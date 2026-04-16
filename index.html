@@ -1,0 +1,1463 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>SEMA/AC — Gestão CIMA & UGAI</title>
+
+<!-- ⚙️ CONFIGURAÇÃO — editar antes de publicar -->
+<script>
+  window.__SB_URL__     = '';  // Ex: 'https://xyzxyz.supabase.co'
+  window.__SB_ANON__    = '';  // anon public key do projeto Supabase
+  window.__CLAUDE_KEY__ = '';  // API key Anthropic para Assistente IA (sk-ant-...)
+                                // ⚠ Nunca exponha chaves de produção em HTML público.
+                                //   Use um proxy backend em ambientes de produção.
+</script>
+
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/MarkerCluster.css"/>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/MarkerCluster.Default.css"/>
+
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#fff;color:#1E2218;-webkit-font-smoothing:antialiased}
+input,select,textarea,button{font-family:inherit;outline:none}
+input,select,textarea{padding:8px 12px;border:1px solid #DEE2D8;border-radius:8px;font-size:13px;color:#1E2218;background:#fff;transition:border-color .15s;box-sizing:border-box;width:100%}
+input:focus,select:focus,textarea:focus{border-color:#2E9E63;box-shadow:0 0 0 2px rgba(46,158,99,.1)}
+button{cursor:pointer}
+a{color:inherit;text-decoration:none}
+code{font-family:monospace;font-size:.9em;background:#F7F8F5;padding:1px 5px;border-radius:4px}
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-track{background:#F7F8F5}
+::-webkit-scrollbar-thumb{background:#DEE2D8;border-radius:4px}
+/* Loading screen */
+#app-loading{position:fixed;inset:0;background:#0F5C3A;display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:99999;gap:16px;transition:opacity .4s}
+#app-loading.hidden{opacity:0;pointer-events:none}
+.ll{width:54px;height:54px;background:#2E9E63;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:26px;animation:lp 1.5s ease-in-out infinite}
+.lb{width:200px;height:3px;background:rgba(255,255,255,.15);border-radius:2px;overflow:hidden}
+.lf{height:100%;background:#C8E6D4;border-radius:2px;animation:lbar 1.8s ease-in-out infinite}
+.lt{color:rgba(255,255,255,.6);font-size:11px;letter-spacing:1px}
+@keyframes lp{0%,100%{transform:scale(1)}50%{transform:scale(1.08)}}
+@keyframes lbar{0%{width:0;margin-left:0}50%{width:60%;margin-left:20%}100%{width:0;margin-left:100%}}
+</style>
+</head>
+<body>
+
+<div id="app-loading">
+  <div class="ll">&#127807;</div>
+  <div class="lb"><div class="lf"></div></div>
+  <div class="lt">SEMA/AC &middot; CIMA &amp; UGAI</div>
+</div>
+
+<div id="root"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/leaflet.markercluster.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+<script>
+// SAGCU SEMA/AC v5 — reescrita limpa
+// Regras: ZERO hooks fora de componentes, ZERO componentes dentro de componentes
+'use strict';
+var h = React.createElement;
+var useState    = React.useState;
+var useEffect   = React.useEffect;
+var useRef      = React.useRef;
+var useMemo     = React.useMemo;
+var useCallback = React.useCallback;
+
+// ── CONFIG ────────────────────────────────────────────────────────────────────
+var SB_URL      = (window.__SB_URL__     || '').replace(/\/$/, '');
+var SB_ANON     = window.__SB_ANON__    || '';
+var CLAUDE_KEY  = window.__CLAUDE_KEY__ || '';
+var SB_OK       = !!(SB_URL && SB_ANON);
+var _tok        = null; // JWT em memória — NUNCA em localStorage
+
+function _hdr(extra) {
+  var o = { 'Content-Type': 'application/json', 'apikey': SB_ANON, 'Prefer': 'return=representation' };
+  if (_tok) o['Authorization'] = 'Bearer ' + _tok;
+  return Object.assign(o, extra || {});
+}
+function _err(r) { return r.json().then(function(e) { throw new Error(e.message || String(r.status)); }); }
+
+function sbGet(t, qs)    { return fetch(SB_URL+'/rest/v1/'+t+(qs?'?'+qs:''),{headers:_hdr()}).then(function(r){return r.ok?r.json():_err(r);}); }
+function sbPost(t, body) { return fetch(SB_URL+'/rest/v1/'+t,{method:'POST',headers:_hdr(),body:JSON.stringify(body)}).then(function(r){return r.ok?r.json():_err(r);}); }
+function sbPatch(t, f, b){ return fetch(SB_URL+'/rest/v1/'+t+'?'+f,{method:'PATCH',headers:_hdr(),body:JSON.stringify(b)}).then(function(r){return r.ok?r.json():_err(r);}); }
+function sbDel(t, f)     { return fetch(SB_URL+'/rest/v1/'+t+'?'+f,{method:'DELETE',headers:_hdr()}).then(function(r){return r.ok?(r.status===204?[]:r.json()):_err(r);}); }
+function sbUpsert(t, b, on){ var hd=Object.assign(_hdr(),{'Prefer':'resolution=merge-duplicates,return=representation'}); return fetch(SB_URL+'/rest/v1/'+t+(on?'?on_conflict='+on:''),{method:'POST',headers:hd,body:JSON.stringify(b)}).then(function(r){return r.ok?r.json():_err(r);}); }
+
+var sbAuth = {
+  signIn: function(email, pwd) {
+    return fetch(SB_URL+'/auth/v1/token?grant_type=password',{method:'POST',headers:{'Content-Type':'application/json','apikey':SB_ANON},body:JSON.stringify({email:email,password:pwd})})
+      .then(function(r){return r.ok?r.json():r.json().then(function(e){throw new Error(e.error_description||e.message||'Login falhou');});})
+      .then(function(d){_tok=d.access_token;return d;});
+  },
+  signOut: function(){ return fetch(SB_URL+'/auth/v1/logout',{method:'POST',headers:_hdr()}).finally(function(){_tok=null;}); },
+  getUser: function(){ if(!_tok)return Promise.resolve(null); return fetch(SB_URL+'/auth/v1/user',{headers:{'apikey':SB_ANON,'Authorization':'Bearer '+_tok}}).then(function(r){return r.ok?r.json():null;}); },
+  resetPassword: function(email){ return fetch(SB_URL+'/auth/v1/recover',{method:'POST',headers:{'Content-Type':'application/json','apikey':SB_ANON},body:JSON.stringify({email:email})}).then(function(r){return r.ok?r.json():_err(r);}); }
+};
+
+// ── PALETA ────────────────────────────────────────────────────────────────────
+var C={g0:'#0A3D2B',g1:'#0F5C3A',g2:'#1A7A4A',g3:'#2E9E63',gl:'#C8E6D4',gx:'#EAF7EE',
+       b1:'#1565A8',bl:'#DCF0FF',t1:'#7B4D1A',tl:'#FAEBD7',am:'#C4832A',al:'#FFF3E0',
+       rm:'#A32D2D',rl:'#FCEBEB',pm:'#5B3FA8',px:'#EDE9FB',cl:'#DEE2D8',cx:'#F7F8F5',cm:'#6B7260',cd:'#1E2218'};
+
+// ── CONSTANTES ────────────────────────────────────────────────────────────────
+var CATS = ['Monitoramento','Fiscalização','Capacitação','Programa REM','Gestão','Parceria','Evento','Legislação'];
+var PL   = {admin:'Administrador',gestor:'Gestor',viewer:'Visualizador'};
+var PC   = {admin:[C.rm,C.rl],gestor:[C.b1,C.bl],viewer:[C.cm,C.cx]};
+var PK   = {units:'Unidades',news:'Notícias',users:'Usuários',sols:'Solicitações',feeds:'Feeds RSS',cfg:'Configurações',ia:'Assistente IA',rel:'Relatórios'};
+var PD   = {admin:{units:true,news:true,users:true,sols:true,feeds:true,cfg:true,ia:true,rel:true},
+            gestor:{units:true,news:true,users:false,sols:true,feeds:false,cfg:false,ia:true,rel:true},
+            viewer:{units:false,news:false,users:false,sols:false,feeds:false,cfg:false,ia:false,rel:false}};
+var scMap = {ativo:[C.g2,C.gl],manutencao:[C.am,C.al],inativo:[C.cm,C.cx]};
+var CC_MAP = {Monitoramento:[C.g2,C.gx],Fiscalização:[C.b1,C.bl],'Programa REM':[C.t1,C.tl]};
+
+// ── HELPERS PUROS ─────────────────────────────────────────────────────────────
+function slabel(s){ return({ativo:'Operacional',manutencao:'Manutenção',inativo:'Inativo'}[s]||s); }
+function fmtD(d)  { if(!d)return''; try{return new Date(d+'T12:00:00').toLocaleDateString('pt-BR');}catch(_){return d;} }
+function getCC(cat){ return CC_MAP[cat]||[C.cm,C.cx]; }
+function sanitize(s,max){ if(typeof s!=='string')return''; s=s.replace(/<[^>]*>/g,'').replace(/[<>"'`\\]/g,'').trim(); return max?s.slice(0,max):s; }
+
+// FIX: r1 retorna null para arrays vazios (original retornava undefined)
+function r1(rows){ if(Array.isArray(rows)){return rows.length?rows[0]:null;} return rows; }
+
+// FIX: sanitização de HTML para evitar XSS em dangerouslySetInnerHTML
+function safeHtml(s){
+  if(!s)return'';
+  return s
+    .replace(/<script[\s\S]*?<\/script>/gi,'')
+    .replace(/<iframe[\s\S]*?<\/iframe>/gi,'')
+    .replace(/\son\w+\s*=\s*["'][^"']*["']/gi,'')
+    .replace(/<link[^>]*>/gi,'');
+}
+
+// ── NORMALIZAÇÃO banco → app ──────────────────────────────────────────────────
+var UN_SEL = 'id,tipo,nome,municipio,regional,lat,lng,status,taxa_uso,agendamentos_mes,descricao,historia,decreto,foto_url,quartos,salas,cozinha,auditorio,ocupacao_atual,visivel,unidades_galeria(url,legenda,ordem),unidades_extras(chave,valor,ordem),unidades_orgaos(orgao),orgaos_presentes(id,nome,tipo_uso,data_entrada,data_saida,ativo)';
+
+function dbUnit(r){
+  return {
+    id:r.id, tipo:r.tipo, nome:r.nome, municipio:r.municipio, regional:r.regional,
+    coords:{lat:parseFloat(r.lat)||-9.5, lng:parseFloat(r.lng)||-70.5},
+    status:r.status, taxaUso:r.taxa_uso||0, ag:r.agendamentos_mes||0,
+    descricao:r.descricao||'', historia:r.historia||'', decreto:r.decreto||'', foto:r.foto_url||'',
+    quartos:r.quartos||0, salas:r.salas||0, cozinha:!!r.cozinha, auditorio:!!r.auditorio,
+    ocupacaoAtual:r.ocupacao_atual||0, visivel:r.visivel!==false,
+    galeria:(r.unidades_galeria||[]).sort(function(a,b){return(a.ordem||0)-(b.ordem||0);}).map(function(g){return{url:g.url,leg:g.legenda||''};}),
+    extras:(r.unidades_extras||[]).sort(function(a,b){return(a.ordem||0)-(b.ordem||0);}).map(function(e,i){return{id:i,k:e.chave,v:e.valor};}),
+    orgaos:(r.unidades_orgaos||[]).map(function(o){return o.orgao;}),
+    orgaosPresentes:(r.orgaos_presentes||[]).map(function(o){return{id:o.id,nome:o.nome,tipo:o.tipo_uso,dataEntrada:o.data_entrada,dataSaida:o.data_saida,ativo:!!o.ativo};})
+  };
+}
+function dbNews(r){ return {id:r.id,titulo:r.titulo,resumo:r.resumo||'',conteudo:r.conteudo||'',data:r.data_pub||'',categoria:r.categoria||'Gestão',unidade:r.unidade_nome||'',unidade_id:r.unidade_id||null,destaque:!!r.destaque,visivel:r.visivel!==false,fonte:r.fonte||'',autor:r.autor||''}; }
+function dbSol(r) { return {id:r.id,sol:r.solicitante,org:r.orgao,email:r.email||'',un:r.unidade_nome,ev:r.tipo_evento,dt:r.data_evento,st:r.status}; }
+function dbUser(r){ return {id:r.id,auth_id:r.auth_id,nome:r.nome,email:r.email,perfil:r.perfil,ativo:!!r.ativo,criadoEm:(r.criado_em||'').slice(0,10),permissoes:{units:!!r.perm_units,news:!!r.perm_news,users:!!r.perm_users,sols:!!r.perm_sols,feeds:!!r.perm_feeds,cfg:!!r.perm_cfg,ia:!!r.perm_ia,rel:!!r.perm_rel}}; }
+function unitRow(u){ return {tipo:u.tipo,nome:sanitize(u.nome,120),municipio:sanitize(u.municipio,80),regional:u.regional,lat:u.coords.lat,lng:u.coords.lng,status:u.status,taxa_uso:u.taxaUso,agendamentos_mes:u.ag||0,descricao:sanitize(u.descricao,2000),historia:sanitize(u.historia,5000),decreto:sanitize(u.decreto,200),foto_url:u.foto||null,quartos:u.quartos||0,salas:u.salas||0,cozinha:!!u.cozinha,auditorio:!!u.auditorio,visivel:u.visivel!==false}; }
+</script>
+<script>
+// ── CAMADA DE DADOS ───────────────────────────────────────────────────────────
+var DB = {
+  unidades: {
+    list: function(soVis){ return sbGet('unidades','select='+UN_SEL+(soVis?'&visivel=eq.true':'')+'&order=nome.asc').then(function(rows){return rows.map(dbUnit);}); },
+    insert: function(u){ return sbPost('unidades',unitRow(u)).then(function(rows){var id=r1(rows);if(!id)throw new Error('Falha ao criar unidade');var uid=id.id; return DB.unidades._rels(uid,u).then(function(){return uid;}); }); },
+    update: function(id,u){ return sbPatch('unidades','id=eq.'+id,unitRow(u)).then(function(){return DB.unidades._rels(id,u);}); },
+    toggleVis: function(id,v){ return sbPatch('unidades','id=eq.'+id,{visivel:v}); },
+    del: function(id){ return sbDel('unidades','id=eq.'+id); },
+    _rels: function(uid,u){
+      var ps = [
+        sbDel('unidades_galeria','unidade_id=eq.'+uid).then(function(){ if(!u.galeria||!u.galeria.length)return; return sbPost('unidades_galeria',u.galeria.map(function(g,i){return{unidade_id:uid,url:g.url,legenda:g.leg||'',ordem:i};})); }),
+        sbDel('unidades_extras','unidade_id=eq.'+uid).then(function(){ var rows=(u.extras||[]).filter(function(e){return e.k&&e.v;}).map(function(e,i){return{unidade_id:uid,chave:sanitize(e.k,60),valor:sanitize(e.v,200),ordem:i};}); if(!rows.length)return; return sbPost('unidades_extras',rows); }),
+        sbDel('unidades_orgaos','unidade_id=eq.'+uid).then(function(){ if(!u.orgaos||!u.orgaos.length)return; return sbPost('unidades_orgaos',(u.orgaos||[]).map(function(o){return{unidade_id:uid,orgao:sanitize(o,60)};})); })
+      ];
+      return Promise.all(ps);
+    }
+  },
+  orgaos: {
+    approve: function(uid,dados){
+      var nome=sanitize(dados.nome||'',100), tipo=sanitize(dados.tipo||'',60);
+      if(!nome||!tipo) return Promise.reject(new Error('Nome e tipo são obrigatórios.'));
+      return sbGet('orgaos_presentes','unidade_id=eq.'+uid+'&ativo=eq.true&nome=ilike.'+encodeURIComponent(nome))
+        .then(function(rows){ if(rows&&rows.length) throw new Error('Órgão "'+nome+'" já está ativo desde '+fmtD(rows[0].data_entrada)+'.'); return sbPost('orgaos_presentes',{unidade_id:uid,nome:nome,tipo_uso:tipo,data_entrada:new Date().toISOString().slice(0,10),ativo:true}); })
+        .then(r1);
+    },
+    leave: function(oid){ return sbPatch('orgaos_presentes','id=eq.'+oid,{ativo:false,data_saida:new Date().toISOString().slice(0,10)}); }
+  },
+  noticias: {
+    list: function(soVis){ return sbGet('noticias','select=id,titulo,resumo,conteudo,data_pub,categoria,unidade_id,unidade_nome,destaque,visivel,fonte,autor'+(soVis?'&visivel=eq.true':'')+'&order=data_pub.desc.nullslast').then(function(r){return r.map(dbNews);}); },
+    insert: function(n){ return sbPost('noticias',{titulo:sanitize(n.titulo,200),resumo:sanitize(n.resumo,500),conteudo:n.conteudo||'',data_pub:n.data||null,categoria:n.categoria,unidade_id:n.unidade_id||null,destaque:!!n.destaque,visivel:n.visivel!==false,fonte:sanitize(n.fonte,120),autor:sanitize(n.autor,120)}).then(r1); },
+    update: function(id,n){ return sbPatch('noticias','id=eq.'+id,{titulo:sanitize(n.titulo,200),resumo:sanitize(n.resumo,500),conteudo:n.conteudo||'',data_pub:n.data||null,categoria:n.categoria,unidade_id:n.unidade_id||null,destaque:!!n.destaque,visivel:n.visivel!==false,fonte:sanitize(n.fonte,120),autor:sanitize(n.autor,120)}); },
+    toggleVis: function(id,v){ return sbPatch('noticias','id=eq.'+id,{visivel:v}); },
+    del: function(id){ return sbDel('noticias','id=eq.'+id); }
+  },
+  feeds: {
+    list: function(){ return sbGet('feeds_rss','order=nome.asc').then(function(rows){return rows.map(function(r){return{id:r.id,nome:r.nome,url:r.url,ativo:!!r.ativo,categoria:r.categoria,sync:r.ultimo_sync?r.ultimo_sync.slice(0,10):'—'};});}); },
+    insert: function(f){ return sbPost('feeds_rss',{nome:sanitize(f.nome,120),url:f.url,ativo:!!f.ativo,categoria:f.categoria}); },
+    update: function(id,f){ return sbPatch('feeds_rss','id=eq.'+id,{nome:sanitize(f.nome,120),url:f.url,ativo:!!f.ativo,categoria:f.categoria}); },
+    sync: function(id){ return sbPatch('feeds_rss','id=eq.'+id,{ultimo_sync:new Date().toISOString()}); },
+    toggleAtivo: function(id,v){ return sbPatch('feeds_rss','id=eq.'+id,{ativo:v}); },
+    del: function(id){ return sbDel('feeds_rss','id=eq.'+id); }
+  },
+  solicitacoes: {
+    list: function(){ return sbGet('solicitacoes','select=id,solicitante,orgao,email,unidade_id,unidade_nome,tipo_evento,data_evento,status&order=criado_em.desc').then(function(r){return r.map(dbSol);}); },
+    // FIX: removido id gerado no cliente — deixa o Supabase gerar (coluna UUID/serial)
+    insert: function(s){ return sbPost('solicitacoes',{solicitante:sanitize(s.nome,120),orgao:sanitize(s.org,80),email:sanitize(s.email,120),unidade_nome:sanitize(s.un,120),tipo_evento:sanitize(s.ev,60),data_evento:s.dt,hora_evento:s.hr||null,justificativa:sanitize(s.just,1000),status:'pendente'}).then(r1); },
+    updStatus: function(id,st){ return sbPatch('solicitacoes','id=eq.'+id,{status:st}); }
+  },
+  usuarios: {
+    COLS: 'id,auth_id,nome,email,perfil,ativo,criado_em,perm_units,perm_news,perm_users,perm_sols,perm_feeds,perm_cfg,perm_ia,perm_rel',
+    list: function(){ return sbGet('usuarios','select='+DB.usuarios.COLS+'&order=nome.asc').then(function(r){return r.map(dbUser);}); },
+    byAuth: function(aid){ return sbGet('usuarios','auth_id=eq.'+aid+'&select='+DB.usuarios.COLS).then(function(r){return r.length?dbUser(r[0]):null;}); },
+    _pRow: function(u){ var p=u.permissoes||{}; return {nome:sanitize(u.nome,120),perfil:u.perfil||'viewer',ativo:u.ativo!==false,perm_units:!!p.units,perm_news:!!p.news,perm_users:!!p.users,perm_sols:!!p.sols,perm_feeds:!!p.feeds,perm_cfg:!!p.cfg,perm_ia:!!p.ia,perm_rel:!!p.rel}; },
+    insert: function(u,aid){ return sbPost('usuarios',Object.assign({auth_id:aid,email:sanitize(u.email,120)},DB.usuarios._pRow(u))).then(r1); },
+    update: function(id,u){ return sbPatch('usuarios','id=eq.'+id,DB.usuarios._pRow(u)); },
+    del: function(id){ return sbDel('usuarios','id=eq.'+id); },
+    toggleAtivo: function(id,v){ return sbPatch('usuarios','id=eq.'+id,{ativo:v}); }
+  },
+  config: {
+    get: function(k){ return sbGet('config_sistema','chave=eq.'+k).then(function(r){return r.length?r[0].valor:null;}); },
+    // FIX: serializa objeto como JSON string para Supabase (coluna text)
+    set: function(k,v){ return sbUpsert('config_sistema',{chave:k,valor:typeof v==='string'?v:JSON.stringify(v)},'chave'); }
+  }
+};
+</script>
+<script>
+// ══════════════════════════════════════════════════════════════════════════════
+// PRIMITIVOS UI
+// ══════════════════════════════════════════════════════════════════════════════
+function Pill(p){
+  return h('span',{style:{fontSize:p.s||11,fontWeight:500,padding:'3px 10px',borderRadius:20,background:p.b||C.cl,color:p.c||C.cd,whiteSpace:'nowrap',display:'inline-block'}},p.t);
+}
+function Bar(p){
+  var v=p.v||0, cor=v>80?C.rm:v>60?C.am:C.g2;
+  return h('div',{style:{height:6,background:C.cl,borderRadius:3,overflow:'hidden'}},
+    h('div',{style:{height:'100%',width:Math.min(100,v)+'%',background:cor,borderRadius:3,transition:'width .6s'}}));
+}
+function Card(p){
+  return h('div',{style:Object.assign({background:'#fff',border:'1px solid '+C.cl,borderRadius:14},p.style||{}),onClick:p.onClick,onMouseEnter:p.onMouseEnter,onMouseLeave:p.onMouseLeave},p.children);
+}
+function StatBox(p){
+  return h('div',{style:{background:C.cx,borderRadius:12,padding:'14px 18px'}},
+    h('div',{style:{fontSize:11,color:C.cm,marginBottom:4,textTransform:'uppercase',letterSpacing:.5}},p.label),
+    h('div',{style:{fontSize:22,fontWeight:700,color:p.color||C.g2,lineHeight:1}},p.value));
+}
+function Modal(p){
+  return h('div',{onClick:p.onClose,style:{position:'fixed',inset:0,background:'rgba(0,0,0,.55)',zIndex:2000,display:'flex',alignItems:'center',justifyContent:'center',padding:16}},
+    h('div',{onClick:function(e){e.stopPropagation();},style:{background:'#fff',borderRadius:16,width:'100%',maxWidth:p.wide?860:680,maxHeight:'92vh',overflowY:'auto',boxShadow:'0 20px 60px rgba(0,0,0,.25)'}},
+      h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'18px 24px',borderBottom:'1px solid '+C.cl,position:'sticky',top:0,background:'#fff'}},
+        h('h3',{style:{fontSize:16,fontWeight:700,margin:0,color:C.cd}},p.titulo),
+        h('button',{onClick:p.onClose,type:'button','aria-label':'Fechar',style:{background:'none',border:'none',fontSize:24,cursor:'pointer',color:C.cm,lineHeight:1}},'×')),
+      h('div',{style:{padding:'22px 24px'}},p.children)));
+}
+function Toast(p){
+  // FIX: timer alinhado com toast2 (3200ms)
+  useEffect(function(){var t=setTimeout(p.onDone,3200);return function(){clearTimeout(t);};},[]);
+  var col=p.color||C.g2;
+  return h('div',{role:'alert','aria-live':'polite',style:{position:'fixed',top:16,right:16,zIndex:10000,background:'#fff',border:'2px solid '+col,borderRadius:12,padding:'11px 18px',fontSize:13,color:col,fontWeight:600,boxShadow:'0 4px 16px rgba(0,0,0,.12)',display:'flex',alignItems:'center',gap:8,maxWidth:360}},
+    h('span',{'aria-hidden':'true'},col===C.rm?'❌':col===C.am?'⚠️':'✅'),p.msg);
+}
+function Confirm(p){
+  return h('div',{onClick:p.onClose,style:{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:3000,display:'flex',alignItems:'center',justifyContent:'center'}},
+    h('div',{onClick:function(e){e.stopPropagation();},style:{background:'#fff',borderRadius:16,padding:'28px',maxWidth:360,width:'100%',margin:'0 16px'}},
+      h('div',{style:{fontSize:28,textAlign:'center',marginBottom:12},'aria-hidden':'true'},'🗑️'),
+      h('h3',{style:{fontSize:16,fontWeight:700,margin:'0 0 8px',color:C.cd,textAlign:'center'}},'Confirmar exclusão'),
+      h('p',{style:{fontSize:13,color:C.cm,margin:'0 0 22px',lineHeight:1.6,textAlign:'center'}},'Excluir ',h('strong',null,'"'+p.nome+'"'),'?'),
+      h('div',{style:{display:'flex',gap:8}},
+        h('button',{onClick:p.onClose,type:'button',style:{flex:1,padding:'10px 0',borderRadius:9,border:'1px solid '+C.cl,background:'none',fontSize:13,cursor:'pointer'}},'Cancelar'),
+        h('button',{onClick:p.onConfirm,type:'button',style:{flex:1,padding:'10px 0',borderRadius:9,border:'none',background:C.rm,color:'#fff',fontSize:13,fontWeight:700,cursor:'pointer'}},'Excluir'))));
+}
+function LoadingOverlay(p){
+  if(!p.show)return null;
+  return h('div',{role:'status','aria-label':'Carregando',style:{position:'fixed',inset:0,background:'rgba(255,255,255,.8)',zIndex:9000,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:14}},
+    h('div',{style:{width:40,height:40,border:'3px solid '+C.cl,borderTopColor:C.g2,borderRadius:'50%',animation:'spin .8s linear infinite'}}),
+    p.msg&&h('div',{style:{fontSize:13,color:C.cm}},p.msg));
+}
+function Skeleton(p){
+  return h('div',{style:{height:p.h||16,width:p.w||'100%',borderRadius:p.r||8,background:'linear-gradient(90deg,'+C.cl+' 25%,'+C.cx+' 50%,'+C.cl+' 75%)',backgroundSize:'200% 100%',animation:'shimmer 1.5s ease-in-out infinite',marginBottom:p.mb||0}});
+}
+
+var _ks=document.createElement('style');
+_ks.textContent='@keyframes spin{to{transform:rotate(360deg)}}@keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}';
+document.head.appendChild(_ks);
+</script>
+<script>
+// ── buildMapHtml ──────────────────────────────────────────────────────────────
+function buildMapHtml(units,compact,singleUnit){
+  var valid=(units||[]).filter(function(u){return u.coords&&u.coords.lat&&u.coords.lng;});
+  var rows=valid.map(function(u){return '{id:'+JSON.stringify(u.id)+',nome:'+JSON.stringify(u.nome)+',municipio:'+JSON.stringify(u.municipio)+',tipo:'+JSON.stringify(u.tipo)+',status:'+JSON.stringify(u.status)+',descricao:'+JSON.stringify(u.descricao||'')+',taxaUso:'+(u.taxaUso||0)+',lat:'+u.coords.lat+',lng:'+u.coords.lng+'}';});
+  var payload='['+rows.join(',')+']';
+  var cLat=singleUnit&&valid[0]?valid[0].coords.lat:-9.5;
+  var cLng=singleUnit&&valid[0]?valid[0].coords.lng:-70.5;
+  var zoom=singleUnit?13:compact?6:7;
+  var scroll=compact?'false':'true';
+  var dcZ=singleUnit?20:11;
+  var acreGeoJS=singleUnit?'':
+    'L.geoJSON({type:"Feature",geometry:{type:"Polygon",coordinates:[[[-73.98,-7.34],[-73.45,-7.12],[-72.85,-7.42],[-72.10,-7.45],[-71.50,-7.80],[-70.95,-8.22],[-70.25,-8.90],[-69.78,-9.38],[-69.02,-10.08],[-68.55,-10.58],[-68.10,-10.95],[-67.62,-11.10],[-67.12,-10.95],[-66.70,-10.48],[-66.62,-10.18],[-66.75,-9.62],[-67.08,-9.12],[-67.22,-8.62],[-66.92,-7.82],[-66.88,-7.35],[-67.28,-7.18],[-67.78,-7.32],[-68.32,-7.52],[-68.88,-7.38],[-69.42,-7.18],[-69.92,-7.35],[-70.45,-7.52],[-70.98,-7.32],[-71.48,-7.15],[-71.98,-7.25],[-72.48,-7.38],[-72.98,-7.25],[-73.48,-7.18],[-73.98,-7.34]]]}},{style:{fillColor:"#1A7A4A",fillOpacity:.04,color:"#1A7A4A",weight:1.5,dashArray:"6 4"}}).addTo(map);';
+  return[
+    '<!DOCTYPE html><html><head><meta charset="UTF-8">',
+    '<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">',
+    '<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/MarkerCluster.css">',
+    '<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/MarkerCluster.Default.css">',
+    '<style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:-apple-system,sans-serif}#map{width:100%;height:100vh}.pw{min-width:230px}.ph{padding:12px 14px 8px;color:#fff}.pn{font-size:14px;font-weight:700;margin-bottom:3px}.ps{font-size:11px;opacity:.82}.pb{padding:10px 14px}.pr{display:flex;gap:6px;margin-bottom:6px;font-size:12px;color:#3D4035}.pr b{color:#6B7260;min-width:54px;flex-shrink:0}.pd{font-size:12px;color:#6B7260;line-height:1.6;margin:8px 0;border-top:1px solid #DEE2D8;padding-top:8px}.pbt{display:block;width:100%;padding:7px;background:#1A7A4A;color:#fff;border:none;border-radius:7px;font-size:12px;font-weight:700;cursor:pointer;margin-top:4px}.pbt:hover{background:#0F5C3A}.pc{font-size:10px;color:#9A9B93;text-align:center;margin-top:5px;font-family:monospace}.leaflet-popup-content-wrapper{border-radius:12px!important;padding:0!important;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,.15)!important}.leaflet-popup-content{margin:0!important;padding:0!important}.marker-cluster{background:rgba(26,122,74,.22)}.marker-cluster div{background:#1A7A4A;color:#fff;font-weight:700}</style>',
+    '</head><body><div id="map"></div>',
+    '<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"><\/script>',
+    '<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/leaflet.markercluster.js"><\/script>',
+    '<script>',
+    'var D='+payload+';',
+    // FIX: gc agora inclui status inativo com cor cinza
+    'function gc(u){if(u.status==="manutencao")return"#C4832A";if(u.status==="inativo")return"#6B7260";return u.tipo==="CIMA"?"#1A7A4A":"#1565A8";}',
+    'function mi(u){var c=gc(u),l=u.tipo==="CIMA"?"C":"U";var al=u.status==="manutencao"?\'<circle cx="28" cy="6" r="5" fill="#C4832A" stroke="white" stroke-width="1.5"/><text x="28" y="10" text-anchor="middle" font-size="8" fill="white">!</text>\':(u.status==="inativo"?\'<circle cx="28" cy="6" r="5" fill="#6B7260" stroke="white" stroke-width="1.5"/><text x="28" y="10" text-anchor="middle" font-size="8" fill="white">✕</text>\':\'\');var sv=\'<svg xmlns="http://www.w3.org/2000/svg" width="36" height="44" viewBox="0 0 36 44"><defs><filter id="sh"><feDropShadow dx="0" dy="2" stdDeviation="2" flood-color="rgba(0,0,0,.3)"/></filter></defs><path d="M18 2C10.27 2 4 8.27 4 16c0 10 14 26 14 26S32 26 32 16C32 8.27 25.73 2 18 2z" fill="\'+c+\'" filter="url(#sh)"/><circle cx="18" cy="16" r="8" fill="white" opacity=".9"/><text x="18" y="20" text-anchor="middle" font-size="9" font-weight="700" fill="\'+c+\'" font-family="sans-serif">\'+l+\'</text>\'+al+\'</svg>\';return L.divIcon({html:sv,className:"",iconSize:[36,44],iconAnchor:[18,44],popupAnchor:[0,-46]});}',
+    // FIX: popup botão usa data-id + this.dataset.id (corrige bug de scope onde JSON.stringify(u.id) era undefined)
+    'function bp(u){var c=gc(u),sc=u.status==="ativo"?"#1A7A4A":(u.status==="inativo"?"#6B7260":"#C4832A"),uso=u.taxaUso>80?"#A32D2D":u.taxaUso>60?"#C4832A":"#1A7A4A";return\'<div class="pw"><div class="ph" style="background:\'+c+\'"><div class="pn">\'+u.nome+\'</div><div class="ps">&#128205; \'+u.municipio+\'</div></div><div class="pb"><div class="pr"><b>Tipo</b><span>\'+u.tipo+\'</span></div><div class="pr"><b>Status</b><span style="color:\'+sc+\';font-weight:600">\'+( u.status==="ativo"?"Operacional":(u.status==="inativo"?"Inativo":"Manutenção"))+\'</span></div><div class="pr"><b>Uso</b><span style="font-weight:600;color:\'+uso+\'">\'+u.taxaUso+\'%</span></div><div class="pd">\'+u.descricao+\'</div><button class="pbt" onclick="su(this.dataset.id)" data-id="\'+u.id+\'">Ver página &#8594;</button><div class="pc">\'+u.lat.toFixed(5)+\', \'+u.lng.toFixed(5)+\'</div></div></div>\';}',
+    'function su(id){try{window.parent.postMessage({type:"SELECT_UNIT",unitId:id},"*");}catch(e){}}',
+    'var map=L.map("map",{center:['+cLat+','+cLng+'],zoom:'+zoom+',zoomControl:false,scrollWheelZoom:'+scroll+'});',
+    'L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{attribution:"&copy; OpenStreetMap",maxZoom:18}).addTo(map);',
+    'L.control.zoom({position:"topright"}).addTo(map);',
+    'var cl=L.markerClusterGroup({iconCreateFunction:function(c){var n=c.getChildCount(),s=n<5?36:n<10?42:48;return L.divIcon({html:\'<div style="width:\'+s+\'px;height:\'+s+\'px;background:#1A7A4A;border-radius:50%;border:3px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,.25);display:flex;align-items:center;justify-content:center;color:#fff;font-size:\'+(n>9?12:14)+\'px;font-weight:700">\'+n+\'</div>\',className:"",iconSize:[s,s],iconAnchor:[s/2,s/2]});},spiderfyOnMaxZoom:true,showCoverageOnHover:false,zoomToBoundsOnClick:true,maxClusterRadius:60,disableClusteringAtZoom:'+dcZ+'});',
+    'D.forEach(function(u){if(!u.lat||!u.lng)return;var mk=L.marker([u.lat,u.lng],{icon:mi(u)});mk.bindPopup(bp(u),{maxWidth:270,minWidth:240});cl.addLayer(mk);});',
+    'map.addLayer(cl);',
+    acreGeoJS,
+    '<\/script></body></html>'
+  ].join('');
+}
+
+function MapView(p){
+  var units=p.units||[], height=p.height||'400px', compact=p.compact||false, singleUnit=p.singleUnit||false, onSel=p.onSelectUnit;
+  var key=units.map(function(u){return u.id;}).join('-')||'empty';
+  var html=useMemo(function(){return buildMapHtml(units,compact,singleUnit);},[key,compact,singleUnit]);
+  useEffect(function(){
+    function handler(e){if(e.data&&e.data.type==='SELECT_UNIT'&&onSel)onSel(e.data.unitId);}
+    window.addEventListener('message',handler);
+    return function(){window.removeEventListener('message',handler);};
+  },[onSel]);
+  var valid=units.filter(function(u){return u.coords&&u.coords.lat&&u.coords.lng;});
+  if(!valid.length) return h('div',{style:{height:height,borderRadius:12,background:C.cx,display:'flex',alignItems:'center',justifyContent:'center',color:C.cm,fontSize:14,border:'1px solid '+C.cl}},'Nenhuma unidade com coordenadas válidas.');
+  return h('iframe',{key:key,srcDoc:html,sandbox:'allow-scripts allow-same-origin',style:{width:'100%',height:height,border:'none',borderRadius:12,display:'block'},title:'Mapa SEMA/AC'});
+}
+</script>
+<script>
+// ── ASSISTENTE IA ─────────────────────────────────────────────────────────────
+function ChatIA(p){
+  var uns=p.uns||[];
+  var apiOk=!!CLAUDE_KEY;
+  var initMsg=apiOk?'Olá! Sou o assistente da SEMA/AC. Como posso ajudar?':'⚠ Configure window.__CLAUDE_KEY__ no HTML para usar o assistente.';
+  var sm=useState([{role:'assistant',content:initMsg}]); var msgs=sm[0],setMsgs=sm[1];
+  var si=useState(''); var inp=si[0],setInp=si[1];
+  var sl=useState(false); var load=sl[0],setLoad=sl[1];
+  var endRef=useRef(null);
+  function send(){
+    if(!apiOk||!inp.trim()||load)return;
+    var t=inp.trim(); setInp(''); setLoad(true);
+    var nm=msgs.concat([{role:'user',content:t}]); setMsgs(nm);
+    fetch('https://api.anthropic.com/v1/messages',{
+      method:'POST',
+      headers:{
+        'Content-Type':'application/json',
+        'x-api-key':CLAUDE_KEY,
+        'anthropic-version':'2023-06-01',
+        'anthropic-dangerous-allow-browser':'true'
+      },
+      body:JSON.stringify({
+        model:'claude-haiku-4-5-20251001',
+        max_tokens:900,
+        system:'Assistente SEMA/AC. Responda em português. Unidades: '+JSON.stringify(uns.slice(0,8).map(function(u){return{nome:u.nome,tipo:u.tipo,municipio:u.municipio,status:u.status,taxaUso:u.taxaUso};})),
+        messages:nm.map(function(m){return{role:m.role,content:m.content};})
+      })
+    })
+    .then(function(r){return r.json();})
+    .then(function(d){
+      var txt='';
+      if(d.error){txt='Erro da API: '+(d.error.message||JSON.stringify(d.error));}
+      else{txt=(d.content||[]).map(function(b){return b.text||'';}).join('')||'Sem resposta.';}
+      setMsgs(nm.concat([{role:'assistant',content:txt}]));
+    })
+    .catch(function(){setMsgs(nm.concat([{role:'assistant',content:'Erro de conexão. Verifique a chave de API ou use um proxy backend.'}]));})
+    .finally(function(){setLoad(false);setTimeout(function(){if(endRef.current)endRef.current.scrollIntoView({behavior:'smooth'});},80);});
+  }
+  return h('div',{style:{display:'flex',flexDirection:'column',height:400}},
+    !apiOk&&h('div',{style:{background:'#FFF3E0',borderBottom:'1px solid '+C.am,padding:'8px 14px',fontSize:12,color:C.t1}},
+      '⚠ Adicione ',h('code',null,'window.__CLAUDE_KEY__'),' no HTML para usar o assistente.'),
+    h('div',{style:{flex:1,overflowY:'auto',padding:14,display:'flex',flexDirection:'column',gap:10}},
+      msgs.map(function(m,i){return h('div',{key:i,style:{display:'flex',justifyContent:m.role==='user'?'flex-end':'flex-start',gap:8}},
+        m.role==='assistant'&&h('div',{style:{width:28,height:28,borderRadius:8,background:C.gx,display:'flex',alignItems:'center',justifyContent:'center',fontSize:13,flexShrink:0},'aria-hidden':'true'},'🌿'),
+        h('div',{style:{maxWidth:'80%',background:m.role==='user'?C.gx:'#f0f4f0',borderRadius:m.role==='user'?'14px 14px 4px 14px':'14px 14px 14px 4px',padding:'9px 13px',fontSize:13,lineHeight:1.65,whiteSpace:'pre-wrap',color:C.cd}},m.content));}),
+      load&&h('div',{style:{display:'flex',gap:8}},h('div',{style:{width:28,height:28,borderRadius:8,background:C.gx,display:'flex',alignItems:'center',justifyContent:'center'},'aria-hidden':'true'},'🌿'),h('div',{style:{background:'#f0f4f0',borderRadius:14,padding:'9px 13px',fontSize:13,color:C.cm}},'Analisando...')),
+      h('div',{ref:endRef})),
+    h('div',{style:{padding:'10px 12px',borderTop:'1px solid '+C.cl,display:'flex',gap:8}},
+      h('input',{value:inp,onChange:function(e){setInp(e.target.value);},onKeyDown:function(e){if(e.key==='Enter')send();},placeholder:apiOk?'Pergunte sobre as unidades...':'Configure a chave de API...',disabled:!apiOk,style:{opacity:apiOk?1:.6}}),
+      h('button',{onClick:send,disabled:load||!inp.trim()||!apiOk,type:'button',style:{padding:'8px 16px',borderRadius:8,border:'none',background:(inp.trim()&&apiOk)?C.g2:C.cl,color:(inp.trim()&&apiOk)?'#fff':C.cm,fontSize:13,fontWeight:500,cursor:(inp.trim()&&apiOk)?'pointer':'default',whiteSpace:'nowrap'}},'Enviar')));
+}
+</script>
+<script>
+// ══════════════════════════════════════════════════════════════════════════════
+// FORMULÁRIOS ADMIN
+// ══════════════════════════════════════════════════════════════════════════════
+var LBL={fontSize:11,color:C.cm,display:'block',marginBottom:4,fontWeight:600};
+
+function FmUn(p){
+  var DEF={id:null,tipo:'CIMA',nome:'',municipio:'',regional:'Vale do Juruá',coords:{lat:-9.0,lng:-70.0},status:'ativo',descricao:'',historia:'',decreto:'',orgaos:[],quartos:0,salas:0,cozinha:false,auditorio:false,taxaUso:0,ag:0,foto:'',galeria:[],extras:[],visivel:true};
+  var sf=useState(p.init||DEF); var f=sf[0],setF=sf[1];
+  var sa=useState('dados'); var ab=sa[0],setAb=sa[1];
+  function sv(k,v){setF(function(x){var n=Object.assign({},x);n[k]=v;return n;});}
+  return h('div',null,
+    h('div',{style:{display:'flex',gap:2,marginBottom:16,borderBottom:'1px solid '+C.cl}},
+      [['dados','Dados'],['historia','História'],['galeria','Fotos'],['extras','Extras']].map(function(a){
+        return h('button',{key:a[0],type:'button',onClick:function(){setAb(a[0]);},style:{background:'none',border:'none',cursor:'pointer',fontSize:12,fontWeight:ab===a[0]?700:400,color:ab===a[0]?C.g2:C.cm,padding:'7px 12px',borderBottom:ab===a[0]?'2px solid '+C.g2:'2px solid transparent',marginBottom:-1}},a[1]);
+      })),
+    ab==='dados'&&h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}},
+      h('div',{style:{gridColumn:'1/-1'}},h('label',{style:LBL},'Nome *'),h('input',{value:f.nome,onChange:function(e){sv('nome',e.target.value);}})),
+      h('div',null,h('label',{style:LBL},'Tipo'),h('select',{value:f.tipo,onChange:function(e){sv('tipo',e.target.value);}},h('option',null,'CIMA'),h('option',null,'UGAI'))),
+      h('div',null,h('label',{style:LBL},'Município *'),h('input',{value:f.municipio,onChange:function(e){sv('municipio',e.target.value);}})),
+      h('div',null,h('label',{style:LBL},'Regional'),h('select',{value:f.regional,onChange:function(e){sv('regional',e.target.value);}},['Vale do Juruá','Vale do Acre','Vale do Purus','Vale do Envira','Alto Acre'].map(function(r){return h('option',{key:r},r);}))),
+      h('div',null,h('label',{style:LBL},'Status'),h('select',{value:f.status,onChange:function(e){sv('status',e.target.value);}},h('option',{value:'ativo'},'Operacional'),h('option',{value:'manutencao'},'Manutenção'),h('option',{value:'inativo'},'Inativo'))),
+      h('div',null,h('label',{style:LBL},'Latitude'),h('input',{type:'number',step:'0.0001',value:f.coords.lat,onChange:function(e){sv('coords',Object.assign({},f.coords,{lat:parseFloat(e.target.value)||0}));}})),
+      h('div',null,h('label',{style:LBL},'Longitude'),h('input',{type:'number',step:'0.0001',value:f.coords.lng,onChange:function(e){sv('coords',Object.assign({},f.coords,{lng:parseFloat(e.target.value)||0}));}})),
+      h('div',{style:{gridColumn:'1/-1'}},h('label',{style:LBL},'Decreto'),h('input',{value:f.decreto||'',onChange:function(e){sv('decreto',e.target.value);},placeholder:'Ex: Decreto Estadual nº 4.821/2012'})),
+      h('div',{style:{gridColumn:'1/-1'}},h('label',{style:LBL},'Descrição'),h('textarea',{value:f.descricao,onChange:function(e){sv('descricao',e.target.value);},rows:3,style:{width:'100%',resize:'vertical',fontFamily:'inherit',fontSize:13,borderRadius:8,border:'1px solid '+C.cl,padding:'8px 12px',boxSizing:'border-box'}})),
+      h('div',null,h('label',{style:LBL},'Órgãos (vírgula)'),h('input',{value:(f.orgaos||[]).join(','),onChange:function(e){sv('orgaos',e.target.value.split(',').map(function(s){return s.trim();}).filter(Boolean));}})),
+      h('div',null,h('label',{style:LBL},'Taxa de uso (%)'),h('input',{type:'number',min:0,max:100,value:f.taxaUso,onChange:function(e){sv('taxaUso',+e.target.value);}})),
+      h('div',null,h('label',{style:LBL},'Quartos'),h('input',{type:'number',min:0,value:f.quartos,onChange:function(e){sv('quartos',+e.target.value);}})),
+      h('div',null,h('label',{style:LBL},'Salas'),h('input',{type:'number',min:0,value:f.salas,onChange:function(e){sv('salas',+e.target.value);}})),
+      h('div',{style:{gridColumn:'1/-1',display:'flex',gap:20,flexWrap:'wrap'}},
+        [['cozinha','🍽 Cozinha'],['auditorio','🎤 Auditório'],['visivel','👁 Visível']].map(function(pr){return h('label',{key:pr[0],style:{display:'flex',alignItems:'center',gap:6,fontSize:13,cursor:'pointer'}},h('input',{type:'checkbox',checked:!!f[pr[0]],onChange:function(e){sv(pr[0],e.target.checked);},style:{accentColor:C.g2,width:14,height:14}}),pr[1]);}))),
+    ab==='historia'&&h('textarea',{value:f.historia||'',onChange:function(e){sv('historia',e.target.value);},rows:10,style:{width:'100%',resize:'vertical',fontFamily:'inherit',fontSize:13,borderRadius:8,border:'1px solid '+C.cl,padding:'8px 12px',boxSizing:'border-box'}}),
+    ab==='galeria'&&h('div',null,
+      h('div',{style:{marginBottom:14}},h('label',{style:LBL},'Foto principal (URL)'),h('input',{value:f.foto||'',onChange:function(e){sv('foto',e.target.value);},placeholder:'https://...'})),
+      h('div',{style:{display:'flex',justifyContent:'space-between',marginBottom:10}},h('span',{style:{fontSize:11,color:C.cm,fontWeight:600}},'GALERIA'),h('button',{type:'button',onClick:function(){sv('galeria',(f.galeria||[]).concat([{url:'',leg:''}]));},style:{padding:'5px 14px',borderRadius:7,border:'none',background:C.g2,color:'#fff',fontSize:12,cursor:'pointer'}},'+ Foto')),
+      (f.galeria||[]).map(function(g,i){return h('div',{key:i,style:{display:'grid',gridTemplateColumns:'1fr auto auto',gap:8,marginBottom:8}},
+        h('input',{value:g.url,onChange:function(e){var gal=f.galeria.slice();gal[i]=Object.assign({},gal[i],{url:e.target.value});sv('galeria',gal);},placeholder:'URL'}),
+        h('input',{value:g.leg,onChange:function(e){var gal=f.galeria.slice();gal[i]=Object.assign({},gal[i],{leg:e.target.value});sv('galeria',gal);},placeholder:'Legenda',style:{width:120}}),
+        h('button',{type:'button',onClick:function(){sv('galeria',f.galeria.filter(function(_,j){return j!==i;}));},style:{padding:'5px 9px',borderRadius:6,border:'1px solid '+C.rm,background:C.rl,color:C.rm,fontSize:11,cursor:'pointer'}},'✕'));})),
+    ab==='extras'&&h('div',null,
+      h('div',{style:{display:'flex',justifyContent:'space-between',marginBottom:10}},h('span',{style:{fontSize:13,color:C.cm}},'Campos personalizados'),h('button',{type:'button',onClick:function(){sv('extras',(f.extras||[]).concat([{id:Date.now(),k:'',v:''}]));},style:{padding:'5px 14px',borderRadius:7,border:'none',background:C.g2,color:'#fff',fontSize:12,cursor:'pointer'}},'+ Campo')),
+      (f.extras||[]).map(function(e){return h('div',{key:e.id,style:{display:'grid',gridTemplateColumns:'1fr 1fr auto',gap:8,marginBottom:8}},
+        h('input',{value:e.k,onChange:function(ev){sv('extras',f.extras.map(function(x){return x.id===e.id?Object.assign({},x,{k:ev.target.value}):x;}));},placeholder:'Campo'}),
+        h('input',{value:e.v,onChange:function(ev){sv('extras',f.extras.map(function(x){return x.id===e.id?Object.assign({},x,{v:ev.target.value}):x;}));},placeholder:'Valor'}),
+        h('button',{type:'button',onClick:function(){sv('extras',f.extras.filter(function(x){return x.id!==e.id;}));},style:{padding:'5px 9px',borderRadius:6,border:'1px solid '+C.rm,background:C.rl,color:C.rm,fontSize:11,cursor:'pointer'}},'✕'));})),
+    h('div',{style:{display:'flex',gap:8,justifyContent:'flex-end',paddingTop:16,marginTop:16,borderTop:'1px solid '+C.cl}},
+      h('button',{type:'button',onClick:p.onClose,style:{padding:'9px 20px',borderRadius:8,border:'1px solid '+C.cl,background:'none',fontSize:13,cursor:'pointer'}},'Cancelar'),
+      h('button',{type:'button',onClick:function(){if(!f.nome||!f.municipio){alert('Nome e município obrigatórios.');return;}p.onSave(f);},style:{padding:'9px 22px',borderRadius:8,border:'none',background:C.g2,color:'#fff',fontSize:13,fontWeight:700,cursor:'pointer'}},'Salvar')));
+}
+
+function FmNw(p){
+  var DEF={id:null,titulo:'',resumo:'',conteudo:'',data:'',categoria:'Monitoramento',unidade:'',unidade_id:null,destaque:false,visivel:true,fonte:'',autor:''};
+  var sf=useState(p.init||DEF); var f=sf[0],setF=sf[1];
+  function sv(k,v){setF(function(x){var n=Object.assign({},x);n[k]=v;return n;});}
+  return h('div',{style:{display:'flex',flexDirection:'column',gap:13}},
+    h('div',null,h('label',{style:LBL},'Título *'),h('input',{value:f.titulo,onChange:function(e){sv('titulo',e.target.value);}})),
+    h('div',null,h('label',{style:LBL},'Resumo'),h('textarea',{value:f.resumo,onChange:function(e){sv('resumo',e.target.value);},rows:2,style:{width:'100%',resize:'vertical',fontFamily:'inherit',fontSize:13,borderRadius:8,border:'1px solid '+C.cl,padding:'8px 12px',boxSizing:'border-box'}})),
+    h('div',null,h('label',{style:LBL},'Conteúdo (HTML)'),h('textarea',{value:f.conteudo,onChange:function(e){sv('conteudo',e.target.value);},rows:7,style:{width:'100%',resize:'vertical',fontFamily:'monospace',fontSize:12,borderRadius:8,border:'1px solid '+C.cl,padding:'8px 12px',boxSizing:'border-box'}})),
+    h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}},
+      h('div',null,h('label',{style:LBL},'Categoria'),h('select',{value:f.categoria,onChange:function(e){sv('categoria',e.target.value);}},CATS.map(function(c){return h('option',{key:c},c);}))),
+      h('div',null,h('label',{style:LBL},'Unidade relacionada'),h('select',{value:f.unidade_id||'',onChange:function(e){var uid=e.target.value,un=(p.uns||[]).find(function(u){return u.id===uid;});sv('unidade_id',uid||null);sv('unidade',un?un.nome:'');}},h('option',{value:''},'Nenhuma'),(p.uns||[]).map(function(u){return h('option',{key:u.id,value:u.id},u.nome);}))),
+      h('div',null,h('label',{style:LBL},'Data'),h('input',{type:'date',value:f.data,onChange:function(e){sv('data',e.target.value);}})),
+      h('div',null,h('label',{style:LBL},'Autor'),h('input',{value:f.autor,onChange:function(e){sv('autor',e.target.value);}})),
+      h('div',{style:{gridColumn:'1/-1'}},h('label',{style:LBL},'Fonte'),h('input',{value:f.fonte,onChange:function(e){sv('fonte',e.target.value);}}))),
+    h('div',{style:{display:'flex',gap:20}},
+      [['destaque','⭐ Destaque'],['visivel','👁 Visível']].map(function(pr){return h('label',{key:pr[0],style:{display:'flex',alignItems:'center',gap:6,fontSize:13,cursor:'pointer'}},h('input',{type:'checkbox',checked:!!f[pr[0]],onChange:function(e){sv(pr[0],e.target.checked);},style:{accentColor:C.g2,width:14,height:14}}),pr[1]);})),
+    h('div',{style:{display:'flex',gap:8,justifyContent:'flex-end'}},
+      h('button',{type:'button',onClick:p.onClose,style:{padding:'9px 20px',borderRadius:8,border:'1px solid '+C.cl,background:'none',fontSize:13,cursor:'pointer'}},'Cancelar'),
+      h('button',{type:'button',onClick:function(){if(!f.titulo){alert('Título obrigatório.');return;}p.onSave(f);},style:{padding:'9px 22px',borderRadius:8,border:'none',background:C.g2,color:'#fff',fontSize:13,fontWeight:700,cursor:'pointer'}},'Salvar')));
+}
+
+function FmFd(p){
+  var DEF={id:null,nome:'',url:'',ativo:true,categoria:'Monitoramento'};
+  var sf=useState(p.init||DEF); var f=sf[0],setF=sf[1];
+  function sv(k,v){setF(function(x){var n=Object.assign({},x);n[k]=v;return n;});}
+  return h('div',{style:{display:'flex',flexDirection:'column',gap:14}},
+    h('div',null,h('label',{style:LBL},'Nome *'),h('input',{value:f.nome,onChange:function(e){sv('nome',e.target.value);}})),
+    h('div',null,h('label',{style:LBL},'URL RSS *'),h('input',{value:f.url,onChange:function(e){sv('url',e.target.value);},placeholder:'https://...'})),
+    h('div',null,h('label',{style:LBL},'Categoria'),h('select',{value:f.categoria,onChange:function(e){sv('categoria',e.target.value);}},CATS.map(function(c){return h('option',{key:c},c);}))),
+    h('label',{style:{display:'flex',alignItems:'center',gap:6,fontSize:13,cursor:'pointer'}},h('input',{type:'checkbox',checked:!!f.ativo,onChange:function(e){sv('ativo',e.target.checked);},style:{accentColor:C.g2,width:14,height:14}}),'Feed ativo'),
+    h('div',{style:{display:'flex',gap:8,justifyContent:'flex-end'}},
+      h('button',{type:'button',onClick:p.onClose,style:{padding:'9px 20px',borderRadius:8,border:'1px solid '+C.cl,background:'none',fontSize:13,cursor:'pointer'}},'Cancelar'),
+      h('button',{type:'button',onClick:function(){if(!f.nome||!f.url){alert('Nome e URL obrigatórios.');return;}p.onSave(f);},style:{padding:'9px 22px',borderRadius:8,border:'none',background:C.g2,color:'#fff',fontSize:13,fontWeight:700,cursor:'pointer'}},'Salvar')));
+}
+
+function FmUser(p){
+  var perfDefs={admin:{units:true,news:true,users:true,sols:true,feeds:true,cfg:true,ia:true,rel:true},gestor:{units:true,news:true,users:false,sols:true,feeds:false,cfg:false,ia:true,rel:true},viewer:{units:false,news:false,users:false,sols:false,feeds:false,cfg:false,ia:false,rel:false}};
+  var DEF={id:null,nome:'',email:'',pwd:'',perfil:'viewer',ativo:true,permissoes:Object.assign({},perfDefs.viewer)};
+  var sf=useState(p.init?Object.assign({},p.init,{pwd:''}):DEF); var f=sf[0],setF=sf[1];
+  var ss=useState(false); var show=ss[0],setShow=ss[1];
+  function sv(k,v){setF(function(x){var n=Object.assign({},x);n[k]=v;return n;});}
+  function setPerf(pf){setF(function(x){return Object.assign({},x,{perfil:pf,permissoes:Object.assign({},perfDefs[pf]||perfDefs.viewer)});});}
+  return h('div',{style:{display:'flex',flexDirection:'column',gap:14}},
+    h('div',null,h('label',{style:LBL},'Nome completo *'),h('input',{value:f.nome,onChange:function(e){sv('nome',e.target.value);}})),
+    h('div',null,h('label',{style:LBL},'E-mail *'),h('input',{type:'email',value:f.email,onChange:function(e){sv('email',e.target.value);}})),
+    !p.init&&h('div',null,h('label',{style:LBL},'Senha *'),h('div',{style:{position:'relative'}},
+      h('input',{type:show?'text':'password',value:f.pwd,onChange:function(e){sv('pwd',e.target.value);},placeholder:'Mínimo 6 caracteres',style:{paddingRight:40}}),
+      h('button',{type:'button','aria-label':show?'Ocultar senha':'Mostrar senha',onClick:function(){setShow(function(x){return!x;});},style:{position:'absolute',right:10,top:'50%',transform:'translateY(-50%)',background:'none',border:'none',cursor:'pointer',color:C.cm,lineHeight:1,fontSize:14}},show?'🙈':'👁'))),
+    h('div',null,h('label',{style:LBL},'Perfil'),h('div',{style:{display:'flex',gap:8}},[['admin','👑 Admin'],['gestor','⚙ Gestor'],['viewer','👁 Viewer']].map(function(pr){var pc2=PC[pr[0]]||[C.cm,C.cx];return h('button',{key:pr[0],type:'button',onClick:function(){setPerf(pr[0]);},style:{flex:1,padding:'9px 8px',borderRadius:9,border:'2px solid '+(f.perfil===pr[0]?pc2[0]:C.cl),background:f.perfil===pr[0]?pc2[1]:'#fff',color:f.perfil===pr[0]?pc2[0]:C.cm,fontSize:12,fontWeight:f.perfil===pr[0]?700:400,cursor:'pointer'}},pr[1]);}))),
+    h('div',null,h('label',{style:Object.assign({},LBL,{marginBottom:8})},'Permissões'),h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,background:C.cx,borderRadius:10,padding:14}},Object.entries(PK).map(function(e){return h('label',{key:e[0],style:{display:'flex',alignItems:'center',gap:7,fontSize:13,cursor:'pointer'}},h('input',{type:'checkbox',checked:!!f.permissoes[e[0]],onChange:function(ev){sv('permissoes',Object.assign({},f.permissoes,{[e[0]]:ev.target.checked}));},style:{accentColor:C.g2,width:14,height:14}}),e[1]);}))),
+    h('label',{style:{display:'flex',alignItems:'center',gap:7,fontSize:13,cursor:'pointer'}},h('input',{type:'checkbox',checked:!!f.ativo,onChange:function(e){sv('ativo',e.target.checked);},style:{accentColor:C.g2,width:14,height:14}}),'Usuário ativo'),
+    h('div',{style:{display:'flex',gap:8,justifyContent:'flex-end'}},
+      h('button',{type:'button',onClick:p.onClose,style:{padding:'9px 20px',borderRadius:8,border:'1px solid '+C.cl,background:'none',fontSize:13,cursor:'pointer'}},'Cancelar'),
+      h('button',{type:'button',onClick:function(){if(!f.nome||!f.email){alert('Nome e e-mail obrigatórios.');return;}if(!p.init&&!f.pwd){alert('Senha obrigatória.');return;}p.onSave(f);},style:{padding:'9px 22px',borderRadius:8,border:'none',background:C.g2,color:'#fff',fontSize:13,fontWeight:700,cursor:'pointer'}},'Salvar')));
+}
+</script>
+<script>
+// ── PainelOcupacao ────────────────────────────────────────────────────────────
+function PainelOcupacao(p){
+  var u=p.u, toast2=p.toast2||function(){}, canEdit=p.canEdit;
+  var sNome=useState(''); var nome=sNome[0],setNome=sNome[1];
+  var sTipo=useState(''); var tipo=sTipo[0],setTipo=sTipo[1];
+  var sErr=useState('');  var err=sErr[0],setErr=sErr[1];
+  var sLoad=useState(false); var load=sLoad[0],setLoad=sLoad[1];
+  var sOps=useState(u.orgaosPresentes||[]); var ops=sOps[0],setOps=sOps[1];
+  var ativos=ops.filter(function(o){return o.ativo;});
+  var hist=ops.filter(function(o){return!o.ativo;});
+  var cor=u.tipo==='CIMA'?C.g2:C.b1;
+  function handleApprove(){
+    setErr('');setLoad(true);
+    DB.orgaos.approve(u.id,{nome:nome,tipo:tipo})
+      .then(function(rec){
+        if(!rec)throw new Error('Falha ao registrar órgão.');
+        var novo={id:rec.id,nome:rec.nome,tipo:rec.tipo_uso||tipo,dataEntrada:rec.data_entrada,ativo:true};
+        setOps(function(prev){return prev.concat([novo]);});
+        setNome('');setTipo('');toast2('Órgão "'+rec.nome+'" registrado.');
+      })
+      .catch(function(e){setErr(e.message);})
+      .finally(function(){setLoad(false);});
+  }
+  function handleLeave(oid){
+    DB.orgaos.leave(oid).then(function(){
+      setOps(function(prev){return prev.map(function(o){return o.id===oid?Object.assign({},o,{ativo:false,dataSaida:new Date().toISOString().slice(0,10)}):o;});});
+      toast2('Saída registrada.');
+    }).catch(function(e){setErr(e.message);});
+  }
+  return h('div',null,
+    h('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(130px,1fr))',gap:10,marginBottom:20}},
+      h(StatBox,{label:'Órgãos ativos',value:ativos.length,color:C.g2}),
+      h(StatBox,{label:'Ocupação atual',value:u.ocupacaoAtual||ativos.length,color:u.taxaUso>80?C.rm:cor}),
+      h(StatBox,{label:'Histórico',value:hist.length,color:C.cm})),
+    ativos.length>0&&h(Card,{style:{padding:'16px 18px',marginBottom:14}},
+      h('div',{style:{fontSize:11,fontWeight:700,color:C.cm,marginBottom:10,letterSpacing:.5}},'ÓRGÃOS ATIVOS'),
+      ativos.map(function(o){return h('div',{key:o.id,style:{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 0',borderBottom:'0.5px solid '+C.cl,flexWrap:'wrap',gap:6}},
+        h('div',null,h('div',{style:{fontSize:13,fontWeight:600,color:C.cd}},o.nome),h('div',{style:{fontSize:11,color:C.cm}},'Tipo: '+o.tipo+' · Entrada: '+fmtD(o.dataEntrada))),
+        canEdit&&h('button',{type:'button',onClick:function(){handleLeave(o.id);},style:{padding:'4px 12px',borderRadius:7,border:'1px solid '+C.rm,background:C.rl,color:C.rm,fontSize:11,cursor:'pointer'}},'Registrar saída'));})),
+    canEdit&&h(Card,{style:{padding:'16px 18px',marginBottom:14}},
+      h('div',{style:{fontSize:11,fontWeight:700,color:C.g2,marginBottom:12,letterSpacing:.5}},'REGISTRAR ENTRADA'),
+      err&&h('div',{style:{background:C.rl,borderRadius:7,padding:'8px 12px',fontSize:12,color:C.rm,marginBottom:10}},err),
+      h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr auto',gap:10,alignItems:'flex-end'}},
+        h('div',null,h('label',{style:LBL},'Órgão *'),h('input',{value:nome,onChange:function(e){setNome(e.target.value);},placeholder:'Ex: SEAGRI'})),
+        h('div',null,h('label',{style:LBL},'Tipo de uso *'),h('input',{value:tipo,onChange:function(e){setTipo(e.target.value);},placeholder:'Ex: Capacitação'})),
+        h('button',{type:'button',onClick:handleApprove,disabled:load||!nome||!tipo,style:{padding:'8px 14px',borderRadius:8,border:'none',background:(!nome||!tipo||load)?C.cl:C.g2,color:(!nome||!tipo||load)?C.cm:'#fff',fontSize:12,fontWeight:700,cursor:(!nome||!tipo||load)?'default':'pointer',whiteSpace:'nowrap'}},'+ Registrar'))),
+    hist.length>0&&h('div',null,
+      h('div',{style:{fontSize:11,fontWeight:700,color:C.cm,marginBottom:8,letterSpacing:.5}},'HISTÓRICO DE SAÍDAS'),
+      hist.map(function(o){return h('div',{key:o.id,style:{display:'flex',justifyContent:'space-between',padding:'6px 0',borderBottom:'0.5px solid '+C.cl,fontSize:12,color:C.cm}},h('span',null,o.nome+' ('+o.tipo+')'),h('span',null,fmtD(o.dataEntrada)+' → '+(o.dataSaida?fmtD(o.dataSaida):'—')));})
+    ));
+}
+
+// ── PgMapa ────────────────────────────────────────────────────────────────────
+function PgMapa(p){
+  var uns=p.uns||[], onVer=p.onVerUnidade;
+  var sT=useState(''); var fT=sT[0],setFT=sT[1];
+  var sM=useState(''); var fM=sM[0],setFM=sM[1];
+  var sB=useState(''); var busca=sB[0],setBusca=sB[1];
+  var sS=useState(null); var selId=sS[0],setSelId=sS[1];
+  var municipios=useMemo(function(){return[...new Set(uns.map(function(u){return u.municipio;}))].sort();},[uns]);
+  var filtradas=useMemo(function(){return uns.filter(function(u){
+    if(!u.visivel)return false;
+    if(fT&&u.tipo!==fT)return false;
+    if(fM&&u.municipio!==fM)return false;
+    if(busca){var b=busca.toLowerCase();if(!u.nome.toLowerCase().includes(b)&&!u.municipio.toLowerCase().includes(b))return false;}
+    return true;
+  });},[uns,fT,fM,busca]);
+  var handleSel=useCallback(function(uid){setSelId(uid);var u=uns.find(function(x){return x.id===uid;});if(u)onVer(u);},[uns,onVer]);
+  return h('div',{style:{display:'flex',flexDirection:'column',height:'calc(100vh - 52px)'}},
+    h('div',{style:{background:'#fff',borderBottom:'1px solid '+C.cl,padding:'10px 16px',display:'flex',gap:8,flexWrap:'wrap',alignItems:'center',flexShrink:0}},
+      h('div',{style:{position:'relative',flex:1,minWidth:160}},
+        h('span',{'aria-hidden':'true',style:{position:'absolute',left:10,top:'50%',transform:'translateY(-50%)',pointerEvents:'none'}},'🔍'),
+        h('input',{value:busca,onChange:function(e){setBusca(e.target.value);},placeholder:'Buscar unidade…','aria-label':'Buscar unidade',style:{paddingLeft:30,width:'100%',boxSizing:'border-box'}})),
+      h('select',{'aria-label':'Filtrar por município',value:fM,onChange:function(e){setFM(e.target.value);},style:{fontSize:12,padding:'7px 10px',border:'1px solid '+C.cl,borderRadius:8,background:'#fff',color:C.cd,outline:'none',cursor:'pointer'}},
+        h('option',{value:''},'Todos os municípios'),municipios.map(function(m){return h('option',{key:m},m);})),
+      [['','Todas'],['CIMA','CIMA'],['UGAI','UGAI']].map(function(pr){var ativo=fT===pr[0],cor2=pr[0]==='UGAI'?C.b1:C.g2;return h('button',{key:pr[0],type:'button',onClick:function(){setFT(pr[0]);},style:{padding:'7px 14px',borderRadius:8,border:'1px solid '+(ativo?cor2:C.cl),background:ativo?(pr[0]==='UGAI'?C.bl:C.gx):'none',color:ativo?cor2:C.cm,fontSize:12,cursor:'pointer',fontWeight:ativo?700:400}},pr[1]);}),
+      h('span',{'aria-live':'polite',style:{fontSize:12,color:C.cm}},filtradas.length+'/'+uns.filter(function(u){return u.visivel;}).length+' unidades')),
+    h('div',{style:{display:'flex',flex:1,overflow:'hidden'}},
+      h('div',{style:{width:256,flexShrink:0,background:'#fff',borderRight:'1px solid '+C.cl,display:'flex',flexDirection:'column',overflow:'hidden'}},
+        h('div',{style:{padding:'11px 14px 8px',borderBottom:'0.5px solid '+C.cl,fontSize:11,fontWeight:700,color:C.cm,letterSpacing:.5,flexShrink:0}},'UNIDADES NO MAPA'),
+        h('div',{style:{flex:1,overflowY:'auto',padding:8}},
+          !filtradas.length&&h('div',{style:{textAlign:'center',padding:'28px 12px',color:C.cm,fontSize:13}},'Nenhuma unidade.'),
+          filtradas.map(function(u){
+            var cor2=u.status==='manutencao'?C.am:(u.tipo==='CIMA'?C.g2:C.b1);
+            var sel=selId===u.id;
+            return h('div',{key:u.id,role:'button',tabIndex:0,onClick:function(){setSelId(sel?null:u.id);},style:{border:'1px solid '+(sel?cor2:C.cl),borderRadius:10,padding:'10px 12px',marginBottom:6,cursor:'pointer',background:sel?cor2+'10':'#fff'}},
+              h('div',{style:{fontSize:13,fontWeight:600,color:C.cd,marginBottom:3}},u.nome),
+              h('div',{style:{display:'flex',gap:5,flexWrap:'wrap',marginBottom:4}},h('span',{style:{fontSize:10,fontWeight:700,padding:'2px 8px',borderRadius:12,background:cor2+'20',color:cor2}},u.tipo),h('span',{style:{fontSize:11,color:C.cm}},u.municipio)),
+              h('div',{style:{fontSize:11,color:u.status==='ativo'?C.g2:C.am}},slabel(u.status)+' · '+u.taxaUso+'%'),
+              sel&&h('button',{type:'button',onClick:function(e){e.stopPropagation();onVer(u);},style:{marginTop:8,width:'100%',padding:'6px 0',borderRadius:7,border:'none',background:cor2,color:'#fff',fontSize:11,fontWeight:700,cursor:'pointer'}},'Ver página →'));
+          }))),
+      h('div',{style:{flex:1,overflow:'hidden'}},h(MapView,{units:filtradas,height:'100%',compact:false,singleUnit:false,onSelectUnit:handleSel}))));
+}
+
+// ── TelaLogin ─────────────────────────────────────────────────────────────────
+function TelaLogin(p){
+  var sE=useState(''); var email=sE[0],setEmail=sE[1];
+  var sP=useState(''); var pwd=sP[0],setPwd=sP[1];
+  var sEr=useState(''); var err=sEr[0],setErr=sEr[1];
+  var sLd=useState(false); var load=sLd[0],setLoad=sLd[1];
+  var sRec=useState(false); var rec=sRec[0],setRec=sRec[1];
+  var sMsg=useState(''); var msg=sMsg[0],setMsg=sMsg[1];
+  var sSh=useState(false); var show=sSh[0],setShow=sSh[1];
+  function login(){
+    setErr('');setLoad(true);
+    sbAuth.signIn(email,pwd).then(function(d){return DB.usuarios.byAuth(d.user.id);})
+      .then(function(user){if(!user||!user.ativo){sbAuth.signOut();throw new Error('Usuário inativo ou não cadastrado.');}p.onLogin(user);})
+      .catch(function(e){setErr(e.message||'Credenciais inválidas.');})
+      .finally(function(){setLoad(false);});
+  }
+  function recover(){
+    setErr('');setLoad(true);
+    sbAuth.resetPassword(email).then(function(){setMsg('Link enviado para '+email);}).catch(function(e){setErr(e.message);}).finally(function(){setLoad(false);});
+  }
+  return h('div',{onClick:p.onClose,style:{position:'fixed',inset:0,background:'rgba(0,0,0,.6)',zIndex:5000,display:'flex',alignItems:'center',justifyContent:'center',padding:16}},
+    h('div',{onClick:function(e){e.stopPropagation();},role:'dialog','aria-modal':'true','aria-label':'Login administrativo',style:{background:'#fff',borderRadius:16,width:'100%',maxWidth:380,overflow:'hidden',boxShadow:'0 20px 60px rgba(0,0,0,.25)'}},
+      h('div',{style:{background:'linear-gradient(135deg,'+C.g0+','+C.g1+')',padding:'28px 28px 22px',textAlign:'center'}},
+        h('div',{style:{width:52,height:52,borderRadius:14,background:'rgba(255,255,255,.15)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:24,margin:'0 auto 12px'},'aria-hidden':'true'},'🔐'),
+        h('h2',{style:{fontSize:18,fontWeight:700,color:'#fff',margin:'0 0 4px'}},'Acesso administrativo'),
+        h('p',{style:{fontSize:12,color:'rgba(255,255,255,.55)',margin:0}},'SEMA/AC — Gestão CIMA & UGAI')),
+      h('div',{style:{padding:'24px 28px'}},
+        !SB_OK&&h('div',{style:{background:'#FFF3E0',border:'1px solid '+C.am,borderRadius:8,padding:'10px 12px',fontSize:12,color:C.t1,marginBottom:16}},'⚠ Supabase não configurado. Edite window.__SB_URL__ e window.__SB_ANON__ no HTML.'),
+        err&&h('div',{role:'alert',style:{background:C.rl,borderRadius:8,padding:'9px 12px',fontSize:12,color:C.rm,marginBottom:14}},err),
+        msg&&h('div',{style:{background:C.gx,borderRadius:8,padding:'9px 12px',fontSize:12,color:C.g2,marginBottom:14}},msg),
+        h('div',{style:{marginBottom:14}},h('label',{style:LBL,htmlFor:'login-email'},'E-mail'),h('input',{id:'login-email',value:email,onChange:function(e){setEmail(e.target.value);},type:'email',autoComplete:'email',onKeyDown:function(e){if(e.key==='Enter'&&!rec)login();}})),
+        !rec&&h('div',{style:{marginBottom:20,position:'relative'}},
+          h('label',{style:LBL,htmlFor:'login-pwd'},'Senha'),
+          h('input',{id:'login-pwd',type:show?'text':'password',value:pwd,onChange:function(e){setPwd(e.target.value);},onKeyDown:function(e){if(e.key==='Enter')login();},autoComplete:'current-password',style:{paddingRight:40}}),
+          h('button',{type:'button','aria-label':show?'Ocultar senha':'Mostrar senha',onClick:function(){setShow(function(x){return!x;});},style:{position:'absolute',right:10,top:32,background:'none',border:'none',cursor:'pointer',color:C.cm,fontSize:14,lineHeight:1}},show?'🙈':'👁')),
+        rec
+          ?h('button',{type:'button',onClick:recover,disabled:load||!email,style:{width:'100%',padding:'11px 0',borderRadius:10,border:'none',background:C.g2,color:'#fff',fontSize:14,fontWeight:700,cursor:'pointer',opacity:(!email||load)?.5:1}},load?'Enviando…':'Enviar link de recuperação')
+          :h('button',{type:'button',onClick:login,disabled:load||!email||!pwd,style:{width:'100%',padding:'11px 0',borderRadius:10,border:'none',background:C.g2,color:'#fff',fontSize:14,fontWeight:700,cursor:'pointer',opacity:(!email||!pwd||load)?.5:1}},load?'Entrando…':'Entrar'),
+        h('div',{style:{textAlign:'center',marginTop:14}},h('button',{type:'button',onClick:function(){setRec(function(x){return!x;});setErr('');setMsg('');},style:{background:'none',border:'none',fontSize:12,color:C.cm,cursor:'pointer',textDecoration:'underline'}},rec?'← Voltar ao login':'Esqueci minha senha')))));
+}
+</script>
+<script>
+// ── PageUnidade ───────────────────────────────────────────────────────────────
+function PageUnidade(p){
+  var u=p.u, onBack=p.onBack, onSol=p.onSolicitar, canEdit=p.canEdit, toast2=p.toast2||function(){};
+  var sA=useState('sobre'); var aba=sA[0],setAba=sA[1];
+  var cor=u.tipo==='CIMA'?C.g2:C.b1;
+  var scPair=scMap[u.status]||[C.cm,C.cx];
+  var abas=[['sobre','Sobre'],['historia','História'],['galeria','Galeria'],['mapa','Localização'],['estrutura','Estrutura'],['ocupacao','Ocupação']];
+  return h('div',{style:{background:'#fff',minHeight:'100vh'}},
+    h('div',{style:{position:'relative',height:300,overflow:'hidden',background:cor}},
+      u.foto&&h('img',{src:u.foto,alt:u.nome,style:{width:'100%',height:'100%',objectFit:'cover',opacity:.7}}),
+      h('div',{style:{position:'absolute',inset:0,background:'linear-gradient(to bottom,transparent 30%,rgba(0,0,0,.75))'}}),
+      h('div',{style:{position:'absolute',bottom:0,left:0,right:0,padding:'20px 24px'}},
+        h('button',{type:'button',onClick:onBack,style:{background:'rgba(255,255,255,.2)',border:'0.5px solid rgba(255,255,255,.4)',color:'#fff',padding:'5px 14px',borderRadius:8,fontSize:12,cursor:'pointer',marginBottom:12}},'← Voltar'),
+        h('div',{style:{display:'flex',gap:8,marginBottom:8}},h(Pill,{t:u.tipo,c:cor,b:'rgba(255,255,255,.2)'}),h(Pill,{t:slabel(u.status),c:scPair[0],b:scPair[1]})),
+        h('h1',{style:{fontSize:26,fontWeight:700,color:'#fff',margin:'0 0 4px'}},u.nome),
+        h('p',{style:{fontSize:13,color:'rgba(255,255,255,.8)',margin:0}},u.municipio+' · '+u.regional)),
+      h('button',{type:'button',onClick:onSol,style:{position:'absolute',top:20,right:20,background:cor,border:'none',color:'#fff',padding:'9px 18px',borderRadius:10,fontSize:13,fontWeight:600,cursor:'pointer'}},'Solicitar uso')),
+    h('div',{style:{borderBottom:'1px solid '+C.cl,background:'#fff',position:'sticky',top:52,zIndex:10}},
+      h('div',{style:{maxWidth:960,margin:'0 auto',padding:'0 20px',display:'flex',overflowX:'auto'},role:'tablist'},
+        abas.map(function(a){return h('button',{key:a[0],type:'button',role:'tab','aria-selected':aba===a[0],onClick:function(){setAba(a[0]);},style:{background:'none',border:'none',cursor:'pointer',fontSize:13,fontWeight:aba===a[0]?700:400,color:aba===a[0]?cor:C.cm,padding:'13px 18px',borderBottom:aba===a[0]?'2.5px solid '+cor:'2.5px solid transparent',whiteSpace:'nowrap'}},a[1]);}))),
+    h('div',{style:{maxWidth:960,margin:'0 auto',padding:'28px 20px 60px'}},
+      h('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(130px,1fr))',gap:10,marginBottom:24}},
+        h(StatBox,{label:'Taxa de uso',value:u.taxaUso+'%',color:u.taxaUso>80?C.rm:C.g2}),
+        h(StatBox,{label:'Agendamentos/mês',value:u.ag||0,color:C.b1}),
+        h(StatBox,{label:'Quartos',value:u.quartos||'—',color:cor}),
+        h(StatBox,{label:'Salas',value:u.salas,color:cor})),
+      aba==='sobre'&&h('div',{style:{display:'grid',gridTemplateColumns:'2fr 1fr',gap:20}},
+        h('div',null,
+          h(Card,{style:{padding:'20px 22px',marginBottom:16}},h('h3',{style:{fontSize:14,fontWeight:700,margin:'0 0 10px',color:cor}},'Descrição'),h('p',{style:{fontSize:14,color:C.cd,lineHeight:1.8,margin:0}},u.descricao||'Sem descrição.')),
+          u.decreto&&h('div',{style:{background:C.gx,border:'1px solid '+C.gl,borderRadius:12,padding:'14px 18px',marginBottom:16,display:'flex',gap:10}},h('span',{'aria-hidden':'true',style:{fontSize:18}},'📜'),h('div',null,h('div',{style:{fontSize:11,fontWeight:700,color:C.g2,marginBottom:3}},'DECRETO DE CRIAÇÃO'),h('div',{style:{fontSize:13,color:C.cd,fontWeight:500}},u.decreto))),
+          u.extras&&u.extras.length>0&&h(Card,{style:{padding:'16px 20px'}},h('h3',{style:{fontSize:13,fontWeight:700,margin:'0 0 10px',color:cor}},'Informações complementares'),u.extras.map(function(e){return h('div',{key:e.id,style:{display:'flex',justifyContent:'space-between',padding:'7px 0',borderBottom:'0.5px solid '+C.cl}},h('span',{style:{fontSize:13,color:C.cm}},e.k),h('span',{style:{fontSize:13,fontWeight:600,color:C.cd}},e.v));}))),
+        h('div',null,
+          u.orgaos&&u.orgaos.length>0&&h(Card,{style:{padding:'16px 18px',marginBottom:14}},h('h3',{style:{fontSize:13,fontWeight:700,margin:'0 0 10px',color:cor}},'Órgãos presentes'),h('div',{style:{display:'flex',flexWrap:'wrap',gap:6}},u.orgaos.map(function(o){return h(Pill,{key:o,t:o,c:C.b1,b:C.bl});}))),
+          h(Card,{style:{padding:'16px 18px'}},h('h3',{style:{fontSize:13,fontWeight:700,margin:'0 0 8px',color:cor}},'Coordenadas'),h('div',{style:{fontFamily:'monospace',fontSize:12,color:C.cd,lineHeight:2}},h('div',null,'Lat: '+u.coords.lat.toFixed(6)),h('div',null,'Lon: '+u.coords.lng.toFixed(6))),h('a',{href:'https://www.google.com/maps?q='+u.coords.lat+','+u.coords.lng,target:'_blank',rel:'noopener noreferrer',style:{display:'block',marginTop:8,fontSize:11,color:C.b1,textDecoration:'none',fontWeight:500}},'Abrir no Google Maps ↗')))),
+      aba==='historia'&&h(Card,{style:{padding:'24px 28px',maxWidth:740}},h('h2',{style:{fontSize:18,fontWeight:700,margin:'0 0 16px',color:cor}},'História da unidade'),u.historia?h('p',{style:{fontSize:14,color:C.cd,lineHeight:1.9,margin:0}},u.historia):h('p',{style:{fontSize:14,color:C.cm,fontStyle:'italic'}},'Histórico não cadastrado.')),
+      aba==='galeria'&&h('div',null,h('h2',{style:{fontSize:16,fontWeight:700,margin:'0 0 16px',color:cor}},'Galeria de fotos'),u.galeria&&u.galeria.length>0?h('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(180px,1fr))',gap:10}},u.galeria.map(function(f,i){return h('div',{key:i,style:{aspectRatio:'4/3',borderRadius:10,overflow:'hidden',background:C.cl}},h('img',{src:f.url,alt:f.leg||('Foto '+(i+1)),loading:'lazy',style:{width:'100%',height:'100%',objectFit:'cover',display:'block'}}));})):h('p',{style:{fontSize:14,color:C.cm,fontStyle:'italic'}},'Nenhuma foto.')),
+      aba==='mapa'&&h('div',null,h('h2',{style:{fontSize:16,fontWeight:700,margin:'0 0 16px',color:cor}},'Localização georreferenciada'),h(MapView,{units:[u],height:'380px',compact:false,singleUnit:true}),h('div',{style:{marginTop:8,display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 12px',background:C.cx,borderRadius:8,fontSize:11,color:C.cm}},h('span',{style:{fontFamily:'monospace'}},'Lat '+u.coords.lat.toFixed(6)+', Lon '+u.coords.lng.toFixed(6)),h('a',{href:'https://www.google.com/maps?q='+u.coords.lat+','+u.coords.lng,target:'_blank',rel:'noopener noreferrer',style:{color:C.b1,textDecoration:'none',fontWeight:500}},'Abrir no Maps ↗'))),
+      aba==='estrutura'&&h('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))',gap:12}},
+        [{ic:'🛏',l:'Quartos',v:u.quartos||'Não possui'},{ic:'🚪',l:'Salas de reunião',v:u.salas},{ic:'🍽',l:'Cozinha',v:u.cozinha?'Sim':'Não'},{ic:'🎤',l:'Auditório',v:u.auditorio?'Sim':'Não'}].map(function(s,i){return h(Card,{key:i,style:{padding:'16px 18px'}},h('div',{'aria-hidden':'true',style:{fontSize:22,marginBottom:8}},s.ic),h('div',{style:{fontSize:11,color:C.cm,marginBottom:4}},s.l),h('div',{style:{fontSize:18,fontWeight:700,color:cor}},s.v));})),
+      aba==='ocupacao'&&h(PainelOcupacao,{u:u,canEdit:canEdit,toast2:toast2})));
+}
+
+// ── PageNoticia ────────────────────────────────────────────────────────────────
+function PageNoticia(p){
+  var n=p.n, onBack=p.onBack, cc=getCC(n.categoria);
+  return h('div',{style:{background:'#fff',minHeight:'100vh'}},
+    h('div',{style:{background:C.g0,padding:'20px 28px'}},
+      h('button',{type:'button',onClick:onBack,style:{background:'rgba(255,255,255,.15)',border:'0.5px solid rgba(255,255,255,.3)',color:'#fff',padding:'5px 14px',borderRadius:8,fontSize:12,cursor:'pointer',marginBottom:16}},'← Voltar'),
+      h('div',{style:{display:'flex',gap:8,marginBottom:10,flexWrap:'wrap'}},h(Pill,{t:n.categoria,c:cc[0],b:'rgba(255,255,255,.15)'}),n.destaque&&h(Pill,{t:'Destaque',c:C.am,b:'rgba(255,255,255,.12)'})),
+      h('h1',{style:{fontSize:24,fontWeight:700,color:'#fff',margin:'0 0 10px',maxWidth:700,lineHeight:1.3}},n.titulo),
+      h('div',{style:{fontSize:12,color:'rgba(255,255,255,.6)',display:'flex',gap:14,flexWrap:'wrap'}},n.data&&h('span',null,'📅 '+fmtD(n.data)),n.autor&&h('span',null,'✍ '+n.autor),n.fonte&&h('span',null,'🔗 '+n.fonte))),
+    h('div',{style:{maxWidth:760,margin:'0 auto',padding:'32px 20px 60px'}},
+      n.resumo&&h('p',{style:{fontSize:16,color:C.cm,fontStyle:'italic',borderLeft:'3px solid '+cc[0],paddingLeft:16,marginBottom:28,lineHeight:1.7}},n.resumo),
+      // FIX: safeHtml sanitiza conteúdo HTML antes de renderizar (proteção XSS)
+      h('div',{style:{lineHeight:1.8,color:C.cd,fontSize:14},dangerouslySetInnerHTML:{__html:safeHtml(n.conteudo||'')}})));
+}
+
+// ── SecNoticias ───────────────────────────────────────────────────────────────
+function SecNoticias(p){
+  var noticias=p.noticias||[], feeds=p.feeds||[], onVer=p.onVer;
+  var sB=useState(''); var busca=sB[0],setBusca=sB[1];
+  var sC=useState(''); var fcat=sC[0],setFcat=sC[1];
+  var sD=useState(''); var fdt=sD[0],setFdt=sD[1];
+  var vis=noticias.filter(function(n){return n.visivel;});
+  var fil=vis.filter(function(n){
+    if(busca&&!n.titulo.toLowerCase().includes(busca.toLowerCase()))return false;
+    if(fcat&&n.categoria!==fcat)return false;
+    if(fdt&&n.data<fdt)return false;
+    return true;
+  });
+  var cats=[...new Set(vis.map(function(n){return n.categoria;}))];
+  var dest=fil.filter(function(n){return n.destaque;});
+  var rest=fil.filter(function(n){return!n.destaque;});
+  var nFeeds=feeds.filter(function(f){return f.ativo;}).length;
+  return h('div',{style:{maxWidth:1100,margin:'0 auto',padding:'28px 16px 60px'}},
+    h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:12,marginBottom:20}},
+      h('div',null,h('h1',{style:{fontSize:22,fontWeight:700,margin:0,color:C.cd}},'Notícias'),h('p',{style:{fontSize:13,color:C.cm,margin:'4px 0 0'}},'Informações e atualizações da SEMA/AC')),
+      nFeeds>0&&h('div',{style:{background:C.gx,border:'1px solid '+C.gl,borderRadius:10,padding:'8px 14px',fontSize:11,color:C.g2,fontWeight:700}},'📡 '+nFeeds+' feed'+(nFeeds>1?'s':'')+' ativo'+(nFeeds>1?'s':''))),
+    h('div',{style:{display:'flex',gap:8,marginBottom:20,flexWrap:'wrap'}},
+      h('input',{'aria-label':'Buscar notícias',value:busca,onChange:function(e){setBusca(e.target.value);},placeholder:'🔍 Buscar…',style:{minWidth:200}}),
+      h('select',{'aria-label':'Filtrar por categoria',value:fcat,onChange:function(e){setFcat(e.target.value);},style:{fontSize:12,padding:'7px 10px',border:'1px solid '+C.cl,borderRadius:8,background:'#fff',color:C.cd,outline:'none',cursor:'pointer'}},h('option',{value:''},'Todas as categorias'),cats.map(function(c){return h('option',{key:c},c);})),
+      h('input',{type:'date','aria-label':'Filtrar a partir de data',value:fdt,onChange:function(e){setFdt(e.target.value);},style:{fontSize:12}}),
+      (busca||fcat||fdt)&&h('button',{type:'button',onClick:function(){setBusca('');setFcat('');setFdt('');},style:{padding:'6px 12px',borderRadius:8,border:'1px solid '+C.cl,background:'none',fontSize:12,cursor:'pointer',color:C.cm}},'Limpar')),
+    dest.length>0&&h('div',{style:{marginBottom:28}},
+      h('div',{style:{fontSize:11,fontWeight:700,color:C.cm,letterSpacing:.6,marginBottom:12}},'EM DESTAQUE'),
+      h('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(280px,1fr))',gap:14}},
+        dest.map(function(n){var cc=getCC(n.categoria);return h('div',{key:n.id,role:'button',tabIndex:0,onClick:function(){onVer(n);},style:{background:'#fff',border:'1.5px solid '+cc[0]+'40',borderRadius:14,overflow:'hidden',cursor:'pointer'},onMouseEnter:function(e){e.currentTarget.style.borderColor=cc[0];},onMouseLeave:function(e){e.currentTarget.style.borderColor=cc[0]+'40';}},
+          h('div',{style:{background:'linear-gradient(135deg,'+cc[0]+'e0,'+cc[0]+')',padding:'18px 20px 14px'}},h(Pill,{t:n.categoria,c:'#fff',b:'rgba(255,255,255,.2)',s:10}),h('h3',{style:{fontSize:15,fontWeight:700,color:'#fff',margin:'8px 0 6px',lineHeight:1.4}},n.titulo),h('div',{style:{fontSize:11,color:'rgba(255,255,255,.65)'}},fmtD(n.data))),
+          h('div',{style:{padding:'12px 18px'}},h('p',{style:{fontSize:13,color:C.cd,lineHeight:1.6,margin:'0 0 8px'}},n.resumo),h('span',{style:{fontSize:12,color:cc[0],fontWeight:600}},'Ler mais →')));}))),
+    rest.length>0&&h('div',null,
+      h('div',{style:{fontSize:11,fontWeight:700,color:C.cm,letterSpacing:.6,marginBottom:12}},'TODAS AS NOTÍCIAS'),
+      h('div',{style:{display:'flex',flexDirection:'column',gap:10}},
+        rest.map(function(n){var cc=getCC(n.categoria);return h('div',{key:n.id,role:'button',tabIndex:0,onClick:function(){onVer(n);},style:{background:'#fff',border:'1px solid '+C.cl,borderRadius:12,padding:'14px 18px',cursor:'pointer',display:'flex',gap:12},onMouseEnter:function(e){e.currentTarget.style.borderColor=cc[0];},onMouseLeave:function(e){e.currentTarget.style.borderColor=C.cl;}},
+          h('div',{style:{width:4,flexShrink:0,borderRadius:2,background:cc[0],alignSelf:'stretch'}}),
+          h('div',{style:{flex:1}},h('div',{style:{display:'flex',gap:6,marginBottom:6,flexWrap:'wrap'}},h(Pill,{t:n.categoria,c:cc[0],b:cc[1],s:10}),n.unidade&&h(Pill,{t:n.unidade,c:C.cm,b:C.cl,s:10})),h('h3',{style:{fontSize:14,fontWeight:600,color:C.cd,margin:'0 0 4px',lineHeight:1.4}},n.titulo),h('p',{style:{fontSize:12,color:C.cm,margin:'0 0 5px',lineHeight:1.5}},n.resumo),h('span',{style:{fontSize:11,color:C.cm}},fmtD(n.data)+(n.autor?' · '+n.autor:''))),
+          h('span',{style:{fontSize:12,color:cc[0],fontWeight:600,alignSelf:'center'}},'→'));}))),
+    !fil.length&&h('div',{style:{textAlign:'center',padding:'40px',color:C.cm,fontSize:14}},'Nenhuma notícia encontrada.'));
+}
+
+// ── PgSol ─────────────────────────────────────────────────────────────────────
+function PgSol(p){
+  var uns=p.uns||[], initUn=p.initUn||'', onDone=p.onDone;
+  var sf=useState({nome:'',org:'',email:'',un:initUn,ev:'',dt:'',hr:'',just:''}); var f=sf[0],setF=sf[1];
+  var ss=useState(false); var senv=ss[0],setSenv=ss[1];
+  var sLd=useState(false); var load=sLd[0],setLoad=sLd[1];
+  var sErr=useState(''); var err=sErr[0],setErr=sErr[1];
+  function sv(k,v){setF(function(x){var n=Object.assign({},x);n[k]=v;return n;});}
+  function submit(){
+    if(!f.nome||!f.email||!f.un||!f.dt){setErr('Preencha os campos obrigatórios.');return;}
+    setErr('');setLoad(true);
+    DB.solicitacoes.insert(f).then(function(){setSenv(true);}).catch(function(e){setErr('Erro: '+e.message);}).finally(function(){setLoad(false);});
+  }
+  if(senv) return h('div',{style:{maxWidth:680,margin:'0 auto',padding:'28px 16px 60px'}},
+    h('div',{style:{textAlign:'center',padding:'60px 20px'}},
+      h('div',{'aria-hidden':'true',style:{width:64,height:64,borderRadius:'50%',background:C.gx,display:'flex',alignItems:'center',justifyContent:'center',margin:'0 auto 18px',fontSize:28}},'✓'),
+      h('h2',{style:{fontSize:22,fontWeight:700,margin:'0 0 10px',color:C.cd}},'Solicitação enviada!'),
+      h('p',{style:{fontSize:14,color:C.cm,margin:'0 0 28px'}},'Protocolo gerado. Retorno em até 2 dias úteis.'),
+      h('div',{style:{display:'flex',gap:10,justifyContent:'center'}},
+        h('button',{type:'button',onClick:onDone,style:{padding:'10px 22px',borderRadius:10,border:'1px solid '+C.cl,background:'none',fontSize:13,cursor:'pointer',color:C.cd}},'Início'),
+        h('button',{type:'button',onClick:function(){setSenv(false);setF({nome:'',org:'',email:'',un:initUn,ev:'',dt:'',hr:'',just:''});},style:{padding:'10px 22px',borderRadius:10,border:'none',background:C.g2,color:'#fff',fontSize:13,fontWeight:700,cursor:'pointer'}},'Nova solicitação'))));
+  return h('div',{style:{maxWidth:680,margin:'0 auto',padding:'28px 16px 60px'}},
+    h('h1',{style:{fontSize:22,fontWeight:700,margin:'0 0 4px',color:C.cd}},'Solicitar uso'),
+    h('p',{style:{fontSize:14,color:C.cm,margin:'0 0 22px'}},'Formalize sua solicitação de uso de uma unidade CIMA ou UGAI.'),
+    err&&h('div',{role:'alert',style:{background:C.rl,borderRadius:9,padding:'10px 14px',fontSize:13,color:C.rm,marginBottom:14}},err),
+    h('div',{style:{display:'flex',flexDirection:'column',gap:14}},
+      h(Card,{style:{padding:'20px 22px'}},
+        h('div',{style:{fontSize:13,fontWeight:700,color:C.g2,marginBottom:14}},'Dados do solicitante'),
+        h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}},
+          h('div',null,h('label',{style:LBL},'Nome completo *'),h('input',{value:f.nome,onChange:function(e){sv('nome',e.target.value);}})),
+          h('div',null,h('label',{style:LBL},'Órgão *'),h('input',{value:f.org,onChange:function(e){sv('org',e.target.value);}})),
+          h('div',{style:{gridColumn:'1/-1'}},h('label',{style:LBL},'E-mail *'),h('input',{type:'email',value:f.email,onChange:function(e){sv('email',e.target.value);}})))),
+      h(Card,{style:{padding:'20px 22px'}},
+        h('div',{style:{fontSize:13,fontWeight:700,color:C.g2,marginBottom:14}},'Dados da solicitação'),
+        h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}},
+          h('div',null,h('label',{style:LBL},'Unidade *'),h('select',{value:f.un,onChange:function(e){sv('un',e.target.value);}},h('option',{value:''},'Selecione'),uns.filter(function(u){return u.visivel;}).map(function(u){return h('option',{key:u.id},u.nome);}))),
+          h('div',null,h('label',{style:LBL},'Tipo de evento *'),h('select',{value:f.ev,onChange:function(e){sv('ev',e.target.value);}},h('option',{value:''},'Selecione'),['Reunião técnica','Capacitação','Evento institucional','Hospedagem','Fiscalização','Outro'].map(function(e){return h('option',{key:e},e);}))),
+          h('div',null,h('label',{style:LBL},'Data *'),h('input',{type:'date',value:f.dt,onChange:function(e){sv('dt',e.target.value);}})),
+          h('div',null,h('label',{style:LBL},'Horário'),h('input',{type:'time',value:f.hr,onChange:function(e){sv('hr',e.target.value);}})),
+          h('div',{style:{gridColumn:'1/-1'}},h('label',{style:LBL},'Justificativa'),h('textarea',{value:f.just,onChange:function(e){sv('just',e.target.value);},rows:3,style:{width:'100%',resize:'vertical',fontFamily:'inherit',fontSize:13,borderRadius:8,border:'1px solid '+C.cl,padding:'8px 12px',boxSizing:'border-box'}})))),
+      h('button',{type:'button',onClick:submit,disabled:load,style:{padding:'13px 0',borderRadius:12,border:'none',background:load?C.cl:C.g2,color:load?C.cm:'#fff',fontSize:15,fontWeight:700,cursor:load?'default':'pointer'}},load?'Enviando…':'Enviar solicitação')));
+}
+
+// ── PgTransp ──────────────────────────────────────────────────────────────────
+function PgTransp(p){
+  var uns=p.uns||[], sols=p.sols||[], onVerUn=p.onVerUn;
+  return h('div',{style:{maxWidth:900,margin:'0 auto',padding:'28px 16px 50px'}},
+    h('h1',{style:{fontSize:22,fontWeight:700,margin:'0 0 20px',color:C.cd}},'Transparência pública'),
+    h('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(140px,1fr))',gap:12,marginBottom:24}},
+      h(StatBox,{label:'Total unidades',value:uns.filter(function(u){return u.visivel;}).length,color:C.g2}),
+      h(StatBox,{label:'Operacionais',value:uns.filter(function(u){return u.status==='ativo'&&u.visivel;}).length,color:C.g2}),
+      h(StatBox,{label:'Manutenção',value:uns.filter(function(u){return u.status==='manutencao';}).length,color:C.am}),
+      h(StatBox,{label:'Solicitações',value:sols.length,color:C.b1})),
+    h(Card,{style:{padding:'18px 20px'}},
+      uns.filter(function(u){return u.visivel;}).map(function(u){
+        var sp=scMap[u.status]||[C.cm,C.cx];
+        return h('div',{key:u.id,style:{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'10px 0',borderBottom:'0.5px solid '+C.cl,flexWrap:'wrap',gap:8}},
+          h('div',null,h('div',{style:{fontSize:13,fontWeight:600,color:C.cd}},u.nome),h('div',{style:{fontSize:11,color:C.cm}},'📍 '+u.coords.lat.toFixed(4)+', '+u.coords.lng.toFixed(4)+' · '+u.municipio)),
+          h('div',{style:{display:'flex',gap:8,alignItems:'center'}},h(Pill,{t:slabel(u.status),c:sp[0],b:sp[1]}),h('span',{style:{fontSize:12,color:C.cm}},u.taxaUso+'%'),h('button',{type:'button',onClick:function(){onVerUn(u);},style:{padding:'4px 12px',borderRadius:8,border:'1px solid '+C.g2,background:'none',color:C.g2,fontSize:11,cursor:'pointer'}},'Ver')));
+      })));
+}
+</script>
+<script>
+// ── Relatórios ────────────────────────────────────────────────────────────────
+var UN_COLS=[{key:'tipo',label:'Tipo',fmt:function(u){return u.tipo;}},{key:'nome',label:'Nome',fmt:function(u){return u.nome;}},{key:'municipio',label:'Município',fmt:function(u){return u.municipio;}},{key:'regional',label:'Regional',fmt:function(u){return u.regional;}},{key:'lat',label:'Latitude',fmt:function(u){return u.coords?u.coords.lat:'';}},{key:'lng',label:'Longitude',fmt:function(u){return u.coords?u.coords.lng:'';}},{key:'status',label:'Status',fmt:function(u){return u.status;}},{key:'taxaUso',label:'Taxa Uso(%)',fmt:function(u){return u.taxaUso;}},{key:'quartos',label:'Quartos',fmt:function(u){return u.quartos||0;}},{key:'salas',label:'Salas',fmt:function(u){return u.salas||0;}},{key:'cozinha',label:'Cozinha',fmt:function(u){return u.cozinha?'Sim':'Não';}},{key:'auditorio',label:'Auditório',fmt:function(u){return u.auditorio?'Sim':'Não';}},{key:'decreto',label:'Decreto',fmt:function(u){return u.decreto||'';}}];
+var NW_COLS=[{key:'titulo',label:'Título',fmt:function(n){return n.titulo;}},{key:'categoria',label:'Categoria',fmt:function(n){return n.categoria;}},{key:'data',label:'Data',fmt:function(n){return n.data;}},{key:'autor',label:'Autor',fmt:function(n){return n.autor||'';}},{key:'destaque',label:'Destaque',fmt:function(n){return n.destaque?'Sim':'Não';}},{key:'visivel',label:'Visível',fmt:function(n){return n.visivel?'Sim':'Não';}},{key:'resumo',label:'Resumo',fmt:function(n){return n.resumo||'';}}];
+var SOL_COLS=[{key:'id',label:'ID',fmt:function(s){return s.id;}},{key:'sol',label:'Solicitante',fmt:function(s){return s.sol;}},{key:'org',label:'Órgão',fmt:function(s){return s.org;}},{key:'un',label:'Unidade',fmt:function(s){return s.un;}},{key:'ev',label:'Evento',fmt:function(s){return s.ev;}},{key:'dt',label:'Data',fmt:function(s){return s.dt;}},{key:'st',label:'Status',fmt:function(s){return s.st;}}];
+
+function escCsv(v){var s=String(v===null||v===undefined?'':v).split('\r').join(' ').split('\n').join(' ');if(s.indexOf(',')!==-1||s.indexOf('"')!==-1)s='"'+s.split('"').join('""')+'"';return s;}
+function exportCSV(rows,cols,name){var lines=[cols.map(function(c){return'"'+c.label+'"';}).join(',')];rows.forEach(function(r){lines.push(cols.map(function(c){return escCsv(c.fmt(r));}).join(','));});var b=new Blob(['\uFEFF'+lines.join('\r\n')],{type:'text/csv;charset=utf-8'});var a=document.createElement('a');a.href=URL.createObjectURL(b);a.download=name;document.body.appendChild(a);a.click();document.body.removeChild(a);setTimeout(function(){URL.revokeObjectURL(a.href);},2000);}
+function exportXLSX(rows,cols,name){if(typeof XLSX==='undefined'){alert('SheetJS não disponível. Use CSV.');return;}var d=[cols.map(function(c){return c.label;})];rows.forEach(function(r){d.push(cols.map(function(c){var v=c.fmt(r);return v===null||v===undefined?'':v;}));});var ws=XLSX.utils.aoa_to_sheet(d);ws['!cols']=cols.map(function(c){var m=c.label.length;rows.forEach(function(r){var v=String(c.fmt(r)||'');if(v.length>m)m=v.length;});return{wch:Math.min(Math.max(m+2,8),60)};});var wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'Dados');XLSX.writeFile(wb,name);}
+function parseCSVLine(line){var res=[],cur='',inQ=false;for(var i=0;i<line.length;i++){var ch=line[i];if(ch==='"'){if(inQ&&line[i+1]==='"'){cur+='"';i++;}else inQ=!inQ;}else if(ch===','&&!inQ){res.push(cur.trim());cur='';}else cur+=ch;}res.push(cur.trim());return res;}
+function parseCSV(txt){var lines=txt.split(/[\r\n]+/).filter(function(l){return l.trim();});if(lines.length<2)return{headers:[],rows:[]};var hdrs=parseCSVLine(lines[0]).map(function(h){return h.replace(/^"+|"+$/g,'');});return{headers:hdrs,rows:lines.slice(1).map(function(line){var vs=parseCSVLine(line),o={};hdrs.forEach(function(h,i){o[h]=vs[i]!==undefined?vs[i].replace(/^"+|"+$/g,''):'';});return o;})};};
+function validateUnRow(r){var errs=[],t=r.tipo||r['Tipo']||'',n=r.nome||r['Nome']||'',m=r.municipio||r['Município']||'',lat=parseFloat(r.lat||r['Latitude']||''),lng=parseFloat(r.lng||r['Longitude']||'');if(!t||!/(CIMA|UGAI)/i.test(t))errs.push('Tipo inválido');if(!n||n.length<2)errs.push('Nome obrigatório');if(!m||m.length<2)errs.push('Município obrigatório');if(isNaN(lat)||lat<-90||lat>90)errs.push('Latitude inválida');if(isNaN(lng)||lng<-180||lng>180)errs.push('Longitude inválida');return errs;}
+function csvRowToUnit(r){var lat=parseFloat(r.lat||r['Latitude']||''),lng=parseFloat(r.lng||r['Longitude']||'');return{tipo:(r.tipo||r['Tipo']||'CIMA').toUpperCase(),nome:sanitize(r.nome||r['Nome']||'',100),municipio:sanitize(r.municipio||r['Município']||'',80),regional:sanitize(r.regional||r['Regional']||'Vale do Juruá',60),coords:{lat:isNaN(lat)?-9.5:lat,lng:isNaN(lng)?-70.5:lng},status:(r.status||r['Status']||'ativo'),taxaUso:Math.min(100,Math.max(0,parseInt(r.taxaUso||r['Taxa Uso(%)']||'0'))),orgaos:(r.orgaos||r['Órgãos']||'').split(';').map(function(s){return s.trim();}).filter(Boolean),quartos:parseInt(r.quartos||r['Quartos']||'0')||0,salas:parseInt(r.salas||r['Salas']||'0')||0,cozinha:(r.cozinha||r['Cozinha']||'Não').toLowerCase()==='sim',auditorio:(r.auditorio||r['Auditório']||'Não').toLowerCase()==='sim',visivel:(r.visivel||r['Visível']||'Sim').toLowerCase()!=='não',decreto:sanitize(r.decreto||r['Decreto']||'',120),descricao:sanitize(r.descricao||r['Descrição']||'',500),historia:'',foto:'',galeria:[],extras:[],orgaosPresentes:[],ocupacaoAtual:0};}
+
+function AdminRelatorios(p){
+  var uns=p.uns||[], news=p.news||[], sols=p.sols||[], toast2=p.toast2||function(){}, onImported=p.onImported||function(){};
+  var sTab=useState('export'); var tab=sTab[0],setTab=sTab[1];
+  var sDs=useState('uns');   var ds=sDs[0],setDs=sDs[1];
+  var sFmt=useState('csv');  var fmt=sFmt[0],setFmt=sFmt[1];
+  var sPr=useState(null);    var pr=sPr[0],setPr=sPr[1];
+  var sFl=useState('');      var fl=sFl[0],setFl=sFl[1];
+  var sLd=useState(false);   var ld=sLd[0],setLd=sLd[1];
+  var DATASETS={uns:{label:'Unidades',cols:UN_COLS,rows:uns},news:{label:'Notícias',cols:NW_COLS,rows:news},sols:{label:'Solicitações',cols:SOL_COLS,rows:sols}};
+  var cur=DATASETS[ds]||DATASETS.uns;
+  var btnSt={padding:'8px 18px',borderRadius:8,border:'none',fontSize:12,cursor:'pointer',fontWeight:600};
+  function doExport(){var ts=new Date().toISOString().slice(0,10),name='SEMA_'+cur.label+'_'+ts;if(fmt==='xlsx')exportXLSX(cur.rows,cur.cols,name+'.xlsx');else exportCSV(cur.rows,cur.cols,name+'.csv');toast2('Exportado: '+name+'.'+(fmt==='xlsx'?'xlsx':'csv'));}
+  function handleFile(e){var file=e.target.files[0];if(!file){setPr(null);return;}setFl(file.name);setLd(true);var reader=new FileReader();reader.onload=function(ev){try{var rows=[];if(file.name.toLowerCase().endsWith('.xlsx')){if(typeof XLSX==='undefined'){alert('SheetJS não disponível. Use CSV.');setLd(false);return;}var wb=XLSX.read(ev.target.result,{type:'binary'});var ws=wb.Sheets[wb.SheetNames[0]];rows=XLSX.utils.sheet_to_json(ws,{defval:''}).map(function(r){var er=validateUnRow(r);return{_raw:r,_errs:er,_obj:er.length===0?csvRowToUnit(r):null};});}else{rows=parseCSV(ev.target.result).rows.map(function(r){var er=validateUnRow(r);return{_raw:r,_errs:er,_obj:er.length===0?csvRowToUnit(r):null};});}setPr(rows);}catch(err){toast2('Erro: '+err.message,C.rm);}setLd(false);};if(file.name.toLowerCase().endsWith('.xlsx'))reader.readAsBinaryString(file);else reader.readAsText(file,'UTF-8');}
+  function doImport(){if(!pr)return;var validos=pr.filter(function(r){return r._errs.length===0;});if(!validos.length){toast2('Nenhuma linha válida.',C.am);return;}Promise.all(validos.map(function(r){return DB.unidades.insert(r._obj);})).then(function(){toast2(validos.length+' unidade(s) importada(s).');setPr(null);setFl('');onImported();}).catch(function(e){toast2('Erro: '+e.message,C.rm);});}
+  return h('div',null,
+    h('h2',{style:{fontSize:20,fontWeight:700,margin:'0 0 4px',color:C.cd}},'Relatórios'),
+    h('p',{style:{fontSize:13,color:C.cm,margin:'0 0 20px'}},'Exportação e importação de dados com validação.'),
+    h('div',{style:{display:'flex',gap:2,marginBottom:20,borderBottom:'1px solid '+C.cl}},
+      [['export','📤 Exportar'],['import','📥 Importar']].map(function(t){return h('button',{key:t[0],type:'button',onClick:function(){setTab(t[0]);},style:{background:'none',border:'none',cursor:'pointer',fontSize:13,fontWeight:tab===t[0]?700:400,color:tab===t[0]?C.g2:C.cm,padding:'8px 16px',borderBottom:tab===t[0]?'2px solid '+C.g2:'2px solid transparent',marginBottom:-1}},t[1]);})),
+    tab==='export'&&h('div',null,
+      h('div',{style:{marginBottom:16}},h('div',{style:{fontSize:11,fontWeight:700,color:C.cm,marginBottom:8,letterSpacing:.5}},'CONJUNTO DE DADOS'),h('div',{style:{display:'flex',gap:8,flexWrap:'wrap'}},Object.entries(DATASETS).map(function(en){var k=en[0],v=en[1];return h('button',{key:k,type:'button',onClick:function(){setDs(k);},style:Object.assign({},btnSt,{background:ds===k?C.gx:'#fff',color:ds===k?C.g2:C.cm,border:'1px solid '+(ds===k?C.g2:C.cl)})},v.label+' ('+v.rows.length+')');}))  ),
+      h('div',{style:{marginBottom:20}},h('div',{style:{fontSize:11,fontWeight:700,color:C.cm,marginBottom:8,letterSpacing:.5}},'FORMATO'),h('div',{style:{display:'flex',gap:8}},[['csv','📄 CSV'],['xlsx','📊 Excel']].map(function(ft){return h('button',{key:ft[0],type:'button',onClick:function(){setFmt(ft[0]);},style:Object.assign({},btnSt,{background:fmt===ft[0]?C.gx:'#fff',color:fmt===ft[0]?C.g2:C.cm,border:'1px solid '+(fmt===ft[0]?C.g2:C.cl)})},ft[1]);}))),
+      h(Card,{style:{padding:'14px 18px',marginBottom:16}},h('div',{style:{fontSize:11,fontWeight:700,color:C.cm,marginBottom:8,letterSpacing:.5}},'COLUNAS'),h('div',{style:{display:'flex',flexWrap:'wrap',gap:6}},cur.cols.map(function(c){return h('span',{key:c.key,style:{fontSize:11,padding:'2px 8px',borderRadius:10,background:C.cx,color:C.cm}},c.label);})),h('div',{style:{marginTop:8,fontSize:12,color:C.cm}},cur.rows.length+' registro(s).')),
+      h('button',{type:'button',onClick:doExport,style:Object.assign({},btnSt,{padding:'10px 28px',fontSize:13,background:C.g2,color:'#fff'})},'⬇ Baixar '+cur.label+'.'+fmt)),
+    tab==='import'&&h('div',null,
+      h('div',{style:{background:C.cx,borderRadius:12,padding:'14px 16px',marginBottom:14,fontSize:13,color:C.cm,lineHeight:1.7}},'Importe unidades via CSV/XLSX. Colunas esperadas: tipo, nome, municipio, regional, lat, lng, status, taxaUso, quartos, salas, cozinha, auditorio, visivel, decreto, descricao'),
+      h('div',{style:{marginBottom:14}},h('label',{style:{display:'inline-block',padding:'10px 20px',borderRadius:9,border:'1.5px dashed '+C.cl,cursor:'pointer',fontSize:13,color:C.g2,fontWeight:600}},'📂 Selecionar CSV ou XLSX',h('input',{type:'file',accept:'.csv,.xlsx',onChange:handleFile,style:{display:'none'}})),fl&&h('span',{style:{marginLeft:10,fontSize:12,color:C.cm}},fl)),
+      ld&&h('div',{role:'status',style:{fontSize:13,color:C.cm,marginBottom:12}},'⏳ Processando...'),
+      pr&&h('div',null,
+        h(Card,{style:{padding:'16px',marginBottom:14}},
+          h('div',{style:{display:'flex',gap:16,marginBottom:12}},
+            h('span',{style:{fontSize:12,fontWeight:700,color:C.g2}},'✅ Válidas: '+pr.filter(function(r){return!r._errs.length;}).length),
+            h('span',{style:{fontSize:12,fontWeight:700,color:C.rm}},'❌ Inválidas: '+pr.filter(function(r){return r._errs.length;}).length),
+            h('span',{style:{fontSize:12,color:C.cm}},'Total: '+pr.length)),
+          h('div',{style:{overflowX:'auto',maxHeight:260,overflowY:'auto'}},
+            h('table',{style:{width:'100%',borderCollapse:'collapse',fontSize:11}},
+              h('thead',null,h('tr',null,['#','','Nome','Município','Tipo','Erros'].map(function(col){return h('th',{key:col,style:{padding:'6px 8px',textAlign:'left',borderBottom:'2px solid '+C.cl,color:C.cm,fontWeight:700,background:C.cx,whiteSpace:'nowrap'}},col);}))),
+              h('tbody',null,pr.slice(0,50).map(function(r,i){var ok=!r._errs.length;return h('tr',{key:i,style:{background:ok?'#fff':'rgba(163,45,45,.05)'}},h('td',{style:{padding:'5px 8px',borderBottom:'1px solid '+C.cl,color:C.cm}},i+1),h('td',{style:{padding:'5px 8px',borderBottom:'1px solid '+C.cl}},ok?'✅':'❌'),h('td',{style:{padding:'5px 8px',borderBottom:'1px solid '+C.cl,maxWidth:140,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},r._raw.nome||r._raw['Nome']||'—'),h('td',{style:{padding:'5px 8px',borderBottom:'1px solid '+C.cl}},r._raw.municipio||r._raw['Município']||'—'),h('td',{style:{padding:'5px 8px',borderBottom:'1px solid '+C.cl}},r._raw.tipo||r._raw['Tipo']||'—'),h('td',{style:{padding:'5px 8px',borderBottom:'1px solid '+C.cl,color:C.rm}},r._errs.join(', ')||'—'));}))))),
+        pr.filter(function(r){return!r._errs.length;}).length>0&&h('button',{type:'button',onClick:doImport,style:Object.assign({},btnSt,{padding:'10px 28px',fontSize:13,background:C.g2,color:'#fff'})},'⬆ Importar ('+pr.filter(function(r){return!r._errs.length;}).length+' válidas)'))));
+}
+</script>
+<script>
+// ── AdminPanel ────────────────────────────────────────────────────────────────
+function AdminPanel(p){
+  var sAt=useState('dash'); var atab=sAt[0],setAtab=sAt[1];
+  var sMo=useState(null);   var modal=sMo[0],setModal=sMo[1];
+  var sCf=useState(null);   var conf=sCf[0],setConf=sCf[1];
+  var sLd=useState(false);  var opLd=sLd[0],setOpLd=sLd[1];
+  var sSe=useState(p.secs||{hero:true,alert:true,bloco:true,mapa:true,dash:true,acesso:true,news:true,ia:true}); var secs=sSe[0],setSecs=sSe[1];
+  // FIX: useRef para não salvar no mount inicial
+  var secsInit=useRef(false);
+
+  var uns=p.uns||[], news=p.news||[], feeds=p.feeds||[], sols=p.sols||[], users=p.users||[];
+  var curUser=p.curUser, toast2=p.toast2||function(){}, reload=p.reload||function(){};
+
+  function can(k){return curUser&&(curUser.perfil==='admin'||!!(curUser.permissoes&&curUser.permissoes[k]));}
+  function op(prom,msg,errC){setOpLd(true);return prom.then(function(){toast2(msg);reload();}).catch(function(e){toast2((e.message||'Erro'),errC||C.rm);}).finally(function(){setOpLd(false);setModal(null);setConf(null);});}
+
+  // FIX: só salva secs após o primeiro render (evita write desnecessário no mount)
+  useEffect(function(){
+    if(!secsInit.current){secsInit.current=true;return;}
+    if(SB_OK)DB.config.set('secs_home',JSON.stringify(secs)).catch(function(){});
+  },[JSON.stringify(secs)]);
+
+  var SIDEBAR=[['dash','📊','Dashboard',true],['uns','🏛','Unidades',can('units')],['nws','📰','Notícias',can('news')],['fds','📡','Feeds',can('feeds')],['sols','📋','Solicitações',can('sols')],['users','👥','Usuários',can('users')],['cfg','🎨','Config. Home',can('cfg')],['ia','🤖','Assistente IA',can('ia')],['rel','📊','Relatórios',can('rel')]].filter(function(it){return it[3];});
+
+  return h('div',{style:{display:'flex',minHeight:'calc(100vh - 72px)'}},
+    opLd&&h(LoadingOverlay,{show:true,msg:'Salvando...'}),
+    conf&&h(Confirm,{nome:conf.nome,onConfirm:conf.fn,onClose:function(){setConf(null);}}),
+    modal&&modal.t==='un'&&h(Modal,{titulo:modal.d&&modal.d.id?'Editar unidade':'Nova unidade',onClose:function(){setModal(null);},wide:true},h(FmUn,{init:modal.d,uns:uns,onSave:function(f){op(f.id?DB.unidades.update(f.id,f):DB.unidades.insert(f),'Unidade salva.');},onClose:function(){setModal(null);}})),
+    modal&&modal.t==='nw'&&h(Modal,{titulo:modal.d&&modal.d.id?'Editar notícia':'Nova notícia',onClose:function(){setModal(null);},wide:true},h(FmNw,{init:modal.d,uns:uns,onSave:function(f){op(f.id?DB.noticias.update(f.id,f):DB.noticias.insert(f),'Notícia salva.');},onClose:function(){setModal(null);}})),
+    modal&&modal.t==='fd'&&h(Modal,{titulo:modal.d&&modal.d.id?'Editar feed':'Novo feed RSS',onClose:function(){setModal(null);}},h(FmFd,{init:modal.d,onSave:function(f){op(f.id?DB.feeds.update(f.id,f):DB.feeds.insert(f),'Feed salvo.');},onClose:function(){setModal(null);}})),
+    modal&&modal.t==='usr'&&h(Modal,{titulo:modal.d&&modal.d.id?'Editar usuário':'Novo usuário',onClose:function(){setModal(null);}},h(FmUser,{init:modal.d,onSave:function(f){op(f.id?DB.usuarios.update(f.id,f):DB.usuarios.insert(f,null),'Usuário salvo.');},onClose:function(){setModal(null);}})),
+
+    h('nav',{style:{width:200,flexShrink:0,background:'#fff',borderRight:'1px solid '+C.cl,padding:'16px 10px',display:'flex',flexDirection:'column',gap:2},'aria-label':'Menu administrativo'},
+      h('div',{style:{fontSize:10,fontWeight:700,color:C.cm,padding:'4px 12px 10px',letterSpacing:.8}},'GESTÃO'),
+      SIDEBAR.map(function(it){return h('button',{key:it[0],type:'button',onClick:function(){setAtab(it[0]);},style:{width:'100%',textAlign:'left',padding:'9px 12px',borderRadius:9,border:'none',background:atab===it[0]?C.gx:'none',color:atab===it[0]?C.g1:C.cm,fontSize:13,fontWeight:atab===it[0]?700:400,cursor:'pointer',display:'flex',alignItems:'center',gap:7},'aria-current':atab===it[0]?'page':undefined},h('span',{'aria-hidden':'true',style:{fontSize:14}},it[1]),it[2]);}),
+      h('div',{style:{flex:1}}),
+      h('button',{type:'button',onClick:p.onLogout,style:{width:'100%',textAlign:'left',padding:'9px 12px',borderRadius:9,border:'none',background:'none',color:C.rm,fontSize:13,cursor:'pointer',display:'flex',alignItems:'center',gap:7}},'⬅ Sair')),
+
+    h('div',{style:{flex:1,padding:'24px 28px',overflowY:'auto',background:C.cx}},
+      // DASHBOARD
+      atab==='dash'&&h('div',null,
+        h('h2',{style:{fontSize:20,fontWeight:700,margin:'0 0 20px',color:C.cd}},'Dashboard'),
+        h('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(130px,1fr))',gap:12,marginBottom:24}},
+          h(StatBox,{label:'Unidades',value:uns.length,color:C.g2}),h(StatBox,{label:'Visíveis',value:uns.filter(function(u){return u.visivel;}).length,color:C.g2}),
+          h(StatBox,{label:'Notícias',value:news.length,color:C.b1}),h(StatBox,{label:'Feeds ativos',value:feeds.filter(function(f){return f.ativo;}).length,color:C.pm}),
+          h(StatBox,{label:'Pendentes',value:sols.filter(function(s){return s.st==='pendente';}).length,color:C.am})),
+        h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16}},
+          h(Card,{style:{padding:'16px 18px'}},h('h3',{style:{fontSize:14,fontWeight:700,margin:'0 0 14px',color:C.cd}},'Utilização'),uns.slice(0,8).map(function(u){return h('div',{key:u.id,style:{marginBottom:9,opacity:u.visivel?1:.45}},h('div',{style:{display:'flex',justifyContent:'space-between',fontSize:11,marginBottom:3,color:C.cd}},h('span',null,u.nome.split(' ').slice(-2).join(' ')),h('span',{style:{fontWeight:700,color:u.taxaUso>80?C.rm:u.taxaUso>60?C.am:C.g2}},u.taxaUso+'%')),h(Bar,{v:u.taxaUso}));})),
+          h(Card,{style:{padding:'16px 18px'}},h('h3',{style:{fontSize:14,fontWeight:700,margin:'0 0 14px',color:C.cd}},'Últimas solicitações'),!sols.length&&h('p',{style:{fontSize:13,color:C.cm,fontStyle:'italic'}},'Nenhuma.'),sols.slice(0,5).map(function(s){var cm={pendente:[C.am,C.al],aprovada:[C.g2,C.gl],rejeitada:[C.rm,C.rl]}[s.st]||[C.cm,C.cx];return h('div',{key:s.id,style:{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 0',borderBottom:'0.5px solid '+C.cl}},h('div',null,h('div',{style:{fontSize:12,fontWeight:600,color:C.cd}},s.sol),h('div',{style:{fontSize:11,color:C.cm}},s.un)),h(Pill,{t:s.st,c:cm[0],b:cm[1]}));})  ))),
+      // UNIDADES
+      atab==='uns'&&can('units')&&h('div',null,
+        h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20}},h('h2',{style:{fontSize:20,fontWeight:700,margin:0,color:C.cd}},'Gestão de unidades'),h('button',{type:'button',onClick:function(){setModal({t:'un',d:null});},style:{padding:'9px 20px',borderRadius:9,border:'none',background:C.g2,color:'#fff',fontSize:13,fontWeight:700,cursor:'pointer'}},'+ Nova unidade')),
+        !uns.length&&h('p',{style:{fontSize:14,color:C.cm,fontStyle:'italic'}},'Nenhuma unidade cadastrada.'),
+        h('div',{style:{display:'flex',flexDirection:'column',gap:8}},
+          uns.map(function(u){var sp=scMap[u.status]||[C.cm,C.cx];return h(Card,{key:u.id,style:{padding:'14px 16px',opacity:u.visivel?1:.6}},h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:10}},
+            h('div',{style:{display:'flex',gap:12,alignItems:'center'}},u.foto?h('div',{style:{width:44,height:44,borderRadius:10,overflow:'hidden',flexShrink:0}},h('img',{src:u.foto,alt:'',style:{width:'100%',height:'100%',objectFit:'cover'}})):h('div',{style:{width:44,height:44,borderRadius:10,background:u.tipo==='CIMA'?C.gx:C.bl,display:'flex',alignItems:'center',justifyContent:'center',fontSize:14,fontWeight:700,color:u.tipo==='CIMA'?C.g2:C.b1,flexShrink:0}},u.tipo[0]),h('div',null,h('div',{style:{fontSize:14,fontWeight:700,color:C.cd}},u.nome),h('div',{style:{fontSize:11,color:C.cm}},u.municipio))),
+            h('div',{style:{display:'flex',gap:7,alignItems:'center',flexWrap:'wrap'}},
+              h(Pill,{t:slabel(u.status),c:sp[0],b:sp[1]}),
+              h('button',{type:'button',onClick:function(){op(DB.unidades.toggleVis(u.id,!u.visivel),u.visivel?'Oculta.':'Visível.');},style:{padding:'5px 11px',borderRadius:7,border:'1px solid '+(u.visivel?C.g2:C.cl),background:u.visivel?C.gx:'none',color:u.visivel?C.g2:C.cm,fontSize:11,cursor:'pointer',fontWeight:600}},u.visivel?'👁 Visível':'🔒 Oculto'),
+              h('button',{type:'button',onClick:function(){p.onVerUnidade(u);},style:{padding:'5px 11px',borderRadius:7,border:'1px solid '+C.bl,background:C.bl,color:C.b1,fontSize:11,cursor:'pointer'}},'Prévia'),
+              h('button',{type:'button',onClick:function(){setModal({t:'un',d:Object.assign({},u)});},style:{padding:'5px 11px',borderRadius:7,border:'1px solid '+C.cl,background:'none',color:C.cd,fontSize:11,cursor:'pointer'}},'Editar'),
+              h('button',{type:'button','aria-label':'Excluir '+u.nome,onClick:function(){setConf({nome:u.nome,fn:function(){op(DB.unidades.del(u.id),'Excluída.',C.am);}});},style:{padding:'5px 11px',borderRadius:7,border:'1px solid '+C.rm,background:C.rl,color:C.rm,fontSize:11,cursor:'pointer'}},'Excluir'))));}))),
+      // NOTÍCIAS
+      atab==='nws'&&can('news')&&h('div',null,
+        h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20}},h('h2',{style:{fontSize:20,fontWeight:700,margin:0,color:C.cd}},'Gestão de notícias'),h('button',{type:'button',onClick:function(){setModal({t:'nw',d:null});},style:{padding:'9px 20px',borderRadius:9,border:'none',background:C.g2,color:'#fff',fontSize:13,fontWeight:700,cursor:'pointer'}},'+ Nova notícia')),
+        !news.length&&h('p',{style:{fontSize:14,color:C.cm,fontStyle:'italic'}},'Nenhuma notícia cadastrada.'),
+        h('div',{style:{display:'flex',flexDirection:'column',gap:8}},
+          news.map(function(n){var cc=getCC(n.categoria);return h(Card,{key:n.id,style:{padding:'13px 16px',opacity:n.visivel?1:.55}},h('div',{style:{display:'flex',justifyContent:'space-between',flexWrap:'wrap',gap:10}},
+            h('div',{style:{flex:1,minWidth:200}},h('div',{style:{display:'flex',gap:6,marginBottom:5,flexWrap:'wrap'}},h(Pill,{t:n.categoria,c:cc[0],b:cc[1],s:10}),n.destaque&&h(Pill,{t:'Destaque',c:C.am,b:C.al,s:10})),h('div',{style:{fontSize:13,fontWeight:700,color:C.cd}},n.titulo),h('div',{style:{fontSize:11,color:C.cm,marginTop:2}},fmtD(n.data)+(n.autor?' · '+n.autor:''))),
+            h('div',{style:{display:'flex',gap:6,alignItems:'flex-start',flexWrap:'wrap'}},
+              h('button',{type:'button',onClick:function(){p.onVerNoticia(n);},style:{padding:'5px 11px',borderRadius:7,border:'1px solid '+C.bl,background:C.bl,color:C.b1,fontSize:11,cursor:'pointer'}},'Prévia'),
+              h('button',{type:'button',onClick:function(){op(DB.noticias.toggleVis(n.id,!n.visivel),n.visivel?'Ocultada.':'Visível.');},style:{padding:'5px 11px',borderRadius:7,border:'1px solid '+(n.visivel?C.g2:C.cl),background:n.visivel?C.gx:'none',color:n.visivel?C.g2:C.cm,fontSize:11,cursor:'pointer',fontWeight:600}},n.visivel?'👁 Visível':'🔒 Oculta'),
+              h('button',{type:'button',onClick:function(){setModal({t:'nw',d:Object.assign({},n)});},style:{padding:'5px 11px',borderRadius:7,border:'1px solid '+C.cl,background:'none',color:C.cd,fontSize:11,cursor:'pointer'}},'Editar'),
+              h('button',{type:'button','aria-label':'Excluir notícia '+n.titulo,onClick:function(){setConf({nome:n.titulo,fn:function(){op(DB.noticias.del(n.id),'Removida.',C.am);}});},style:{padding:'5px 11px',borderRadius:7,border:'1px solid '+C.rm,background:C.rl,color:C.rm,fontSize:11,cursor:'pointer'}},'Excluir'))));}))),
+      // FEEDS
+      atab==='fds'&&can('feeds')&&h('div',null,
+        h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}},h('h2',{style:{fontSize:20,fontWeight:700,margin:0,color:C.cd}},'Feeds RSS externos'),h('button',{type:'button',onClick:function(){setModal({t:'fd',d:null});},style:{padding:'9px 20px',borderRadius:9,border:'none',background:C.g2,color:'#fff',fontSize:13,fontWeight:700,cursor:'pointer'}},'+ Novo feed')),
+        !feeds.length&&h('p',{style:{fontSize:14,color:C.cm,fontStyle:'italic'}},'Nenhum feed cadastrado.'),
+        h('div',{style:{display:'flex',flexDirection:'column',gap:8}},feeds.map(function(f){return h(Card,{key:f.id,style:{padding:'14px 16px'}},h('div',{style:{display:'flex',justifyContent:'space-between',flexWrap:'wrap',gap:10}},
+          h('div',null,h('div',{style:{display:'flex',gap:6,marginBottom:5}},h(Pill,{t:f.categoria,c:C.pm,b:C.px,s:10}),h(Pill,{t:f.ativo?'Ativo':'Inativo',c:f.ativo?C.g2:C.cm,b:f.ativo?C.gx:C.cx,s:10})),h('div',{style:{fontSize:14,fontWeight:700,color:C.cd}},f.nome),h('div',{style:{fontSize:11,color:C.cm,fontFamily:'monospace'}},f.url),h('div',{style:{fontSize:11,color:C.cm}},'Sync: '+f.sync)),
+          h('div',{style:{display:'flex',gap:6,alignItems:'flex-start',flexWrap:'wrap'}},
+            h('button',{type:'button',onClick:function(){op(DB.feeds.toggleAtivo(f.id,!f.ativo),f.ativo?'Pausado.':'Ativo.');},style:{padding:'5px 11px',borderRadius:7,border:'1px solid '+(f.ativo?C.g2:C.cl),background:f.ativo?C.gx:'none',color:f.ativo?C.g2:C.cm,fontSize:11,cursor:'pointer',fontWeight:600}},f.ativo?'🟢 Ativo':'⏸ Pausado'),
+            h('button',{type:'button',onClick:function(){op(DB.feeds.sync(f.id),'Sincronizado.');},style:{padding:'5px 11px',borderRadius:7,border:'1px solid '+C.bl,background:C.bl,color:C.b1,fontSize:11,cursor:'pointer'}},'↻ Sync'),
+            h('button',{type:'button',onClick:function(){setModal({t:'fd',d:Object.assign({},f)});},style:{padding:'5px 11px',borderRadius:7,border:'1px solid '+C.cl,background:'none',color:C.cd,fontSize:11,cursor:'pointer'}},'Editar'),
+            h('button',{type:'button','aria-label':'Excluir feed '+f.nome,onClick:function(){setConf({nome:f.nome,fn:function(){op(DB.feeds.del(f.id),'Removido.',C.am);}});},style:{padding:'5px 11px',borderRadius:7,border:'1px solid '+C.rm,background:C.rl,color:C.rm,fontSize:11,cursor:'pointer'}},'Excluir')))); }))),
+      // SOLICITAÇÕES
+      atab==='sols'&&can('sols')&&h('div',null,
+        h('h2',{style:{fontSize:20,fontWeight:700,margin:'0 0 20px',color:C.cd}},'Solicitações de uso'),
+        !sols.length&&h('p',{style:{fontSize:14,color:C.cm,fontStyle:'italic'}},'Nenhuma solicitação.'),
+        h('div',{style:{display:'flex',flexDirection:'column',gap:8}},sols.map(function(s){var cm={pendente:[C.am,C.al],aprovada:[C.g2,C.gl],rejeitada:[C.rm,C.rl]}[s.st]||[C.cm,C.cx];return h(Card,{key:s.id,style:{padding:'14px 16px'}},h('div',{style:{display:'flex',justifyContent:'space-between',flexWrap:'wrap',gap:10}},
+          h('div',null,h('div',{style:{display:'flex',gap:7,marginBottom:6}},h('span',{style:{fontSize:11,color:C.cm}},s.id),h(Pill,{t:s.st,c:cm[0],b:cm[1]})),h('div',{style:{fontSize:13,fontWeight:700,color:C.cd}},s.sol+' — '+s.org),h('div',{style:{fontSize:11,color:C.cm,marginTop:2}},s.un+' · '+s.ev+' · '+fmtD(s.dt))),
+          s.st==='pendente'&&h('div',{style:{display:'flex',gap:7}},
+            h('button',{type:'button',onClick:function(){var unid=uns.find(function(u){return u.nome===s.un;});var pr=DB.solicitacoes.updStatus(s.id,'aprovada');if(unid)pr=pr.then(function(){return DB.orgaos.approve(unid.id,{nome:s.org,tipo:s.ev}).catch(function(e){toast2('Aviso: '+e.message,C.am);});});op(pr,'Aprovada.');},style:{padding:'7px 16px',borderRadius:8,border:'1px solid '+C.g2,background:C.gx,color:C.g2,fontSize:12,fontWeight:700,cursor:'pointer'}},'Aprovar'),
+            h('button',{type:'button',onClick:function(){op(DB.solicitacoes.updStatus(s.id,'rejeitada'),'Rejeitada.',C.rm);},style:{padding:'7px 16px',borderRadius:8,border:'1px solid '+C.rm,background:C.rl,color:C.rm,fontSize:12,fontWeight:700,cursor:'pointer'}},'Rejeitar'))));}))),
+      // USUÁRIOS
+      atab==='users'&&can('users')&&h('div',null,
+        h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20}},h('div',null,h('h2',{style:{fontSize:20,fontWeight:700,margin:0,color:C.cd}},'Gestão de usuários'),h('p',{style:{fontSize:13,color:C.cm,margin:'4px 0 0'}},users.length+' usuário(s)')),h('button',{type:'button',onClick:function(){setModal({t:'usr',d:null});},style:{padding:'9px 20px',borderRadius:9,border:'none',background:C.g2,color:'#fff',fontSize:13,fontWeight:700,cursor:'pointer'}},'+ Novo usuário')),
+        h('div',{style:{display:'flex',flexDirection:'column',gap:8}},users.map(function(u){var pc2=PC[u.perfil]||[C.cm,C.cx],isCur=curUser&&u.id===curUser.id;return h(Card,{key:u.id,style:{padding:'14px 18px',opacity:u.ativo?1:.65}},
+          h('div',{style:{display:'flex',alignItems:'center',gap:14,flexWrap:'wrap'}},
+            h('div',{'aria-hidden':'true',style:{width:40,height:40,borderRadius:10,background:pc2[1],display:'flex',alignItems:'center',justifyContent:'center',fontSize:18,flexShrink:0}},u.perfil==='admin'?'👑':u.perfil==='gestor'?'⚙':'👁'),
+            h('div',{style:{flex:1,minWidth:160}},h('div',{style:{display:'flex',alignItems:'center',gap:7,marginBottom:2}},h('span',{style:{fontSize:14,fontWeight:700,color:C.cd}},u.nome),isCur&&h(Pill,{t:'Você',c:C.g2,b:C.gx,s:9})),h('div',{style:{fontSize:12,color:C.cm}},u.email)),
+            h('div',{style:{display:'flex',gap:7,alignItems:'center',flexWrap:'wrap'}},
+              h(Pill,{t:PL[u.perfil],c:pc2[0],b:pc2[1]}),
+              !isCur&&h('button',{type:'button',onClick:function(){op(DB.usuarios.toggleAtivo(u.id,!u.ativo),u.ativo?'Inativado.':'Ativado.');},style:{padding:'5px 11px',borderRadius:7,border:'1px solid '+(u.ativo?C.g2:C.cl),background:u.ativo?C.gx:'none',color:u.ativo?C.g2:C.cm,fontSize:11,cursor:'pointer',fontWeight:600}},u.ativo?'👁 Ativo':'🔒 Inativo'),
+              h('button',{type:'button',onClick:function(){setModal({t:'usr',d:Object.assign({},u)});},style:{padding:'5px 11px',borderRadius:7,border:'1px solid '+C.cl,background:'none',color:C.cd,fontSize:11,cursor:'pointer'}},'Editar'),
+              !isCur&&h('button',{type:'button','aria-label':'Excluir usuário '+u.nome,onClick:function(){setConf({nome:u.nome,fn:function(){op(DB.usuarios.del(u.id),'Removido.',C.am);}});},style:{padding:'5px 11px',borderRadius:7,border:'1px solid '+C.rm,background:C.rl,color:C.rm,fontSize:11,cursor:'pointer'}},'Excluir'))),
+          h('div',{style:{marginTop:8,paddingTop:8,borderTop:'1px solid '+C.cl,display:'flex',flexWrap:'wrap',gap:5}},Object.entries(PK).map(function(e){return h('span',{key:e[0],style:{fontSize:10,padding:'2px 8px',borderRadius:10,background:u.permissoes[e[0]]?C.gx:C.cx,color:u.permissoes[e[0]]?C.g2:C.cm,fontWeight:u.permissoes[e[0]]?600:400}},(u.permissoes[e[0]]?'✓':'-')+' '+e[1]);})));}  ))),
+      // CONFIG HOME
+      atab==='cfg'&&can('cfg')&&h('div',null,
+        h('h2',{style:{fontSize:20,fontWeight:700,margin:'0 0 6px',color:C.cd}},'Configuração da Home'),
+        h('p',{style:{fontSize:13,color:C.cm,margin:'0 0 24px'}},'Ative ou desative seções da página inicial.'),
+        h('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(220px,1fr))',gap:12}},
+          [['hero','🖼 Hero'],['alert','⚠ Alertas'],['bloco','📖 CIMA/UGAI'],['mapa','🗺 Mapa'],['dash','📊 Dashboard'],['acesso','⚡ Acesso rápido'],['news','📰 Notícias'],['ia','🤖 Assistente IA']].map(function(pr){
+            return h('div',{key:pr[0],role:'button',tabIndex:0,onClick:function(){setSecs(function(s){return Object.assign({},s,{[pr[0]]:!s[pr[0]]});});},style:{display:'flex',alignItems:'center',gap:12,padding:'14px 16px',background:'#fff',borderRadius:12,border:'1.5px solid '+(secs[pr[0]]?C.g2:C.cl),cursor:'pointer'}},
+              h('div',{style:{width:22,height:22,borderRadius:6,background:secs[pr[0]]?C.g2:C.cl,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}},secs[pr[0]]&&h('svg',{width:12,height:12,viewBox:'0 0 12 12'},h('path',{d:'M2 6l3 3 5-5',stroke:'white',strokeWidth:2,strokeLinecap:'round',strokeLinejoin:'round',fill:'none'}))),
+              h('span',{style:{fontSize:13,fontWeight:secs[pr[0]]?700:400,color:secs[pr[0]]?C.cd:C.cm}},pr[1]));}))  ),
+      // ASSISTENTE IA
+      atab==='ia'&&can('ia')&&h('div',null,
+        h('h2',{style:{fontSize:20,fontWeight:700,margin:'0 0 4px',color:C.cd}},'Assistente IA'),
+        h(Card,{style:{overflow:'hidden',marginTop:16}},h('div',{style:{background:'linear-gradient(135deg,'+C.g0+','+C.g1+')',padding:'12px 16px',display:'flex',alignItems:'center',gap:8}},h('div',{'aria-hidden':'true',style:{width:7,height:7,borderRadius:'50%',background:C.g3}}),h('span',{style:{fontSize:13,fontWeight:700,color:'#fff'}},'Assistente de Gestão — SEMA/AC'),h('span',{style:{fontSize:11,color:'rgba(255,255,255,.4)',marginLeft:'auto'}},'Claude AI')),h(ChatIA,{uns:uns}))),
+      // RELATÓRIOS
+      atab==='rel'&&can('rel')&&h(AdminRelatorios,{uns:uns,news:news,sols:sols,toast2:toast2,onImported:reload})
+    ));
+}
+</script>
+<script>
+// ── Navbar ────────────────────────────────────────────────────────────────────
+function Navbar(p){
+  var page=p.page, go=p.go, curUser=p.curUser, onAdmin=p.onAdmin, onLogout=p.onLogout;
+  var NAV=[{id:'home',l:'Início'},{id:'cima',l:'CIMA'},{id:'ugai',l:'UGAI'},{id:'mapa',l:'🗺 Mapa'},{id:'noticias',l:'Notícias'},{id:'sol',l:'Solicitação'},{id:'transp',l:'Transparência'}];
+  return h('nav',{'aria-label':'Navegação principal',style:{background:C.g0,position:'sticky',top:0,zIndex:100}},
+    h('div',{style:{background:C.g1,padding:'4px 20px'}},h('span',{style:{fontSize:10,color:'rgba(255,255,255,.6)'}},'Governo do Estado do Acre · Secretaria de Estado do Meio Ambiente')),
+    h('div',{style:{maxWidth:1200,margin:'0 auto',padding:'0 16px',height:52,display:'flex',alignItems:'center'}},
+      h('div',{onClick:function(){go('home');},role:'button',tabIndex:0,style:{display:'flex',alignItems:'center',gap:9,cursor:'pointer',marginRight:20,flexShrink:0},'aria-label':'Início SEMA/AC'},
+        h('div',{style:{width:32,height:32,borderRadius:8,background:C.g3,display:'flex',alignItems:'center',justifyContent:'center'}},
+          h('svg',{width:18,height:18,viewBox:'0 0 18 18',fill:'none','aria-hidden':'true'},h('path',{d:'M9 2C6.5 2 4 4.5 4 8c0 1.8.9 3.2 2.2 4.5L9 16l2.8-3.5C13.1 11.2 14 9.8 14 8c0-3.5-2.5-6-5-6z',fill:'rgba(255,255,255,.95)'}),h('circle',{cx:9,cy:8,r:2.2,fill:C.g3}))),
+        h('div',{style:{lineHeight:1.15}},h('div',{style:{fontSize:14,fontWeight:700,color:'#fff'}},'SEMA/AC'),h('div',{style:{fontSize:10,color:'rgba(255,255,255,.55)'}},'CIMA · UGAI'))),
+      h('div',{style:{display:'flex',gap:1,flex:1,overflowX:'auto'}},
+        NAV.map(function(n){return h('button',{key:n.id,type:'button',onClick:function(){go(n.id);},style:{background:page===n.id?'rgba(255,255,255,.12)':'none',border:'none',cursor:'pointer',fontSize:12,fontWeight:page===n.id?600:400,color:page===n.id?'#fff':'rgba(255,255,255,.62)',padding:'6px 11px',borderRadius:7,whiteSpace:'nowrap',flexShrink:0,borderBottom:page===n.id?'2px solid '+C.g3:'2px solid transparent'},'aria-current':page===n.id?'page':undefined},n.l);})),
+      h('div',{style:{display:'flex',gap:8,alignItems:'center',flexShrink:0,marginLeft:8}},
+        curUser&&h('div',{style:{fontSize:11,color:'rgba(255,255,255,.55)',textAlign:'right',lineHeight:1.3}},h('div',{style:{fontWeight:600,color:'rgba(255,255,255,.85)'}},curUser.nome.split(' ')[0]),h('div',{style:{fontSize:10}},PL[curUser.perfil])),
+        h('button',{type:'button',onClick:onAdmin,style:{background:page==='admin'?'rgba(255,255,255,.15)':'rgba(255,255,255,.07)',border:'0.5px solid rgba(255,255,255,.18)',color:'rgba(255,255,255,.75)',padding:'6px 12px',borderRadius:8,fontSize:12,cursor:'pointer'}},'⚙ Admin'),
+        curUser&&h('button',{type:'button',onClick:onLogout,'aria-label':'Sair da conta',style:{background:'none',border:'0.5px solid rgba(255,255,255,.15)',color:'rgba(255,255,255,.45)',padding:'6px 10px',borderRadius:8,fontSize:11,cursor:'pointer'}},'Sair'))));
+}
+
+// ── Footer ────────────────────────────────────────────────────────────────────
+function Footer(p){
+  var go=p.go;
+  return h('footer',{style:{background:C.g0,padding:'28px 20px 20px'}},
+    h('div',{style:{maxWidth:1100,margin:'0 auto',display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))',gap:24,marginBottom:20}},
+      h('div',null,h('div',{style:{fontSize:14,fontWeight:700,color:'#fff',marginBottom:6}},'SEMA/AC'),h('div',{style:{fontSize:12,color:'rgba(255,255,255,.5)',lineHeight:1.8}},'Secretaria de Estado do Meio Ambiente do Acre')),
+      h('nav',{'aria-label':'Links do rodapé'},h('div',{style:{fontSize:10,fontWeight:700,color:'rgba(255,255,255,.35)',marginBottom:8,letterSpacing:.8}},'NAVEGAÇÃO'),['home','cima','ugai','mapa','noticias','transp'].map(function(pg){return h('div',{key:pg,role:'button',tabIndex:0,onClick:function(){go(pg);},style:{fontSize:12,color:'rgba(255,255,255,.5)',cursor:'pointer',marginBottom:5}},{home:'Início',cima:'CIMA',ugai:'UGAI',mapa:'Mapa',noticias:'Notícias',transp:'Transparência'}[pg]||pg);})),
+      h('address',{style:{fontStyle:'normal'}},h('div',{style:{fontSize:10,fontWeight:700,color:'rgba(255,255,255,.35)',marginBottom:8,letterSpacing:.8}},'CONTATO'),h('div',{style:{fontSize:12,color:'rgba(255,255,255,.5)',lineHeight:1.9}},'📧 cima@sema.ac.gov.br',h('br'),h('span',null,'📞 (68) 3212-0000')))),
+    h('div',{style:{borderTop:'0.5px solid rgba(255,255,255,.1)',paddingTop:14}},h('span',{style:{fontSize:11,color:'rgba(255,255,255,.25)'}},'© 2026 SEMA/AC — Todos os direitos reservados')));
+}
+</script>
+
+<script>
+// ── App — parte 1: estado, loadAll, helpers ──────────────────────────────────
+var DEFAULT_SECS={hero:true,alertas:true,bloco:true,mapa:true,dash:true,acesso:true,noticias:true,chat:true};
+
+function App(){
+  var sP=useState('home');        var page=sP[0],setPage=sP[1];
+  var sT=useState(null);          var toast=sT[0],setToast=sT[1];
+  var sU=useState(null);          var user=sU[0],setUser=sU[1];
+  var sUn=useState([]);           var unidades=sUn[0],setUnidades=sUn[1];
+  var sNw=useState([]);           var noticias=sNw[0],setNoticias=sNw[1];
+  var sSol=useState([]);          var solic=sSol[0],setSolic=sSol[1];
+  var sSe=useState(DEFAULT_SECS); var secs=sSe[0],setSecs=sSe[1];
+  var sLd=useState(true);         var loading=sLd[0],setLoading=sLd[1];
+  var sEr=useState(null);         var erro=sEr[0],setErro=sEr[1];
+  var sUV=useState(null);         var uVista=sUV[0],setUVista=sUV[1];
+  var sNV=useState(null);         var nVista=sNV[0],setNVista=sNV[1];
+  var sFi=useState('');           var filtro=sFi[0],setFiltro=sFi[1];
+  var sAb=useState(false);        var menuAberto=sAb[0],setMenuAberto=sAb[1];
+
+  function t2(m,c){setToast({m:m,c:c||C.g2});setTimeout(function(){setToast(null);},3200);}
+
+  function go(p){setPage(p);setUVista(null);setNVista(null);window.scrollTo(0,0);}
+
+  function loadAll(){
+    if(!SB_OK){setLoading(false);return;}
+    setLoading(true);
+    Promise.all([
+      DB.unidades.list(),
+      DB.noticias.list(),
+      DB.solicitacoes.list(),
+      DB.auth.me(),
+      DB.config.get('secs_home')
+    ]).then(function(res){
+      setUnidades(res[0]||[]);
+      setNoticias(res[1]||[]);
+      setSolic(res[2]||[]);
+      setUser(res[3]||null);
+      if(res[4]){try{setSecs(JSON.parse(res[4]));}catch(_){}}
+      setLoading(false);
+      setErro(null);
+    }).catch(function(e){
+      setErro(e.message||'Erro ao carregar dados');
+      setLoading(false);
+    });
+  }
+
+  useEffect(function(){loadAll();},[]);
+
+  // Computed
+  var cimas=unidades.filter(function(u){return u.tipo==='CIMA';});
+  var ugais=unidades.filter(function(u){return u.tipo==='UGAI';});
+  var ativas=unidades.filter(function(u){return u.status==='ativo';});
+  var manut=unidades.filter(function(u){return u.status==='manutencao';});
+  var inativas=unidades.filter(function(u){return u.status==='inativo';});
+  var filtrados=filtro?unidades.filter(function(u){
+    var q=filtro.toLowerCase();
+    return (u.nome||'').toLowerCase().includes(q)||(u.municipio||'').toLowerCase().includes(q);
+  }):unidades;
+
+  // Alertas de manutenção
+  var alertasManut=unidades.filter(function(u){return u.status==='manutencao';});
+
+  // Detalhe unidade
+  if(uVista)return h('div',null,
+    h(Navbar,{go:go,user:user,page:page,menuAberto:menuAberto,setMenuAberto:setMenuAberto}),
+    h(PageUnidade,{u:uVista,go:go,user:user,t2:t2,reload:loadAll}),
+    h(Footer,null),
+    toast&&h(Toast,{msg:toast.m,color:toast.c,onDone:function(){setToast(null);}})
+  );
+
+  // Detalhe notícia
+  if(nVista)return h('div',null,
+    h(Navbar,{go:go,user:user,page:page,menuAberto:menuAberto,setMenuAberto:setMenuAberto}),
+    h(PageNoticia,{n:nVista,go:go}),
+    h(Footer,null),
+    toast&&h(Toast,{msg:toast.m,color:toast.c,onDone:function(){setToast(null);}})
+  );
+
+  // ── Seções da Home ─────────────────────────────────────────────────────────
+  function SecHero(){
+    return h('section',{style:{background:'linear-gradient(135deg,#0a3d2e 0%,#1A7A4A 60%,#145c38 100%)',color:'#fff',padding:'80px 20px 60px',textAlign:'center',position:'relative',overflow:'hidden'}},
+      h('div',{style:{position:'absolute',top:0,left:0,right:0,bottom:0,opacity:.07,backgroundImage:'repeating-linear-gradient(45deg,#fff 0,#fff 1px,transparent 0,transparent 50%)',backgroundSize:'20px 20px'}}),
+      h('div',{style:{position:'relative',maxWidth:900,margin:'0 auto'}},
+        h('div',{style:{display:'inline-block',background:'rgba(255,255,255,.12)',borderRadius:8,padding:'4px 14px',fontSize:12,fontWeight:700,letterSpacing:1.2,marginBottom:18}},'SEMA / AC — SISTEMA DE GESTÃO'),
+        h('h1',{style:{fontSize:'clamp(28px,5vw,52px)',fontWeight:900,margin:'0 0 18px',lineHeight:1.1}},'Gestão das Unidades',h('br'),h('span',{style:{color:'#7ddba8'}},'Ambientais do Acre')),
+        h('p',{style:{fontSize:'clamp(14px,2vw,18px)',opacity:.85,maxWidth:620,margin:'0 auto 32px',lineHeight:1.7}},'Monitore, gerencie e consulte as informações das unidades CIMA e UGAI do Estado do Acre em tempo real.'),
+        h('div',{style:{display:'flex',gap:12,justifyContent:'center',flexWrap:'wrap'}},
+          h('button',{type:'button',onClick:function(){go('mapa');},style:{background:'#7ddba8',color:'#0a3d2e',border:'none',borderRadius:8,padding:'12px 28px',fontWeight:700,fontSize:15,cursor:'pointer'}},'🗺️ Ver Mapa'),
+          h('button',{type:'button',onClick:function(){go('cima');},style:{background:'rgba(255,255,255,.15)',color:'#fff',border:'2px solid rgba(255,255,255,.4)',borderRadius:8,padding:'12px 28px',fontWeight:700,fontSize:15,cursor:'pointer'}},'Ver Unidades')
+        )
+      )
+    );
+  }
+
+  function SecAlertas(){
+    if(!alertasManut.length)return null;
+    return h('section',{style:{background:'#fffbea',borderBottom:'3px solid #C4832A',padding:'14px 20px'}},
+      h('div',{style:{maxWidth:1100,margin:'0 auto',display:'flex',alignItems:'center',gap:12,flexWrap:'wrap'}},
+        h('span',{style:{fontSize:20}},'⚠️'),
+        h('strong',{style:{color:'#7a4e00',fontSize:14}},'Manutenção em andamento:'),
+        h('span',{style:{color:'#7a4e00',fontSize:13}},' '+alertasManut.map(function(u){return u.nome;}).join(', '))
+      )
+    );
+  }
+
+  function SecBloco(){
+    var cards=[
+      {label:'Unidades Ativas',val:ativas.length,icon:'✅',color:'#1A7A4A'},
+      {label:'Em Manutenção',val:manut.length,icon:'🔧',color:'#C4832A'},
+      {label:'Inativas',val:inativas.length,icon:'❌',color:'#888'},
+      {label:'Total CIMA',val:cimas.length,icon:'🌳',color:'#1A7A4A'},
+      {label:'Total UGAI',val:ugais.length,icon:'🏞️',color:'#1565A8'},
+    ];
+    return h('section',{style:{background:'#f5f9f6',padding:'40px 20px'}},
+      h('div',{style:{maxWidth:1100,margin:'0 auto'}},
+        h('h2',{style:{textAlign:'center',color:'#0a3d2e',fontSize:22,fontWeight:800,marginBottom:28}},'Resumo das Unidades'),
+        h('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(160px,1fr))',gap:16}},
+          cards.map(function(c,i){
+            return h('div',{key:i,style:{background:'#fff',borderRadius:12,padding:'22px 16px',textAlign:'center',boxShadow:'0 2px 8px rgba(0,0,0,.07)',borderTop:'4px solid '+c.color}},
+              h('div',{style:{fontSize:28,marginBottom:6}},c.icon),
+              h('div',{style:{fontSize:32,fontWeight:900,color:c.color,lineHeight:1}},c.val),
+              h('div',{style:{fontSize:12,color:'#666',marginTop:6,fontWeight:600}},c.label)
+            );
+          })
+        )
+      )
+    );
+  }
+
+  function SecMapa(){
+    var html=buildMapHtml(unidades,function(id){var u=unidades.find(function(x){return x.id===id;});if(u)setUVista(u);});
+    return h('section',{style:{padding:'40px 20px',background:'#fff'}},
+      h('div',{style:{maxWidth:1100,margin:'0 auto'}},
+        h('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:20,flexWrap:'wrap',gap:10}},
+          h('h2',{style:{color:'#0a3d2e',fontSize:22,fontWeight:800,margin:0}},'Mapa das Unidades'),
+          h('button',{type:'button',onClick:function(){go('mapa');},style:{background:C.g2,color:'#fff',border:'none',borderRadius:8,padding:'8px 20px',fontWeight:700,cursor:'pointer',fontSize:13}},'Ver mapa completo')
+        ),
+        h('div',{style:{borderRadius:12,overflow:'hidden',boxShadow:'0 4px 16px rgba(0,0,0,.1)',height:420}},
+          h('iframe',{srcDoc:html,style:{width:'100%',height:'100%',border:'none'},title:'Mapa das unidades ambientais',
+            onLoad:function(e){
+              e.target.contentWindow.addEventListener('message',function(ev){
+                if(ev.data&&ev.data.type==='openUnit'){
+                  var u=unidades.find(function(x){return String(x.id)===String(ev.data.id);});
+                  if(u)setUVista(u);
+                }
+              });
+            }
+          })
+        )
+      )
+    );
+  }
+
+  function SecDash(){
+    var totalArea=unidades.reduce(function(s,u){return s+(parseFloat(u.area_ha)||0);},0);
+    var muns=[...new Set(unidades.map(function(u){return u.municipio;}).filter(Boolean))];
+    var stats=[
+      {icon:'📐',label:'Área total (ha)',val:totalArea.toLocaleString('pt-BR',{maximumFractionDigits:0})},
+      {icon:'📍',label:'Municípios',val:muns.length},
+      {icon:'📋',label:'Solicitações',val:solic.length},
+      {icon:'📰',label:'Notícias',val:noticias.length},
+    ];
+    return h('section',{style:{background:'#0a3d2e',padding:'40px 20px'}},
+      h('div',{style:{maxWidth:1100,margin:'0 auto'}},
+        h('h2',{style:{textAlign:'center',color:'#7ddba8',fontSize:22,fontWeight:800,marginBottom:28}},'Indicadores'),
+        h('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))',gap:16}},
+          stats.map(function(s,i){
+            return h('div',{key:i,style:{background:'rgba(255,255,255,.08)',borderRadius:12,padding:'24px 16px',textAlign:'center'}},
+              h('div',{style:{fontSize:30,marginBottom:8}},s.icon),
+              h('div',{style:{fontSize:28,fontWeight:900,color:'#7ddba8',lineHeight:1}},s.val),
+              h('div',{style:{fontSize:12,color:'rgba(255,255,255,.6)',marginTop:6,fontWeight:600}},s.label)
+            );
+          })
+        )
+      )
+    );
+  }
+
+  function SecAcesso(){
+    var links=[
+      {icon:'🌳',label:'CIMA',desc:'Centros de Interpretação do Meio Ambiente',page:'cima',color:'#1A7A4A'},
+      {icon:'🏞️',label:'UGAI',desc:'Unidades de Gestão Ambiental Integrada',page:'ugai',color:'#1565A8'},
+      {icon:'🗺️',label:'Mapa',desc:'Visualização geoespacial das unidades',page:'mapa',color:'#2e7d32'},
+      {icon:'📋',label:'Solicitações',desc:'Enviar ou acompanhar solicitações',page:'sol',color:'#C4832A'},
+      {icon:'📰',label:'Notícias',desc:'Comunicados e publicações da SEMA',page:'noticias',color:'#555'},
+      {icon:'🔍',label:'Transparência',desc:'Dados abertos e relatórios públicos',page:'transp',color:'#1565A8'},
+    ];
+    return h('section',{style:{background:'#f5f9f6',padding:'40px 20px'}},
+      h('div',{style:{maxWidth:1100,margin:'0 auto'}},
+        h('h2',{style:{textAlign:'center',color:'#0a3d2e',fontSize:22,fontWeight:800,marginBottom:28}},'Acesso Rápido'),
+        h('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(200px,1fr))',gap:16}},
+          links.map(function(l,i){
+            return h('button',{key:i,type:'button',onClick:function(){go(l.page);},
+              style:{background:'#fff',border:'none',borderRadius:12,padding:'24px 16px',textAlign:'center',
+                boxShadow:'0 2px 8px rgba(0,0,0,.07)',cursor:'pointer',transition:'transform .15s',
+                borderTop:'4px solid '+l.color}},
+              h('div',{style:{fontSize:34,marginBottom:8}},l.icon),
+              h('div',{style:{fontWeight:700,color:l.color,fontSize:15,marginBottom:4}},l.label),
+              h('div',{style:{fontSize:12,color:'#666',lineHeight:1.4}},l.desc)
+            );
+          })
+        )
+      )
+    );
+  }
+
+  function SecNoticias(){
+    var recentes=noticias.slice(0,3);
+    return h('section',{style:{background:'#fff',padding:'40px 20px'}},
+      h('div',{style:{maxWidth:1100,margin:'0 auto'}},
+        h('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:28,flexWrap:'wrap',gap:10}},
+          h('h2',{style:{color:'#0a3d2e',fontSize:22,fontWeight:800,margin:0}},'Últimas Notícias'),
+          h('button',{type:'button',onClick:function(){go('noticias');},style:{background:'none',border:'1px solid '+C.g2,color:C.g2,borderRadius:8,padding:'7px 18px',fontWeight:700,cursor:'pointer',fontSize:13}},'Ver todas')
+        ),
+        recentes.length
+          ? h('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(280px,1fr))',gap:20}},
+              recentes.map(function(n){
+                return h('div',{key:n.id,style:{borderRadius:12,overflow:'hidden',boxShadow:'0 2px 8px rgba(0,0,0,.07)',cursor:'pointer'},onClick:function(){setNVista(n);}},
+                  n.imagem_url&&h('img',{src:n.imagem_url,alt:n.titulo||'',style:{width:'100%',height:160,objectFit:'cover'}}),
+                  h('div',{style:{padding:'16px'}},
+                    h('div',{style:{fontSize:11,color:C.g2,fontWeight:700,textTransform:'uppercase',marginBottom:6}},n.categoria||'Notícia'),
+                    h('h3',{style:{fontSize:16,fontWeight:700,color:'#111',margin:'0 0 8px',lineHeight:1.4}},n.titulo||''),
+                    h('p',{style:{fontSize:13,color:'#555',margin:0,lineHeight:1.5}},
+                      (n.resumo||(n.conteudo||'').substring(0,120)).substring(0,120)+(((n.resumo||n.conteudo||'').length>120)?'…':'')
+                    )
+                  )
+                );
+              })
+            )
+          : h('p',{style:{color:'#999',textAlign:'center',fontSize:14}},'Nenhuma notícia publicada.')
+      )
+    );
+  }
+
+  function SecChat(){
+    return h('section',{style:{background:'#f5f9f6',padding:'40px 20px'}},
+      h('div',{style:{maxWidth:700,margin:'0 auto'}},
+        h('h2',{style:{textAlign:'center',color:'#0a3d2e',fontSize:22,fontWeight:800,marginBottom:20}},'Assistente IA'),
+        h(ChatIA,null)
+      )
+    );
+  }
+
+  // ── Páginas ────────────────────────────────────────────────────────────────
+  function PgHome(){
+    if(loading)return h('div',{style:{textAlign:'center',padding:'80px 20px',color:C.g2,fontSize:18}},'Carregando…');
+    if(!SB_OK)return h('div',{style:{background:'#fff3cd',border:'1px solid #ffc107',borderRadius:10,margin:'40px auto',maxWidth:600,padding:'24px',textAlign:'center'}},
+      h('div',{style:{fontSize:28,marginBottom:12}},'⚙️'),
+      h('strong',{style:{color:'#856404',display:'block',marginBottom:8}},'Configuração necessária'),
+      h('p',{style:{color:'#856404',fontSize:14,margin:0}},'Defina ',h('code',null,'window.__SB_URL__'),' e ',h('code',null,'window.__SB_ANON__'),' no HTML antes de carregar.')
+    );
+    return h('div',null,
+      secs.hero!==false&&h(SecHero,null),
+      secs.alertas!==false&&h(SecAlertas,null),
+      secs.bloco!==false&&h(SecBloco,null),
+      secs.mapa!==false&&unidades.length>0&&h(SecMapa,null),
+      secs.dash!==false&&h(SecDash,null),
+      secs.acesso!==false&&h(SecAcesso,null),
+      secs.noticias!==false&&h(SecNoticias,null),
+      secs.chat!==false&&h(SecChat,null)
+    );
+  }
+
+  function PgMapa(){
+    var html=buildMapHtml(filtrados,function(id){var u=unidades.find(function(x){return x.id===id;});if(u)setUVista(u);});
+    return h('div',{style:{padding:'20px',maxWidth:1100,margin:'0 auto'}},
+      h('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:16,flexWrap:'wrap',gap:10}},
+        h('h1',{style:{color:'#0a3d2e',fontSize:22,fontWeight:800,margin:0}},'Mapa das Unidades'),
+        h('input',{type:'search',placeholder:'Filtrar unidades…',value:filtro,onChange:function(e){setFiltro(e.target.value);},
+          style:{padding:'8px 14px',borderRadius:8,border:'1px solid #ccc',fontSize:14,width:220}})
+      ),
+      h('div',{style:{borderRadius:12,overflow:'hidden',boxShadow:'0 4px 16px rgba(0,0,0,.1)',height:'calc(100vh - 160px)',minHeight:400}},
+        h('iframe',{srcDoc:html,style:{width:'100%',height:'100%',border:'none'},title:'Mapa completo das unidades',
+          onLoad:function(e){
+            e.target.contentWindow.addEventListener('message',function(ev){
+              if(ev.data&&ev.data.type==='openUnit'){
+                var u=unidades.find(function(x){return String(x.id)===String(ev.data.id);});
+                if(u)setUVista(u);
+              }
+            });
+          }
+        })
+      )
+    );
+  }
+
+  function PgLista(tipo){
+    var lista=(tipo==='CIMA'?cimas:ugais).filter(function(u){
+      if(!filtro)return true;
+      var q=filtro.toLowerCase();
+      return (u.nome||'').toLowerCase().includes(q)||(u.municipio||'').toLowerCase().includes(q);
+    });
+    var cor=tipo==='CIMA'?'#1A7A4A':'#1565A8';
+    return h('div',{style:{padding:'20px',maxWidth:1100,margin:'0 auto'}},
+      h('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:20,flexWrap:'wrap',gap:10}},
+        h('h1',{style:{color:'#0a3d2e',fontSize:22,fontWeight:800,margin:0}},tipo==='CIMA'?'🌳 Unidades CIMA':'🏞️ Unidades UGAI'),
+        h('input',{type:'search',placeholder:'Buscar…',value:filtro,onChange:function(e){setFiltro(e.target.value);},
+          style:{padding:'8px 14px',borderRadius:8,border:'1px solid #ccc',fontSize:14,width:220}})
+      ),
+      lista.length===0
+        ? h('p',{style:{color:'#999',textAlign:'center',padding:'40px 0',fontSize:15}},'Nenhuma unidade encontrada.')
+        : h('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(280px,1fr))',gap:16}},
+            lista.map(function(u){
+              var scMap={ativo:C.g2,manutencao:'#C4832A',inativo:'#888'};
+              var sc=scMap[u.status]||'#ccc';
+              return h('div',{key:u.id,
+                style:{background:'#fff',borderRadius:12,padding:'20px',boxShadow:'0 2px 8px rgba(0,0,0,.07)',
+                  cursor:'pointer',borderLeft:'5px solid '+sc},
+                onClick:function(){setUVista(u);}},
+                h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:10}},
+                  h('h3',{style:{fontSize:16,fontWeight:700,color:'#111',margin:0,lineHeight:1.3}},u.nome||'—'),
+                  h('span',{style:{background:sc,color:'#fff',borderRadius:20,padding:'2px 10px',fontSize:11,fontWeight:700,whiteSpace:'nowrap'}},u.status||'—')
+                ),
+                h('div',{style:{fontSize:13,color:'#555'}},
+                  u.municipio&&h('div',null,'📍 '+u.municipio),
+                  u.area_ha&&h('div',null,'📐 '+parseFloat(u.area_ha).toLocaleString('pt-BR')+'  ha'),
+                  u.bioma&&h('div',null,'🌿 '+u.bioma)
+                )
+              );
+            })
+          )
+    );
+  }
+
+  function PgNoticias(){
+    return h('div',{style:{padding:'20px',maxWidth:1100,margin:'0 auto'}},
+      h('h1',{style:{color:'#0a3d2e',fontSize:22,fontWeight:800,marginBottom:24}},'📰 Notícias'),
+      noticias.length===0
+        ? h('p',{style:{color:'#999',textAlign:'center',padding:'40px 0',fontSize:15}},'Nenhuma notícia publicada.')
+        : h('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(280px,1fr))',gap:20}},
+            noticias.map(function(n){
+              return h('div',{key:n.id,style:{background:'#fff',borderRadius:12,overflow:'hidden',
+                boxShadow:'0 2px 8px rgba(0,0,0,.07)',cursor:'pointer'},
+                onClick:function(){setNVista(n);}},
+                n.imagem_url&&h('img',{src:n.imagem_url,alt:n.titulo||'',style:{width:'100%',height:180,objectFit:'cover'}}),
+                h('div',{style:{padding:'16px'}},
+                  h('div',{style:{fontSize:11,color:C.g2,fontWeight:700,textTransform:'uppercase',marginBottom:6}},n.categoria||'Notícia'),
+                  h('h3',{style:{fontSize:16,fontWeight:700,color:'#111',margin:'0 0 8px',lineHeight:1.4}},n.titulo||''),
+                  h('p',{style:{fontSize:13,color:'#555',margin:0,lineHeight:1.5}},
+                    (n.resumo||(n.conteudo||'').substring(0,140)).substring(0,140)+(((n.resumo||n.conteudo||'').length>140)?'…':'')
+                  ),
+                  n.created_at&&h('div',{style:{fontSize:11,color:'#aaa',marginTop:10}},new Date(n.created_at).toLocaleDateString('pt-BR'))
+                )
+              );
+            })
+          )
+    );
+  }
+
+  function PgSol(){
+    return h('div',{style:{padding:'20px',maxWidth:800,margin:'0 auto'}},
+      h('h1',{style:{color:'#0a3d2e',fontSize:22,fontWeight:800,marginBottom:8}},'📋 Solicitações'),
+      h('p',{style:{color:'#555',fontSize:14,marginBottom:28}},'Envie uma solicitação, dúvida ou denúncia relacionada às unidades ambientais do Acre.'),
+      h(FormSol,{t2:t2,reload:loadAll})
+    );
+  }
+
+  function PgTransp(){
+    var cols=['nome','tipo','municipio','status','area_ha','bioma','criacao'];
+    function exportCSV(){
+      if(!unidades.length){t2('Sem dados para exportar','#C4832A');return;}
+      var rows=[cols].concat(unidades.map(function(u){return cols.map(function(c){return u[c]||''});}));
+      var csv=rows.map(function(r){return r.map(function(v){return '"'+String(v).replace(/"/g,'""')+'"';}).join(',');}).join('\n');
+      var a=document.createElement('a');
+      a.href='data:text/csv;charset=utf-8,\uFEFF'+encodeURIComponent(csv);
+      a.download='unidades_sema_ac.csv';
+      a.click();
+      t2('CSV exportado!');
+    }
+    function exportXLSX(){
+      if(!window.XLSX){t2('Biblioteca XLSX não disponível','#C4832A');return;}
+      if(!unidades.length){t2('Sem dados para exportar','#C4832A');return;}
+      var ws=XLSX.utils.json_to_sheet(unidades.map(function(u){
+        return {Nome:u.nome||'',Tipo:u.tipo||'',Município:u.municipio||'',Status:u.status||'',
+          'Área (ha)':u.area_ha||'',Bioma:u.bioma||'',Criação:u.criacao||''};
+      }));
+      var wb=XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb,ws,'Unidades');
+      XLSX.writeFile(wb,'unidades_sema_ac.xlsx');
+      t2('XLSX exportado!');
+    }
+    return h('div',{style:{padding:'20px',maxWidth:1100,margin:'0 auto'}},
+      h('h1',{style:{color:'#0a3d2e',fontSize:22,fontWeight:800,marginBottom:8}},'🔍 Transparência'),
+      h('p',{style:{color:'#555',fontSize:14,marginBottom:24}},'Dados públicos das unidades ambientais do Estado do Acre. Exporte ou consulte abaixo.'),
+      h('div',{style:{display:'flex',gap:12,marginBottom:24,flexWrap:'wrap'}},
+        h('button',{type:'button',onClick:exportCSV,style:{background:'#1A7A4A',color:'#fff',border:'none',borderRadius:8,padding:'10px 20px',fontWeight:700,cursor:'pointer',fontSize:14}},'⬇️ Exportar CSV'),
+        h('button',{type:'button',onClick:exportXLSX,style:{background:'#1565A8',color:'#fff',border:'none',borderRadius:8,padding:'10px 20px',fontWeight:700,cursor:'pointer',fontSize:14}},'⬇️ Exportar XLSX')
+      ),
+      h('div',{style:{overflowX:'auto'}},
+        h('table',{style:{width:'100%',borderCollapse:'collapse',fontSize:13}},
+          h('thead',null,
+            h('tr',{style:{background:'#0a3d2e',color:'#fff'}},
+              cols.map(function(c){return h('th',{key:c,style:{padding:'10px 14px',textAlign:'left',fontWeight:700,whiteSpace:'nowrap'}},c.toUpperCase());})
+            )
+          ),
+          h('tbody',null,
+            unidades.length===0
+              ? h('tr',null,h('td',{colSpan:cols.length,style:{padding:'24px',textAlign:'center',color:'#999'}},'Nenhum registro.'))
+              : unidades.map(function(u,i){
+                  return h('tr',{key:u.id,style:{background:i%2?'#f9f9f9':'#fff'}},
+                    cols.map(function(c){return h('td',{key:c,style:{padding:'9px 14px',borderBottom:'1px solid #eee'}},u[c]||'—');})
+                  );
+                })
+          )
+        )
+      )
+    );
+  }
+
+  // ── Main render ─────────────────────────────────────────────────────────────
+  var content;
+  if(page==='mapa')          content=h(PgMapa,null);
+  else if(page==='cima')     content=h(PgLista,'CIMA');
+  else if(page==='ugai')     content=h(PgLista,'UGAI');
+  else if(page==='noticias') content=h(PgNoticias,null);
+  else if(page==='sol')      content=h(PgSol,null);
+  else if(page==='transp')   content=h(PgTransp,null);
+  else if(page==='admin')    content=h(AdminPanel,{user:user,unidades:unidades,noticias:noticias,solic:solic,secs:secs,setSecs:setSecs,t2:t2,reload:loadAll,go:go});
+  else                       content=h(PgHome,null);
+
+  return h('div',{style:{minHeight:'100vh',display:'flex',flexDirection:'column',fontFamily:"'Segoe UI',system-ui,sans-serif"}},
+    h(Navbar,{go:go,user:user,page:page,menuAberto:menuAberto,setMenuAberto:setMenuAberto}),
+    h('main',{style:{flex:1}},
+      !SB_OK&&page!=='home'&&h('div',{style:{background:'#fff3cd',borderBottom:'2px solid #ffc107',padding:'8px 20px',textAlign:'center',fontSize:13,color:'#856404'}},
+        '⚙️ Supabase não configurado — dados indisponíveis. Configure ',h('code',null,'window.__SB_URL__'),' e ',h('code',null,'window.__SB_ANON__'),'.'
+      ),
+      erro&&h('div',{style:{background:'#ffeaea',borderBottom:'2px solid #e53935',padding:'8px 20px',textAlign:'center',fontSize:13,color:'#b71c1c'}},
+        '⚠️ '+erro+' ',h('button',{type:'button',onClick:loadAll,style:{background:'none',border:'1px solid #e53935',borderRadius:4,padding:'2px 10px',color:'#b71c1c',cursor:'pointer',fontSize:12}},'Tentar novamente')
+      ),
+      content
+    ),
+    h(Footer,null),
+    toast&&h(Toast,{msg:toast.m,color:toast.c,onDone:function(){setToast(null);}})
+  );
+}
+
+// ── Bootstrap ─────────────────────────────────────────────────────────────────
+var root;
+try{
+  root=ReactDOM.createRoot(document.getElementById('root'));
+  root.render(h(React.StrictMode,null,h(App,null)));
+}catch(e){
+  document.getElementById('root').innerHTML=
+    '<div style="font-family:sans-serif;padding:40px;text-align:center;color:#b71c1c">'+
+    '<div style="font-size:48px;margin-bottom:16px">⚠️</div>'+
+    '<h2>Erro ao inicializar</h2>'+
+    '<pre style="background:#f5f5f5;padding:16px;border-radius:8px;text-align:left;overflow:auto;font-size:13px">'+
+    (e&&e.stack||e).toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')+
+    '</pre></div>';
+}
+</script>
+</body>
+</html>
