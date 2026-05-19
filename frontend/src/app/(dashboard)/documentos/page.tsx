@@ -1,0 +1,169 @@
+"use client";
+import { useState, useEffect } from "react";
+import { FolderOpen, Search, FileText, Download, Eye } from "lucide-react";
+
+interface Documento {
+  id: string;
+  titulo: string;
+  tipo: string;
+  status: string;
+  gerado_por_ia: boolean;
+  versao: number;
+  process_id: string | null;
+  client_id: string | null;
+  created_at: string;
+}
+
+const STATUS_STYLE: Record<string, string> = {
+  RASCUNHO: "badge-pendente",
+  REVISAO: "badge-pendente",
+  APROVADO: "badge-ativo",
+  PROTOCOLADO: "badge-ativo",
+  REJEITADO: "badge-arquivado",
+};
+
+const TIPO_COLORS: Record<string, string> = {
+  PETICAO: "bg-blue-100 text-blue-700",
+  CONTRATO: "bg-purple-100 text-purple-700",
+  PROCURACAO: "bg-orange-100 text-orange-700",
+  PARECER: "bg-teal-100 text-teal-700",
+  RECURSO: "bg-red-100 text-red-700",
+  OUTROS: "bg-gray-100 text-gray-700",
+};
+
+export default function DocumentosPage() {
+  const [docs, setDocs] = useState<Documento[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState("");
+  const [filtroTipo, setFiltroTipo] = useState("");
+  const [filtroStatus, setFiltroStatus] = useState("");
+
+  useEffect(() => { fetchDocs(); }, [filtroTipo, filtroStatus]);
+
+  async function fetchDocs() {
+    setLoading(true);
+    try {
+      const token = localStorage.getItem("afj_access_token");
+      const params = new URLSearchParams();
+      if (filtroTipo) params.set("tipo", filtroTipo);
+      if (filtroStatus) params.set("status", filtroStatus);
+      const res = await fetch(`/api/v1/documents?${params}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) setDocs(await res.json());
+    } finally { setLoading(false); }
+  }
+
+  const filtrados = docs.filter((d) =>
+    !search || d.titulo.toLowerCase().includes(search.toLowerCase())
+  );
+
+  return (
+    <div className="max-w-7xl mx-auto space-y-5">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="font-display text-2xl font-semibold text-afj-black">Documentos</h1>
+          <p className="text-afj-black/50 text-sm">{filtrados.length} documento(s)</p>
+        </div>
+      </div>
+
+      {/* Filtros */}
+      <div className="flex gap-3 flex-wrap">
+        <div className="relative flex-1 min-w-48">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-afj-black/30" />
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Buscar por título..."
+            className="w-full pl-9 pr-4 py-2 text-sm border border-afj-cream-dark rounded-md focus:outline-none focus:border-afj-gold bg-white"
+          />
+        </div>
+        <select
+          value={filtroTipo}
+          onChange={(e) => setFiltroTipo(e.target.value)}
+          className="border border-afj-cream-dark rounded-md px-3 py-2 text-sm bg-white focus:outline-none focus:border-afj-gold"
+        >
+          <option value="">Todos os tipos</option>
+          {["PETICAO", "CONTRATO", "PROCURACAO", "PARECER", "RECURSO", "OUTROS"].map((t) => (
+            <option key={t} value={t}>{t}</option>
+          ))}
+        </select>
+        <select
+          value={filtroStatus}
+          onChange={(e) => setFiltroStatus(e.target.value)}
+          className="border border-afj-cream-dark rounded-md px-3 py-2 text-sm bg-white focus:outline-none focus:border-afj-gold"
+        >
+          <option value="">Todos os status</option>
+          <option value="RASCUNHO">Rascunho</option>
+          <option value="REVISAO">Em Revisão</option>
+          <option value="APROVADO">Aprovado</option>
+          <option value="PROTOCOLADO">Protocolado</option>
+        </select>
+      </div>
+
+      {loading ? (
+        <div className="afj-card p-8 text-center text-afj-black/40">Carregando documentos...</div>
+      ) : filtrados.length === 0 ? (
+        <div className="afj-card p-12 text-center">
+          <FolderOpen className="mx-auto text-afj-black/20 mb-3" size={40} />
+          <p className="font-semibold text-afj-black">Nenhum documento encontrado</p>
+          <p className="text-afj-black/40 text-sm mt-1">Documentos gerados pelo sistema aparecerão aqui</p>
+        </div>
+      ) : (
+        <div className="afj-card overflow-hidden">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-afj-cream-dark bg-afj-cream/50">
+                <th className="text-left px-4 py-3 text-afj-black/50 font-medium">Título</th>
+                <th className="text-left px-4 py-3 text-afj-black/50 font-medium">Tipo</th>
+                <th className="text-left px-4 py-3 text-afj-black/50 font-medium">Status</th>
+                <th className="text-left px-4 py-3 text-afj-black/50 font-medium">Versão</th>
+                <th className="text-left px-4 py-3 text-afj-black/50 font-medium">Origem</th>
+                <th className="text-left px-4 py-3 text-afj-black/50 font-medium">Data</th>
+                <th className="text-left px-4 py-3 text-afj-black/50 font-medium">Ações</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtrados.map((d) => (
+                <tr key={d.id} className="border-b border-afj-cream-dark hover:bg-afj-cream/30 transition-colors">
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-2">
+                      <FileText size={14} className="text-afj-black/30 flex-shrink-0" />
+                      <span className="font-medium text-afj-black">{d.titulo}</span>
+                    </div>
+                  </td>
+                  <td className="px-4 py-3">
+                    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${TIPO_COLORS[d.tipo] ?? "bg-gray-100 text-gray-700"}`}>
+                      {d.tipo}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3">
+                    <span className={STATUS_STYLE[d.status] ?? "badge-arquivado"}>{d.status}</span>
+                  </td>
+                  <td className="px-4 py-3 text-afj-black/50 text-xs">v{d.versao}</td>
+                  <td className="px-4 py-3">
+                    {d.gerado_por_ia ? (
+                      <span className="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full">IA</span>
+                    ) : (
+                      <span className="text-xs text-afj-black/30">Manual</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-3 text-afj-black/40 text-xs">
+                    {new Date(d.created_at).toLocaleDateString("pt-BR")}
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-2">
+                      <button className="text-afj-black/40 hover:text-afj-gold transition-colors" title="Visualizar">
+                        <Eye size={14} />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
