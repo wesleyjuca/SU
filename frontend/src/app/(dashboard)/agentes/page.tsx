@@ -1,8 +1,10 @@
 "use client";
 import { useState } from "react";
-import { Bot, Play, Clock, CheckCircle, XCircle, AlertCircle, DollarSign } from "lucide-react";
+import { Play } from "lucide-react";
+import { AgentStatusCard } from "@/components/agents/AgentStatusCard";
+import type { AgentCardData } from "@/components/agents/AgentStatusCard";
 
-const AGENTS = [
+const AGENTS: AgentCardData[] = [
   { name: "orchestration_agent", label: "Orquestrador", desc: "Coordena todos os agentes", category: "CORE" },
   { name: "petition_agent", label: "Petição", desc: "Gera petições jurídicas com Claude", category: "JURIDICO" },
   { name: "review_agent", label: "Revisão", desc: "Revisão jurídica em 4 etapas", category: "JURIDICO" },
@@ -34,34 +36,26 @@ const CATEGORY_COLORS: Record<string, string> = {
 };
 
 export default function AgentesPage() {
-  const [triggering, setTriggering] = useState<string | null>(null);
   const [taskType, setTaskType] = useState("generate_petition");
   const [result, setResult] = useState<string | null>(null);
 
   async function triggerAgent(agentName: string) {
-    setTriggering(agentName);
     setResult(null);
-    try {
-      const token = localStorage.getItem("afj_access_token");
-      const res = await fetch("/api/v1/agents/trigger", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          task_type: taskType,
-          task_input: { descricao: `Teste do agente ${agentName}` },
-        }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setResult(`Run iniciado: ${data.run_id}`);
-      }
-    } catch (e) {
-      setResult(`Erro: ${e}`);
-    } finally {
-      setTriggering(null);
+    const token = localStorage.getItem("afj_access_token");
+    const res = await fetch("/api/v1/agents/trigger", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        task_type: taskType,
+        task_input: { descricao: `Teste do agente ${agentName}` },
+      }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      setResult(`Run iniciado: ${data.run_id}`);
     }
   }
 
@@ -115,33 +109,12 @@ export default function AgentesPage() {
           <h2 className="text-xs font-semibold text-afj-black/40 uppercase tracking-wider mb-3">{cat}</h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
             {AGENTS.filter((a) => a.category === cat).map((agent) => (
-              <div
+              <AgentStatusCard
                 key={agent.name}
-                className="afj-card p-4 flex flex-col gap-3 hover:border-afj-gold/30 transition-colors"
-              >
-                <div className="flex items-start justify-between">
-                  <div className="w-8 h-8 rounded-lg bg-afj-gold/10 flex items-center justify-center">
-                    <Bot size={14} className="text-afj-gold" />
-                  </div>
-                  <span className={`text-xs px-2 py-0.5 rounded-full border ${CATEGORY_COLORS[agent.category]}`}>
-                    {agent.category}
-                  </span>
-                </div>
-                <div>
-                  <p className="font-semibold text-sm text-afj-black">{agent.label}</p>
-                  <p className="text-xs text-afj-black/50 mt-0.5">{agent.desc}</p>
-                </div>
-                <div className="flex items-center justify-between text-xs text-afj-black/40 border-t border-afj-cream-dark pt-2">
-                  <span className="flex items-center gap-1">
-                    <span className="agent-idle" />
-                    idle
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <DollarSign size={10} />
-                    $0.00
-                  </span>
-                </div>
-              </div>
+                agent={agent}
+                categoryColor={CATEGORY_COLORS[agent.category]}
+                onTrigger={triggerAgent}
+              />
             ))}
           </div>
         </div>
