@@ -1,6 +1,6 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import AnyHttpUrl, field_validator
-from typing import Annotated
+from pydantic import field_validator, model_validator
+from urllib.parse import urlparse
 import json
 
 
@@ -17,14 +17,14 @@ class Settings(BaseSettings):
     # ─── Banco de dados ──────────────────────────────────────────────────────
     DATABASE_URL: str
     POSTGRES_USER: str = "afj"
-    POSTGRES_PASSWORD: str
+    POSTGRES_PASSWORD: str = ""   # auto-derived from DATABASE_URL if empty
     POSTGRES_DB: str = "afj_core"
 
     # ─── Redis ───────────────────────────────────────────────────────────────
     REDIS_URL: str
-    REDIS_PASSWORD: str
-    CELERY_BROKER_URL: str
-    CELERY_RESULT_BACKEND: str
+    REDIS_PASSWORD: str = ""       # auto-derived from REDIS_URL if empty
+    CELERY_BROKER_URL: str = ""    # defaults to REDIS_URL
+    CELERY_RESULT_BACKEND: str = ""  # defaults to REDIS_URL
 
     # ─── Qdrant ──────────────────────────────────────────────────────────────
     QDRANT_URL: str = "http://qdrant:6333"
@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
-    ENCRYPTION_KEY: str
+    ENCRYPTION_KEY: str = ""       # generated from SECRET_KEY if empty
 
     # ─── CORS ────────────────────────────────────────────────────────────────
     CORS_ORIGINS: list[str] = ["http://localhost:3000"]
@@ -51,8 +51,8 @@ class Settings(BaseSettings):
         return v
 
     # ─── IA ──────────────────────────────────────────────────────────────────
-    ANTHROPIC_API_KEY: str
-    OPENAI_API_KEY: str
+    ANTHROPIC_API_KEY: str = ""
+    OPENAI_API_KEY: str = ""
     DEFAULT_CLAUDE_MODEL: str = "claude-opus-4-7"
     DEFAULT_EMBEDDING_MODEL: str = "text-embedding-3-large"
     EMBEDDING_DIMENSIONS: int = 3072
@@ -61,6 +61,28 @@ class Settings(BaseSettings):
     PROCESS_POLLING_INTERVAL_MINUTES: int = 30
     PROCESS_POLLING_BATCH_SIZE: int = 50
     PUBLICATION_SCAN_HOUR: int = 7
+
+    @model_validator(mode="after")
+    def derive_from_urls(self) -> "Settings":
+        # Fill Celery URLs from Redis if not set
+        if not self.CELERY_BROKER_URL:
+            self.CELERY_BROKER_URL = self.REDIS_URL
+        if not self.CELERY_RESULT_BACKEND:
+            self.CELERY_RESULT_BACKEND = self.REDIS_URL
+        # Extract REDIS_PASSWORD from REDIS_URL if not set
+        if not self.REDIS_PASSWORD and self.REDIS_URL:
+            parsed = urlparse(self.REDIS_URL)
+            if parsed.password:
+                self.REDIS_PASSWORD = parsed.password
+        # Extract POSTGRES_PASSWORD from DATABASE_URL if not set
+        if not self.POSTGRES_PASSWORD and self.DATABASE_URL:
+            parsed = urlparse(self.DATABASE_URL)
+            if parsed.password:
+                self.POSTGRES_PASSWORD = parsed.password
+        # Derive ENCRYPTION_KEY from SECRET_KEY if not set
+        if not self.ENCRYPTION_KEY and self.SECRET_KEY:
+            self.ENCRYPTION_KEY = self.SECRET_KEY[:32].ljust(32, "0")
+        return self
 
 
 settings = Settings()
