@@ -6,6 +6,7 @@ import {
   Bot, CheckSquare, DollarSign, Shield, Shapes, Settings,
   Bell, Search, ChevronRight, FileEdit
 } from "lucide-react";
+import { useApprovalCount } from "@/hooks/useApprovals";
 
 const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -24,6 +25,7 @@ const navItems = [
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const { count: approvalCount } = useApprovalCount();
 
   return (
     <div className="flex h-screen overflow-hidden">
@@ -84,10 +86,14 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             <span>Buscar processos, clientes, documentos... (⌘K)</span>
           </div>
           <div className="flex items-center gap-3">
-            <button className="relative text-afj-black/60 hover:text-afj-black transition-colors">
+            <Link href="/aprovacoes" className="relative text-afj-black/60 hover:text-afj-black transition-colors">
               <Bell size={18} />
-              <span className="absolute -top-1 -right-1 w-3.5 h-3.5 bg-red-500 rounded-full text-white text-[9px] flex items-center justify-center font-bold">3</span>
-            </button>
+              {approvalCount > 0 && (
+                <span className="absolute -top-1 -right-1 min-w-[14px] h-3.5 bg-red-500 rounded-full text-white text-[9px] flex items-center justify-center font-bold px-0.5">
+                  {approvalCount > 99 ? "99+" : approvalCount}
+                </span>
+              )}
+            </Link>
           </div>
         </header>
 
