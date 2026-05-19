@@ -1,0 +1,51 @@
+# Ambiente
+.env
+.env.local
+.env.*.local
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.venv/
+venv/
+dist/
+build/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node
+node_modules/
+.next/
+out/
+.vercel/
+npm-debug.log*
+
+# Docker volumes (local)
+postgres_data/
+redis_data/
+qdrant_data/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Certificados digitais — nunca versionar
+*.pfx
+*.p12
+*.cer
+*.crt
+*.key
+
+# Uploads locais
+uploads/
+media/

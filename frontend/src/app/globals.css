@@ -1,0 +1,107 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Playfair+Display:wght@400;500;600;700&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 40 33% 96%;    /* creme */
+    --foreground: 0 0% 10%;      /* preto suave */
+    --border: 35 20% 85%;
+    --input: 35 20% 85%;
+    --ring: 38 55% 55%;          /* dourado */
+    --radius: 0.5rem;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 98%;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-afj-cream text-afj-black font-sans antialiased;
+  }
+
+  h1, h2, h3 {
+    @apply font-display;
+  }
+}
+
+@layer components {
+  /* ─── Sidebar AFJ ─────────────────────────────────────────────────────── */
+  .afj-sidebar {
+    @apply bg-afj-black text-afj-cream w-64 h-screen flex flex-col fixed left-0 top-0 z-40;
+  }
+
+  .afj-sidebar-logo {
+    @apply px-6 py-5 border-b border-afj-charcoal;
+  }
+
+  .afj-sidebar-nav-item {
+    @apply flex items-center gap-3 px-4 py-2.5 mx-2 rounded-md text-sm font-medium
+           text-afj-cream/70 hover:text-afj-gold hover:bg-afj-black-soft
+           transition-colors duration-150 cursor-pointer;
+  }
+
+  .afj-sidebar-nav-item.active {
+    @apply text-afj-gold bg-afj-black-soft border-l-2 border-afj-gold;
+  }
+
+  /* ─── Cards ──────────────────────────────────────────────────────────── */
+  .afj-card {
+    @apply bg-white border border-afj-cream-dark rounded-lg shadow-sm;
+  }
+
+  .afj-card-premium {
+    @apply bg-white border border-afj-gold/20 rounded-lg shadow-md;
+  }
+
+  /* ─── KPI Box ─────────────────────────────────────────────────────────── */
+  .kpi-box {
+    @apply afj-card p-5 flex flex-col gap-2;
+  }
+
+  .kpi-value {
+    @apply font-display text-3xl font-semibold text-afj-black;
+  }
+
+  .kpi-label {
+    @apply text-sm text-muted-foreground;
+  }
+
+  /* ─── Status Badges ───────────────────────────────────────────────────── */
+  .badge-ativo { @apply bg-green-100 text-green-800 text-xs font-medium px-2 py-0.5 rounded-full; }
+  .badge-pendente { @apply bg-amber-100 text-amber-800 text-xs font-medium px-2 py-0.5 rounded-full; }
+  .badge-urgente { @apply bg-red-100 text-red-800 text-xs font-medium px-2 py-0.5 rounded-full; }
+  .badge-aprovado { @apply bg-emerald-100 text-emerald-800 text-xs font-medium px-2 py-0.5 rounded-full; }
+  .badge-arquivado { @apply bg-gray-100 text-gray-600 text-xs font-medium px-2 py-0.5 rounded-full; }
+
+  /* ─── Agent Status ────────────────────────────────────────────────────── */
+  .agent-idle { @apply w-2 h-2 rounded-full bg-gray-400; }
+  .agent-running { @apply w-2 h-2 rounded-full bg-afj-gold animate-pulse; }
+  .agent-success { @apply w-2 h-2 rounded-full bg-green-500; }
+  .agent-error { @apply w-2 h-2 rounded-full bg-red-500; }
+  .agent-approval { @apply w-2 h-2 rounded-full bg-amber-500 animate-pulse; }
+
+  /* ─── Botões primários AFJ ────────────────────────────────────────────── */
+  .btn-afj-primary {
+    @apply bg-afj-gold text-afj-black font-semibold px-5 py-2.5 rounded-md
+           hover:bg-afj-gold-dark transition-colors duration-150 text-sm;
+  }
+
+  .btn-afj-outline {
+    @apply border border-afj-gold text-afj-gold font-medium px-5 py-2.5 rounded-md
+           hover:bg-afj-gold/10 transition-colors duration-150 text-sm;
+  }
+
+  /* ─── Timeline processual ─────────────────────────────────────────────── */
+  .timeline-item {
+    @apply relative pl-6 pb-6 border-l-2 border-afj-cream-dark last:border-l-0;
+  }
+
+  .timeline-dot {
+    @apply absolute -left-[5px] top-1 w-2.5 h-2.5 rounded-full bg-afj-gold border-2 border-white;
+  }
+}
