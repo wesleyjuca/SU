@@ -6,9 +6,11 @@ import hashlib
 
 from app.db.base import get_db
 from app.models.user import User, Session
-from app.core.security import verify_password, create_access_token, create_refresh_token, hash_token
+from app.core.security import verify_password, create_access_token, create_refresh_token, hash_token, decode_access_token
 from app.core.exceptions import UnauthorizedError
 from app.config import settings
+from app.dependencies import bearer_scheme
+from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel, EmailStr
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -102,10 +104,30 @@ async def refresh(body: RefreshRequest, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/logout")
-async def logout(body: RefreshRequest, db: AsyncSession = Depends(get_db)):
+async def logout(
+    body: RefreshRequest,
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    db: AsyncSession = Depends(get_db),
+):
     token_hash = hash_token(body.refresh_token)
     result = await db.execute(select(Session).where(Session.token_hash == token_hash))
     session = result.scalar_one_or_none()
     if session:
         await db.delete(session)
+
+    # Blacklist the access token via Redis
+    if credentials:
+        try:
+            payload = decode_access_token(credentials.credentials)
+            jti = payload.get("jti")
+            exp = payload.get("exp")
+            if jti and exp:
+                remaining = max(0, int(exp - datetime.now(timezone.utc).timestamp()))
+                from app.db.redis import get_redis
+                redis = await get_redis()
+                if redis and remaining > 0:
+                    await redis.setex(f"blacklist:{jti}", remaining, "1")
+        except Exception:
+            pass
+
     return {"message": "Logout realizado com sucesso"}

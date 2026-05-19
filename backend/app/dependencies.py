@@ -6,7 +6,7 @@ from jose import JWTError
 from app.db.base import get_db
 from app.db.redis import get_redis
 from app.db.qdrant import get_qdrant
-from app.core.security import decode_access_token
+from app.core.security import decode_access_token, is_token_blacklisted
 from app.core.exceptions import UnauthorizedError, ForbiddenError
 from app.models.user import User
 from sqlalchemy import select
@@ -25,8 +25,11 @@ async def get_current_user(
     try:
         payload = decode_access_token(credentials.credentials)
         user_id: str = payload.get("sub")
+        jti: str = payload.get("jti", "")
         if not user_id:
             raise UnauthorizedError()
+        if jti and await is_token_blacklisted(jti):
+            raise UnauthorizedError("Token revogado")
     except JWTError:
         raise UnauthorizedError("Token inválido ou expirado")
 

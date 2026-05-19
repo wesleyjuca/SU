@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { User, Approval } from "@/types";
+import type { TenantTheme } from "@/lib/theme";
 
 // ─── User Store ──────────────────────────────────────────────────────────────
 
@@ -78,4 +79,25 @@ export const useApprovalStore = create<ApprovalStore>()((set) => ({
   setPendingCount: (count) => set({ pendingCount: count }),
   incrementPending: () =>
     set((state) => ({ pendingCount: state.pendingCount + 1 })),
+}));
+
+// ─── Theme Store ──────────────────────────────────────────────────────────────
+
+const DEFAULT_THEME: TenantTheme = {
+  primaryColor: "#C9A84C",
+  secondaryColor: "#1A1A1A",
+  accentColor: "#F5F0E8",
+  appName: "AFJ CORE",
+  logoUrl: null,
+  logoDarkUrl: null,
+};
+
+interface ThemeStore {
+  theme: TenantTheme;
+  setTheme: (t: TenantTheme) => void;
+}
+
+export const useThemeStore = create<ThemeStore>()((set) => ({
+  theme: DEFAULT_THEME,
+  setTheme: (theme) => set({ theme }),
 }));

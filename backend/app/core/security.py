@@ -51,7 +51,19 @@ def create_refresh_token(subject: str | Any) -> tuple[str, str]:
 
 
 def decode_access_token(token: str) -> dict:
-    return jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
+    payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
+    return payload
+
+
+async def is_token_blacklisted(jti: str) -> bool:
+    try:
+        from app.db.redis import get_redis
+        redis = await get_redis()
+        if redis:
+            return bool(await redis.exists(f"blacklist:{jti}"))
+    except Exception:
+        pass
+    return False
 
 
 def hash_token(token: str) -> str:

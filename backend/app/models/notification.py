@@ -19,5 +19,6 @@ class Notification(Base):
     priority: Mapped[str] = mapped_column(String(10), default="NORMAL")
     link: Mapped[str | None] = mapped_column(Text)
     metadata: Mapped[dict | None] = mapped_column(JSONB)
+    tenant_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("tenants.id"), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
     read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

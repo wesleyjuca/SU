@@ -14,6 +14,18 @@
     --radius: 0.5rem;
     --destructive: 0 84% 60%;
     --destructive-foreground: 0 0% 98%;
+
+    /* ── Tema customizável (sobrescrito via JS em runtime) ─── */
+    --brand-primary: #C9A84C;
+    --brand-primary-light: #E8C96A;
+    --brand-primary-dark: #A07830;
+    --brand-secondary: #1A1A1A;
+    --brand-accent: #F5F0E8;
+    --brand-accent-dark: #EDE5D0;
+    --sidebar-bg: #1A1A1A;
+    --sidebar-text: #F5F0E8;
+    --font-display: 'Playfair Display', serif;
+    --font-body: 'Inter', sans-serif;
   }
 
   * {
@@ -104,4 +116,11 @@
   .timeline-dot {
     @apply absolute -left-[5px] top-1 w-2.5 h-2.5 rounded-full bg-afj-gold border-2 border-white;
   }
+
+  /* ─── Classes de tema dinâmico ────────────────────────────────────────── */
+  .brand-primary { color: var(--brand-primary); }
+  .bg-brand-primary { background-color: var(--brand-primary); }
+  .border-brand-primary { border-color: var(--brand-primary); }
+  .brand-accent { color: var(--brand-accent); }
+  .bg-brand-accent { background-color: var(--brand-accent); }
 }

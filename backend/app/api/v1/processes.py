@@ -160,6 +160,109 @@ async def get_deadlines(
     ]
 
 
+@router.put("/{process_id}", response_model=ProcessResponse)
+async def update_process(
+    process_id: str,
+    body: ProcessCreate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(LegalProcess).where(LegalProcess.id == uuid.UUID(process_id)))
+    process = result.scalar_one_or_none()
+    if not process:
+        raise NotFoundError("Processo", process_id)
+    for field, value in body.model_dump(exclude_none=True).items():
+        if field == "client_id" and value:
+            setattr(process, field, uuid.UUID(value))
+        else:
+            setattr(process, field, value)
+    await db.flush()
+    return _to_response(process)
+
+
+@router.delete("/{process_id}", status_code=204)
+async def archive_process(
+    process_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(LegalProcess).where(LegalProcess.id == uuid.UUID(process_id)))
+    process = result.scalar_one_or_none()
+    if not process:
+        raise NotFoundError("Processo", process_id)
+    process.situacao = "ARQUIVADO"
+    process.monitoring_active = False
+    await db.flush()
+
+
+class MovementCreate(BaseModel):
+    descricao: str
+    tipo: str | None = None
+    data_movimento: str | None = None
+
+
+@router.post("/{process_id}/movements", status_code=201)
+async def create_movement(
+    process_id: str,
+    body: MovementCreate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    from datetime import datetime, timezone
+    result = await db.execute(select(LegalProcess).where(LegalProcess.id == uuid.UUID(process_id)))
+    if not result.scalar_one_or_none():
+        raise NotFoundError("Processo", process_id)
+    data_mov = (
+        datetime.fromisoformat(body.data_movimento)
+        if body.data_movimento
+        else datetime.now(timezone.utc)
+    )
+    movement = ProcessMovement(
+        process_id=uuid.UUID(process_id),
+        descricao=body.descricao,
+        tipo=body.tipo,
+        data_movimento=data_mov,
+    )
+    db.add(movement)
+    await db.flush()
+    return {
+        "id": str(movement.id),
+        "process_id": process_id,
+        "descricao": movement.descricao,
+        "tipo": movement.tipo,
+        "data": movement.data_movimento.isoformat(),
+    }
+
+
+class DeadlineUpdate(BaseModel):
+    status: str
+    descricao: str | None = None
+
+
+@router.put("/{process_id}/deadlines/{deadline_id}")
+async def update_deadline(
+    process_id: str,
+    deadline_id: str,
+    body: DeadlineUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(ProcessDeadline).where(
+            ProcessDeadline.id == uuid.UUID(deadline_id),
+            ProcessDeadline.process_id == uuid.UUID(process_id),
+        )
+    )
+    deadline = result.scalar_one_or_none()
+    if not deadline:
+        raise NotFoundError("Prazo", deadline_id)
+    deadline.status = body.status
+    if body.descricao:
+        deadline.descricao = body.descricao
+    await db.flush()
+    return {"id": str(deadline.id), "status": deadline.status}
+
+
 def _to_response(p: LegalProcess) -> ProcessResponse:
     return ProcessResponse(
         id=str(p.id),

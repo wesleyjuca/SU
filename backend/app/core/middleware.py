@@ -23,6 +23,20 @@ AUTH_PATHS = {"/api/v1/auth/login", "/api/v1/auth/refresh"}
 AGENT_TRIGGER_PATH = "/api/v1/agents/trigger"
 
 
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Adiciona headers de segurança HTTP em todas as respostas."""
+
+    async def dispatch(self, request: Request, call_next: Callable) -> Response:
+        response = await call_next(request)
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        return response
+
+
 class AuditMiddleware(BaseHTTPMiddleware):
     """
     Intercepta todas as requisições que modificam estado e registra no audit_log.

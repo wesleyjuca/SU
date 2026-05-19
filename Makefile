@@ -1,4 +1,4 @@
-.PHONY: up down logs backend frontend migrate seed
+.PHONY: up down logs backend frontend migrate seed test lint format test-cov backup build-prod
 
 # ─── Docker ───────────────────────────────────────────────────────────────────
 up:
@@ -23,6 +23,32 @@ migrate-create:
 
 seed:
 	docker compose exec backend python scripts/seed_db.py
+
+# ─── Testes e qualidade ───────────────────────────────────────────────────────
+test:
+	docker compose exec backend pytest -v
+
+test-cov:
+	docker compose exec backend pytest --cov=app --cov-report=html --cov-report=term-missing
+
+lint:
+	docker compose exec backend ruff check app/
+
+format:
+	docker compose exec backend black app/
+
+# ─── Produção ─────────────────────────────────────────────────────────────────
+backup:
+	bash scripts/backup.sh
+
+build-prod:
+	docker build -f backend/Dockerfile -t afj-backend:prod backend/
+
+prod-up:
+	docker compose -f docker-compose.prod.yml up -d
+
+prod-down:
+	docker compose -f docker-compose.prod.yml down
 
 # ─── Dev ──────────────────────────────────────────────────────────────────────
 backend-shell:

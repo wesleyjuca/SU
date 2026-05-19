@@ -23,6 +23,7 @@ class FinancialEntry(Base):
     status: Mapped[str] = mapped_column(String(20), default="PENDENTE")  # PENDENTE, PAGO, CANCELADO
     nf_numero: Mapped[str | None] = mapped_column(String(50))
     created_by: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id"))
+    tenant_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("tenants.id"), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

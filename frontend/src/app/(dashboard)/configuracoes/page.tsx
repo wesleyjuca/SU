@@ -1,6 +1,8 @@
 "use client";
 import { useState } from "react";
-import { Settings, User, Bell, Shield, Palette, Save, CheckCircle } from "lucide-react";
+import { Settings, User, Bell, Shield, Palette, Save, CheckCircle, Loader2 } from "lucide-react";
+import { applyTheme } from "@/lib/theme";
+import { useThemeStore } from "@/store";
 
 const TABS = [
   { id: "perfil", label: "Perfil", icon: User },
@@ -12,23 +14,61 @@ const TABS = [
 export default function ConfiguracoesPage() {
   const [activeTab, setActiveTab] = useState("perfil");
   const [saved, setSaved] = useState(false);
-  const [perfil, setPerfil] = useState({
-    full_name: "",
-    email: "",
-    oab_number: "",
-    oab_uf: "",
-  });
+  const [saving, setSaving] = useState(false);
+  const { theme, setTheme } = useThemeStore();
+
+  const [perfil, setPerfil] = useState({ full_name: "", email: "", oab_number: "", oab_uf: "" });
   const [notifs, setNotifs] = useState({
-    novos_prazos: true,
-    novas_aprovacoes: true,
-    agente_concluiu: true,
-    publicacoes_dj: true,
-    email_diario: false,
+    novos_prazos: true, novas_aprovacoes: true, agente_concluiu: true,
+    publicacoes_dj: true, email_diario: false,
+  });
+
+  // Aparência state (local copy for live preview)
+  const [branding, setBranding] = useState({
+    primaryColor: theme.primaryColor,
+    appName: theme.appName,
+    logoUrl: theme.logoUrl ?? "",
   });
 
   function handleSave() {
     setSaved(true);
     setTimeout(() => setSaved(false), 3000);
+  }
+
+  async function saveBranding() {
+    setSaving(true);
+    try {
+      const token = localStorage.getItem("afj_access_token");
+      const res = await fetch("/api/v1/tenant/branding", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          primary_color: branding.primaryColor,
+          app_name: branding.appName,
+          logo_url: branding.logoUrl || null,
+        }),
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        const newTheme = {
+          ...theme,
+          primaryColor: updated.primary_color,
+          appName: updated.app_name,
+          logoUrl: updated.logo_url,
+        };
+        setTheme(newTheme);
+        applyTheme(newTheme);
+        setSaved(true);
+        setTimeout(() => setSaved(false), 3000);
+      }
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function previewColor(color: string) {
+    applyTheme({ ...theme, primaryColor: color });
+    setBranding((b) => ({ ...b, primaryColor: color }));
   }
 
   return (
@@ -149,45 +189,121 @@ export default function ConfiguracoesPage() {
 
           {activeTab === "aparencia" && (
             <>
-              <h2 className="font-semibold text-afj-black">Aparência</h2>
-              <div className="space-y-4">
+              <h2 className="font-semibold text-afj-black">Aparência do Sistema</h2>
+              <p className="text-xs text-afj-black/50">Alterações aplicadas instantaneamente e salvas para todos os usuários do escritório.</p>
+              <div className="space-y-5">
+                {/* Nome do sistema */}
                 <div>
-                  <label className="text-xs text-afj-black/60 block mb-2">Tema</label>
-                  <div className="grid grid-cols-2 gap-3">
-                    {[
-                      { id: "light", label: "Claro", preview: "bg-white border-2 border-afj-gold" },
-                      { id: "system", label: "Sistema", preview: "bg-gradient-to-r from-white to-gray-800 border-2 border-afj-cream-dark" },
-                    ].map((t) => (
-                      <button key={t.id} className={`p-4 rounded-md ${t.preview} text-center text-sm font-medium`}>
-                        {t.label}
-                      </button>
+                  <label className="text-xs text-afj-black/60 block mb-1">Nome do Sistema</label>
+                  <input
+                    type="text"
+                    value={branding.appName}
+                    onChange={(e) => setBranding((b) => ({ ...b, appName: e.target.value }))}
+                    className="w-full border border-afj-cream-dark rounded-md px-3 py-2 text-sm focus:outline-none focus:border-afj-gold"
+                    placeholder="AFJ CORE"
+                  />
+                </div>
+
+                {/* Cor primária */}
+                <div>
+                  <label className="text-xs text-afj-black/60 block mb-2">Cor Primária (dourado, acento)</label>
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="color"
+                      value={branding.primaryColor}
+                      onChange={(e) => previewColor(e.target.value)}
+                      className="w-12 h-10 rounded border border-afj-cream-dark cursor-pointer"
+                    />
+                    <input
+                      type="text"
+                      value={branding.primaryColor}
+                      onChange={(e) => {
+                        setBranding((b) => ({ ...b, primaryColor: e.target.value }));
+                        if (/^#[0-9A-Fa-f]{6}$/.test(e.target.value)) {
+                          previewColor(e.target.value);
+                        }
+                      }}
+                      className="flex-1 border border-afj-cream-dark rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-afj-gold"
+                      placeholder="#C9A84C"
+                    />
+                    <div
+                      className="w-10 h-10 rounded border border-afj-cream-dark"
+                      style={{ backgroundColor: branding.primaryColor }}
+                    />
+                  </div>
+                  <div className="flex gap-2 mt-2">
+                    {["#C9A84C", "#1A6EAB", "#4CAF50", "#9C27B0", "#E91E63", "#FF5722"].map((c) => (
+                      <button
+                        key={c}
+                        onClick={() => previewColor(c)}
+                        className="w-7 h-7 rounded-full border-2 border-white shadow-sm hover:scale-110 transition-transform"
+                        style={{ backgroundColor: c }}
+                        title={c}
+                      />
                     ))}
                   </div>
                 </div>
+
+                {/* URL do logo */}
                 <div>
-                  <label className="text-xs text-afj-black/60 block mb-2">Densidade da Interface</label>
-                  <div className="flex gap-3">
-                    {["Compacta", "Normal", "Espaçada"].map((d) => (
-                      <button key={d} className="flex-1 py-2 border border-afj-cream-dark rounded-md text-sm text-afj-black hover:border-afj-gold first:border-afj-gold first:bg-afj-gold/5 first:text-afj-gold">
-                        {d}
-                      </button>
-                    ))}
+                  <label className="text-xs text-afj-black/60 block mb-1">URL do Logo (opcional)</label>
+                  <input
+                    type="url"
+                    value={branding.logoUrl}
+                    onChange={(e) => setBranding((b) => ({ ...b, logoUrl: e.target.value }))}
+                    className="w-full border border-afj-cream-dark rounded-md px-3 py-2 text-sm focus:outline-none focus:border-afj-gold"
+                    placeholder="https://..."
+                  />
+                  {branding.logoUrl && (
+                    <img src={branding.logoUrl} alt="Logo preview" className="mt-2 h-10 object-contain" />
+                  )}
+                </div>
+
+                {/* Preview */}
+                <div className="p-4 rounded-lg border border-afj-cream-dark bg-afj-cream/30">
+                  <p className="text-xs text-afj-black/50 mb-2">Pré-visualização</p>
+                  <div className="flex items-center gap-3">
+                    <div
+                      className="w-9 h-9 rounded-lg flex items-center justify-center"
+                      style={{ backgroundColor: `${branding.primaryColor}20`, border: `1px solid ${branding.primaryColor}50` }}
+                    >
+                      <span className="font-bold text-sm" style={{ color: branding.primaryColor }}>
+                        {branding.appName.slice(0, 2).toUpperCase()}
+                      </span>
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold" style={{ color: "#1A1A1A" }}>{branding.appName}</p>
+                      <p className="text-xs text-afj-black/40">Sistema Jurídico IA</p>
+                    </div>
                   </div>
                 </div>
+              </div>
+
+              <div className="flex justify-end pt-3 border-t border-afj-cream-dark">
+                <button
+                  onClick={saveBranding}
+                  disabled={saving}
+                  className="btn-afj-primary rounded-md flex items-center gap-2 disabled:opacity-60"
+                >
+                  {saving ? <Loader2 size={14} className="animate-spin" /> : saved ? <CheckCircle size={14} /> : <Save size={14} />}
+                  {saving ? "Salvando..." : saved ? "Salvo!" : "Salvar Aparência"}
+                </button>
               </div>
             </>
           )}
 
-          {/* Botão salvar */}
-          <div className="flex justify-end pt-3 border-t border-afj-cream-dark">
-            <button
-              onClick={handleSave}
-              className="btn-afj-primary rounded-md flex items-center gap-2"
-            >
-              {saved ? <CheckCircle size={14} /> : <Save size={14} />}
-              {saved ? "Salvo!" : "Salvar Alterações"}
-            </button>
-          </div>
+          {/* Botão salvar (outros tabs) */}
+          {activeTab !== "aparencia" && (
+            <div className="flex justify-end pt-3 border-t border-afj-cream-dark">
+              <button
+                onClick={handleSave}
+                className="btn-afj-primary rounded-md flex items-center gap-2"
+              >
+                {saved ? <CheckCircle size={14} /> : <Save size={14} />}
+                {saved ? "Salvo!" : "Salvar Alterações"}
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </div>
