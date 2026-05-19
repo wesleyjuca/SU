@@ -1,7 +1,8 @@
 "use client";
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { ChevronRight, ChevronLeft, Scale, FileText, Send, CheckCircle, Loader2 } from "lucide-react";
+import { ChevronRight, ChevronLeft, Scale, FileText, Send, CheckCircle, Loader2, Edit3 } from "lucide-react";
+import { PetitionEditor } from "@/components/petitions/PetitionEditor";
 
 interface Processo {
   id: string;
@@ -27,6 +28,7 @@ const STEPS = [
   { label: "Tipo", icon: FileText },
   { label: "Instruções", icon: FileText },
   { label: "Gerando", icon: Loader2 },
+  { label: "Revisar", icon: Edit3 },
   { label: "Concluído", icon: CheckCircle },
 ];
 
@@ -42,6 +44,8 @@ export default function NovaPeticaoPage() {
   const [runId, setRunId] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [documentoHtml, setDocumentoHtml] = useState<string>("");
+  const [documentoId, setDocumentoId] = useState<string | null>(null);
 
   useEffect(() => {
     fetchProcessos();
@@ -99,6 +103,19 @@ export default function NovaPeticaoPage() {
           setStatus(run.status);
           if (run.status === "AWAITING_APPROVAL" || run.status === "SUCCESS") {
             clearInterval(interval);
+            const docId = run.output_data?.document_id as string | undefined;
+            if (docId) {
+              setDocumentoId(docId);
+              try {
+                const docRes = await fetch(`/api/v1/documents/${docId}`, {
+                  headers: { Authorization: `Bearer ${token}` },
+                });
+                if (docRes.ok) {
+                  const doc = await docRes.json();
+                  setDocumentoHtml(doc.conteudo_html || doc.conteudo_texto || "");
+                }
+              } catch {}
+            }
             setStep(4);
           } else if (run.status === "FAILED") {
             clearInterval(interval);
@@ -234,8 +251,42 @@ export default function NovaPeticaoPage() {
           </div>
         )}
 
-        {/* Step 4: Concluído */}
+        {/* Step 4: Revisar */}
         {step === 4 && (
+          <div className="space-y-4">
+            <div>
+              <h2 className="font-semibold text-afj-black">Revisar Petição Gerada</h2>
+              <p className="text-sm text-afj-black/50 mt-0.5">
+                Revise o conteúdo gerado. Campos em vermelho indicam informações a completar.
+              </p>
+            </div>
+            {documentoHtml ? (
+              <PetitionEditor
+                initialContent={documentoHtml}
+                onChange={setDocumentoHtml}
+              />
+            ) : (
+              <div className="bg-amber-50 border border-amber-200 rounded-lg p-6 text-center">
+                <p className="text-sm text-amber-800 font-medium">Petição enviada para aprovação</p>
+                <p className="text-xs text-amber-700 mt-1">
+                  O conteúdo detalhado estará disponível na fila de aprovações.
+                </p>
+              </div>
+            )}
+            <div className="flex gap-3 pt-2">
+              <button
+                onClick={() => setStep(5)}
+                className="flex-1 btn-afj-primary rounded-md flex items-center justify-center gap-2"
+              >
+                <CheckCircle size={14} />
+                Confirmar e Ir para Aprovações
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Step 5: Concluído */}
+        {step === 5 && (
           <div className="py-8 text-center space-y-4">
             <CheckCircle className="mx-auto text-green-500" size={40} />
             <p className="font-semibold text-afj-black text-lg">Petição Gerada!</p>
@@ -269,7 +320,7 @@ export default function NovaPeticaoPage() {
       </div>
 
       {/* Navigation */}
-      {step < 3 && (
+      {step < 3 && step !== 4 && (
         <div className="flex gap-3 justify-between">
           <button
             onClick={() => step > 0 && setStep(step - 1)}

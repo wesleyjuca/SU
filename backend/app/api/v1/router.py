@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api.v1 import auth, agents, approvals, processes, clients, documents, financial, ws, audit, rag
+from app.api.v1 import auth, agents, approvals, processes, clients, documents, financial, ws, audit, rag, notifications
 
 api_router = APIRouter()
 
@@ -13,3 +13,4 @@ api_router.include_router(financial.router)
 api_router.include_router(ws.router)
 api_router.include_router(audit.router)
 api_router.include_router(rag.router)
+api_router.include_router(notifications.router)

@@ -1,6 +1,8 @@
 "use client";
 import { useState } from "react";
 import { GitBranch, Loader2, Download, RefreshCw } from "lucide-react";
+import { VisualLawCanvas, parseMermaidToNodes } from "@/components/visual-law/VisualLawCanvas";
+import type { VisualLawNode, VisualLawEdge } from "@/components/visual-law/VisualLawCanvas";
 
 const TIPOS_VISUALIZACAO = [
   { value: "fluxograma", label: "Fluxograma Processual", desc: "Etapas e decisões do processo" },
@@ -13,6 +15,7 @@ export default function VisualLawPage() {
   const [contexto, setContexto] = useState("");
   const [loading, setLoading] = useState(false);
   const [resultado, setResultado] = useState<{ tipo: string; conteudo: string; mermaid?: string } | null>(null);
+  const [flowData, setFlowData] = useState<{ nodes: VisualLawNode[]; edges: VisualLawEdge[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   async function gerar() {
@@ -45,7 +48,13 @@ export default function VisualLawPage() {
         if (runRes.ok) {
           const run = await runRes.json();
           if (run.status === "SUCCESS" && run.output_data?.output) {
-            setResultado(run.output_data.output);
+            const out = run.output_data.output;
+            setResultado(out);
+            if (out.nodes && out.edges) {
+              setFlowData({ nodes: out.nodes, edges: out.edges });
+            } else if (out.mermaid) {
+              setFlowData(parseMermaidToNodes(out.mermaid));
+            }
             break;
           } else if (run.status === "FAILED") {
             setError("O agente falhou ao gerar a visualização.");
@@ -64,6 +73,11 @@ export default function VisualLawPage() {
     if (resultado?.mermaid) {
       navigator.clipboard.writeText(resultado.mermaid);
     }
+  }
+
+  function limpar() {
+    setResultado(null);
+    setFlowData(null);
   }
 
   return (
@@ -160,7 +174,7 @@ export default function VisualLawPage() {
                     </button>
                   )}
                   <button
-                    onClick={() => setResultado(null)}
+                    onClick={limpar}
                     className="text-xs text-afj-black/50 hover:text-afj-gold flex items-center gap-1"
                   >
                     <RefreshCw size={12} />
@@ -168,9 +182,11 @@ export default function VisualLawPage() {
                   </button>
                 </div>
               </div>
-              <div className="p-5">
-                {resultado.mermaid ? (
-                  <div className="space-y-4">
+              <div className="p-0">
+                {flowData && (flowData.nodes.length > 0) ? (
+                  <VisualLawCanvas nodes={flowData.nodes} edges={flowData.edges} />
+                ) : resultado.mermaid ? (
+                  <div className="p-5 space-y-4">
                     <div className="bg-afj-cream rounded-md p-4">
                       <p className="text-xs font-mono text-afj-black/50 mb-2">Código Mermaid (cole em mermaid.live):</p>
                       <pre className="text-xs font-mono text-afj-black whitespace-pre-wrap overflow-auto max-h-64">
@@ -178,13 +194,12 @@ export default function VisualLawPage() {
                       </pre>
                     </div>
                     {resultado.conteudo && (
-                      <div className="prose prose-sm max-w-none text-afj-black/80">
-                        <p className="text-sm">{resultado.conteudo}</p>
-                      </div>
+                      <p className="text-sm text-afj-black/80">{resultado.conteudo}</p>
                     )}
                   </div>
                 ) : (
-                  <div className="prose prose-sm max-w-none text-afj-black/80"
+                  <div
+                    className="p-5 prose prose-sm max-w-none text-afj-black/80"
                     dangerouslySetInnerHTML={{ __html: resultado.conteudo?.replace(/\n/g, "<br/>") || "" }}
                   />
                 )}
