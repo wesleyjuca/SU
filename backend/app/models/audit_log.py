@@ -32,6 +32,7 @@ class AuditLog(Base):
     error_detail: Mapped[str | None] = mapped_column(Text)
     contains_pii: Mapped[bool] = mapped_column(Boolean, default=False)
     legal_basis: Mapped[str | None] = mapped_column(String(100))  # consent, legitimate_interest, contract
+    tenant_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), nullable=True)
 
 
 class LGPDConsentRecord(Base):

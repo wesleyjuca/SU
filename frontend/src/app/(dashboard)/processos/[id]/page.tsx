@@ -1,47 +1,9 @@
 "use client";
 import { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { ArrowLeft, Scale, AlertTriangle, Calendar, Clock, FileText, Users, MapPin } from "lucide-react";
-
-interface Processo {
-  id: string;
-  numero_cnj: string | null;
-  numero_original: string | null;
-  tribunal: string;
-  vara: string | null;
-  comarca: string | null;
-  uf: string | null;
-  tipo_acao: string | null;
-  area_direito: string | null;
-  fase: string | null;
-  situacao: string;
-  valor_causa: number | null;
-  polo: string | null;
-  parte_contraria: string | null;
-  oab_responsavel: string | null;
-  distribuicao_data: string | null;
-  ultimo_andamento_at: string | null;
-  proximo_prazo_at: string | null;
-  monitoring_active: boolean;
-  created_at: string;
-}
-
-interface Movimentacao {
-  id: string;
-  data_movimento: string;
-  tipo: string | null;
-  descricao: string;
-  ai_summary: string | null;
-}
-
-interface Prazo {
-  id: string;
-  descricao: string;
-  data_prazo: string;
-  data_fatal: string | null;
-  tipo: string | null;
-  status: string;
-}
+import { ArrowLeft, Scale, AlertTriangle, Calendar, Clock } from "lucide-react";
+import { ProcessTimelineCard } from "@/components/processes/ProcessTimeline";
+import type { Processo, Movimentacao, Prazo } from "@/types";
 
 const SITUACAO_STYLE: Record<string, string> = {
   ATIVO: "badge-ativo",
@@ -226,42 +188,8 @@ export default function ProcessoDetailPage() {
         </div>
 
         {/* Timeline de movimentações */}
-        <div className="lg:col-span-2 afj-card p-4">
-          <h2 className="font-semibold text-afj-black text-sm mb-4 flex items-center gap-2">
-            <FileText size={14} />
-            Movimentações ({movimentacoes.length})
-          </h2>
-          {movimentacoes.length === 0 ? (
-            <div className="py-8 text-center text-afj-black/40 text-sm">
-              Nenhuma movimentação registrada
-            </div>
-          ) : (
-            <div className="relative">
-              <div className="absolute left-3.5 top-0 bottom-0 w-px bg-afj-cream-dark" />
-              <div className="space-y-4">
-                {movimentacoes.map((m, idx) => (
-                  <div key={m.id} className="timeline-item pl-9 relative">
-                    <div className={`timeline-dot absolute left-2 top-1.5 ${idx === 0 ? "bg-afj-gold" : "bg-afj-cream-dark border border-afj-black/20"}`} />
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm text-afj-black">{m.descricao}</p>
-                        {m.ai_summary && (
-                          <div className="mt-1.5 bg-purple-50 border border-purple-100 rounded px-2 py-1.5">
-                            <p className="text-xs text-purple-800">
-                              <span className="font-medium">IA: </span>{m.ai_summary}
-                            </p>
-                          </div>
-                        )}
-                      </div>
-                      <span className="text-xs text-afj-black/40 flex-shrink-0">
-                        {new Date(m.data_movimento).toLocaleDateString("pt-BR")}
-                      </span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+        <div className="lg:col-span-2">
+          <ProcessTimelineCard movimentacoes={movimentacoes} />
         </div>
       </div>
     </div>

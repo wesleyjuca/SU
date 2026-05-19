@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime, timezone
 
 from app.db.base import get_db
-from app.dependencies import get_current_user
+from app.dependencies import get_current_user, require_role
 from app.models.user import User
 from app.models.client import Client, ClientInteraction
 from app.core.exceptions import NotFoundError
@@ -171,6 +171,95 @@ async def get_interactions(
         }
         for i in interactions
     ]
+
+
+@router.delete("/{client_id}", status_code=204)
+async def delete_client(
+    client_id: str,
+    current_user: User = Depends(require_role("ADMIN", "SOCIO")),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Client).where(Client.id == uuid.UUID(client_id)))
+    client = result.scalar_one_or_none()
+    if not client:
+        raise NotFoundError("Cliente", client_id)
+    client.status = "INATIVO"
+    client.cpf = None
+    client.cnpj = None
+    client.email = f"[removido]@{client_id[:8]}.invalid"
+    client.telefone = None
+    client.whatsapp = None
+    await db.flush()
+
+
+@router.get("/{client_id}/export")
+async def export_client_data(
+    client_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """LGPD art. 18 VI — portabilidade de dados."""
+    result = await db.execute(select(Client).where(Client.id == uuid.UUID(client_id)))
+    client = result.scalar_one_or_none()
+    if not client:
+        raise NotFoundError("Cliente", client_id)
+    interactions_result = await db.execute(
+        select(ClientInteraction)
+        .where(ClientInteraction.client_id == uuid.UUID(client_id))
+        .order_by(desc(ClientInteraction.created_at))
+    )
+    interactions = interactions_result.scalars().all()
+    return {
+        "exportado_em": datetime.now(timezone.utc).isoformat(),
+        "base_legal": "LGPD art. 18 VI — Portabilidade de dados",
+        "titular": {
+            "id": str(client.id),
+            "nome": client.nome_completo,
+            "email": client.email,
+            "telefone": client.telefone,
+            "tipo": client.tipo,
+            "status": client.status,
+            "lgpd_consent": client.lgpd_consent,
+            "lgpd_consent_at": client.lgpd_consent_at.isoformat() if client.lgpd_consent_at else None,
+            "created_at": client.created_at.isoformat(),
+        },
+        "interacoes": [
+            {"tipo": i.tipo, "descricao": i.descricao, "created_at": i.created_at.isoformat()}
+            for i in interactions
+        ],
+    }
+
+
+@router.delete("/{client_id}/data", status_code=200)
+async def erase_client_data(
+    client_id: str,
+    current_user: User = Depends(require_role("ADMIN")),
+    db: AsyncSession = Depends(get_db),
+):
+    """LGPD art. 18 VI — direito ao esquecimento: anonimiza dados sensíveis."""
+    result = await db.execute(select(Client).where(Client.id == uuid.UUID(client_id)))
+    client = result.scalar_one_or_none()
+    if not client:
+        raise NotFoundError("Cliente", client_id)
+
+    client.nome_completo = f"[ANONIMIZADO-{client_id[:8]}]"
+    client.razao_social = None
+    client.cpf = None
+    client.cnpj = None
+    client.email = f"[removido]@{client_id[:8]}.invalid"
+    client.telefone = None
+    client.whatsapp = None
+    client.observacoes = None
+    client.status = "INATIVO"
+    await db.flush()
+
+    return {
+        "message": "Dados anonimizados conforme LGPD art. 18",
+        "client_id": client_id,
+        "anonimizado_em": datetime.now(timezone.utc).isoformat(),
+        "base_legal": "LGPD art. 18 — Direito ao esquecimento",
+        "realizado_por": str(current_user.id),
+    }
 
 
 def _to_response(c: Client) -> ClientResponse:

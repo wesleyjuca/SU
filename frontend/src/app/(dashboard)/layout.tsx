@@ -1,11 +1,15 @@
 "use client";
 import Link from "next/link";
+import { useState } from "react";
 import { usePathname } from "next/navigation";
 import {
   LayoutDashboard, Scale, FileText, Users, FolderOpen,
   Bot, CheckSquare, DollarSign, Shield, Shapes, Settings,
   Bell, Search, ChevronRight, FileEdit
 } from "lucide-react";
+import { useApprovalCount } from "@/hooks/useApprovals";
+import { useNotifications } from "@/hooks/useNotifications";
+import { NotificationDropdown } from "@/components/layout/NotificationDropdown";
 
 const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -24,6 +28,9 @@ const navItems = [
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const { count: approvalCount } = useApprovalCount();
+  const { unreadCount } = useNotifications();
+  const [notifOpen, setNotifOpen] = useState(false);
 
   return (
     <div className="flex h-screen overflow-hidden">
@@ -84,10 +91,21 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             <span>Buscar processos, clientes, documentos... (⌘K)</span>
           </div>
           <div className="flex items-center gap-3">
-            <button className="relative text-afj-black/60 hover:text-afj-black transition-colors">
-              <Bell size={18} />
-              <span className="absolute -top-1 -right-1 w-3.5 h-3.5 bg-red-500 rounded-full text-white text-[9px] flex items-center justify-center font-bold">3</span>
-            </button>
+            <div className="relative">
+              <button
+                onClick={() => setNotifOpen((o) => !o)}
+                className="relative text-afj-black/60 hover:text-afj-black transition-colors p-1"
+              >
+                <Bell size={18} />
+                {(unreadCount > 0 || approvalCount > 0) && (
+                  <span className="absolute -top-0.5 -right-0.5 min-w-[14px] h-3.5 bg-red-500 rounded-full text-white text-[9px] flex items-center justify-center font-bold px-0.5">
+                    {Math.min(unreadCount + approvalCount, 99)}
+                    {unreadCount + approvalCount > 99 ? "+" : ""}
+                  </span>
+                )}
+              </button>
+              <NotificationDropdown open={notifOpen} onClose={() => setNotifOpen(false)} />
+            </div>
           </div>
         </header>
 

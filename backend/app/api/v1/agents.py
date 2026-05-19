@@ -71,8 +71,20 @@ async def trigger_agent(
     )
     db.add(agent_run)
 
-    # Executar em background para não bloquear a requisição
-    background_tasks.add_task(_run_agent_task, ctx, str(run_id))
+    # Tentar enviar para Celery; fallback para background task se Celery indisponível
+    try:
+        from app.workers.tasks.agent_tasks import run_agent_task
+        run_agent_task.delay(
+            run_id=str(run_id),
+            task_type=body.task_type,
+            task_input=body.task_input,
+            triggered_by=str(current_user.id),
+            process_id=body.process_id,
+            client_id=body.client_id,
+            priority=body.priority,
+        )
+    except Exception:
+        background_tasks.add_task(_run_agent_task, ctx, str(run_id))
 
     return {
         "run_id": str(run_id),

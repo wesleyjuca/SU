@@ -80,6 +80,88 @@ async def create_entry(
     return _to_response(entry)
 
 
+class FinancialEntryUpdate(BaseModel):
+    descricao: str | None = None
+    valor: float | None = None
+    categoria: str | None = None
+    data_vencimento: date | None = None
+    status: str | None = None
+
+
+@router.put("/{entry_id}", response_model=FinancialEntryResponse)
+async def update_entry(
+    entry_id: str,
+    body: FinancialEntryUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.core.exceptions import NotFoundError
+    result = await db.execute(select(FinancialEntry).where(FinancialEntry.id == uuid.UUID(entry_id)))
+    entry = result.scalar_one_or_none()
+    if not entry:
+        raise NotFoundError("Lançamento", entry_id)
+    updates = body.model_dump(exclude_none=True)
+    if "valor" in updates:
+        entry.valor = Decimal(str(updates.pop("valor")))
+    for field, value in updates.items():
+        setattr(entry, field, value)
+    await db.flush()
+    return _to_response(entry)
+
+
+@router.delete("/{entry_id}", status_code=204)
+async def delete_entry(
+    entry_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.core.exceptions import NotFoundError
+    result = await db.execute(select(FinancialEntry).where(FinancialEntry.id == uuid.UUID(entry_id)))
+    entry = result.scalar_one_or_none()
+    if not entry:
+        raise NotFoundError("Lançamento", entry_id)
+    await db.delete(entry)
+    await db.flush()
+
+
+@router.get("/export")
+async def export_financial(
+    tipo: str | None = None,
+    status: str | None = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Exporta lançamentos como CSV."""
+    import csv, io
+    from fastapi.responses import StreamingResponse
+
+    query = select(FinancialEntry).order_by(desc(FinancialEntry.created_at))
+    if tipo:
+        query = query.where(FinancialEntry.tipo == tipo)
+    if status:
+        query = query.where(FinancialEntry.status == status)
+    result = await db.execute(query)
+    entries = result.scalars().all()
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["ID", "Tipo", "Categoria", "Descrição", "Valor", "Status", "Vencimento", "Pagamento", "Criado em"])
+    for e in entries:
+        writer.writerow([
+            str(e.id), e.tipo, e.categoria or "", e.descricao, float(e.valor),
+            e.status,
+            e.data_vencimento.isoformat() if e.data_vencimento else "",
+            e.data_pagamento.isoformat() if e.data_pagamento else "",
+            e.created_at.isoformat(),
+        ])
+    output.seek(0)
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=financeiro.csv"},
+    )
+
+
 @router.post("/{entry_id}/mark-paid")
 async def mark_paid(
     entry_id: str,

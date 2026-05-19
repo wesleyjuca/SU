@@ -21,6 +21,7 @@ class Client(Base):
     whatsapp: Mapped[str | None] = mapped_column(String(20))
     endereco_json: Mapped[dict | None] = mapped_column(JSONB)
     responsavel_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id"))
+    tenant_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("tenants.id"), nullable=True, index=True)
     origem: Mapped[str | None] = mapped_column(String(100))   # site, indicacao, crm_agent
     status: Mapped[str] = mapped_column(String(50), default="PROSPECTO")
     lgpd_consent: Mapped[bool] = mapped_column(Boolean, default=False)

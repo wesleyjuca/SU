@@ -2,6 +2,7 @@ import time
 import uuid
 from typing import Callable
 from fastapi import Request, Response
+from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
 import structlog
@@ -10,6 +11,30 @@ log = structlog.get_logger()
 
 AUDIT_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 SKIP_AUDIT_PATHS = {"/api/v1/auth/login", "/api/v1/auth/refresh", "/health", "/docs", "/openapi.json"}
+
+# Rate limit config: (limit, window_seconds)
+RATE_LIMIT_RULES: dict[str, tuple[int, int]] = {
+    "auth": (10, 60),          # 10 req/min por IP (brute-force protection)
+    "agents_trigger": (20, 60), # 20 req/min por user
+    "default": (200, 60),       # 200 req/min por IP
+}
+
+AUTH_PATHS = {"/api/v1/auth/login", "/api/v1/auth/refresh"}
+AGENT_TRIGGER_PATH = "/api/v1/agents/trigger"
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Adiciona headers de segurança HTTP em todas as respostas."""
+
+    async def dispatch(self, request: Request, call_next: Callable) -> Response:
+        response = await call_next(request)
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        return response
 
 
 class AuditMiddleware(BaseHTTPMiddleware):
@@ -59,6 +84,68 @@ class AuditMiddleware(BaseHTTPMiddleware):
             log.error("audit_write_failed", error=str(exc))
 
 
+class RateLimitMiddleware(BaseHTTPMiddleware):
+    """
+    Rate limiting via Redis sliding window (fixed window por simplicidade).
+    Protege endpoints sensíveis de abuso e brute-force.
+    """
+
+    async def dispatch(self, request: Request, call_next: Callable) -> Response:
+        path = request.url.path
+        client_ip = request.client.host if request.client else "unknown"
+
+        if path in AUTH_PATHS:
+            rule_key = "auth"
+            identifier = client_ip
+        elif path == AGENT_TRIGGER_PATH:
+            rule_key = "agents_trigger"
+            auth_header = request.headers.get("authorization", "")
+            identifier = auth_header[-16:] if auth_header else client_ip
+        else:
+            rule_key = "default"
+            identifier = client_ip
+
+        limit, window = RATE_LIMIT_RULES[rule_key]
+        redis_key = f"ratelimit:{rule_key}:{identifier}"
+
+        try:
+            redis = await self._get_redis()
+            if redis:
+                count = await redis.incr(redis_key)
+                if count == 1:
+                    await redis.expire(redis_key, window)
+                remaining = max(0, limit - count)
+
+                if count > limit:
+                    return JSONResponse(
+                        status_code=429,
+                        content={"detail": "Muitas requisições. Aguarde e tente novamente."},
+                        headers={
+                            "Retry-After": str(window),
+                            "X-RateLimit-Limit": str(limit),
+                            "X-RateLimit-Remaining": "0",
+                        },
+                    )
+        except Exception:
+            pass
+
+        response = await call_next(request)
+
+        try:
+            response.headers["X-RateLimit-Limit"] = str(limit)
+        except Exception:
+            pass
+
+        return response
+
+    async def _get_redis(self):
+        try:
+            from app.db.redis import get_redis
+            return await get_redis()
+        except Exception:
+            return None
+
+
 class RequestLoggingMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         log.info(
@@ -75,3 +162,4 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
             status=response.status_code,
         )
         return response
+

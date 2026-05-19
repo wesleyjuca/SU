@@ -89,6 +89,101 @@ async def get_document_content(
     }
 
 
+class DocumentUpdate(BaseModel):
+    titulo: str | None = None
+    status: str | None = None
+    conteudo_html: str | None = None
+    conteudo_texto: str | None = None
+
+
+@router.put("/{doc_id}", response_model=DocumentResponse)
+async def update_document(
+    doc_id: str,
+    body: DocumentUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Document).where(Document.id == uuid.UUID(doc_id)))
+    doc = result.scalar_one_or_none()
+    if not doc:
+        raise NotFoundError("Documento", doc_id)
+    for field, value in body.model_dump(exclude_none=True).items():
+        setattr(doc, field, value)
+    await db.flush()
+    return _to_response(doc)
+
+
+@router.delete("/{doc_id}", status_code=204)
+async def archive_document(
+    doc_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Document).where(Document.id == uuid.UUID(doc_id)))
+    doc = result.scalar_one_or_none()
+    if not doc:
+        raise NotFoundError("Documento", doc_id)
+    doc.status = "ARQUIVADO"
+    await db.flush()
+
+
+@router.get("/{doc_id}/download")
+async def download_document(
+    doc_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    from fastapi.responses import Response as FastAPIResponse
+    from app.utils.pdf_builder import build_petition_pdf
+
+    result = await db.execute(select(Document).where(Document.id == uuid.UUID(doc_id)))
+    doc = result.scalar_one_or_none()
+    if not doc:
+        raise NotFoundError("Documento", doc_id)
+    content = doc.conteudo_html or doc.conteudo_texto or ""
+    pdf_bytes = build_petition_pdf(
+        title=doc.titulo,
+        content_html=content,
+        metadata={"status": doc.status, "versao": doc.versao},
+    )
+    return FastAPIResponse(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{doc.titulo[:50]}.pdf"'},
+    )
+
+
+class VersionCreate(BaseModel):
+    conteudo_html: str
+    change_summary: str | None = None
+
+
+@router.post("/{doc_id}/versions", status_code=201)
+async def create_version(
+    doc_id: str,
+    body: VersionCreate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.models.document import DocumentVersion
+    result = await db.execute(select(Document).where(Document.id == uuid.UUID(doc_id)))
+    doc = result.scalar_one_or_none()
+    if not doc:
+        raise NotFoundError("Documento", doc_id)
+    doc.versao += 1
+    doc.conteudo_html = body.conteudo_html
+    version = DocumentVersion(
+        document_id=doc.id,
+        versao=doc.versao,
+        conteudo_html=body.conteudo_html,
+        changed_by=current_user.id,
+        change_summary=body.change_summary,
+    )
+    db.add(version)
+    await db.flush()
+    return {"document_id": doc_id, "versao": doc.versao, "version_id": str(version.id)}
+
+
 @router.post("/petitions/generate", status_code=202)
 async def generate_petition(
     body: GeneratePetitionRequest,
