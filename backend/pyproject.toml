@@ -33,7 +33,7 @@ redis = {extras = ["hiredis"], version = "^5.2.0"}
 celery = {extras = ["redis"], version = "^5.4.0"}
 
 # IA e Agentes
-anthropic = "^0.40.0"
+anthropic = ">=0.69.0,<1.0.0"
 openai = "^1.57.0"
 langgraph = "^0.2.55"
 langchain-core = "^0.3.24"
