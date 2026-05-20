@@ -21,13 +21,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          ref: claude/afj-core-system-OlGA2
+        # sem ref fixo — usa main (branch padrão do repositório)
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: Mask token in logs
         run: echo "::add-mask::${{ github.event.inputs.vercel_token }}"
@@ -35,6 +34,32 @@ jobs:
       - name: Install Vercel CLI
         run: npm install -g vercel
 
+      # ── Deploy (cria projeto 'afj-core' se não existir) ──────────────────
+      - name: Deploy to Vercel (production)
+        id: deploy
+        env:
+          VERCEL_TOKEN: ${{ github.event.inputs.vercel_token }}
+        run: |
+          echo "Iniciando deploy no Vercel..."
+          DEPLOY_OUTPUT=$(vercel --yes --prod --token "$VERCEL_TOKEN" --name "afj-core" 2>&1)
+          EXIT_CODE=$?
+          echo "$DEPLOY_OUTPUT"
+
+          if [ $EXIT_CODE -eq 0 ]; then
+            DEPLOY_URL=$(echo "$DEPLOY_OUTPUT" | grep -oP 'https://[a-zA-Z0-9._-]+\.vercel\.app' | tail -1 || echo "")
+            echo "VERCEL_URL=$DEPLOY_URL" >> $GITHUB_ENV
+            echo "url=$DEPLOY_URL" >> $GITHUB_OUTPUT
+            echo ""
+            echo "════════════════════════════════════════════"
+            echo "  ✅ FRONTEND PUBLICADO!"
+            echo "  URL: $DEPLOY_URL"
+            echo "════════════════════════════════════════════"
+          else
+            echo "::error::Deploy falhou. Verifique os logs acima."
+            exit 1
+          fi
+
+      # ── Configurar NEXT_PUBLIC_API_URL (projeto já existe agora) ─────────
       - name: Configure NEXT_PUBLIC_API_URL
         if: github.event.inputs.railway_url != ''
         env:
@@ -43,51 +68,31 @@ jobs:
           RAILWAY_URL="${{ github.event.inputs.railway_url }}"
           echo "Configurando NEXT_PUBLIC_API_URL=$RAILWAY_URL..."
 
-          # Remove env var se existir (ignora erro se não existir)
+          # Remove env var se existir (ignora erro)
           vercel env rm NEXT_PUBLIC_API_URL production --yes --token "$VERCEL_TOKEN" 2>/dev/null || true
 
           # Adiciona env var
-          echo "$RAILWAY_URL" | vercel env add NEXT_PUBLIC_API_URL production --token "$VERCEL_TOKEN" --yes 2>&1 || \
-            echo "::warning::Failed to set env var via CLI — set manually on Vercel dashboard"
+          echo "$RAILWAY_URL" | vercel env add NEXT_PUBLIC_API_URL production \
+            --token "$VERCEL_TOKEN" --yes 2>&1 || \
+            echo "::warning::Failed to set env var — configure manualmente no Vercel dashboard"
 
-      - name: Deploy to Vercel (production)
-        env:
-          VERCEL_TOKEN: ${{ github.event.inputs.vercel_token }}
-        run: |
-          echo "Iniciando deploy no Vercel..."
-          DEPLOY_OUTPUT=$(vercel --yes --prod --token "$VERCEL_TOKEN" 2>&1)
-          EXIT_CODE=$?
-          echo "$DEPLOY_OUTPUT"
+          # Redeploy para aplicar a nova env var
+          echo "Redeploy para aplicar NEXT_PUBLIC_API_URL..."
+          vercel --yes --prod --token "$VERCEL_TOKEN" --name "afj-core" 2>&1 || true
 
-          if [ $EXIT_CODE -eq 0 ]; then
-            DEPLOY_URL=$(echo "$DEPLOY_OUTPUT" | grep -oP 'https://[a-zA-Z0-9._-]+\.vercel\.app' | tail -1 || echo "")
-            echo ""
-            echo "════════════════════════════════════════════"
-            echo "  ✅ FRONTEND PUBLICADO!"
-            echo "  URL: $DEPLOY_URL"
-            echo "════════════════════════════════════════════"
-            echo "VERCEL_URL=$DEPLOY_URL" >> $GITHUB_ENV
-          else
-            echo "::error::Deploy falhou. Verifique os logs acima."
-            exit 1
-          fi
-
+      # ── Atualizar CORS no Railway com URL Vercel ──────────────────────────
       - name: Update Railway CORS with Vercel URL
         if: env.VERCEL_URL != ''
         env:
           RAILWAY_TOKEN: aa2353a4-96fb-4f34-ae0c-ec8895ffebaf
         run: |
-          if [ -z "$VERCEL_URL" ]; then
-            exit 0
-          fi
-
           echo "Atualizando CORS no Railway com: $VERCEL_URL"
           npm install -g @railway/cli 2>/dev/null
 
           cd backend
           railway variables set \
             CORS_ORIGINS="[\"$VERCEL_URL\",\"http://localhost:3000\"]" \
-            2>&1 || echo "::warning::CORS update failed — update manually no Railway dashboard"
+            2>&1 || echo "::warning::CORS update failed — atualize manualmente no Railway dashboard"
 
           echo ""
           echo "════════════════════════════════════════════"
