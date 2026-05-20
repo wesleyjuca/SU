@@ -1,4 +1,6 @@
 const BASE = "/api/v1";
+const TIMEOUT_MS = 30_000;
+const MAX_RETRIES = 3;
 
 function getToken(): string | null {
   if (typeof window === "undefined") return null;
@@ -10,6 +12,10 @@ function getRefreshToken(): string | null {
   return localStorage.getItem("afj_refresh_token");
 }
 
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function refreshTokens(): Promise<boolean> {
   const refresh = getRefreshToken();
   if (!refresh) return false;
@@ -18,6 +24,7 @@ async function refreshTokens(): Promise<boolean> {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ refresh_token: refresh }),
+      signal: AbortSignal.timeout(TIMEOUT_MS),
     });
     if (res.ok) {
       const data = await res.json();
@@ -29,6 +36,27 @@ async function refreshTokens(): Promise<boolean> {
   return false;
 }
 
+async function fetchWithRetry(url: string, options: RequestInit): Promise<Response> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    try {
+      const res = await fetch(url, {
+        ...options,
+        signal: AbortSignal.timeout(TIMEOUT_MS),
+      });
+      if (res.status >= 500 && attempt < MAX_RETRIES - 1) {
+        await sleep(Math.pow(2, attempt) * 500);
+        continue;
+      }
+      return res;
+    } catch (e) {
+      lastError = e;
+      if (attempt < MAX_RETRIES - 1) await sleep(Math.pow(2, attempt) * 500);
+    }
+  }
+  throw lastError;
+}
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const token = getToken();
   const headers: HeadersInit = {
@@ -37,19 +65,18 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
   };
 
-  let res = await fetch(`${BASE}${path}`, { ...options, headers });
+  let res = await fetchWithRetry(`${BASE}${path}`, { ...options, headers });
 
   // Auto-refresh on 401
   if (res.status === 401) {
     const refreshed = await refreshTokens();
     if (refreshed) {
       const newToken = getToken();
-      res = await fetch(`${BASE}${path}`, {
+      res = await fetchWithRetry(`${BASE}${path}`, {
         ...options,
         headers: { ...headers, Authorization: `Bearer ${newToken}` },
       });
     } else {
-      // Clear tokens and redirect to login
       localStorage.removeItem("afj_access_token");
       localStorage.removeItem("afj_refresh_token");
       window.location.href = "/login";

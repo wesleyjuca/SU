@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect } from "react";
-import { DollarSign, TrendingUp, TrendingDown, Plus, CheckCircle, Clock, AlertCircle } from "lucide-react";
+import { DollarSign, TrendingUp, TrendingDown, Plus, CheckCircle, Clock, Trash2 } from "lucide-react";
 
 interface Entry {
   id: string;
@@ -38,6 +38,7 @@ export default function FinanceiroPage() {
   const [filtroTipo, setFiltroTipo] = useState("");
   const [filtroStatus, setFiltroStatus] = useState("");
   const [showModal, setShowModal] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [form, setForm] = useState({
     tipo: "RECEITA",
     categoria: "",
@@ -89,6 +90,15 @@ export default function FinanceiroPage() {
       }),
     });
     if (res.ok) { setShowModal(false); fetchEntries(); fetchSummary(); }
+  }
+
+  async function excluirLancamento(id: string) {
+    const token = localStorage.getItem("afj_access_token");
+    const res = await fetch(`/api/v1/financial/${id}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (res.ok) { setDeletingId(null); fetchEntries(); fetchSummary(); }
   }
 
   async function marcarPago(id: string) {
@@ -214,20 +224,43 @@ export default function FinanceiroPage() {
                     <span className={STATUS_STYLE[e.status] ?? "badge-arquivado"}>{e.status}</span>
                   </td>
                   <td className="px-4 py-3">
-                    {e.status === "PENDENTE" && (
+                    <div className="flex items-center gap-2">
+                      {e.status === "PENDENTE" && (
+                        <button
+                          onClick={() => marcarPago(e.id)}
+                          className="text-xs text-afj-gold hover:text-afj-gold/70 flex items-center gap-1"
+                        >
+                          <CheckCircle size={12} />
+                          Pago
+                        </button>
+                      )}
                       <button
-                        onClick={() => marcarPago(e.id)}
-                        className="text-xs text-afj-gold hover:text-afj-gold/70 flex items-center gap-1"
+                        onClick={() => setDeletingId(e.id)}
+                        className="text-afj-black/30 hover:text-red-500 transition-colors"
+                        title="Excluir"
                       >
-                        <CheckCircle size={12} />
-                        Marcar pago
+                        <Trash2 size={13} />
                       </button>
-                    )}
+                    </div>
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* Modal confirmação exclusão */}
+      {deletingId && (
+        <div className="fixed inset-0 bg-afj-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl p-6 w-full max-w-sm shadow-2xl text-center">
+            <p className="font-semibold text-afj-black mb-2">Excluir lançamento?</p>
+            <p className="text-afj-black/50 text-sm mb-5">Esta ação não pode ser desfeita.</p>
+            <div className="flex gap-3">
+              <button onClick={() => setDeletingId(null)} className="flex-1 btn-afj-outline rounded-md">Cancelar</button>
+              <button onClick={() => excluirLancamento(deletingId)} className="flex-1 bg-red-500 text-white rounded-md py-2 text-sm font-medium hover:bg-red-600">Excluir</button>
+            </div>
+          </div>
         </div>
       )}
 

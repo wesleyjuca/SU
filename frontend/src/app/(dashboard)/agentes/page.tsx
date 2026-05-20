@@ -38,24 +38,34 @@ const CATEGORY_COLORS: Record<string, string> = {
 export default function AgentesPage() {
   const [taskType, setTaskType] = useState("generate_petition");
   const [result, setResult] = useState<string | null>(null);
+  const [triggering, setTriggering] = useState<string | null>(null);
 
   async function triggerAgent(agentName: string) {
     setResult(null);
-    const token = localStorage.getItem("afj_access_token");
-    const res = await fetch("/api/v1/agents/trigger", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({
-        task_type: taskType,
-        task_input: { descricao: `Teste do agente ${agentName}` },
-      }),
-    });
-    if (res.ok) {
-      const data = await res.json();
-      setResult(`Run iniciado: ${data.run_id}`);
+    setTriggering(agentName);
+    try {
+      const token = localStorage.getItem("afj_access_token");
+      const res = await fetch("/api/v1/agents/trigger", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          task_type: taskType,
+          task_input: { descricao: `Teste do agente ${agentName}` },
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setResult(`Run iniciado: ${data.run_id}`);
+      } else {
+        setResult(`Erro ao iniciar agente: ${res.status}`);
+      }
+    } catch {
+      setResult("Erro de conexão ao iniciar agente.");
+    } finally {
+      setTriggering(null);
     }
   }
 

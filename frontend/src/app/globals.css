@@ -123,4 +123,7 @@
   .border-brand-primary { border-color: var(--brand-primary); }
   .brand-accent { color: var(--brand-accent); }
   .bg-brand-accent { background-color: var(--brand-accent); }
+
+  /* ─── Tabelas responsivas ─────────────────────────────────────────────── */
+  .table-responsive { @apply overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0; }
 }

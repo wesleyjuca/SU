@@ -29,6 +29,8 @@ export default function LoginPage() {
       localStorage.setItem("afj_access_token", data.access_token);
       localStorage.setItem("afj_refresh_token", data.refresh_token);
       localStorage.setItem("afj_user", JSON.stringify(data.user));
+      // Session cookie for Next.js middleware auth guard (localStorage not accessible in middleware)
+      document.cookie = "afj_session=1; path=/; SameSite=Lax; max-age=86400";
       window.location.href = "/dashboard";
     } catch {
       setError("Erro de conexão. Tente novamente.");

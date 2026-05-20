@@ -86,7 +86,8 @@ jobs:
       - name: Update Railway CORS with Vercel URL
         if: env.VERCEL_URL != ''
         env:
-          RAILWAY_TOKEN: aa2353a4-96fb-4f34-ae0c-ec8895ffebaf
+          # Add RAILWAY_TOKEN to GitHub Settings → Secrets → Actions
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
           echo "Atualizando CORS no Railway com: $VERCEL_URL"
           npm install -g @railway/cli 2>/dev/null
