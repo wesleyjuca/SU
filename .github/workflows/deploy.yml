@@ -61,7 +61,6 @@ jobs:
 
           if [ -z "$PROJECT_ID" ]; then
             echo "::warning::Could not create project via API. Trying Railway CLI..."
-            # Fallback: use railway CLI
             cd backend
             echo "afj-core" | railway init 2>&1 || true
             PROJECT_INFO=$(railway status --json 2>/dev/null || echo "{}")
@@ -88,7 +87,6 @@ jobs:
               \"query\": \"mutation { pluginCreate(input: { name: \\\"postgresql\\\", projectId: \\\"$PROJECT_ID\\\", environmentId: \\\"$ENV_ID\\\" }) { id } }\"
             }")
           echo "PostgreSQL response: $RESPONSE"
-          # Fallback para nova API Railway
           if echo "$RESPONSE" | grep -q "error\|null"; then
             RESPONSE=$(curl -s -X POST "https://backboard.railway.app/graphql/v2" \
               -H "Authorization: Bearer $RAILWAY_TOKEN" \
@@ -147,19 +145,15 @@ jobs:
           sleep 30
 
           cd backend
-          # Try to get domain from Railway CLI
           DOMAIN=""
 
-          # Method 1: railway domain command
           DOMAIN=$(railway domain 2>/dev/null | grep -oP '[a-zA-Z0-9-]+\.up\.railway\.app' | head -1 || echo "")
 
-          # Method 2: railway status JSON
           if [ -z "$DOMAIN" ]; then
             STATUS=$(railway status --json 2>/dev/null || echo "{}")
             DOMAIN=$(echo "$STATUS" | jq -r '.deploymentDomain // .domain // empty' 2>/dev/null || echo "")
           fi
 
-          # Method 3: Railway API
           if [ -z "$DOMAIN" ] && [ -n "$PROJECT_ID" ]; then
             SERVICES=$(curl -s -X POST "https://backboard.railway.app/graphql/v2" \
               -H "Authorization: Bearer $RAILWAY_TOKEN" \
@@ -225,22 +219,20 @@ jobs:
           fi
 
           npm install -g vercel
+          cd frontend
 
           # Set NEXT_PUBLIC_API_URL env var in project (create or update)
           if [ -n "$RAILWAY_URL" ]; then
             echo "Configurando NEXT_PUBLIC_API_URL=$RAILWAY_URL..."
-            # Remove existing env var if present (ignore errors)
             vercel env rm NEXT_PUBLIC_API_URL production --yes --token "$VERCEL_TOKEN" 2>/dev/null || true
-            # Add updated env var
             echo "$RAILWAY_URL" | vercel env add NEXT_PUBLIC_API_URL production --token "$VERCEL_TOKEN" --yes 2>/dev/null || true
           fi
 
-          # Deploy (creates project on first run, uses existing on subsequent runs)
+          # Deploy from frontend/ (rootDirectory configured in Vercel dashboard)
           echo "Iniciando deploy no Vercel..."
-          DEPLOY_OUTPUT=$(vercel --yes --prod --token "$VERCEL_TOKEN" 2>&1)
+          DEPLOY_OUTPUT=$(vercel --yes --prod --token "$VERCEL_TOKEN" --name "afj-core" 2>&1)
           echo "$DEPLOY_OUTPUT"
 
-          # Extract deployment URL
           DEPLOY_URL=$(echo "$DEPLOY_OUTPUT" | grep -oP 'https://[a-zA-Z0-9._-]+\.vercel\.app' | tail -1 || echo "")
           if [ -n "$DEPLOY_URL" ]; then
             echo ""
@@ -258,8 +250,7 @@ jobs:
           if [ -z "$VERCEL_TOKEN" ] || [ -z "$RAILWAY_URL" ]; then
             exit 0
           fi
-          # Get Vercel production URL to update Railway CORS
-          VERCEL_URL=$(vercel ls --token "$VERCEL_TOKEN" 2>/dev/null | grep 'afj' | head -1 | awk '{print $2}' || echo "")
+          VERCEL_URL=$(cd frontend && vercel ls --token "$VERCEL_TOKEN" 2>/dev/null | grep 'afj' | head -1 | awk '{print $2}' || echo "")
           if [ -n "$VERCEL_URL" ]; then
             echo "Atualizando CORS no Railway com URL Vercel: $VERCEL_URL"
             cd backend
