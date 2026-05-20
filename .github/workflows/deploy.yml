@@ -225,6 +225,7 @@ jobs:
           fi
 
           npm install -g vercel
+          cd frontend
 
           # Set NEXT_PUBLIC_API_URL env var in project (create or update)
           if [ -n "$RAILWAY_URL" ]; then
@@ -235,9 +236,9 @@ jobs:
             echo "$RAILWAY_URL" | vercel env add NEXT_PUBLIC_API_URL production --token "$VERCEL_TOKEN" --yes 2>/dev/null || true
           fi
 
-          # Deploy (creates project on first run, uses existing on subsequent runs)
+          # Deploy from frontend/ (rootDirectory configured in Vercel dashboard)
           echo "Iniciando deploy no Vercel..."
-          DEPLOY_OUTPUT=$(vercel --yes --prod --token "$VERCEL_TOKEN" 2>&1)
+          DEPLOY_OUTPUT=$(vercel --yes --prod --token "$VERCEL_TOKEN" --name "afj-core" 2>&1)
           echo "$DEPLOY_OUTPUT"
 
           # Extract deployment URL
@@ -259,7 +260,7 @@ jobs:
             exit 0
           fi
           # Get Vercel production URL to update Railway CORS
-          VERCEL_URL=$(vercel ls --token "$VERCEL_TOKEN" 2>/dev/null | grep 'afj' | head -1 | awk '{print $2}' || echo "")
+          VERCEL_URL=$(cd frontend && vercel ls --token "$VERCEL_TOKEN" 2>/dev/null | grep 'afj' | head -1 | awk '{print $2}' || echo "")
           if [ -n "$VERCEL_URL" ]; then
             echo "Atualizando CORS no Railway com URL Vercel: $VERCEL_URL"
             cd backend
