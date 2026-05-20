@@ -1,11 +1,12 @@
 "use client";
 import Link from "next/link";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { usePathname } from "next/navigation";
+import { useUserStore } from "@/store";
 import {
   LayoutDashboard, Scale, FileText, Users, FolderOpen,
   Bot, CheckSquare, DollarSign, Shield, Shapes, Settings,
-  Bell, Search, ChevronRight, FileEdit
+  Bell, Search, ChevronRight, FileEdit, Menu, X
 } from "lucide-react";
 import { useApprovalCount } from "@/hooks/useApprovals";
 import { useNotifications } from "@/hooks/useNotifications";
@@ -31,11 +32,30 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const { count: approvalCount } = useApprovalCount();
   const { unreadCount } = useNotifications();
   const [notifOpen, setNotifOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const { user, setUser } = useUserStore();
+
+  useEffect(() => {
+    if (!user) {
+      try {
+        const stored = localStorage.getItem("afj_user");
+        if (stored) setUser(JSON.parse(stored));
+      } catch {}
+    }
+  }, []);
 
   return (
     <div className="flex h-screen overflow-hidden">
+      {/* Mobile overlay */}
+      {sidebarOpen && (
+        <div
+          className="fixed inset-0 bg-black/50 z-20 md:hidden"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
       {/* ─── Sidebar AFJ ─────────────────────────────────────────────── */}
-      <aside className="afj-sidebar">
+      <aside className={`afj-sidebar fixed md:static inset-y-0 left-0 z-30 transform transition-transform duration-200 ${sidebarOpen ? "translate-x-0" : "-translate-x-full"} md:translate-x-0`}>
         {/* Logo */}
         <div className="afj-sidebar-logo">
           <div className="flex items-center gap-3">
@@ -75,20 +95,28 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               <span className="text-afj-gold text-xs font-bold">U</span>
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-afj-cream text-xs font-medium truncate">Usuário</p>
-              <p className="text-afj-cream/40 text-xs">Advogado</p>
+              <p className="text-afj-cream text-xs font-medium truncate">{user?.full_name || "Usuário"}</p>
+              <p className="text-afj-cream/40 text-xs">{user?.role || "Advogado"}</p>
             </div>
           </div>
         </div>
       </aside>
 
       {/* ─── Conteúdo principal ──────────────────────────────────────── */}
-      <div className="flex-1 flex flex-col ml-64 overflow-hidden">
+      <div className="flex-1 flex flex-col md:ml-64 overflow-hidden">
         {/* Header */}
-        <header className="h-14 bg-white border-b border-afj-cream-dark flex items-center justify-between px-6 flex-shrink-0">
-          <div className="flex items-center gap-2 text-afj-black/40 text-sm">
-            <Search size={14} />
-            <span>Buscar processos, clientes, documentos... (⌘K)</span>
+        <header className="h-14 bg-white border-b border-afj-cream-dark flex items-center justify-between px-4 md:px-6 flex-shrink-0">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setSidebarOpen((o) => !o)}
+              className="md:hidden text-afj-black/60 hover:text-afj-black transition-colors p-1"
+            >
+              {sidebarOpen ? <X size={20} /> : <Menu size={20} />}
+            </button>
+            <div className="hidden sm:flex items-center gap-2 text-afj-black/40 text-sm">
+              <Search size={14} />
+              <span>Buscar processos, clientes, documentos... (⌘K)</span>
+            </div>
           </div>
           <div className="flex items-center gap-3">
             <div className="relative">

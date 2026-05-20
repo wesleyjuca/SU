@@ -29,6 +29,8 @@ export default function LoginPage() {
       localStorage.setItem("afj_access_token", data.access_token);
       localStorage.setItem("afj_refresh_token", data.refresh_token);
       localStorage.setItem("afj_user", JSON.stringify(data.user));
+      // Session cookie for Next.js middleware auth guard (localStorage not accessible in middleware)
+      document.cookie = "afj_session=1; path=/; SameSite=Lax; max-age=86400";
       window.location.href = "/dashboard";
     } catch {
       setError("Erro de conexão. Tente novamente.");
@@ -46,7 +48,7 @@ export default function LoginPage() {
             <span className="text-afj-gold font-display text-2xl font-bold">AFJ</span>
           </div>
           <h1 className="font-display text-3xl text-afj-cream font-semibold">
-            Almeida, Freire & Jucá
+            Almeida, Freire &amp; Jucá
           </h1>
           <p className="text-afj-cream/50 mt-1 text-sm">Sistema Jurídico Inteligente</p>
         </div>

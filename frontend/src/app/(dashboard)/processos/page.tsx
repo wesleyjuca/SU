@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import { Scale, Plus, AlertTriangle, Search, Filter } from "lucide-react";
+import { Scale, Plus, AlertTriangle, Search, Pencil, Trash2 } from "lucide-react";
 
 interface Processo {
   id: string;
@@ -46,6 +46,9 @@ export default function ProcessosPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [filtroArea, setFiltroArea] = useState("");
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState<Partial<Processo>>({});
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   useEffect(() => {
     fetchProcessos();
@@ -66,13 +69,32 @@ export default function ProcessosPage() {
     }
   }
 
+  async function salvarEdicao() {
+    if (!editingId) return;
+    const token = localStorage.getItem("afj_access_token");
+    const res = await fetch(`/api/v1/processes/${editingId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify(editForm),
+    });
+    if (res.ok) { setEditingId(null); fetchProcessos(); }
+  }
+
+  async function excluirProcesso(id: string) {
+    const token = localStorage.getItem("afj_access_token");
+    const res = await fetch(`/api/v1/processes/${id}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (res.ok) { setDeletingId(null); fetchProcessos(); }
+  }
+
   const filtrados = processos.filter((p) =>
     !search || p.numero_cnj?.includes(search) || p.tribunal.toLowerCase().includes(search.toLowerCase())
   );
 
   return (
     <div className="max-w-7xl mx-auto space-y-5">
-      {/* Header */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="font-display text-2xl font-semibold text-afj-black">Processos</h1>
@@ -84,7 +106,6 @@ export default function ProcessosPage() {
         </Link>
       </div>
 
-      {/* Filtros */}
       <div className="flex gap-3 flex-wrap">
         <div className="relative flex-1 min-w-48">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-afj-black/30" />
@@ -107,7 +128,6 @@ export default function ProcessosPage() {
         </select>
       </div>
 
-      {/* Tabela */}
       {loading ? (
         <div className="afj-card p-8 text-center text-afj-black/40">Carregando processos...</div>
       ) : filtrados.length === 0 ? (
@@ -131,6 +151,7 @@ export default function ProcessosPage() {
                 <th className="text-left px-4 py-3 text-afj-black/50 font-medium">Situação</th>
                 <th className="text-left px-4 py-3 text-afj-black/50 font-medium">Próximo Prazo</th>
                 <th className="text-left px-4 py-3 text-afj-black/50 font-medium">Valor da Causa</th>
+                <th className="px-4 py-3" />
               </tr>
             </thead>
             <tbody>
@@ -167,11 +188,70 @@ export default function ProcessosPage() {
                     <td className="px-4 py-3 text-afj-black/60 text-xs">
                       {p.valor_causa ? `R$ ${p.valor_causa.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}` : "—"}
                     </td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => { setEditingId(p.id); setEditForm({ tribunal: p.tribunal, situacao: p.situacao, area_direito: p.area_direito ?? "" }); }}
+                          className="text-afj-black/30 hover:text-afj-gold transition-colors"
+                          title="Editar"
+                        >
+                          <Pencil size={13} />
+                        </button>
+                        <button
+                          onClick={() => setDeletingId(p.id)}
+                          className="text-afj-black/30 hover:text-red-500 transition-colors"
+                          title="Arquivar"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
+                    </td>
                   </tr>
                 );
               })}
             </tbody>
           </table>
+        </div>
+      )}
+      {editingId && (
+        <div className="fixed inset-0 bg-afj-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl p-6 w-full max-w-md shadow-2xl">
+            <h2 className="font-display text-lg font-semibold text-afj-black mb-4">Editar Processo</h2>
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs text-afj-black/60 block mb-1">Tribunal</label>
+                <input value={editForm.tribunal ?? ""} onChange={(e) => setEditForm({ ...editForm, tribunal: e.target.value })}
+                  className="w-full border border-afj-cream-dark rounded-md px-3 py-2 text-sm focus:outline-none focus:border-afj-gold" />
+              </div>
+              <div>
+                <label className="text-xs text-afj-black/60 block mb-1">Situação</label>
+                <select value={editForm.situacao ?? ""} onChange={(e) => setEditForm({ ...editForm, situacao: e.target.value })}
+                  className="w-full border border-afj-cream-dark rounded-md px-3 py-2 text-sm focus:outline-none focus:border-afj-gold">
+                  <option value="ATIVO">Ativo</option>
+                  <option value="SUSPENSO">Suspenso</option>
+                  <option value="ARQUIVADO">Arquivado</option>
+                  <option value="ENCERRADO">Encerrado</option>
+                </select>
+              </div>
+            </div>
+            <div className="flex gap-3 mt-5">
+              <button onClick={() => setEditingId(null)} className="flex-1 btn-afj-outline rounded-md">Cancelar</button>
+              <button onClick={salvarEdicao} className="flex-1 btn-afj-primary rounded-md">Salvar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {deletingId && (
+        <div className="fixed inset-0 bg-afj-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl p-6 w-full max-w-sm shadow-2xl text-center">
+            <p className="font-semibold text-afj-black mb-2">Arquivar processo?</p>
+            <p className="text-afj-black/50 text-sm mb-5">O processo será marcado como arquivado e removido da lista ativa.</p>
+            <div className="flex gap-3">
+              <button onClick={() => setDeletingId(null)} className="flex-1 btn-afj-outline rounded-md">Cancelar</button>
+              <button onClick={() => excluirProcesso(deletingId)} className="flex-1 bg-red-500 text-white rounded-md py-2 text-sm font-medium hover:bg-red-600">Arquivar</button>
+            </div>
+          </div>
         </div>
       )}
     </div>
