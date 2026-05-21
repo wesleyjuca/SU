@@ -93,6 +93,7 @@ export default function ClientesPage() {
         </button>
       </div>
 
+      {/* Filtros */}
       <div className="flex gap-3">
         <div className="relative flex-1">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-afj-black/30" />
@@ -132,8 +133,8 @@ export default function ClientesPage() {
                 <span className="text-xs text-afj-black/30">{c.origem || "Origem não informada"}</span>
                 <div className="flex items-center gap-2">
                   {!c.lgpd_consent && <span className="text-xs text-amber-600">⚠ LGPD</span>}
-                  <button onClick={() => { setEditingId(c.id); setEditForm({ nome_completo: c.nome_completo, email: c.email ?? "", telefone: c.telefone ?? "", status: c.status }); }} className="text-afj-black/30 hover:text-afj-gold transition-colors"><Pencil size={12} /></button>
-                  <button onClick={() => setDeletingId(c.id)} className="text-afj-black/30 hover:text-red-500 transition-colors"><Trash2 size={12} /></button>
+                  <button onClick={() => { setEditingId(c.id); setEditForm({ nome_completo: c.nome_completo, email: c.email ?? "", telefone: c.telefone ?? "", status: c.status }); }} className="text-afj-black/30 hover:text-afj-gold transition-colors" aria-label="Editar cliente"><Pencil size={12} /></button>
+                  <button onClick={() => setDeletingId(c.id)} className="text-afj-black/30 hover:text-red-500 transition-colors" aria-label="Remover cliente"><Trash2 size={12} /></button>
                 </div>
               </div>
             </div>
@@ -141,6 +142,7 @@ export default function ClientesPage() {
         </div>
       )}
 
+      {/* Modal edição cliente */}
       {editingId && (
         <div className="fixed inset-0 bg-afj-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-xl p-6 w-full max-w-md shadow-2xl">
@@ -175,6 +177,7 @@ export default function ClientesPage() {
         </div>
       )}
 
+      {/* Modal confirmação exclusão */}
       {deletingId && (
         <div className="fixed inset-0 bg-afj-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-xl p-6 w-full max-w-sm shadow-2xl text-center">
@@ -188,6 +191,7 @@ export default function ClientesPage() {
         </div>
       )}
 
+      {/* Modal novo cliente */}
       {showModal && (
         <div className="fixed inset-0 bg-afj-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-xl p-6 w-full max-w-lg shadow-2xl">

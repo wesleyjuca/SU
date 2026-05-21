@@ -95,6 +95,7 @@ export default function ProcessosPage() {
 
   return (
     <div className="max-w-7xl mx-auto space-y-5">
+      {/* Header */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="font-display text-2xl font-semibold text-afj-black">Processos</h1>
@@ -106,6 +107,7 @@ export default function ProcessosPage() {
         </Link>
       </div>
 
+      {/* Filtros */}
       <div className="flex gap-3 flex-wrap">
         <div className="relative flex-1 min-w-48">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-afj-black/30" />
@@ -128,6 +130,7 @@ export default function ProcessosPage() {
         </select>
       </div>
 
+      {/* Tabela */}
       {loading ? (
         <div className="afj-card p-8 text-center text-afj-black/40">Carregando processos...</div>
       ) : filtrados.length === 0 ? (
@@ -193,14 +196,14 @@ export default function ProcessosPage() {
                         <button
                           onClick={() => { setEditingId(p.id); setEditForm({ tribunal: p.tribunal, situacao: p.situacao, area_direito: p.area_direito ?? "" }); }}
                           className="text-afj-black/30 hover:text-afj-gold transition-colors"
-                          title="Editar"
+                          aria-label="Editar processo"
                         >
                           <Pencil size={13} />
                         </button>
                         <button
                           onClick={() => setDeletingId(p.id)}
                           className="text-afj-black/30 hover:text-red-500 transition-colors"
-                          title="Arquivar"
+                          aria-label="Arquivar processo"
                         >
                           <Trash2 size={13} />
                         </button>
@@ -213,6 +216,7 @@ export default function ProcessosPage() {
           </table>
         </div>
       )}
+      {/* Modal edição */}
       {editingId && (
         <div className="fixed inset-0 bg-afj-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-xl p-6 w-full max-w-md shadow-2xl">
@@ -242,6 +246,7 @@ export default function ProcessosPage() {
         </div>
       )}
 
+      {/* Modal confirmação exclusão */}
       {deletingId && (
         <div className="fixed inset-0 bg-afj-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-xl p-6 w-full max-w-sm shadow-2xl text-center">

@@ -55,7 +55,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       )}
 
       {/* ─── Sidebar AFJ ─────────────────────────────────────────────── */}
-      <aside className={`afj-sidebar fixed md:static inset-y-0 left-0 z-30 transform transition-transform duration-200 ${sidebarOpen ? "translate-x-0" : "-translate-x-full"} md:translate-x-0`}>
+      <aside aria-label="Menu lateral" className={`afj-sidebar fixed md:static inset-y-0 left-0 z-30 transform transition-transform duration-200 ${sidebarOpen ? "translate-x-0" : "-translate-x-full"} md:translate-x-0`}>
         {/* Logo */}
         <div className="afj-sidebar-logo">
           <div className="flex items-center gap-3">
@@ -70,7 +70,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         </div>
 
         {/* Navegação */}
-        <nav className="flex-1 overflow-y-auto py-3 space-y-0.5">
+        <nav aria-label="Navegação principal" className="flex-1 overflow-y-auto py-3 space-y-0.5">
           {navItems.map((item) => {
             const Icon = item.icon;
             const isActive = pathname === item.href || pathname.startsWith(item.href + "/");
@@ -110,6 +110,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             <button
               onClick={() => setSidebarOpen((o) => !o)}
               className="md:hidden text-afj-black/60 hover:text-afj-black transition-colors p-1"
+              aria-label={sidebarOpen ? "Fechar menu" : "Abrir menu"}
+              aria-expanded={sidebarOpen}
+              aria-controls="sidebar"
             >
               {sidebarOpen ? <X size={20} /> : <Menu size={20} />}
             </button>
@@ -123,6 +126,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               <button
                 onClick={() => setNotifOpen((o) => !o)}
                 className="relative text-afj-black/60 hover:text-afj-black transition-colors p-1"
+                aria-label="Notificações"
+                aria-haspopup="true"
+                aria-expanded={notifOpen}
               >
                 <Bell size={18} />
                 {(unreadCount > 0 || approvalCount > 0) && (

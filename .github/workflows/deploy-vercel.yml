@@ -51,10 +51,10 @@ jobs:
             echo "VERCEL_URL=$DEPLOY_URL" >> $GITHUB_ENV
             echo "url=$DEPLOY_URL" >> $GITHUB_OUTPUT
             echo ""
-            echo "╔══════════════════════════════════════════╗"
+            echo "════════════════════════════════════════════"
             echo "  ✅ FRONTEND PUBLICADO!"
             echo "  URL: $DEPLOY_URL"
-            echo "╚══════════════════════════════════════════╝"
+            echo "════════════════════════════════════════════"
           else
             echo "::error::Deploy falhou. Verifique os logs acima."
             exit 1
@@ -86,7 +86,8 @@ jobs:
       - name: Update Railway CORS with Vercel URL
         if: env.VERCEL_URL != ''
         env:
-          RAILWAY_TOKEN: aa2353a4-96fb-4f34-ae0c-ec8895ffebaf
+          # Add RAILWAY_TOKEN to GitHub Settings → Secrets → Actions
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
           echo "Atualizando CORS no Railway com: $VERCEL_URL"
           npm install -g @railway/cli 2>/dev/null
@@ -97,10 +98,8 @@ jobs:
             2>&1 || echo "::warning::CORS update failed — atualize manualmente no Railway dashboard"
 
           echo ""
-          echo "╔══════════════════════════════════════════╗"
+          echo "════════════════════════════════════════════"
           echo "  ✅ DEPLOY COMPLETO!"
           echo "  Frontend: $VERCEL_URL"
           echo "  Backend:  ${{ github.event.inputs.railway_url }}"
-          echo "  Login:    admin@afjadvogados.com.br"
-          echo "  Senha:    Admin@123"
-          echo "╚══════════════════════════════════════════╝"
+          echo "════════════════════════════════════════════"

@@ -6,7 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "next": "14.2.18",
@@ -27,7 +29,6 @@
     "@radix-ui/react-dropdown-menu": "^2.1.2",
     "@radix-ui/react-select": "^2.1.2",
     "@radix-ui/react-tabs": "^1.1.1",
-    "@radix-ui/react-badge": "^1.0.4",
     "@radix-ui/react-avatar": "^1.1.1",
     "@radix-ui/react-scroll-area": "^1.2.1",
     "@radix-ui/react-separator": "^1.1.0",
@@ -54,7 +55,13 @@
   },
   "devDependencies": {
     "eslint": "^8.57.1",
-    "eslint-config-next": "14.2.18"
+    "eslint-config-next": "14.2.18",
+    "vitest": "^1.6.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "@testing-library/react": "^16.0.0",
+    "@testing-library/user-event": "^14.5.2",
+    "@testing-library/jest-dom": "^6.4.0",
+    "jsdom": "^24.0.0"
   },
   "engines": {
     "node": ">=22.0.0"
