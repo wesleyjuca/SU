@@ -48,7 +48,12 @@ async def list_entries(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    query = select(FinancialEntry).order_by(desc(FinancialEntry.created_at)).limit(limit)
+    query = (
+        select(FinancialEntry)
+        .where(FinancialEntry.tenant_id == current_user.tenant_id)
+        .order_by(desc(FinancialEntry.created_at))
+        .limit(limit)
+    )
     if tipo:
         query = query.where(FinancialEntry.tipo == tipo)
     if status:
@@ -74,6 +79,7 @@ async def create_entry(
         data_vencimento=body.data_vencimento,
         status=body.status,
         created_by=current_user.id,
+        tenant_id=current_user.tenant_id,
     )
     db.add(entry)
     await db.flush()
@@ -96,7 +102,12 @@ async def update_entry(
     db: AsyncSession = Depends(get_db),
 ):
     from app.core.exceptions import NotFoundError
-    result = await db.execute(select(FinancialEntry).where(FinancialEntry.id == uuid.UUID(entry_id)))
+    result = await db.execute(
+        select(FinancialEntry).where(
+            FinancialEntry.id == uuid.UUID(entry_id),
+            FinancialEntry.tenant_id == current_user.tenant_id,
+        )
+    )
     entry = result.scalar_one_or_none()
     if not entry:
         raise NotFoundError("Lançamento", entry_id)
@@ -116,7 +127,12 @@ async def delete_entry(
     db: AsyncSession = Depends(get_db),
 ):
     from app.core.exceptions import NotFoundError
-    result = await db.execute(select(FinancialEntry).where(FinancialEntry.id == uuid.UUID(entry_id)))
+    result = await db.execute(
+        select(FinancialEntry).where(
+            FinancialEntry.id == uuid.UUID(entry_id),
+            FinancialEntry.tenant_id == current_user.tenant_id,
+        )
+    )
     entry = result.scalar_one_or_none()
     if not entry:
         raise NotFoundError("Lançamento", entry_id)
@@ -135,7 +151,11 @@ async def export_financial(
     import csv, io
     from fastapi.responses import StreamingResponse
 
-    query = select(FinancialEntry).order_by(desc(FinancialEntry.created_at))
+    query = (
+        select(FinancialEntry)
+        .where(FinancialEntry.tenant_id == current_user.tenant_id)
+        .order_by(desc(FinancialEntry.created_at))
+    )
     if tipo:
         query = query.where(FinancialEntry.tipo == tipo)
     if status:
@@ -168,7 +188,12 @@ async def mark_paid(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(FinancialEntry).where(FinancialEntry.id == uuid.UUID(entry_id)))
+    result = await db.execute(
+        select(FinancialEntry).where(
+            FinancialEntry.id == uuid.UUID(entry_id),
+            FinancialEntry.tenant_id == current_user.tenant_id,
+        )
+    )
     entry = result.scalar_one_or_none()
     if not entry:
         from app.core.exceptions import NotFoundError

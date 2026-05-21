@@ -60,7 +60,13 @@ async def list_processes(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    query = select(LegalProcess).order_by(LegalProcess.proximo_prazo_at.asc().nulls_last()).offset(offset).limit(limit)
+    query = (
+        select(LegalProcess)
+        .where(LegalProcess.tenant_id == current_user.tenant_id)
+        .order_by(LegalProcess.proximo_prazo_at.asc().nulls_last())
+        .offset(offset)
+        .limit(limit)
+    )
 
     if tribunal:
         query = query.where(LegalProcess.tribunal == tribunal)
@@ -85,6 +91,7 @@ async def create_process(
     process = LegalProcess(
         **body.model_dump(exclude_none=True),
         responsavel_id=current_user.id,
+        tenant_id=current_user.tenant_id,
         client_id=uuid.UUID(body.client_id) if body.client_id else None,
     )
     db.add(process)
@@ -98,7 +105,12 @@ async def get_process(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(LegalProcess).where(LegalProcess.id == uuid.UUID(process_id)))
+    result = await db.execute(
+        select(LegalProcess).where(
+            LegalProcess.id == uuid.UUID(process_id),
+            LegalProcess.tenant_id == current_user.tenant_id,
+        )
+    )
     process = result.scalar_one_or_none()
     if not process:
         raise NotFoundError("Processo", process_id)
@@ -167,7 +179,12 @@ async def update_process(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(LegalProcess).where(LegalProcess.id == uuid.UUID(process_id)))
+    result = await db.execute(
+        select(LegalProcess).where(
+            LegalProcess.id == uuid.UUID(process_id),
+            LegalProcess.tenant_id == current_user.tenant_id,
+        )
+    )
     process = result.scalar_one_or_none()
     if not process:
         raise NotFoundError("Processo", process_id)
@@ -186,7 +203,12 @@ async def archive_process(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(LegalProcess).where(LegalProcess.id == uuid.UUID(process_id)))
+    result = await db.execute(
+        select(LegalProcess).where(
+            LegalProcess.id == uuid.UUID(process_id),
+            LegalProcess.tenant_id == current_user.tenant_id,
+        )
+    )
     process = result.scalar_one_or_none()
     if not process:
         raise NotFoundError("Processo", process_id)
