@@ -196,14 +196,14 @@ export default function ProcessosPage() {
                         <button
                           onClick={() => { setEditingId(p.id); setEditForm({ tribunal: p.tribunal, situacao: p.situacao, area_direito: p.area_direito ?? "" }); }}
                           className="text-afj-black/30 hover:text-afj-gold transition-colors"
-                          title="Editar"
+                          aria-label="Editar processo"
                         >
                           <Pencil size={13} />
                         </button>
                         <button
                           onClick={() => setDeletingId(p.id)}
                           className="text-afj-black/30 hover:text-red-500 transition-colors"
-                          title="Arquivar"
+                          aria-label="Arquivar processo"
                         >
                           <Trash2 size={13} />
                         </button>

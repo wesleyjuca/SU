@@ -60,7 +60,13 @@ async def list_clients(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    query = select(Client).order_by(desc(Client.created_at)).offset(offset).limit(limit)
+    query = (
+        select(Client)
+        .where(Client.tenant_id == current_user.tenant_id)
+        .order_by(desc(Client.created_at))
+        .offset(offset)
+        .limit(limit)
+    )
     if status:
         query = query.where(Client.status == status)
     if search:
@@ -86,6 +92,7 @@ async def create_client(
     if body.lgpd_consent:
         data["lgpd_consent_at"] = datetime.now(timezone.utc)
     data["responsavel_id"] = current_user.id
+    data["tenant_id"] = current_user.tenant_id
 
     client = Client(**data)
     db.add(client)
@@ -99,7 +106,12 @@ async def get_client(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(Client).where(Client.id == uuid.UUID(client_id)))
+    result = await db.execute(
+        select(Client).where(
+            Client.id == uuid.UUID(client_id),
+            Client.tenant_id == current_user.tenant_id,
+        )
+    )
     client = result.scalar_one_or_none()
     if not client:
         raise NotFoundError("Cliente", client_id)
@@ -113,7 +125,12 @@ async def update_client(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(Client).where(Client.id == uuid.UUID(client_id)))
+    result = await db.execute(
+        select(Client).where(
+            Client.id == uuid.UUID(client_id),
+            Client.tenant_id == current_user.tenant_id,
+        )
+    )
     client = result.scalar_one_or_none()
     if not client:
         raise NotFoundError("Cliente", client_id)
@@ -179,7 +196,12 @@ async def delete_client(
     current_user: User = Depends(require_role("ADMIN", "SOCIO")),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(Client).where(Client.id == uuid.UUID(client_id)))
+    result = await db.execute(
+        select(Client).where(
+            Client.id == uuid.UUID(client_id),
+            Client.tenant_id == current_user.tenant_id,
+        )
+    )
     client = result.scalar_one_or_none()
     if not client:
         raise NotFoundError("Cliente", client_id)

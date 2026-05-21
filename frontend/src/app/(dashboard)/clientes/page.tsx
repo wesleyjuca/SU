@@ -133,8 +133,8 @@ export default function ClientesPage() {
                 <span className="text-xs text-afj-black/30">{c.origem || "Origem não informada"}</span>
                 <div className="flex items-center gap-2">
                   {!c.lgpd_consent && <span className="text-xs text-amber-600">⚠ LGPD</span>}
-                  <button onClick={() => { setEditingId(c.id); setEditForm({ nome_completo: c.nome_completo, email: c.email ?? "", telefone: c.telefone ?? "", status: c.status }); }} className="text-afj-black/30 hover:text-afj-gold transition-colors"><Pencil size={12} /></button>
-                  <button onClick={() => setDeletingId(c.id)} className="text-afj-black/30 hover:text-red-500 transition-colors"><Trash2 size={12} /></button>
+                  <button onClick={() => { setEditingId(c.id); setEditForm({ nome_completo: c.nome_completo, email: c.email ?? "", telefone: c.telefone ?? "", status: c.status }); }} className="text-afj-black/30 hover:text-afj-gold transition-colors" aria-label="Editar cliente"><Pencil size={12} /></button>
+                  <button onClick={() => setDeletingId(c.id)} className="text-afj-black/30 hover:text-red-500 transition-colors" aria-label="Remover cliente"><Trash2 size={12} /></button>
                 </div>
               </div>
             </div>

@@ -6,10 +6,10 @@ import hashlib
 
 from app.db.base import get_db
 from app.models.user import User, Session
-from app.core.security import verify_password, create_access_token, create_refresh_token, hash_token, decode_access_token
+from app.core.security import verify_password, hash_password, create_access_token, create_refresh_token, hash_token, decode_access_token
 from app.core.exceptions import UnauthorizedError
 from app.config import settings
-from app.dependencies import bearer_scheme
+from app.dependencies import bearer_scheme, get_current_user
 from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel, EmailStr
 
@@ -131,3 +131,24 @@ async def logout(
             pass
 
     return {"message": "Logout realizado com sucesso"}
+
+
+class PasswordChangeRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
+@router.patch("/password")
+async def change_password(
+    body: PasswordChangeRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if not verify_password(body.current_password, current_user.hashed_password):
+        raise UnauthorizedError("Senha atual incorreta")
+    if len(body.new_password) < 8:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=422, detail="Nova senha deve ter ao menos 8 caracteres")
+    current_user.hashed_password = hash_password(body.new_password)
+    await db.flush()
+    return {"message": "Senha alterada com sucesso"}

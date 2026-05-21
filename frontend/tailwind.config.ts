@@ -57,8 +57,8 @@ const config: Config = {
         },
       },
       fontFamily: {
-        sans: ["Inter", "system-ui", "sans-serif"],
-        display: ["Playfair Display", "Georgia", "serif"],
+        sans: ["var(--font-inter)", "Inter", "system-ui", "sans-serif"],
+        display: ["var(--font-playfair)", "Playfair Display", "Georgia", "serif"],
       },
       borderRadius: {
         lg: "var(--radius)",

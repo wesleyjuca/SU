@@ -102,6 +102,4 @@ jobs:
           echo "  ✅ DEPLOY COMPLETO!"
           echo "  Frontend: $VERCEL_URL"
           echo "  Backend:  ${{ github.event.inputs.railway_url }}"
-          echo "  Login:    admin@afjadvogados.com.br"
-          echo "  Senha:    Admin@123"
           echo "════════════════════════════════════════════"

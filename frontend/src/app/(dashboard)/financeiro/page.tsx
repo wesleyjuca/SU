@@ -237,7 +237,7 @@ export default function FinanceiroPage() {
                       <button
                         onClick={() => setDeletingId(e.id)}
                         className="text-afj-black/30 hover:text-red-500 transition-colors"
-                        title="Excluir"
+                        aria-label="Excluir lançamento"
                       >
                         <Trash2 size={13} />
                       </button>
