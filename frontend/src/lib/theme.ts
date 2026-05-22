@@ -10,9 +10,9 @@ export interface TenantTheme {
 const STORAGE_KEY = "afj_theme";
 
 const DEFAULT_THEME: TenantTheme = {
-  primaryColor: "#C9A84C",
-  secondaryColor: "#1A1A1A",
-  accentColor: "#F5F0E8",
+  primaryColor: "#B8954A",
+  secondaryColor: "#1E2229",
+  accentColor: "#F4F0EA",
   appName: "AFJ CORE",
   logoUrl: null,
   logoDarkUrl: null,
