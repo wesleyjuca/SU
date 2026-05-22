@@ -6,7 +6,7 @@ import { useUserStore } from "@/store";
 import {
   LayoutDashboard, Scale, FileText, Users, FolderOpen,
   Bot, CheckSquare, DollarSign, Shield, Shapes, Settings,
-  Bell, Search, ChevronRight, FileEdit, Menu, X, LogOut, BarChart2, CalendarClock
+  Bell, Search, ChevronRight, FileEdit, Menu, X, LogOut, BarChart2, CalendarClock, BookOpen
 } from "lucide-react";
 import { useApprovalCount } from "@/hooks/useApprovals";
 import { useNotifications } from "@/hooks/useNotifications";
@@ -26,6 +26,7 @@ const navItems = [
   { href: "/financeiro", label: "Financeiro", icon: DollarSign },
   { href: "/relatorios", label: "Relatórios", icon: BarChart2 },
   { href: "/visual-law", label: "Visual Law", icon: Shapes },
+  { href: "/busca-juridica", label: "Pesquisa Jurídica", icon: BookOpen },
   { href: "/auditoria", label: "Auditoria", icon: Shield },
   { href: "/configuracoes", label: "Configurações", icon: Settings },
 ];

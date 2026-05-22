@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect } from "react";
-import { DollarSign, TrendingUp, TrendingDown, Plus, CheckCircle, Clock, Trash2 } from "lucide-react";
+import { DollarSign, TrendingUp, TrendingDown, Plus, CheckCircle, Clock, Trash2, FileDown } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 
 interface Entry {
@@ -102,6 +102,22 @@ export default function FinanceiroPage() {
     if (res.ok) { setDeletingId(null); fetchEntries(); fetchSummary(); }
   }
 
+  async function exportarCSV() {
+    const token = localStorage.getItem("afj_access_token");
+    const res = await fetch("/api/v1/financial/export", {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (res.ok) {
+      const blob = await res.blob();
+      const a = Object.assign(document.createElement("a"), {
+        href: URL.createObjectURL(blob),
+        download: "financeiro.csv",
+      });
+      a.click();
+      URL.revokeObjectURL(a.href);
+    }
+  }
+
   async function marcarPago(id: string) {
     const token = localStorage.getItem("afj_access_token");
     await fetch(`/api/v1/financial/${id}/mark-paid`, {
@@ -122,10 +138,16 @@ export default function FinanceiroPage() {
           <h1 className="font-display text-2xl font-semibold text-afj-black">Financeiro</h1>
           <p className="text-afj-black/50 text-sm">Honorários, despesas e fluxo de caixa</p>
         </div>
-        <button onClick={() => setShowModal(true)} className="btn-afj-primary rounded-md flex items-center gap-2">
-          <Plus size={15} />
-          Novo Lançamento
-        </button>
+        <div className="flex gap-2">
+          <button onClick={exportarCSV} className="btn-afj-outline rounded-md flex items-center gap-2" title="Exportar CSV" aria-label="Exportar lançamentos como CSV">
+            <FileDown size={14} />
+            Exportar
+          </button>
+          <button onClick={() => setShowModal(true)} className="btn-afj-primary rounded-md flex items-center gap-2">
+            <Plus size={15} />
+            Novo Lançamento
+          </button>
+        </div>
       </div>
 
       {/* KPIs */}
