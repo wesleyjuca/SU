@@ -6,7 +6,7 @@ import { useUserStore } from "@/store";
 import {
   LayoutDashboard, Scale, FileText, Users, FolderOpen,
   Bot, CheckSquare, DollarSign, Shield, Shapes, Settings,
-  Bell, Search, ChevronRight, FileEdit, Menu, X, LogOut, BarChart2
+  Bell, Search, ChevronRight, FileEdit, Menu, X, LogOut, BarChart2, CalendarClock
 } from "lucide-react";
 import { useApprovalCount } from "@/hooks/useApprovals";
 import { useNotifications } from "@/hooks/useNotifications";
@@ -16,6 +16,7 @@ import { SearchModal } from "@/components/layout/SearchModal";
 const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/processos", label: "Processos", icon: Scale },
+  { href: "/agenda", label: "Agenda", icon: CalendarClock },
   { href: "/peticoes", label: "Petições", icon: FileEdit },
   { href: "/clientes", label: "Clientes", icon: Users },
   { href: "/documentos", label: "Documentos", icon: FolderOpen },
