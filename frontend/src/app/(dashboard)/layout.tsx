@@ -6,7 +6,7 @@ import { useUserStore } from "@/store";
 import {
   LayoutDashboard, Scale, FileText, Users, FolderOpen,
   Bot, CheckSquare, DollarSign, Shield, Shapes, Settings,
-  Bell, Search, ChevronRight, FileEdit, Menu, X
+  Bell, Search, ChevronRight, FileEdit, Menu, X, LogOut
 } from "lucide-react";
 import { useApprovalCount } from "@/hooks/useApprovals";
 import { useNotifications } from "@/hooks/useNotifications";
@@ -98,6 +98,35 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               <p className="text-afj-cream text-xs font-medium truncate">{user?.full_name || "Usuário"}</p>
               <p className="text-afj-cream/40 text-xs">{user?.role || "Advogado"}</p>
             </div>
+            <button
+              onClick={async () => {
+                try {
+                  const token = localStorage.getItem("afj_access_token");
+                  const refresh = localStorage.getItem("afj_refresh_token");
+                  if (refresh) {
+                    await fetch("/api/v1/auth/logout", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+                      body: JSON.stringify({ refresh_token: refresh }),
+                    });
+                  }
+                  await fetch("/api/auth/session", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ action: "clear" }),
+                  });
+                } catch {}
+                localStorage.removeItem("afj_access_token");
+                localStorage.removeItem("afj_refresh_token");
+                localStorage.removeItem("afj_user");
+                window.location.href = "/login";
+              }}
+              className="text-afj-cream/30 hover:text-red-400 transition-colors"
+              aria-label="Sair do sistema"
+              title="Sair"
+            >
+              <LogOut size={14} />
+            </button>
           </div>
         </div>
       </aside>

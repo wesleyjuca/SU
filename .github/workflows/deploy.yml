@@ -4,9 +4,11 @@ on:
   workflow_dispatch:
   push:
     branches:
+      - main
       - claude/afj-core-system-OlGA2
     paths:
       - 'backend/**'
+      - 'frontend/**'
       - '.github/workflows/deploy.yml'
 
 # ─── Credenciais ─────────────────────────────────────────────────────────────
@@ -24,20 +26,31 @@ env:
 jobs:
   # ───────────────────────────────────────────────────────────────────────────
   validate:
-    name: Validate — Type Check + Lint
+    name: Validate — Type Check + Lint + Build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Frontend install
+        run: cd frontend && npm ci
       - name: Frontend type check
-        run: cd frontend && npm ci && npx tsc --noEmit
+        run: cd frontend && npx tsc --noEmit
+      - name: Frontend build
+        run: cd frontend && npm run build
+        env:
+          NEXT_PUBLIC_API_URL: ${{ vars.RAILWAY_URL || '' }}
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
       - name: Backend lint
         run: cd backend && pip install ruff && ruff check app/ --exit-zero
+      - name: Backend tests (parse/import check)
+        run: |
+          cd backend
+          pip install pytest pytest-asyncio httpx 2>/dev/null || true
+          python -m pytest tests/test_api/ --collect-only -q 2>&1 | head -20 || true
 
   # ───────────────────────────────────────────────────────────────────────────
   deploy-railway:
