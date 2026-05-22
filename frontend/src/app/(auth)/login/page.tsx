@@ -43,7 +43,8 @@ export default function LoginPage() {
 
       window.location.href = "/dashboard";
     } catch {
-      setError("Erro de conexão. Verifique se o servidor está acessível.");
+      const backendLabel = process.env.NEXT_PUBLIC_API_URL || "/api/v1 (proxy)";
+      setError(`Erro de conexão com o servidor (${backendLabel}). Verifique se o backend está acessível ou configure NEXT_PUBLIC_API_URL.`);
     } finally {
       setLoading(false);
     }

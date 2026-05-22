@@ -145,6 +145,7 @@ export default function ProcessosPage() {
         </div>
       ) : (
         <div className="afj-card overflow-hidden">
+          <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-afj-cream-dark bg-afj-cream/50">
@@ -214,6 +215,7 @@ export default function ProcessosPage() {
               })}
             </tbody>
           </table>
+          </div>
         </div>
       )}
       {/* Modal edição */}

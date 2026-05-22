@@ -190,6 +190,7 @@ export default function FinanceiroPage() {
         <div className="afj-card p-8 text-center text-afj-black/40">Carregando...</div>
       ) : (
         <div className="afj-card overflow-hidden">
+          <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-afj-cream-dark bg-afj-cream/50">
@@ -247,6 +248,7 @@ export default function FinanceiroPage() {
               ))}
             </tbody>
           </table>
+          </div>
         </div>
       )}
 
