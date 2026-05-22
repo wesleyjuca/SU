@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import { FolderOpen, Search, FileText, Download, Eye } from "lucide-react";
+import { Breadcrumb } from "@/components/layout/Breadcrumb";
 
 interface Documento {
   id: string;
@@ -60,6 +61,7 @@ export default function DocumentosPage() {
 
   return (
     <div className="max-w-7xl mx-auto space-y-5">
+      <Breadcrumb crumbs={[{ label: "Dashboard", href: "/dashboard" }, { label: "Documentos" }]} />
       <div className="flex items-center justify-between">
         <div>
           <h1 className="font-display text-2xl font-semibold text-afj-black">Documentos</h1>
@@ -102,7 +104,11 @@ export default function DocumentosPage() {
       </div>
 
       {loading ? (
-        <div className="afj-card p-8 text-center text-afj-black/40">Carregando documentos...</div>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <div key={i} className="afj-card p-5 h-32 animate-pulse bg-afj-cream-dark/40" />
+          ))}
+        </div>
       ) : filtrados.length === 0 ? (
         <div className="afj-card p-12 text-center">
           <FolderOpen className="mx-auto text-afj-black/20 mb-3" size={40} />

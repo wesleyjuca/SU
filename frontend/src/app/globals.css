@@ -1,29 +1,38 @@
+/* ─── Fonte oficial AFJ: Optima ──────────────────────────────────────────── */
+@font-face {
+  font-family: 'Optima';
+  src: url('/fonts/Optima.ttc') format('truetype');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 @layer base {
   :root {
-    --background: 40 33% 96%;    /* creme */
-    --foreground: 0 0% 10%;      /* preto suave */
-    --border: 35 20% 85%;
-    --input: 35 20% 85%;
-    --ring: 38 55% 55%;          /* dourado */
-    --radius: 0.5rem;
+    --background: 40 25% 95%;
+    --foreground: 0 0% 10%;
+    --border: 35 18% 84%;
+    --input: 35 18% 84%;
+    --ring: 36 44% 50%;
+    --radius: 0.375rem;
     --destructive: 0 84% 60%;
     --destructive-foreground: 0 0% 98%;
 
     /* ── Tema customizável (sobrescrito via JS em runtime) ─── */
-    --brand-primary: #C9A84C;
-    --brand-primary-light: #E8C96A;
-    --brand-primary-dark: #A07830;
-    --brand-secondary: #1A1A1A;
-    --brand-accent: #F5F0E8;
-    --brand-accent-dark: #EDE5D0;
-    --sidebar-bg: #1A1A1A;
-    --sidebar-text: #F5F0E8;
-    --font-display: 'Playfair Display', serif;
-    --font-body: 'Inter', sans-serif;
+    --brand-primary: #B8954A;
+    --brand-primary-light: #D4AC64;
+    --brand-primary-dark: #8A6D2A;
+    --brand-secondary: #1E2229;
+    --brand-accent: #F4F0EA;
+    --brand-accent-dark: #EAE5D8;
+    --sidebar-bg: #1E2229;
+    --sidebar-text: #F4F0EA;
+    --font-display: 'Optima', 'Optima Nova', Georgia, serif;
+    --font-body: 'Inter', system-ui, sans-serif;
   }
 
   * {
@@ -42,30 +51,30 @@
 @layer components {
   /* ─── Sidebar AFJ ─────────────────────────────────────────────────────── */
   .afj-sidebar {
-    @apply bg-afj-black text-afj-cream w-64 h-screen flex flex-col fixed left-0 top-0 z-40;
+    @apply bg-afj-navy text-afj-cream w-64 h-screen flex flex-col fixed left-0 top-0 z-40;
   }
 
   .afj-sidebar-logo {
-    @apply px-6 py-5 border-b border-afj-charcoal;
+    @apply px-5 py-5 border-b border-white/10;
   }
 
   .afj-sidebar-nav-item {
-    @apply flex items-center gap-3 px-4 py-2.5 mx-2 rounded-md text-sm font-medium
-           text-afj-cream/70 hover:text-afj-gold hover:bg-afj-black-soft
+    @apply flex items-center gap-3 px-4 py-2.5 mx-2 rounded-sm text-sm font-medium
+           text-afj-cream/65 hover:text-afj-gold hover:bg-white/5
            transition-colors duration-150 cursor-pointer;
   }
 
   .afj-sidebar-nav-item.active {
-    @apply text-afj-gold bg-afj-black-soft border-l-2 border-afj-gold;
+    @apply text-afj-gold bg-white/5 border-l-[3px] border-afj-gold;
   }
 
   /* ─── Cards ──────────────────────────────────────────────────────────── */
   .afj-card {
-    @apply bg-white border border-afj-cream-dark rounded-lg shadow-sm;
+    @apply bg-white border border-afj-cream-dark rounded-sm shadow-sm;
   }
 
   .afj-card-premium {
-    @apply bg-white border border-afj-gold/20 rounded-lg shadow-md;
+    @apply bg-white border border-afj-gold/25 rounded-sm shadow-md;
   }
 
   /* ─── KPI Box ─────────────────────────────────────────────────────────── */
@@ -82,28 +91,35 @@
   }
 
   /* ─── Status Badges ───────────────────────────────────────────────────── */
-  .badge-ativo { @apply bg-green-100 text-green-800 text-xs font-medium px-2 py-0.5 rounded-full; }
+  .badge-ativo    { @apply bg-green-100 text-green-800 text-xs font-medium px-2 py-0.5 rounded-full; }
   .badge-pendente { @apply bg-amber-100 text-amber-800 text-xs font-medium px-2 py-0.5 rounded-full; }
-  .badge-urgente { @apply bg-red-100 text-red-800 text-xs font-medium px-2 py-0.5 rounded-full; }
+  .badge-urgente  { @apply bg-red-100 text-red-800 text-xs font-medium px-2 py-0.5 rounded-full; }
   .badge-aprovado { @apply bg-emerald-100 text-emerald-800 text-xs font-medium px-2 py-0.5 rounded-full; }
   .badge-arquivado { @apply bg-gray-100 text-gray-600 text-xs font-medium px-2 py-0.5 rounded-full; }
 
   /* ─── Agent Status ────────────────────────────────────────────────────── */
-  .agent-idle { @apply w-2 h-2 rounded-full bg-gray-400; }
-  .agent-running { @apply w-2 h-2 rounded-full bg-afj-gold animate-pulse; }
-  .agent-success { @apply w-2 h-2 rounded-full bg-green-500; }
-  .agent-error { @apply w-2 h-2 rounded-full bg-red-500; }
+  .agent-idle     { @apply w-2 h-2 rounded-full bg-gray-400; }
+  .agent-running  { @apply w-2 h-2 rounded-full bg-afj-gold animate-pulse; }
+  .agent-success  { @apply w-2 h-2 rounded-full bg-green-500; }
+  .agent-error    { @apply w-2 h-2 rounded-full bg-red-500; }
   .agent-approval { @apply w-2 h-2 rounded-full bg-amber-500 animate-pulse; }
 
   /* ─── Botões primários AFJ ────────────────────────────────────────────── */
   .btn-afj-primary {
-    @apply bg-afj-gold text-afj-black font-semibold px-5 py-2.5 rounded-md
-           hover:bg-afj-gold-dark transition-colors duration-150 text-sm;
+    @apply bg-afj-gold text-white font-semibold px-5 py-2.5 rounded-sm
+           hover:bg-afj-gold-dark transition-colors duration-150
+           text-xs uppercase tracking-wider;
   }
 
   .btn-afj-outline {
-    @apply border border-afj-gold text-afj-gold font-medium px-5 py-2.5 rounded-md
-           hover:bg-afj-gold/10 transition-colors duration-150 text-sm;
+    @apply border border-afj-gold text-afj-gold font-medium px-5 py-2.5 rounded-sm
+           hover:bg-afj-gold/10 transition-colors duration-150
+           text-xs uppercase tracking-wider;
+  }
+
+  /* ─── Divisor dourado (elemento de marca) ─────────────────────────────── */
+  .afj-divider-gold {
+    @apply h-px bg-gradient-to-r from-transparent via-afj-gold/40 to-transparent my-4;
   }
 
   /* ─── Timeline processual ─────────────────────────────────────────────── */
@@ -116,11 +132,11 @@
   }
 
   /* ─── Classes de tema dinâmico ────────────────────────────────────────── */
-  .brand-primary { color: var(--brand-primary); }
-  .bg-brand-primary { background-color: var(--brand-primary); }
+  .brand-primary        { color: var(--brand-primary); }
+  .bg-brand-primary     { background-color: var(--brand-primary); }
   .border-brand-primary { border-color: var(--brand-primary); }
-  .brand-accent { color: var(--brand-accent); }
-  .bg-brand-accent { background-color: var(--brand-accent); }
+  .brand-accent         { color: var(--brand-accent); }
+  .bg-brand-accent      { background-color: var(--brand-accent); }
 
   /* ─── Tabelas responsivas ─────────────────────────────────────────────── */
   .table-responsive { @apply overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0; }

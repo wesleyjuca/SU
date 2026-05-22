@@ -2,6 +2,7 @@
 import { useState } from "react";
 import { Play } from "lucide-react";
 import { AgentStatusCard } from "@/components/agents/AgentStatusCard";
+import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import type { AgentCardData } from "@/components/agents/AgentStatusCard";
 
 const AGENTS: AgentCardData[] = [
@@ -38,24 +39,34 @@ const CATEGORY_COLORS: Record<string, string> = {
 export default function AgentesPage() {
   const [taskType, setTaskType] = useState("generate_petition");
   const [result, setResult] = useState<string | null>(null);
+  const [triggering, setTriggering] = useState<string | null>(null);
 
   async function triggerAgent(agentName: string) {
     setResult(null);
-    const token = localStorage.getItem("afj_access_token");
-    const res = await fetch("/api/v1/agents/trigger", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({
-        task_type: taskType,
-        task_input: { descricao: `Teste do agente ${agentName}` },
-      }),
-    });
-    if (res.ok) {
-      const data = await res.json();
-      setResult(`Run iniciado: ${data.run_id}`);
+    setTriggering(agentName);
+    try {
+      const token = localStorage.getItem("afj_access_token");
+      const res = await fetch("/api/v1/agents/trigger", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          task_type: taskType,
+          task_input: { descricao: `Teste do agente ${agentName}` },
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setResult(`Run iniciado: ${data.run_id}`);
+      } else {
+        setResult(`Erro ao iniciar agente: ${res.status}`);
+      }
+    } catch {
+      setResult("Erro de conexão ao iniciar agente.");
+    } finally {
+      setTriggering(null);
     }
   }
 
@@ -63,6 +74,7 @@ export default function AgentesPage() {
 
   return (
     <div className="max-w-7xl mx-auto space-y-6">
+      <Breadcrumb crumbs={[{ label: "Dashboard", href: "/dashboard" }, { label: "Agentes IA" }]} />
       <div>
         <h1 className="font-display text-2xl font-semibold text-afj-black">Agentes IA</h1>
         <p className="text-afj-black/50 text-sm">19 agentes especializados — {AGENTS.length} disponíveis</p>

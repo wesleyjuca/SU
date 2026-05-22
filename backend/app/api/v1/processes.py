@@ -49,6 +49,45 @@ class ProcessResponse(BaseModel):
     created_at: str
 
 
+@router.get("/agenda")
+async def get_agenda(
+    dias: int = Query(default=30, ge=1, le=90),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Retorna todos os prazos pendentes do tenant com dados do processo, ordenados por data."""
+    from datetime import datetime, timezone, timedelta
+    now = datetime.now(timezone.utc).date()
+    cutoff = now + timedelta(days=dias)
+
+    q = await db.execute(
+        select(ProcessDeadline, LegalProcess)
+        .join(LegalProcess, ProcessDeadline.process_id == LegalProcess.id)
+        .where(
+            LegalProcess.tenant_id == current_user.tenant_id,
+            ProcessDeadline.status == "PENDENTE",
+            ProcessDeadline.data_prazo <= cutoff,
+        )
+        .order_by(ProcessDeadline.data_prazo.asc())
+    )
+    rows = q.all()
+    return [
+        {
+            "id": str(d.id),
+            "descricao": d.descricao,
+            "tipo": d.tipo,
+            "status": d.status,
+            "data_prazo": d.data_prazo.isoformat() if d.data_prazo else None,
+            "data_fatal": d.data_fatal.isoformat() if d.data_fatal else None,
+            "process_id": str(p.id),
+            "numero_cnj": p.numero_cnj,
+            "tribunal": p.tribunal,
+            "area_direito": p.area_direito,
+        }
+        for d, p in rows
+    ]
+
+
 @router.get("", response_model=list[ProcessResponse])
 async def list_processes(
     tribunal: str | None = None,

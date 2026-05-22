@@ -6,15 +6,17 @@ import { useUserStore } from "@/store";
 import {
   LayoutDashboard, Scale, FileText, Users, FolderOpen,
   Bot, CheckSquare, DollarSign, Shield, Shapes, Settings,
-  Bell, Search, ChevronRight, FileEdit, Menu, X, LogOut
+  Bell, Search, ChevronRight, FileEdit, Menu, X, LogOut, BarChart2, CalendarClock
 } from "lucide-react";
 import { useApprovalCount } from "@/hooks/useApprovals";
 import { useNotifications } from "@/hooks/useNotifications";
 import { NotificationDropdown } from "@/components/layout/NotificationDropdown";
+import { SearchModal } from "@/components/layout/SearchModal";
 
 const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/processos", label: "Processos", icon: Scale },
+  { href: "/agenda", label: "Agenda", icon: CalendarClock },
   { href: "/peticoes", label: "Petições", icon: FileEdit },
   { href: "/clientes", label: "Clientes", icon: Users },
   { href: "/documentos", label: "Documentos", icon: FolderOpen },
@@ -22,6 +24,7 @@ const navItems = [
   { href: "/agentes", label: "Agentes IA", icon: Bot },
   { href: "/aprovacoes", label: "Aprovações", icon: CheckSquare },
   { href: "/financeiro", label: "Financeiro", icon: DollarSign },
+  { href: "/relatorios", label: "Relatórios", icon: BarChart2 },
   { href: "/visual-law", label: "Visual Law", icon: Shapes },
   { href: "/auditoria", label: "Auditoria", icon: Shield },
   { href: "/configuracoes", label: "Configurações", icon: Settings },
@@ -33,6 +36,19 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const { unreadCount } = useNotifications();
   const [notifOpen, setNotifOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+
+  useEffect(() => {
+    function handleKey(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+        e.preventDefault();
+        setSearchOpen((o) => !o);
+      }
+      if (e.key === "Escape") setSearchOpen(false);
+    }
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, []);
   const { user, setUser } = useUserStore();
 
   useEffect(() => {
@@ -56,15 +72,29 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
       {/* ─── Sidebar AFJ ─────────────────────────────────────────────── */}
       <aside aria-label="Menu lateral" className={`afj-sidebar fixed md:static inset-y-0 left-0 z-30 transform transition-transform duration-200 ${sidebarOpen ? "translate-x-0" : "-translate-x-full"} md:translate-x-0`}>
-        {/* Logo */}
+        {/* Logo — monograma geométrico AFJ */}
         <div className="afj-sidebar-logo">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-lg bg-afj-gold/10 border border-afj-gold/30 flex items-center justify-center">
-              <span className="text-afj-gold font-display font-bold text-sm">AFJ</span>
+            <div className="w-9 h-9 flex-shrink-0 text-afj-gold">
+              <svg viewBox="0 0 80 80" className="w-9 h-9" fill="currentColor" aria-hidden="true">
+                <rect x="2" y="2" width="76" height="76" fill="none" stroke="currentColor" strokeWidth="3.5"/>
+                <rect x="10" y="10" width="6" height="60"/>
+                <rect x="29" y="10" width="6" height="60"/>
+                <rect x="10" y="37" width="25" height="5"/>
+                <rect x="43" y="10" width="6" height="42"/>
+                <rect x="43" y="10" width="25" height="5"/>
+                <rect x="43" y="27" width="19" height="5"/>
+                <rect x="62" y="10" width="6" height="46"/>
+                <path d="M68,56 Q68,70 55,70 Q49,70 49,63" fill="none" stroke="currentColor" strokeWidth="6" strokeLinecap="round"/>
+              </svg>
             </div>
             <div>
-              <p className="text-afj-cream text-sm font-semibold font-display">AFJ CORE</p>
-              <p className="text-afj-cream/40 text-xs">Sistema Jurídico IA</p>
+              <p className="text-afj-cream text-[11px] font-bold tracking-[0.18em] uppercase font-display">
+                AFJ CORE
+              </p>
+              <p className="text-afj-cream/35 text-[9px] tracking-widest uppercase mt-0.5">
+                Sistema Jurídico IA
+              </p>
             </div>
           </div>
         </div>
@@ -89,7 +119,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         </nav>
 
         {/* Rodapé do sidebar */}
-        <div className="border-t border-afj-charcoal px-4 py-4">
+        <div className="border-t border-white/10 px-4 py-4">
           <div className="flex items-center gap-3">
             <div className="w-7 h-7 rounded-full bg-afj-gold/20 border border-afj-gold/30 flex items-center justify-center">
               <span className="text-afj-gold text-xs font-bold">U</span>
@@ -145,10 +175,17 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             >
               {sidebarOpen ? <X size={20} /> : <Menu size={20} />}
             </button>
-            <div className="hidden sm:flex items-center gap-2 text-afj-black/40 text-sm">
-              <Search size={14} />
-              <span>Buscar processos, clientes, documentos... (⌘K)</span>
-            </div>
+            <span className="hidden xl:block text-[9px] tracking-[0.22em] uppercase text-afj-black/25 font-display mr-1 select-none">
+              Almeida, Freire & Jucá
+            </span>
+            <button
+              onClick={() => setSearchOpen(true)}
+              className="hidden sm:flex items-center gap-2 text-afj-black/35 text-sm hover:text-afj-black/55 transition-colors px-3 py-1.5 rounded-sm hover:bg-afj-cream-dark border border-transparent hover:border-afj-cream-dark"
+            >
+              <Search size={13} />
+              <span className="text-xs">Buscar processos, clientes, documentos...</span>
+              <kbd className="ml-2 text-[10px] font-mono bg-afj-cream-dark px-1.5 py-0.5 rounded-sm text-afj-black/30">⌘K</kbd>
+            </button>
           </div>
           <div className="flex items-center gap-3">
             <div className="relative">
@@ -177,6 +214,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           {children}
         </main>
       </div>
+
+      <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)} />
     </div>
   );
 }

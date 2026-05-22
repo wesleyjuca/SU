@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import { FileSignature, Plus, Search, Calendar } from "lucide-react";
+import { Breadcrumb } from "@/components/layout/Breadcrumb";
 
 interface Contrato {
   id: string;
@@ -51,6 +52,7 @@ export default function ContratosPage() {
 
   return (
     <div className="max-w-7xl mx-auto space-y-5">
+      <Breadcrumb crumbs={[{ label: "Dashboard", href: "/dashboard" }, { label: "Contratos" }]} />
       <div className="flex items-center justify-between">
         <div>
           <h1 className="font-display text-2xl font-semibold text-afj-black">Contratos</h1>
@@ -71,7 +73,11 @@ export default function ContratosPage() {
       </div>
 
       {loading ? (
-        <div className="afj-card p-8 text-center text-afj-black/40">Carregando contratos...</div>
+        <div className="afj-card p-4 space-y-3">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <div key={i} className="h-11 bg-afj-cream-dark rounded animate-pulse" />
+          ))}
+        </div>
       ) : filtrados.length === 0 ? (
         <div className="afj-card p-12 text-center">
           <FileSignature className="mx-auto text-afj-black/20 mb-3" size={40} />

@@ -2,6 +2,7 @@
 import { useState } from "react";
 import { Settings, User, Bell, Shield, Palette, Save, CheckCircle, Loader2 } from "lucide-react";
 import { applyTheme } from "@/lib/theme";
+import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useThemeStore } from "@/store";
 
 const TABS = [
@@ -73,6 +74,7 @@ export default function ConfiguracoesPage() {
 
   return (
     <div className="max-w-4xl mx-auto space-y-5">
+      <Breadcrumb crumbs={[{ label: "Dashboard", href: "/dashboard" }, { label: "Configurações" }]} />
       <div>
         <h1 className="font-display text-2xl font-semibold text-afj-black">Configurações</h1>
         <p className="text-afj-black/50 text-sm">Gerencie seu perfil, notificações e preferências do sistema</p>
@@ -224,7 +226,7 @@ export default function ConfiguracoesPage() {
                         }
                       }}
                       className="flex-1 border border-afj-cream-dark rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-afj-gold"
-                      placeholder="#C9A84C"
+                      placeholder="#B8954A"
                     />
                     <div
                       className="w-10 h-10 rounded border border-afj-cream-dark"
@@ -232,7 +234,7 @@ export default function ConfiguracoesPage() {
                     />
                   </div>
                   <div className="flex gap-2 mt-2">
-                    {["#C9A84C", "#1A6EAB", "#4CAF50", "#9C27B0", "#E91E63", "#FF5722"].map((c) => (
+                    {["#B8954A", "#1A6EAB", "#4CAF50", "#9C27B0", "#E91E63", "#FF5722"].map((c) => (
                       <button
                         key={c}
                         onClick={() => previewColor(c)}

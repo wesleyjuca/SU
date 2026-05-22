@@ -10,16 +10,17 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        // ─── Identidade Visual AFJ ───────────────────────────────────────────
+        // ─── Identidade Visual AFJ (Almeida, Freire & Jucá) ─────────────────
         afj: {
-          gold: "#C9A84C",      // dourado principal
-          "gold-light": "#E8C96A",
-          "gold-dark": "#A07830",
-          black: "#1A1A1A",     // preto principal
-          "black-soft": "#2A2A2A",
-          cream: "#F5F0E8",     // creme claro
-          "cream-dark": "#EDE5D0",
-          charcoal: "#3D3D3D",
+          gold: "#B8954A",         // dourado acobreado — cor oficial da marca
+          "gold-light": "#D4AC64",
+          "gold-dark": "#8A6D2A",
+          black: "#1A1A1A",        // preto para texto
+          "black-soft": "#252B35",
+          cream: "#F4F0EA",        // creme claro — fundo principal
+          "cream-dark": "#EAE5D8",
+          charcoal: "#353D4A",
+          navy: "#1E2229",         // charcoal-navy — fundo da sidebar (marca)
         },
         border: "hsl(var(--border))",
         input: "hsl(var(--input))",
@@ -27,11 +28,11 @@ const config: Config = {
         background: "hsl(var(--background))",
         foreground: "hsl(var(--foreground))",
         primary: {
-          DEFAULT: "#C9A84C",   // dourado AFJ
-          foreground: "#1A1A1A",
+          DEFAULT: "#B8954A",
+          foreground: "#FFFFFF",
         },
         secondary: {
-          DEFAULT: "#F5F0E8",
+          DEFAULT: "#F4F0EA",
           foreground: "#1A1A1A",
         },
         destructive: {
@@ -39,11 +40,11 @@ const config: Config = {
           foreground: "hsl(var(--destructive-foreground))",
         },
         muted: {
-          DEFAULT: "#F5F0E8",
+          DEFAULT: "#F4F0EA",
           foreground: "#6B6B6B",
         },
         accent: {
-          DEFAULT: "#EDE5D0",
+          DEFAULT: "#EAE5D8",
           foreground: "#1A1A1A",
         },
         // Status badges
@@ -58,7 +59,7 @@ const config: Config = {
       },
       fontFamily: {
         sans: ["var(--font-inter)", "Inter", "system-ui", "sans-serif"],
-        display: ["var(--font-playfair)", "Playfair Display", "Georgia", "serif"],
+        display: ["Optima", "Optima Nova", "Georgia", "serif"],
       },
       borderRadius: {
         lg: "var(--radius)",

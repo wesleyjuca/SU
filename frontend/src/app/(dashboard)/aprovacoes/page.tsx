@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import { CheckCircle } from "lucide-react";
+import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { ApprovalCard, ApprovalListItem, type Approval } from "@/components/approvals/ApprovalCard";
 
 export default function AprovacoesPage() {
@@ -36,6 +37,7 @@ export default function AprovacoesPage() {
 
   return (
     <div className="max-w-7xl mx-auto space-y-4">
+      <Breadcrumb crumbs={[{ label: "Dashboard", href: "/dashboard" }, { label: "Aprovações" }]} />
       <div>
         <h1 className="font-display text-2xl font-semibold text-afj-black">Aprovações Pendentes</h1>
         <p className="text-afj-black/50 text-sm">
@@ -45,7 +47,11 @@ export default function AprovacoesPage() {
       </div>
 
       {loading ? (
-        <div className="afj-card p-8 text-center text-afj-black/40">Carregando aprovações...</div>
+        <div className="space-y-3">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="afj-card p-5 h-20 animate-pulse bg-afj-cream-dark/40" />
+          ))}
+        </div>
       ) : approvals.length === 0 ? (
         <div className="afj-card p-12 text-center">
           <CheckCircle className="mx-auto text-green-500 mb-3" size={40} />

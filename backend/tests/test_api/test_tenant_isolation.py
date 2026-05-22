@@ -2,6 +2,7 @@
 import pytest
 
 
+
 async def test_cannot_read_other_tenant_processes(client, tenant_a_headers, tenant_b_process_id):
     """User from tenant A cannot access process belonging to tenant B."""
     res = await client.get(
@@ -9,6 +10,7 @@ async def test_cannot_read_other_tenant_processes(client, tenant_a_headers, tena
         headers=tenant_a_headers,
     )
     assert res.status_code == 404
+
 
 
 async def test_cannot_update_other_tenant_process(client, tenant_a_headers, tenant_b_process_id):
@@ -20,12 +22,14 @@ async def test_cannot_update_other_tenant_process(client, tenant_a_headers, tena
     assert res.status_code == 404
 
 
+
 async def test_cannot_delete_other_tenant_process(client, tenant_a_headers, tenant_b_process_id):
     res = await client.delete(
         f"/api/v1/processes/{tenant_b_process_id}",
         headers=tenant_a_headers,
     )
     assert res.status_code == 404
+
 
 
 async def test_list_processes_only_shows_own_tenant(client, tenant_a_headers, tenant_b_process_id):
@@ -36,12 +40,14 @@ async def test_list_processes_only_shows_own_tenant(client, tenant_a_headers, te
     assert tenant_b_process_id not in process_ids
 
 
+
 async def test_cannot_read_other_tenant_clients(client, tenant_a_headers, tenant_b_client_id):
     res = await client.get(
         f"/api/v1/clients/{tenant_b_client_id}",
         headers=tenant_a_headers,
     )
     assert res.status_code == 404
+
 
 
 async def test_list_clients_only_shows_own_tenant(client, tenant_a_headers, tenant_b_client_id):

@@ -1,0 +1,15 @@
+<svg viewBox="0 0 80 80" xmlns="http://www.w3.org/2000/svg" fill="currentColor">
+  <!-- Outer frame -->
+  <rect x="2" y="2" width="76" height="76" fill="none" stroke="currentColor" stroke-width="3.5"/>
+  <!-- A — two verticals + crossbar -->
+  <rect x="10" y="10" width="6" height="60"/>
+  <rect x="29" y="10" width="6" height="60"/>
+  <rect x="10" y="37" width="25" height="5"/>
+  <!-- F — vertical + two horizontals -->
+  <rect x="43" y="10" width="6" height="42"/>
+  <rect x="43" y="10" width="25" height="5"/>
+  <rect x="43" y="27" width="19" height="5"/>
+  <!-- J — vertical bar + curl -->
+  <rect x="62" y="10" width="6" height="46"/>
+  <path d="M68,56 Q68,70 55,70 Q49,70 49,63" fill="none" stroke="currentColor" stroke-width="6" stroke-linecap="round"/>
+</svg>
