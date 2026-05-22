@@ -2,6 +2,7 @@
 import { useState } from "react";
 import { GitBranch, Loader2, Download, RefreshCw } from "lucide-react";
 import { VisualLawCanvas, parseMermaidToNodes } from "@/components/visual-law/VisualLawCanvas";
+import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import type { VisualLawNode, VisualLawEdge } from "@/components/visual-law/VisualLawCanvas";
 
 const TIPOS_VISUALIZACAO = [
@@ -82,6 +83,7 @@ export default function VisualLawPage() {
 
   return (
     <div className="max-w-7xl mx-auto space-y-5">
+      <Breadcrumb crumbs={[{ label: "Dashboard", href: "/dashboard" }, { label: "Visual Law" }]} />
       <div>
         <h1 className="font-display text-2xl font-semibold text-afj-black">Visual Law</h1>
         <p className="text-afj-black/50 text-sm">Visualizações jurídicas geradas por IA — fluxogramas, timelines, comparativos</p>

@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import { ShieldCheck, Search, CheckCircle, XCircle, AlertTriangle } from "lucide-react";
+import { Breadcrumb } from "@/components/layout/Breadcrumb";
 
 interface AuditLog {
   id: number;
@@ -54,6 +55,7 @@ export default function AuditoriaPage() {
 
   return (
     <div className="max-w-7xl mx-auto space-y-5">
+      <Breadcrumb crumbs={[{ label: "Dashboard", href: "/dashboard" }, { label: "Auditoria" }]} />
       <div>
         <h1 className="font-display text-2xl font-semibold text-afj-black">Auditoria</h1>
         <p className="text-afj-black/50 text-sm">Registro imutável de todas as ações do sistema</p>
@@ -105,7 +107,11 @@ export default function AuditoriaPage() {
       </div>
 
       {loading ? (
-        <div className="afj-card p-8 text-center text-afj-black/40">Carregando logs de auditoria...</div>
+        <div className="afj-card p-4 space-y-3">
+          {Array.from({ length: 8 }).map((_, i) => (
+            <div key={i} className="h-10 bg-afj-cream-dark rounded animate-pulse" />
+          ))}
+        </div>
       ) : filtrados.length === 0 ? (
         <div className="afj-card p-12 text-center">
           <ShieldCheck className="mx-auto text-afj-black/20 mb-3" size={40} />

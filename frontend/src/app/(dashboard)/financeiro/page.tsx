@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import { DollarSign, TrendingUp, TrendingDown, Plus, CheckCircle, Clock, Trash2 } from "lucide-react";
+import { Breadcrumb } from "@/components/layout/Breadcrumb";
 
 interface Entry {
   id: string;
@@ -115,6 +116,7 @@ export default function FinanceiroPage() {
 
   return (
     <div className="max-w-7xl mx-auto space-y-5">
+      <Breadcrumb crumbs={[{ label: "Dashboard", href: "/dashboard" }, { label: "Financeiro" }]} />
       <div className="flex items-center justify-between">
         <div>
           <h1 className="font-display text-2xl font-semibold text-afj-black">Financeiro</h1>
@@ -187,7 +189,11 @@ export default function FinanceiroPage() {
 
       {/* Tabela */}
       {loading ? (
-        <div className="afj-card p-8 text-center text-afj-black/40">Carregando...</div>
+        <div className="afj-card p-4 space-y-3">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <div key={i} className="h-11 bg-afj-cream-dark rounded animate-pulse" />
+          ))}
+        </div>
       ) : (
         <div className="afj-card overflow-hidden">
           <div className="overflow-x-auto">

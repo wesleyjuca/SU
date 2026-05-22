@@ -2,6 +2,7 @@
 import { useState } from "react";
 import { Settings, User, Bell, Shield, Palette, Save, CheckCircle, Loader2 } from "lucide-react";
 import { applyTheme } from "@/lib/theme";
+import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useThemeStore } from "@/store";
 
 const TABS = [
@@ -73,6 +74,7 @@ export default function ConfiguracoesPage() {
 
   return (
     <div className="max-w-4xl mx-auto space-y-5">
+      <Breadcrumb crumbs={[{ label: "Dashboard", href: "/dashboard" }, { label: "Configurações" }]} />
       <div>
         <h1 className="font-display text-2xl font-semibold text-afj-black">Configurações</h1>
         <p className="text-afj-black/50 text-sm">Gerencie seu perfil, notificações e preferências do sistema</p>

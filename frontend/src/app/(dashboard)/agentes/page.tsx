@@ -2,6 +2,7 @@
 import { useState } from "react";
 import { Play } from "lucide-react";
 import { AgentStatusCard } from "@/components/agents/AgentStatusCard";
+import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import type { AgentCardData } from "@/components/agents/AgentStatusCard";
 
 const AGENTS: AgentCardData[] = [
@@ -73,6 +74,7 @@ export default function AgentesPage() {
 
   return (
     <div className="max-w-7xl mx-auto space-y-6">
+      <Breadcrumb crumbs={[{ label: "Dashboard", href: "/dashboard" }, { label: "Agentes IA" }]} />
       <div>
         <h1 className="font-display text-2xl font-semibold text-afj-black">Agentes IA</h1>
         <p className="text-afj-black/50 text-sm">19 agentes especializados — {AGENTS.length} disponíveis</p>

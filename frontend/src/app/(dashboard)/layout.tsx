@@ -11,6 +11,7 @@ import {
 import { useApprovalCount } from "@/hooks/useApprovals";
 import { useNotifications } from "@/hooks/useNotifications";
 import { NotificationDropdown } from "@/components/layout/NotificationDropdown";
+import { SearchModal } from "@/components/layout/SearchModal";
 
 const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -33,6 +34,19 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const { unreadCount } = useNotifications();
   const [notifOpen, setNotifOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+
+  useEffect(() => {
+    function handleKey(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+        e.preventDefault();
+        setSearchOpen((o) => !o);
+      }
+      if (e.key === "Escape") setSearchOpen(false);
+    }
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, []);
   const { user, setUser } = useUserStore();
 
   useEffect(() => {
@@ -145,10 +159,14 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             >
               {sidebarOpen ? <X size={20} /> : <Menu size={20} />}
             </button>
-            <div className="hidden sm:flex items-center gap-2 text-afj-black/40 text-sm">
+            <button
+              onClick={() => setSearchOpen(true)}
+              className="hidden sm:flex items-center gap-2 text-afj-black/40 text-sm hover:text-afj-black/60 transition-colors px-3 py-1.5 rounded-md hover:bg-afj-cream-dark"
+            >
               <Search size={14} />
-              <span>Buscar processos, clientes, documentos... (⌘K)</span>
-            </div>
+              <span>Buscar processos, clientes, documentos...</span>
+              <kbd className="ml-2 text-xs font-mono bg-afj-cream-dark px-1.5 py-0.5 rounded text-afj-black/30">⌘K</kbd>
+            </button>
           </div>
           <div className="flex items-center gap-3">
             <div className="relative">
@@ -177,6 +195,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           {children}
         </main>
       </div>
+
+      <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)} />
     </div>
   );
 }

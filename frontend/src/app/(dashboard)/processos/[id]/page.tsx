@@ -2,6 +2,7 @@
 import { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { ArrowLeft, Scale, AlertTriangle, Calendar, Clock } from "lucide-react";
+import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { ProcessTimelineCard } from "@/components/processes/ProcessTimeline";
 import type { Processo, Movimentacao, Prazo } from "@/types";
 
@@ -50,8 +51,14 @@ export default function ProcessoDetailPage() {
   }
 
   if (loading) return (
-    <div className="max-w-7xl mx-auto">
-      <div className="afj-card p-12 text-center text-afj-black/40">Carregando processo...</div>
+    <div className="max-w-7xl mx-auto space-y-4">
+      <Breadcrumb crumbs={[{ label: "Dashboard", href: "/dashboard" }, { label: "Processos", href: "/processos" }, { label: "..." }]} />
+      <div className="h-8 bg-afj-cream-dark rounded animate-pulse w-64" />
+      <div className="afj-card p-6 space-y-3">
+        {Array.from({ length: 6 }).map((_, i) => (
+          <div key={i} className="h-6 bg-afj-cream-dark rounded animate-pulse" />
+        ))}
+      </div>
     </div>
   );
 
@@ -70,6 +77,7 @@ export default function ProcessoDetailPage() {
 
   return (
     <div className="max-w-7xl mx-auto space-y-5">
+      <Breadcrumb crumbs={[{ label: "Dashboard", href: "/dashboard" }, { label: "Processos", href: "/processos" }, { label: processo.numero_cnj ?? "Processo" }]} />
       {/* Header */}
       <div>
         <button onClick={() => router.back()} className="flex items-center gap-2 text-sm text-afj-black/50 hover:text-afj-black mb-3">
