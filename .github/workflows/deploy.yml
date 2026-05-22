@@ -270,7 +270,7 @@ jobs:
 
           # Deploy from frontend/ (rootDirectory configured in Vercel dashboard)
           echo "Iniciando deploy no Vercel..."
-          DEPLOY_OUTPUT=$(vercel --yes --prod --token "$VERCEL_TOKEN" --name "afj-core" 2>&1)
+          DEPLOY_OUTPUT=$(vercel --yes --prod --token "$VERCEL_TOKEN" --name "afj-core" 2>&1) || true
           echo "$DEPLOY_OUTPUT"
 
           # Extract deployment URL
