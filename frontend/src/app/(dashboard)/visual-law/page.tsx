@@ -1,9 +1,14 @@
 "use client";
 import { useState } from "react";
 import { GitBranch, Loader2, Download, RefreshCw } from "lucide-react";
-import { VisualLawCanvas, parseMermaidToNodes } from "@/components/visual-law/VisualLawCanvas";
+import dynamic from "next/dynamic";
+import { parseMermaidToNodes } from "@/components/visual-law/VisualLawCanvas";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import type { VisualLawNode, VisualLawEdge } from "@/components/visual-law/VisualLawCanvas";
+const VisualLawCanvas = dynamic(
+  () => import("@/components/visual-law/VisualLawCanvas").then((m) => ({ default: m.VisualLawCanvas })),
+  { ssr: false, loading: () => <div className="h-96 afj-card flex items-center justify-center text-afj-black/40 animate-pulse">Carregando canvas...</div> }
+);
 
 const TIPOS_VISUALIZACAO = [
   { value: "fluxograma", label: "Fluxograma Processual", desc: "Etapas e decisões do processo" },

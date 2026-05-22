@@ -1,7 +1,14 @@
 "use client";
 import { useState, useEffect } from "react";
-import { Scale, AlertTriangle, CheckSquare, DollarSign, Bot, Activity, Loader2 } from "lucide-react";
+import { Scale, AlertTriangle, CheckSquare, DollarSign, Bot, Activity, Loader2, BarChart2 } from "lucide-react";
 import Link from "next/link";
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
+
+interface FinanceiroMes {
+  mes: string;
+  receitas: number;
+  despesas: number;
+}
 
 interface Metrics {
   processos_ativos: number;
@@ -56,6 +63,7 @@ export default function DashboardPage() {
   const [runs, setRuns] = useState<AgentRun[]>([]);
   const [loading, setLoading] = useState(true);
   const [agentStatus, setAgentStatus] = useState<Record<string, string>>({});
+  const [finData, setFinData] = useState<FinanceiroMes[]>([]);
 
   useEffect(() => {
     loadData();
@@ -67,9 +75,10 @@ export default function DashboardPage() {
 
     const headers = { Authorization: `Bearer ${token}` };
     try {
-      const [metricsRes, runsRes] = await Promise.allSettled([
+      const [metricsRes, runsRes, finRes] = await Promise.allSettled([
         fetch("/api/v1/system/metrics", { headers }),
         fetch("/api/v1/agents/runs?limit=10", { headers }),
+        fetch("/api/v1/system/analytics/financeiro?meses=6", { headers }),
       ]);
 
       if (metricsRes.status === "fulfilled" && metricsRes.value.ok) {
@@ -93,6 +102,10 @@ export default function DashboardPage() {
           }
         }
         setAgentStatus(statusMap);
+      }
+      if (finRes.status === "fulfilled" && finRes.value.ok) {
+        const d = await finRes.value.json();
+        setFinData(d.mensal ?? []);
       }
     } finally {
       setLoading(false);
@@ -155,6 +168,44 @@ export default function DashboardPage() {
           <span className="text-xs text-afj-black/40">{metrics ? `${metrics.tokens_ia_mes.toLocaleString()} tokens` : "tokens utilizados"}</span>
         </div>
       </div>
+
+      {/* ─── Mini gráfico financeiro ───────────────────────────────────── */}
+      {finData.length > 0 && (
+        <div className="afj-card p-5">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <BarChart2 size={15} className="text-afj-gold" />
+              <h2 className="font-semibold text-sm text-afj-black">Receitas vs Despesas — últimos 6 meses</h2>
+            </div>
+            <Link href="/relatorios" className="text-xs text-afj-gold hover:underline">
+              Ver relatórios completos →
+            </Link>
+          </div>
+          <div style={{ height: 160 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={finData} barCategoryGap="30%">
+                <XAxis
+                  dataKey="mes"
+                  tickFormatter={(v) => new Date(v + "-01").toLocaleDateString("pt-BR", { month: "short" })}
+                  tick={{ fontSize: 11, fill: "#6B7280" }}
+                  axisLine={false}
+                  tickLine={false}
+                />
+                <YAxis hide />
+                <Tooltip
+                  formatter={(v: number, name: string) => [
+                    `R$ ${v.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`,
+                    name === "receitas" ? "Receitas" : "Despesas",
+                  ]}
+                  contentStyle={{ fontSize: 12, borderRadius: 4, border: "1px solid #EAE5D8" }}
+                />
+                <Bar dataKey="receitas" fill="#B8954A" radius={[3, 3, 0, 0]} />
+                <Bar dataKey="despesas" fill="#DC2626" radius={[3, 3, 0, 0]} opacity={0.7} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
 
       {/* ─── Grid principal ─────────────────────────────────────────────── */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

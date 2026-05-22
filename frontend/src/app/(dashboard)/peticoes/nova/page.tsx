@@ -2,7 +2,11 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { ChevronRight, ChevronLeft, Scale, FileText, Send, CheckCircle, Loader2, Edit3 } from "lucide-react";
-import { PetitionEditor } from "@/components/petitions/PetitionEditor";
+import dynamic from "next/dynamic";
+const PetitionEditor = dynamic(
+  () => import("@/components/petitions/PetitionEditor").then((m) => ({ default: m.PetitionEditor })),
+  { ssr: false, loading: () => <div className="afj-card p-8 text-center text-afj-black/40 animate-pulse">Carregando editor...</div> }
+);
 
 interface Processo {
   id: string;
