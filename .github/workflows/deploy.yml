@@ -40,7 +40,7 @@ jobs:
       - name: Frontend build
         run: cd frontend && npm run build
         env:
-          NEXT_PUBLIC_API_URL: ${{ vars.RAILWAY_URL || '' }}
+          NEXT_PUBLIC_API_URL: ${{ vars.RAILWAY_URL || 'https://su-production-5a83.up.railway.app' }}
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'

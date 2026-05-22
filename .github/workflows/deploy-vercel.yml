@@ -36,11 +36,10 @@ jobs:
 
       # ── Configurar NEXT_PUBLIC_API_URL ANTES do deploy ────────────────────
       - name: Pre-configure NEXT_PUBLIC_API_URL
-        if: github.event.inputs.railway_url != ''
         env:
           VERCEL_TOKEN: ${{ github.event.inputs.vercel_token }}
         run: |
-          RAILWAY_URL="${{ github.event.inputs.railway_url }}"
+          RAILWAY_URL="${{ github.event.inputs.railway_url || 'https://su-production-5a83.up.railway.app' }}"
           echo "Configurando NEXT_PUBLIC_API_URL=$RAILWAY_URL antes do deploy..."
           cd frontend
 
