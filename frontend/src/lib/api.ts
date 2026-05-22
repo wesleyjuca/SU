@@ -1,4 +1,6 @@
-const BASE = "/api/v1";
+const BASE = process.env.NEXT_PUBLIC_API_URL
+  ? `${process.env.NEXT_PUBLIC_API_URL}/api/v1`
+  : "/api/v1";
 const TIMEOUT_MS = 30_000;
 const MAX_RETRIES = 3;
 
@@ -14,6 +16,16 @@ function getRefreshToken(): string | null {
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function clearSession() {
+  try {
+    await fetch("/api/auth/session", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "clear" }),
+    });
+  } catch {}
 }
 
 async function refreshTokens(): Promise<boolean> {
@@ -79,6 +91,8 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     } else {
       localStorage.removeItem("afj_access_token");
       localStorage.removeItem("afj_refresh_token");
+      localStorage.removeItem("afj_user");
+      await clearSession();
       window.location.href = "/login";
       throw new Error("Sessão expirada");
     }

@@ -34,6 +34,24 @@ jobs:
       - name: Install Vercel CLI
         run: npm install -g vercel
 
+      # ── Configurar NEXT_PUBLIC_API_URL ANTES do deploy ────────────────────────
+      - name: Pre-configure NEXT_PUBLIC_API_URL
+        if: github.event.inputs.railway_url != ''
+        env:
+          VERCEL_TOKEN: ${{ github.event.inputs.vercel_token }}
+        run: |
+          RAILWAY_URL="${{ github.event.inputs.railway_url }}"
+          echo "Configurando NEXT_PUBLIC_API_URL=$RAILWAY_URL antes do deploy..."
+          cd frontend
+
+          # Remove env var se existir (ignora erro)
+          vercel env rm NEXT_PUBLIC_API_URL production --yes --token "$VERCEL_TOKEN" 2>/dev/null || true
+
+          # Adiciona env var antes do build
+          echo "$RAILWAY_URL" | vercel env add NEXT_PUBLIC_API_URL production \
+            --token "$VERCEL_TOKEN" --yes 2>&1 || \
+            echo "::warning::Failed to set env var — configure manualmente no Vercel dashboard"
+
       # ── Deploy from frontend/ (rootDirectory must be set in Vercel dashboard) ──
       - name: Deploy to Vercel (production)
         id: deploy
@@ -59,28 +77,6 @@ jobs:
             echo "::error::Deploy falhou. Verifique os logs acima."
             exit 1
           fi
-
-      # ── Configurar NEXT_PUBLIC_API_URL (projeto já existe agora) ─────────
-      - name: Configure NEXT_PUBLIC_API_URL
-        if: github.event.inputs.railway_url != ''
-        env:
-          VERCEL_TOKEN: ${{ github.event.inputs.vercel_token }}
-        run: |
-          RAILWAY_URL="${{ github.event.inputs.railway_url }}"
-          echo "Configurando NEXT_PUBLIC_API_URL=$RAILWAY_URL..."
-          cd frontend
-
-          # Remove env var se existir (ignora erro)
-          vercel env rm NEXT_PUBLIC_API_URL production --yes --token "$VERCEL_TOKEN" 2>/dev/null || true
-
-          # Adiciona env var
-          echo "$RAILWAY_URL" | vercel env add NEXT_PUBLIC_API_URL production \
-            --token "$VERCEL_TOKEN" --yes 2>&1 || \
-            echo "::warning::Failed to set env var — configure manualmente no Vercel dashboard"
-
-          # Redeploy para aplicar a nova env var
-          echo "Redeploy para aplicar NEXT_PUBLIC_API_URL..."
-          vercel --yes --prod --token "$VERCEL_TOKEN" --name "afj-core" 2>&1 || true
 
       # ── Atualizar CORS no Railway com URL Vercel ──────────────────────────
       - name: Update Railway CORS with Vercel URL
