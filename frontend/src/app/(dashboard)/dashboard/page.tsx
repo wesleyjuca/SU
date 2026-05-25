@@ -123,7 +123,7 @@ export default function DashboardPage() {
       </div>
 
       {/* ─── KPI Cards ─────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 animate-fade-in">
         <div className="kpi-box">
           <div className="flex items-center justify-between">
             <span className="kpi-label">Processos Ativos</span>
@@ -257,24 +257,13 @@ export default function DashboardPage() {
                 </div>
               ))}
             </div>
-          ) : (
-            <div className="space-y-3">
-              {[
-                { tipo: "Sistema", msg: "AFJ CORE SYSTEM operacional", color: "bg-green-500" },
-                { tipo: "Agentes", msg: "19 agentes carregados e prontos", color: "bg-afj-gold" },
-                { tipo: "Banco", msg: "Schema do banco criado e indexado", color: "bg-blue-500" },
-                { tipo: "Qdrant", msg: "6 collections de memória institucional criadas", color: "bg-purple-500" },
-              ].map((item, i) => (
-                <div key={i} className="flex items-start gap-3 text-sm">
-                  <span className={`w-1.5 h-1.5 rounded-full mt-1.5 flex-shrink-0 ${item.color}`} />
-                  <div className="flex-1 min-w-0">
-                    <span className="font-medium text-afj-black/80">[{item.tipo}]</span>{" "}
-                    <span className="text-afj-black/60">{item.msg}</span>
-                  </div>
-                </div>
-              ))}
+          ) : !loading ? (
+            <div className="py-8 text-center">
+              <Bot size={28} className="mx-auto text-afj-black/15 mb-2" />
+              <p className="text-sm text-afj-black/40">Nenhuma execução de agente recente</p>
+              <p className="text-xs text-afj-black/25 mt-1">Execute um agente para ver a atividade aqui</p>
             </div>
-          )}
+          ) : null}
 
           <div className="mt-6 p-4 bg-afj-gold/5 border border-afj-gold/20 rounded-lg">
             <p className="text-sm text-afj-black/70">

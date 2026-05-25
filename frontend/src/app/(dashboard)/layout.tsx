@@ -6,7 +6,8 @@ import { useUserStore } from "@/store";
 import {
   LayoutDashboard, Scale, FileText, Users, FolderOpen,
   Bot, CheckSquare, DollarSign, Shield, Shapes, Settings,
-  Bell, Search, ChevronRight, FileEdit, Menu, X, LogOut, BarChart2, CalendarClock, BookOpen
+  Bell, Search, ChevronRight, FileEdit, Menu, X, LogOut, BarChart2, CalendarClock, BookOpen,
+  Moon, Sun
 } from "lucide-react";
 import { useApprovalCount } from "@/hooks/useApprovals";
 import { useNotifications } from "@/hooks/useNotifications";
@@ -38,6 +39,19 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const [notifOpen, setNotifOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [dark, setDark] = useState(false);
+
+  useEffect(() => {
+    const saved = localStorage.getItem("afj_dark");
+    if (saved === "1") { document.documentElement.classList.add("dark"); setDark(true); }
+  }, []);
+
+  function toggleDark() {
+    const next = !dark;
+    setDark(next);
+    document.documentElement.classList.toggle("dark", next);
+    localStorage.setItem("afj_dark", next ? "1" : "0");
+  }
 
   useEffect(() => {
     function handleKey(e: KeyboardEvent) {
@@ -189,6 +203,14 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             </button>
           </div>
           <div className="flex items-center gap-3">
+            <button
+              onClick={toggleDark}
+              className="text-afj-black/40 hover:text-afj-black transition-colors p-1"
+              aria-label={dark ? "Modo claro" : "Modo escuro"}
+              title={dark ? "Modo claro" : "Modo escuro"}
+            >
+              {dark ? <Sun size={16} /> : <Moon size={16} />}
+            </button>
             <div className="relative">
               <button
                 onClick={() => setNotifOpen((o) => !o)}

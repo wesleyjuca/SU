@@ -54,6 +54,8 @@ export default function BuscaJuridicaPage() {
     setLoading(true);
     setError(null);
     setResults(null);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
     try {
       const token = localStorage.getItem("afj_access_token");
       const res = await fetch("/api/v1/rag/search", {
@@ -65,6 +67,7 @@ export default function BuscaJuridicaPage() {
           k: 8,
           score_threshold: 0.5,
         }),
+        signal: controller.signal,
       });
       if (!res.ok) {
         setError("Erro ao buscar. Verifique se a base vetorial está disponível.");
@@ -72,10 +75,16 @@ export default function BuscaJuridicaPage() {
       }
       const data = await res.json();
       setResults(Array.isArray(data) ? data : (data.results ?? []));
-    } catch {
-      setError("Erro de conexão com a base vetorial.");
+    } catch (err: any) {
+      if (err?.name === "AbortError") {
+        setError("Busca excedeu o tempo limite (15s). Tente novamente ou refine a consulta.");
+      } else {
+        setError("Erro de conexão com a base vetorial.");
+      }
     } finally {
-      setLoading(false); }
+      clearTimeout(timeout);
+      setLoading(false);
+    }
   }
 
   async function copiar(id: string, text: string) {
@@ -183,7 +192,7 @@ export default function BuscaJuridicaPage() {
               <p className="text-xs text-afj-black/40">{results.length} resultado(s)</p>
 
               {results.map((r) => (
-                <div key={r.id} className="afj-card p-4 hover:border-afj-gold/20 transition-colors">
+                <div key={r.id} className="afj-card p-4 hover:border-afj-gold/20 transition-colors animate-fade-in">
                   <div className="flex items-start justify-between gap-3 mb-2">
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${colecaoColor(r.collection)}`}>

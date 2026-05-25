@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect } from "react";
-import { Calendar, AlertTriangle, CheckCircle, Clock, Loader2, RefreshCw } from "lucide-react";
+import { CalendarClock, Calendar, AlertTriangle, CheckCircle, Clock, Loader2, RefreshCw } from "lucide-react";
 import Link from "next/link";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 
@@ -102,7 +102,7 @@ export default function AgendaPage() {
           return (
             <div
               key={item.id}
-              className={`afj-card p-4 border-l-4 ${urgencyClass(dias)} hover:shadow-md transition-shadow`}
+              className={`afj-card p-4 border-l-4 ${urgencyClass(dias)} hover:shadow-md transition-shadow animate-fade-in`}
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="flex-1 min-w-0">
@@ -208,10 +208,10 @@ export default function AgendaPage() {
           ))}
         </div>
       ) : items.length === 0 ? (
-        <div className="afj-card p-12 text-center">
-          <Calendar className="mx-auto text-afj-black/20 mb-3" size={40} />
-          <p className="font-semibold text-afj-black">Nenhum prazo pendente</p>
-          <p className="text-afj-black/40 text-sm mt-1">Não há prazos nos próximos {dias} dias.</p>
+        <div className="afj-card p-10 text-center">
+          <CalendarClock size={36} className="mx-auto text-afj-black/20 mb-3" />
+          <p className="font-semibold text-afj-black">Nenhum prazo no período</p>
+          <p className="text-afj-black/40 text-sm mt-1">Ajuste o filtro ou cadastre prazos nos processos</p>
         </div>
       ) : (
         <div className="space-y-6">
