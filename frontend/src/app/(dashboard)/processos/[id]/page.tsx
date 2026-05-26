@@ -37,6 +37,9 @@ export default function ProcessoDetailPage() {
   const [savingMov, setSavingMov] = useState(false);
   const [cumpridoId, setCumpridoId] = useState<string | null>(null);
   const [movForm, setMovForm] = useState({ descricao: "", tipo: "Despacho", data_movimento: "" });
+  const [showPrazoModal, setShowPrazoModal] = useState(false);
+  const [savingPrazo, setSavingPrazo] = useState(false);
+  const [prazoForm, setPrazoForm] = useState({ descricao: "", tipo: "", data_prazo: "", data_fatal: "", observacoes: "" });
 
   useEffect(() => {
     if (id) fetchAll();
@@ -79,6 +82,31 @@ export default function ProcessoDetailPage() {
         fetchAll();
       }
     } finally { setSavingMov(false); }
+  }
+
+  async function criarPrazo(e: React.FormEvent) {
+    e.preventDefault();
+    if (!prazoForm.descricao.trim() || !prazoForm.data_prazo) return;
+    setSavingPrazo(true);
+    try {
+      const token = localStorage.getItem("afj_access_token");
+      const res = await fetch(`/api/v1/processes/${id}/deadlines`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          descricao: prazoForm.descricao,
+          tipo: prazoForm.tipo || undefined,
+          data_prazo: prazoForm.data_prazo,
+          data_fatal: prazoForm.data_fatal || undefined,
+          observacoes: prazoForm.observacoes || undefined,
+        }),
+      });
+      if (res.ok) {
+        setShowPrazoModal(false);
+        setPrazoForm({ descricao: "", tipo: "", data_prazo: "", data_fatal: "", observacoes: "" });
+        fetchAll();
+      }
+    } finally { setSavingPrazo(false); }
   }
 
   async function marcarCumprido(prazoId: string) {
@@ -148,6 +176,13 @@ export default function ProcessoDetailPage() {
                 Monitorado
               </span>
             )}
+            <button
+              onClick={() => setShowPrazoModal(true)}
+              className="btn-afj-outline rounded-sm flex items-center gap-1.5 text-xs"
+            >
+              <Calendar size={12} />
+              + Prazo
+            </button>
             <button
               onClick={() => setShowMovModal(true)}
               className="btn-afj-primary rounded-sm flex items-center gap-1.5 text-xs ml-2"
@@ -225,12 +260,20 @@ export default function ProcessoDetailPage() {
           )}
 
           {/* Prazos pendentes */}
-          {prazosPendentes.length > 0 && (
-            <div className="afj-card p-4">
-              <h2 className="font-semibold text-afj-black text-sm mb-3 flex items-center gap-2">
+          <div className="afj-card p-4">
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="font-semibold text-afj-black text-sm flex items-center gap-2">
                 <Calendar size={14} />
                 Prazos Pendentes ({prazosPendentes.length})
               </h2>
+              <button
+                onClick={() => setShowPrazoModal(true)}
+                className="text-xs text-afj-gold hover:underline flex items-center gap-1"
+              >
+                <Plus size={11} /> Adicionar
+              </button>
+            </div>
+          {prazosPendentes.length > 0 ? (
               <div className="space-y-2">
                 {prazosPendentes.map((p) => {
                   const dias = diasPara(p.data_prazo);
@@ -261,8 +304,10 @@ export default function ProcessoDetailPage() {
                   );
                 })}
               </div>
-            </div>
+          ) : (
+            <p className="text-xs text-afj-black/40 py-2 text-center">Nenhum prazo pendente</p>
           )}
+          </div>
         </div>
 
         {/* Timeline de movimentações */}
@@ -270,6 +315,89 @@ export default function ProcessoDetailPage() {
           <ProcessTimelineCard movimentacoes={movimentacoes} />
         </div>
       </div>
+
+      {/* Modal: Adicionar Prazo */}
+      {showPrazoModal && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-sm shadow-xl w-full max-w-md">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-afj-cream-dark">
+              <h2 className="font-semibold text-afj-black">Adicionar Prazo</h2>
+              <button onClick={() => setShowPrazoModal(false)} className="text-afj-black/40 hover:text-afj-black">
+                <X size={18} />
+              </button>
+            </div>
+            <form onSubmit={criarPrazo} className="p-5 space-y-4">
+              <div>
+                <label className="text-xs text-afj-black/60 block mb-1">Descrição *</label>
+                <input
+                  required
+                  value={prazoForm.descricao}
+                  onChange={(e) => setPrazoForm({ ...prazoForm, descricao: e.target.value })}
+                  placeholder="Ex: Prazo para contestação"
+                  className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs text-afj-black/60 block mb-1">Tipo</label>
+                  <select
+                    value={prazoForm.tipo}
+                    onChange={(e) => setPrazoForm({ ...prazoForm, tipo: e.target.value })}
+                    className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold"
+                  >
+                    <option value="">Selecionar...</option>
+                    {["RECURSO", "CONTESTACAO", "MANIFESTACAO", "AUDIENCIA", "PERICIA", "OUTRO"].map((t) => (
+                      <option key={t} value={t}>{t}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs text-afj-black/60 block mb-1">Data do Prazo *</label>
+                  <input
+                    required
+                    type="date"
+                    value={prazoForm.data_prazo}
+                    onChange={(e) => setPrazoForm({ ...prazoForm, data_prazo: e.target.value })}
+                    className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="text-xs text-afj-black/60 block mb-1">Data Fatal (opcional)</label>
+                <input
+                  type="date"
+                  value={prazoForm.data_fatal}
+                  onChange={(e) => setPrazoForm({ ...prazoForm, data_fatal: e.target.value })}
+                  className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-afj-black/60 block mb-1">Observações</label>
+                <textarea
+                  value={prazoForm.observacoes}
+                  onChange={(e) => setPrazoForm({ ...prazoForm, observacoes: e.target.value })}
+                  rows={2}
+                  placeholder="Observações adicionais..."
+                  className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold resize-none"
+                />
+              </div>
+              <div className="flex gap-3 pt-1">
+                <button type="button" onClick={() => setShowPrazoModal(false)} className="flex-1 btn-afj-outline rounded-sm">
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingPrazo || !prazoForm.descricao.trim() || !prazoForm.data_prazo}
+                  className="flex-1 btn-afj-primary rounded-sm flex items-center justify-center gap-2 disabled:opacity-40"
+                >
+                  {savingPrazo ? <Loader2 size={13} className="animate-spin" /> : <Calendar size={13} />}
+                  Salvar Prazo
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Modal: Registrar Movimentação */}
       {showMovModal && (

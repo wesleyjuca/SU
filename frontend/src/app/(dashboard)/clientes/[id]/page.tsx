@@ -3,7 +3,7 @@ import { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
 import {
   ArrowLeft, Users, Plus, MessageSquare, Phone, Mail, Scale,
-  Loader2, X, AlertTriangle, Download, Trash2
+  Loader2, X, AlertTriangle, Download, Trash2, Settings2
 } from "lucide-react";
 import Link from "next/link";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
@@ -30,6 +30,16 @@ interface Interaction {
   created_at: string;
 }
 
+interface Contato {
+  id: string;
+  nome: string;
+  cargo: string | null;
+  email: string | null;
+  telefone: string | null;
+  whatsapp: string | null;
+  is_primary: boolean;
+}
+
 interface Processo {
   id: string;
   numero_cnj: string | null;
@@ -38,8 +48,12 @@ interface Processo {
   situacao: string;
 }
 
-const TIPO_ICONS: Record<string, string> = {
-  EMAIL: "✉", LIGACAO: "📞", REUNIAO: "🤝", WHATSAPP: "💬", SISTEMA: "⚙",
+const TIPO_ICONS: Record<string, React.ReactNode> = {
+  EMAIL: <Mail size={12} className="text-blue-500" />,
+  LIGACAO: <Phone size={12} className="text-green-500" />,
+  REUNIAO: <Users size={12} className="text-purple-500" />,
+  WHATSAPP: <MessageSquare size={12} className="text-emerald-500" />,
+  SISTEMA: <Settings2 size={12} className="text-afj-black/40" />,
 };
 
 const TIPO_INTERACAO = ["EMAIL", "LIGACAO", "REUNIAO", "WHATSAPP", "SISTEMA"];
@@ -64,12 +78,20 @@ export default function ClienteDetailPage() {
 
   const [cliente, setCliente] = useState<Cliente | null>(null);
   const [interactions, setInteractions] = useState<Interaction[]>([]);
+  const [contatos, setContatos] = useState<Contato[]>([]);
   const [processos, setProcessos] = useState<Processo[]>([]);
   const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState<"interacoes" | "contatos">("interacoes");
   const [showModal, setShowModal] = useState(false);
+  const [showContatoModal, setShowContatoModal] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [savingContato, setSavingContato] = useState(false);
+  const [deletingContatoId, setDeletingContatoId] = useState<string | null>(null);
   const [confirmErase, setConfirmErase] = useState(false);
   const [interForm, setInterForm] = useState({ tipo: "EMAIL", descricao: "" });
+  const [contatoForm, setContatoForm] = useState({
+    nome: "", cargo: "", email: "", telefone: "", whatsapp: "", is_primary: false,
+  });
 
   useEffect(() => { if (id) fetchAll(); }, [id]);
 
@@ -78,14 +100,16 @@ export default function ClienteDetailPage() {
     const headers = { Authorization: `Bearer ${token}` };
     setLoading(true);
     try {
-      const [cRes, iRes, pRes] = await Promise.all([
+      const [cRes, iRes, pRes, ctRes] = await Promise.all([
         fetch(`/api/v1/clients/${id}`, { headers }),
         fetch(`/api/v1/clients/${id}/interactions?limit=50`, { headers }),
         fetch(`/api/v1/processes?client_id=${id}`, { headers }),
+        fetch(`/api/v1/clients/${id}/contacts`, { headers }),
       ]);
       if (cRes.ok) setCliente(await cRes.json());
       if (iRes.ok) setInteractions(await iRes.json());
       if (pRes.ok) setProcessos(await pRes.json());
+      if (ctRes.ok) setContatos(await ctRes.json());
     } finally { setLoading(false); }
   }
 
@@ -106,6 +130,34 @@ export default function ClienteDetailPage() {
         fetchAll();
       }
     } finally { setSaving(false); }
+  }
+
+  async function criarContato(e: React.FormEvent) {
+    e.preventDefault();
+    if (!contatoForm.nome.trim()) return;
+    setSavingContato(true);
+    try {
+      const token = localStorage.getItem("afj_access_token");
+      const res = await fetch(`/api/v1/clients/${id}/contacts`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify(contatoForm),
+      });
+      if (res.ok) {
+        setShowContatoModal(false);
+        setContatoForm({ nome: "", cargo: "", email: "", telefone: "", whatsapp: "", is_primary: false });
+        fetchAll();
+      }
+    } finally { setSavingContato(false); }
+  }
+
+  async function excluirContato(cid: string) {
+    const token = localStorage.getItem("afj_access_token");
+    const res = await fetch(`/api/v1/clients/${id}/contacts/${cid}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (res.ok) { setDeletingContatoId(null); fetchAll(); }
   }
 
   async function exportarDados() {
@@ -129,10 +181,7 @@ export default function ClienteDetailPage() {
       method: "DELETE",
       headers: { Authorization: `Bearer ${token}` },
     });
-    if (res.ok) {
-      setConfirmErase(false);
-      router.push("/clientes");
-    }
+    if (res.ok) { setConfirmErase(false); router.push("/clientes"); }
   }
 
   if (loading) return (
@@ -184,7 +233,7 @@ export default function ClienteDetailPage() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-        {/* Coluna esquerda: dados + processos */}
+        {/* Coluna esquerda: dados + processos + LGPD */}
         <div className="space-y-4">
           {/* Dados cadastrais */}
           <div className="afj-card p-4">
@@ -216,10 +265,7 @@ export default function ClienteDetailPage() {
                     ? `Consentido${cliente.lgpd_consent_at ? " em " + new Date(cliente.lgpd_consent_at).toLocaleDateString("pt-BR") : ""}`
                     : "Não consentido",
                 },
-                {
-                  label: "Cadastrado em",
-                  value: new Date(cliente.created_at).toLocaleDateString("pt-BR"),
-                },
+                { label: "Cadastrado em", value: new Date(cliente.created_at).toLocaleDateString("pt-BR") },
               ].map(({ label, value }) => value && (
                 <div key={label} className="flex justify-between gap-2 pt-1 border-t border-afj-cream-dark/50">
                   <span className="text-afj-black/50">{label}</span>
@@ -259,14 +305,9 @@ export default function ClienteDetailPage() {
           {/* Ações LGPD */}
           <div className="afj-card p-4 border border-red-100">
             <h2 className="font-semibold text-afj-black text-sm mb-2">Direitos LGPD</h2>
-            <p className="text-xs text-afj-black/50 mb-3">
-              Conforme arts. 18 e 20 da LGPD — Lei 13.709/2018
-            </p>
+            <p className="text-xs text-afj-black/50 mb-3">Conforme arts. 18 e 20 da LGPD — Lei 13.709/2018</p>
             <div className="flex gap-2">
-              <button
-                onClick={exportarDados}
-                className="btn-afj-outline rounded-sm flex items-center gap-1.5 text-xs"
-              >
+              <button onClick={exportarDados} className="btn-afj-outline rounded-sm flex items-center gap-1.5 text-xs">
                 <Download size={12} />
                 Exportar Dados
               </button>
@@ -281,48 +322,130 @@ export default function ClienteDetailPage() {
           </div>
         </div>
 
-        {/* Coluna direita: histórico de interações */}
+        {/* Coluna direita: abas Interações / Contatos */}
         <div className="afj-card p-4 flex flex-col">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="font-semibold text-afj-black text-sm flex items-center gap-2">
-              <MessageSquare size={14} />
-              Histórico de Interações ({interactions.length})
-            </h2>
+          {/* Tab header */}
+          <div className="flex items-center gap-1 border-b border-afj-cream-dark mb-4 -mx-4 px-4">
             <button
-              onClick={() => setShowModal(true)}
-              className="btn-afj-primary rounded-sm flex items-center gap-1.5 text-xs"
+              onClick={() => setActiveTab("interacoes")}
+              className={`px-3 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
+                activeTab === "interacoes"
+                  ? "border-afj-gold text-afj-gold"
+                  : "border-transparent text-afj-black/50 hover:text-afj-black"
+              }`}
             >
-              <Plus size={12} />
-              Registrar
+              Interações ({interactions.length})
             </button>
+            <button
+              onClick={() => setActiveTab("contatos")}
+              className={`px-3 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
+                activeTab === "contatos"
+                  ? "border-afj-gold text-afj-gold"
+                  : "border-transparent text-afj-black/50 hover:text-afj-black"
+              }`}
+            >
+              Contatos ({contatos.length})
+            </button>
+            <div className="ml-auto">
+              {activeTab === "interacoes" && (
+                <button
+                  onClick={() => setShowModal(true)}
+                  className="btn-afj-primary rounded-sm flex items-center gap-1.5 text-xs"
+                >
+                  <Plus size={12} />
+                  Registrar
+                </button>
+              )}
+              {activeTab === "contatos" && (
+                <button
+                  onClick={() => setShowContatoModal(true)}
+                  className="btn-afj-primary rounded-sm flex items-center gap-1.5 text-xs"
+                >
+                  <Plus size={12} />
+                  Contato
+                </button>
+              )}
+            </div>
           </div>
 
-          {interactions.length === 0 ? (
-            <div className="flex-1 flex items-center justify-center text-center py-8">
-              <div>
-                <MessageSquare className="mx-auto text-afj-black/20 mb-2" size={28} />
-                <p className="text-sm text-afj-black/40">Nenhuma interação registrada</p>
-              </div>
-            </div>
-          ) : (
-            <div className="space-y-3 overflow-y-auto">
-              {interactions.map((i) => (
-                <div key={i.id} className="flex gap-3 text-sm">
-                  <div className="w-7 h-7 rounded-full bg-afj-cream flex items-center justify-center flex-shrink-0 text-base">
-                    {TIPO_ICONS[i.tipo] ?? "•"}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs font-medium text-afj-black/60 uppercase tracking-wide">{i.tipo}</span>
-                      <span className="text-xs text-afj-black/30 flex-shrink-0">
-                        {new Date(i.created_at).toLocaleDateString("pt-BR", { day: "2-digit", month: "short" })}
-                      </span>
-                    </div>
-                    <p className="text-afj-black/80 mt-0.5 leading-snug">{i.descricao}</p>
-                  </div>
+          {/* Aba Interações */}
+          {activeTab === "interacoes" && (
+            interactions.length === 0 ? (
+              <div className="flex-1 flex items-center justify-center text-center py-8">
+                <div>
+                  <MessageSquare className="mx-auto text-afj-black/20 mb-2" size={28} />
+                  <p className="text-sm text-afj-black/40">Nenhuma interação registrada</p>
                 </div>
-              ))}
-            </div>
+              </div>
+            ) : (
+              <div className="space-y-3 overflow-y-auto">
+                {interactions.map((i) => (
+                  <div key={i.id} className="flex gap-3 text-sm animate-fade-in">
+                    <div className="w-7 h-7 rounded-full bg-afj-cream flex items-center justify-center flex-shrink-0">
+                      {TIPO_ICONS[i.tipo] ?? <MessageSquare size={12} className="text-afj-black/40" />}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-medium text-afj-black/60 uppercase tracking-wide">{i.tipo}</span>
+                        <span className="text-xs text-afj-black/30 flex-shrink-0">
+                          {new Date(i.created_at).toLocaleDateString("pt-BR", { day: "2-digit", month: "short" })}
+                        </span>
+                      </div>
+                      <p className="text-afj-black/80 mt-0.5 leading-snug">{i.descricao}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )
+          )}
+
+          {/* Aba Contatos */}
+          {activeTab === "contatos" && (
+            contatos.length === 0 ? (
+              <div className="flex-1 flex items-center justify-center text-center py-8">
+                <div>
+                  <Users className="mx-auto text-afj-black/20 mb-2" size={28} />
+                  <p className="text-sm text-afj-black/40">Nenhum contato cadastrado</p>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-3 overflow-y-auto">
+                {contatos.map((c) => (
+                  <div key={c.id} className="border border-afj-cream-dark rounded-sm p-3 animate-fade-in">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <p className="font-medium text-sm text-afj-black">{c.nome}</p>
+                          {c.is_primary && (
+                            <span className="text-[10px] bg-afj-gold/10 text-afj-gold px-1.5 py-0.5 rounded font-medium">Principal</span>
+                          )}
+                        </div>
+                        {c.cargo && <p className="text-xs text-afj-black/50 mt-0.5">{c.cargo}</p>}
+                        <div className="flex flex-col gap-0.5 mt-1.5">
+                          {c.email && (
+                            <a href={`mailto:${c.email}`} className="flex items-center gap-1.5 text-xs text-afj-gold hover:underline">
+                              <Mail size={10} />{c.email}
+                            </a>
+                          )}
+                          {c.telefone && (
+                            <a href={`tel:${c.telefone}`} className="flex items-center gap-1.5 text-xs text-afj-black/60 hover:underline">
+                              <Phone size={10} />{c.telefone}
+                            </a>
+                          )}
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => setDeletingContatoId(c.id)}
+                        className="text-afj-black/25 hover:text-red-500 transition-colors p-1 flex-shrink-0"
+                        aria-label="Excluir contato"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )
           )}
         </div>
       </div>
@@ -346,7 +469,7 @@ export default function ClienteDetailPage() {
                   className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold"
                 >
                   {TIPO_INTERACAO.map((t) => (
-                    <option key={t} value={t}>{TIPO_ICONS[t]} {t}</option>
+                    <option key={t} value={t}>{t}</option>
                   ))}
                 </select>
               </div>
@@ -375,6 +498,81 @@ export default function ClienteDetailPage() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Novo Contato */}
+      {showContatoModal && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-sm shadow-xl w-full max-w-md">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-afj-cream-dark">
+              <h2 className="font-semibold text-afj-black">Novo Contato</h2>
+              <button onClick={() => setShowContatoModal(false)} className="text-afj-black/40 hover:text-afj-black">
+                <X size={18} />
+              </button>
+            </div>
+            <form onSubmit={criarContato} className="p-5 space-y-3">
+              {[
+                { label: "Nome *", key: "nome", type: "text", required: true },
+                { label: "Cargo", key: "cargo", type: "text", required: false },
+                { label: "E-mail", key: "email", type: "email", required: false },
+                { label: "Telefone", key: "telefone", type: "tel", required: false },
+                { label: "WhatsApp", key: "whatsapp", type: "tel", required: false },
+              ].map(({ label, key, type, required }) => (
+                <div key={key}>
+                  <label className="text-xs text-afj-black/60 block mb-1">{label}</label>
+                  <input
+                    type={type}
+                    required={required}
+                    value={(contatoForm as any)[key]}
+                    onChange={(e) => setContatoForm({ ...contatoForm, [key]: e.target.value })}
+                    className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold"
+                  />
+                </div>
+              ))}
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={contatoForm.is_primary}
+                  onChange={(e) => setContatoForm({ ...contatoForm, is_primary: e.target.checked })}
+                  className="rounded"
+                />
+                <span className="text-sm text-afj-black/70">Contato principal</span>
+              </label>
+              <div className="flex gap-3 pt-1">
+                <button type="button" onClick={() => setShowContatoModal(false)} className="flex-1 btn-afj-outline rounded-sm">
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingContato || !contatoForm.nome.trim()}
+                  className="flex-1 btn-afj-primary rounded-sm flex items-center justify-center gap-2 disabled:opacity-40"
+                >
+                  {savingContato ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} />}
+                  Salvar
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Confirmar excluir contato */}
+      {deletingContatoId && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-sm shadow-xl w-full max-w-sm p-6 text-center">
+            <p className="font-semibold text-afj-black mb-2">Excluir contato?</p>
+            <p className="text-afj-black/50 text-sm mb-5">Esta ação não pode ser desfeita.</p>
+            <div className="flex gap-3">
+              <button onClick={() => setDeletingContatoId(null)} className="flex-1 btn-afj-outline rounded-sm">Cancelar</button>
+              <button
+                onClick={() => excluirContato(deletingContatoId)}
+                className="flex-1 bg-red-500 text-white rounded-sm py-2 text-sm font-medium hover:bg-red-600"
+              >
+                Excluir
+              </button>
+            </div>
           </div>
         </div>
       )}

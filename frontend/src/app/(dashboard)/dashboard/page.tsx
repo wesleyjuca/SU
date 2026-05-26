@@ -1,8 +1,13 @@
 "use client";
 import { useState, useEffect } from "react";
+import dynamic from "next/dynamic";
 import { Scale, AlertTriangle, CheckSquare, DollarSign, Bot, Activity, Loader2, BarChart2 } from "lucide-react";
 import Link from "next/link";
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
+
+const MiniFinancialChart = dynamic(() => import("@/components/dashboard/MiniFinancialChart"), {
+  ssr: false,
+  loading: () => <div className="h-full bg-afj-cream-dark/30 animate-pulse rounded-sm" />,
+});
 
 interface FinanceiroMes {
   mes: string;
@@ -182,27 +187,7 @@ export default function DashboardPage() {
             </Link>
           </div>
           <div style={{ height: 160 }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={finData} barCategoryGap="30%">
-                <XAxis
-                  dataKey="mes"
-                  tickFormatter={(v) => new Date(v + "-01").toLocaleDateString("pt-BR", { month: "short" })}
-                  tick={{ fontSize: 11, fill: "#6B7280" }}
-                  axisLine={false}
-                  tickLine={false}
-                />
-                <YAxis hide />
-                <Tooltip
-                  formatter={(v: number, name: string) => [
-                    `R$ ${v.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`,
-                    name === "receitas" ? "Receitas" : "Despesas",
-                  ]}
-                  contentStyle={{ fontSize: 12, borderRadius: 4, border: "1px solid #EAE5D8" }}
-                />
-                <Bar dataKey="receitas" fill="#B8954A" radius={[3, 3, 0, 0]} />
-                <Bar dataKey="despesas" fill="#DC2626" radius={[3, 3, 0, 0]} opacity={0.7} />
-              </BarChart>
-            </ResponsiveContainer>
+            <MiniFinancialChart data={finData} />
           </div>
         </div>
       )}

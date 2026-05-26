@@ -295,6 +295,53 @@ async def create_movement(
     }
 
 
+class DeadlineCreate(BaseModel):
+    descricao: str
+    tipo: str | None = None
+    data_prazo: str
+    data_fatal: str | None = None
+    observacoes: str | None = None
+
+
+@router.post("/{process_id}/deadlines", status_code=201)
+async def create_deadline(
+    process_id: str,
+    body: DeadlineCreate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    from datetime import date as date_type
+    result = await db.execute(
+        select(LegalProcess).where(
+            LegalProcess.id == uuid.UUID(process_id),
+            LegalProcess.tenant_id == current_user.tenant_id,
+        )
+    )
+    if not result.scalar_one_or_none():
+        raise NotFoundError("Processo", process_id)
+
+    deadline = ProcessDeadline(
+        process_id=uuid.UUID(process_id),
+        descricao=body.descricao,
+        tipo=body.tipo,
+        data_prazo=date_type.fromisoformat(body.data_prazo),
+        data_fatal=date_type.fromisoformat(body.data_fatal) if body.data_fatal else None,
+        status="PENDENTE",
+        responsavel_id=current_user.id,
+    )
+    db.add(deadline)
+    await db.flush()
+    return {
+        "id": str(deadline.id),
+        "process_id": process_id,
+        "descricao": deadline.descricao,
+        "tipo": deadline.tipo,
+        "data_prazo": deadline.data_prazo.isoformat(),
+        "data_fatal": deadline.data_fatal.isoformat() if deadline.data_fatal else None,
+        "status": deadline.status,
+    }
+
+
 class DeadlineUpdate(BaseModel):
     status: str
     descricao: str | None = None
