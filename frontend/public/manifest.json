@@ -1,0 +1,42 @@
+{
+  "name": "AFJ CORE — Sistema Jurídico IA",
+  "short_name": "AFJ CORE",
+  "description": "Plataforma de gestão jurídica com IA — Almeida, Freire & Jucá Advogados",
+  "start_url": "/dashboard",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#F4F0EA",
+  "theme_color": "#B8954A",
+  "orientation": "portrait-primary",
+  "lang": "pt-BR",
+  "categories": ["business", "productivity"],
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "screenshots": [],
+  "shortcuts": [
+    {
+      "name": "Novo Processo",
+      "short_name": "Processo",
+      "url": "/processos/novo",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Agenda de Prazos",
+      "short_name": "Agenda",
+      "url": "/agenda",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
+    }
+  ]
+}

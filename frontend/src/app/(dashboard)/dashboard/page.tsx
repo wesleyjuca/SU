@@ -3,6 +3,8 @@ import { useState, useEffect } from "react";
 import dynamic from "next/dynamic";
 import { Scale, AlertTriangle, CheckSquare, DollarSign, Bot, Activity, Loader2, BarChart2 } from "lucide-react";
 import Link from "next/link";
+import { useAgentWebSocket } from "@/hooks/useAgentWebSocket";
+import { OnboardingWizard } from "@/components/onboarding/OnboardingWizard";
 
 const MiniFinancialChart = dynamic(() => import("@/components/dashboard/MiniFinancialChart"), {
   ssr: false,
@@ -67,8 +69,14 @@ export default function DashboardPage() {
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [runs, setRuns] = useState<AgentRun[]>([]);
   const [loading, setLoading] = useState(true);
-  const [agentStatus, setAgentStatus] = useState<Record<string, string>>({});
   const [finData, setFinData] = useState<FinanceiroMes[]>([]);
+  const [showOnboarding, setShowOnboarding] = useState(false);
+
+  // Real-time agent status via WebSocket (falls back to polling-derived status)
+  const wsAgentStatus = useAgentWebSocket();
+  const [pollAgentStatus, setPollAgentStatus] = useState<Record<string, string>>({});
+  // Merge: WebSocket updates take precedence
+  const agentStatus = { ...pollAgentStatus, ...wsAgentStatus };
 
   useEffect(() => {
     loadData();
@@ -94,7 +102,7 @@ export default function DashboardPage() {
         const list: AgentRun[] = Array.isArray(data) ? data : (data.runs ?? []);
         setRuns(list);
 
-        // Build agent status map from recent runs
+        // Build poll-based agent status map from recent runs (WebSocket takes precedence)
         const statusMap: Record<string, string> = {};
         for (const run of list) {
           const ag = run.agent_name;
@@ -106,11 +114,21 @@ export default function DashboardPage() {
               : "idle";
           }
         }
-        setAgentStatus(statusMap);
+        setPollAgentStatus(statusMap);
       }
       if (finRes.status === "fulfilled" && finRes.value.ok) {
         const d = await finRes.value.json();
         setFinData(d.mensal ?? []);
+      }
+
+      // Show onboarding for first-time users with no processes
+      if (typeof window !== "undefined" && !localStorage.getItem("afj_onboarded")) {
+        const m = metricsRes.status === "fulfilled" && metricsRes.value.ok
+          ? await metricsRes.value.clone().json().catch(() => null)
+          : null;
+        if (!m || m.processos_ativos === 0) {
+          setShowOnboarding(true);
+        }
       }
     } finally {
       setLoading(false);
@@ -121,6 +139,10 @@ export default function DashboardPage() {
     loading ? "..." : v !== undefined ? `${prefix}${v}${suffix}` : "—";
 
   return (
+    <>
+    {showOnboarding && (
+      <OnboardingWizard onComplete={() => setShowOnboarding(false)} />
+    )}
     <div className="space-y-6 max-w-7xl mx-auto">
       <div>
         <h1 className="font-display text-2xl font-semibold text-afj-black">Dashboard</h1>
@@ -267,5 +289,6 @@ export default function DashboardPage() {
         </div>
       </div>
     </div>
+    </>
   );
 }
