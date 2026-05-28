@@ -62,6 +62,7 @@ playwright = "^1.49.0"
 python-dateutil = "^2.9.0"
 pytz = "^2024.2"
 structlog = "^24.4.0"
+pywebpush = ">=2.0.0"
 
 [tool.poetry.dev-dependencies]
 pytest = "^8.3.0"

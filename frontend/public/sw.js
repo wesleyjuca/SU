@@ -61,3 +61,41 @@ self.addEventListener("fetch", (event) => {
     fetch(event.request).catch(() => caches.match(event.request))
   );
 });
+
+/* ─── Web Push ────────────────────────────────────────────────────────────── */
+self.addEventListener("push", (event) => {
+  let data = { title: "AFJ CORE", body: "Nova notificação", url: "/dashboard", icon: "/icons/icon-192.png" };
+  try { Object.assign(data, JSON.parse(event.data ? event.data.text() : "{}")); } catch {}
+
+  event.waitUntil(
+    self.registration.showNotification(data.title, {
+      body: data.body,
+      icon: data.icon,
+      badge: "/icons/icon-192.png",
+      tag: "afj-push",
+      renotify: true,
+      requireInteraction: false,
+      data: { url: data.url },
+    })
+  );
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const targetUrl = (event.notification.data && event.notification.data.url) || "/dashboard";
+
+  event.waitUntil(
+    clients.matchAll({ type: "window", includeUncontrolled: true }).then((windowClients) => {
+      // Focus existing window if available and navigate
+      const existing = windowClients.find((c) => "focus" in c);
+      if (existing) {
+        return existing.focus().then((w) => {
+          if (w.navigate) w.navigate(targetUrl);
+          return w;
+        });
+      }
+      // Otherwise open a new window
+      return clients.openWindow(targetUrl);
+    })
+  );
+});

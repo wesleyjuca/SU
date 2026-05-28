@@ -5,6 +5,7 @@ import { Scale, AlertTriangle, CheckSquare, DollarSign, Bot, Activity, Loader2, 
 import Link from "next/link";
 import { useAgentWebSocket } from "@/hooks/useAgentWebSocket";
 import { OnboardingWizard } from "@/components/onboarding/OnboardingWizard";
+import { PushPermissionBanner } from "@/components/notifications/PushPermissionBanner";
 
 const MiniFinancialChart = dynamic(() => import("@/components/dashboard/MiniFinancialChart"), {
   ssr: false,
@@ -144,6 +145,7 @@ export default function DashboardPage() {
       <OnboardingWizard onComplete={() => setShowOnboarding(false)} />
     )}
     <div className="space-y-6 max-w-7xl mx-auto">
+      {!showOnboarding && <PushPermissionBanner />}
       <div>
         <h1 className="font-display text-2xl font-semibold text-afj-black">Dashboard</h1>
         <p className="text-afj-black/50 text-sm mt-0.5">Visão geral do escritório em tempo real</p>

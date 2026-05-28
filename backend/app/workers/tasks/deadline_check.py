@@ -45,7 +45,7 @@ def check_upcoming_deadlines(self):
                         db.add(notif)
                         total_notificacoes += 1
 
-                        # Tenta enviar email para o responsável
+                        # Tenta enviar email e push para o responsável
                         from app.models.user import User as UserModel
                         user_res = await db.execute(
                             select(UserModel).where(UserModel.id == prazo.responsavel_id)
@@ -59,6 +59,14 @@ def check_upcoming_deadlines(self):
                                 dias=dias,
                                 data_prazo=str(prazo.data_prazo),
                                 process_id=str(prazo.process_id),
+                            )
+                        if user:
+                            from app.services.webpush import send_push_to_user
+                            await send_push_to_user(
+                                user_id=str(user.id),
+                                title=f"{'🚨 URGENTE' if dias <= 3 else '⚠️'} Prazo em {dias} dia{'s' if dias != 1 else ''}",
+                                body=prazo.descricao[:100],
+                                url=f"/processos/{prazo.process_id}",
                             )
 
             await db.commit()

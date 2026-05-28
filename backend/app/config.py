@@ -74,6 +74,12 @@ class Settings(BaseSettings):
     # ─── Sentry ──────────────────────────────────────────────────────────────
     SENTRY_DSN: str = ""             # leave empty to disable Sentry
 
+    # ─── Web Push (VAPID) ────────────────────────────────────────────────────
+    VAPID_PRIVATE_KEY: str = ""      # generate: py_vapid.Vapid().generate_keys()
+    VAPID_PUBLIC_KEY: str = ""       # corresponding DER base64url public key
+    VAPID_EMAIL: str = "mailto:dev@afjadvogados.com.br"
+    PUSH_ENABLED: bool = False       # True when VAPID keys are configured
+
     @model_validator(mode="after")
     def derive_from_urls(self) -> "Settings":
         # Fill Celery URLs from Redis if not set

@@ -13,6 +13,7 @@ import { useApprovalCount } from "@/hooks/useApprovals";
 import { useNotifications } from "@/hooks/useNotifications";
 import { NotificationDropdown } from "@/components/layout/NotificationDropdown";
 import { SearchModal } from "@/components/layout/SearchModal";
+import { BottomNav } from "@/components/layout/BottomNav";
 
 const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, roles: null },
@@ -235,11 +236,14 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           </div>
         </header>
 
-        {/* Área de conteúdo com scroll */}
-        <main className="flex-1 overflow-y-auto p-6 bg-afj-cream">
+        {/* Área de conteúdo com scroll — pb-16 evita sobreposição da bottom nav no mobile */}
+        <main className="flex-1 overflow-y-auto p-6 pb-20 md:pb-6 bg-afj-cream">
           {children}
         </main>
       </div>
+
+      {/* Bottom navigation — apenas mobile */}
+      <BottomNav approvalCount={approvalCount} />
 
       <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)} />
     </div>
