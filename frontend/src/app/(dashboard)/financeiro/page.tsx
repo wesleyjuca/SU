@@ -3,6 +3,7 @@ import { useState, useEffect } from "react";
 import { DollarSign, TrendingUp, TrendingDown, Plus, CheckCircle, Clock, Trash2, FileDown } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useForm } from "react-hook-form";
+import type { Resolver } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { FinanceiroSchema, type FinanceiroInput } from "@/lib/schemas";
 
@@ -50,7 +51,7 @@ export default function FinanceiroPage() {
     reset: resetFin,
     formState: { errors: finErrors, isSubmitting: finSubmitting },
   } = useForm<FinanceiroInput>({
-    resolver: zodResolver(FinanceiroSchema),
+    resolver: zodResolver(FinanceiroSchema) as Resolver<FinanceiroInput>,
     defaultValues: { tipo: "RECEITA", status: "PENDENTE" },
   });
 

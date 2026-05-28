@@ -18,7 +18,7 @@ export const ProcessoSchema = z.object({
 });
 
 export const ClienteSchema = z.object({
-  tipo: z.enum(["PF", "PJ"], { required_error: "Tipo obrigatório" }),
+  tipo: z.enum(["PF", "PJ"], { message: "Tipo obrigatório" }),
   nome_completo: z.string().min(3, "Nome deve ter ao menos 3 caracteres"),
   email: z.string().email("E-mail inválido").optional().or(z.literal("")),
   telefone: z
@@ -44,7 +44,7 @@ export const ClienteSchema = z.object({
 });
 
 export const FinanceiroSchema = z.object({
-  tipo: z.enum(["RECEITA", "DESPESA"], { required_error: "Tipo obrigatório" }),
+  tipo: z.enum(["RECEITA", "DESPESA"], { message: "Tipo obrigatório" }),
   descricao: z.string().min(3, "Descrição obrigatória"),
   valor: z.coerce.number().positive("Valor deve ser maior que zero"),
   categoria: z.string().optional(),

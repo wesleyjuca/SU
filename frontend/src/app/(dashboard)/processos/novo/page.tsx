@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
 import { useForm } from "react-hook-form";
+import type { Resolver } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { ProcessoSchema, type ProcessoInput } from "@/lib/schemas";
 
@@ -20,7 +21,7 @@ export default function NovoProcessoPage() {
     handleSubmit,
     formState: { errors, isSubmitting },
   } = useForm<ProcessoInput>({
-    resolver: zodResolver(ProcessoSchema),
+    resolver: zodResolver(ProcessoSchema) as Resolver<ProcessoInput>,
     defaultValues: { area_direito: "CIVIL" },
   });
 
