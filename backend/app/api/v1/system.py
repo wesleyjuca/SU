@@ -50,6 +50,7 @@ NAV_ALL = [
     {"href": "/financeiro", "label": "Financeiro", "icon": "DollarSign"},
     {"href": "/visual-law", "label": "Visual Law", "icon": "Shapes"},
     {"href": "/auditoria", "label": "Auditoria", "icon": "Shield"},
+    {"href": "/admin/health", "label": "Monitoramento", "icon": "Activity"},
     {"href": "/configuracoes", "label": "Configurações", "icon": "Settings"},
 ]
 
@@ -410,3 +411,90 @@ async def analytics_agentes(
         }
 
     return await _cached(cache_key, 120, compute)
+
+
+@router.get("/health/detailed")
+async def health_detailed(current_user: User = Depends(get_current_user)):
+    """Health check detalhado com latências — apenas para ADMIN."""
+    if current_user.role not in ("ADMIN", "SOCIO"):
+        from fastapi import HTTPException
+        raise HTTPException(status_code=403, detail="Acesso negado")
+
+    import time
+
+    async def probe_postgres(db_session) -> tuple[bool, int]:
+        t0 = time.monotonic()
+        try:
+            await db_session.execute(text("SELECT 1"))
+            return True, int((time.monotonic() - t0) * 1000)
+        except Exception:
+            return False, -1
+
+    async def probe_redis() -> tuple[bool, int]:
+        t0 = time.monotonic()
+        try:
+            from app.db.redis import get_redis
+            redis = await get_redis()
+            if redis:
+                await redis.ping()
+                return True, int((time.monotonic() - t0) * 1000)
+        except Exception:
+            pass
+        return False, -1
+
+    async def probe_qdrant() -> tuple[bool, int]:
+        t0 = time.monotonic()
+        try:
+            from app.db.qdrant import get_qdrant
+            qdrant = await get_qdrant()
+            if qdrant:
+                return True, int((time.monotonic() - t0) * 1000)
+        except Exception:
+            pass
+        return False, -1
+
+    from app.db.base import get_db as _get_db
+    from app.db.base import AsyncSessionLocal
+    from app.models.agent import AgentRun
+
+    async with AsyncSessionLocal() as db_check:
+        pg_ok, pg_ms = await probe_postgres(db_check)
+    redis_ok, redis_ms = await probe_redis()
+    qdrant_ok, qdrant_ms = await probe_qdrant()
+
+    # Recent agent activity
+    async with AsyncSessionLocal() as db2:
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+        q = await db2.execute(
+            select(
+                AgentRun.agent_name,
+                AgentRun.status,
+                AgentRun.started_at,
+            )
+            .where(AgentRun.started_at >= cutoff)
+            .order_by(AgentRun.started_at.desc())
+            .limit(20)
+        )
+        recent_runs = [
+            {"agent": r.agent_name, "status": r.status, "started_at": r.started_at.isoformat()}
+            for r in q.all()
+        ]
+
+    services = {
+        "postgresql": {"ok": pg_ok, "latency_ms": pg_ms},
+        "redis": {"ok": redis_ok, "latency_ms": redis_ms},
+        "qdrant": {"ok": qdrant_ok, "latency_ms": qdrant_ms},
+    }
+    all_ok = all(s["ok"] for s in services.values())
+
+    from app.config import settings as cfg
+    return {
+        "status": "operational" if all_ok else "degraded",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "version": cfg.VERSION,
+        "environment": cfg.ENVIRONMENT,
+        "services": services,
+        "email_enabled": cfg.EMAIL_ENABLED,
+        "sentry_enabled": bool(cfg.SENTRY_DSN),
+        "recent_agent_runs": recent_runs,
+    }

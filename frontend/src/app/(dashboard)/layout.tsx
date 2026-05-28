@@ -7,7 +7,7 @@ import {
   LayoutDashboard, Scale, FileText, Users, FolderOpen,
   Bot, CheckSquare, DollarSign, Shield, Shapes, Settings,
   Bell, Search, ChevronRight, FileEdit, Menu, X, LogOut, BarChart2, CalendarClock, BookOpen,
-  Moon, Sun
+  Moon, Sun, Activity
 } from "lucide-react";
 import { useApprovalCount } from "@/hooks/useApprovals";
 import { useNotifications } from "@/hooks/useNotifications";
@@ -15,21 +15,22 @@ import { NotificationDropdown } from "@/components/layout/NotificationDropdown";
 import { SearchModal } from "@/components/layout/SearchModal";
 
 const navItems = [
-  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/processos", label: "Processos", icon: Scale },
-  { href: "/agenda", label: "Agenda", icon: CalendarClock },
-  { href: "/peticoes", label: "Petições", icon: FileEdit },
-  { href: "/clientes", label: "Clientes", icon: Users },
-  { href: "/documentos", label: "Documentos", icon: FolderOpen },
-  { href: "/contratos", label: "Contratos", icon: FileText },
-  { href: "/agentes", label: "Agentes IA", icon: Bot },
-  { href: "/aprovacoes", label: "Aprovações", icon: CheckSquare },
-  { href: "/financeiro", label: "Financeiro", icon: DollarSign },
-  { href: "/relatorios", label: "Relatórios", icon: BarChart2 },
-  { href: "/visual-law", label: "Visual Law", icon: Shapes },
-  { href: "/busca-juridica", label: "Pesquisa Jurídica", icon: BookOpen },
-  { href: "/auditoria", label: "Auditoria", icon: Shield },
-  { href: "/configuracoes", label: "Configurações", icon: Settings },
+  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, roles: null },
+  { href: "/processos", label: "Processos", icon: Scale, roles: null },
+  { href: "/agenda", label: "Agenda", icon: CalendarClock, roles: null },
+  { href: "/peticoes", label: "Petições", icon: FileEdit, roles: null },
+  { href: "/clientes", label: "Clientes", icon: Users, roles: null },
+  { href: "/documentos", label: "Documentos", icon: FolderOpen, roles: null },
+  { href: "/contratos", label: "Contratos", icon: FileText, roles: null },
+  { href: "/agentes", label: "Agentes IA", icon: Bot, roles: null },
+  { href: "/aprovacoes", label: "Aprovações", icon: CheckSquare, roles: null },
+  { href: "/financeiro", label: "Financeiro", icon: DollarSign, roles: null },
+  { href: "/relatorios", label: "Relatórios", icon: BarChart2, roles: null },
+  { href: "/visual-law", label: "Visual Law", icon: Shapes, roles: null },
+  { href: "/busca-juridica", label: "Pesquisa Jurídica", icon: BookOpen, roles: null },
+  { href: "/auditoria", label: "Auditoria", icon: Shield, roles: ["ADMIN", "SOCIO"] },
+  { href: "/admin/health", label: "Monitoramento", icon: Activity, roles: ["ADMIN"] },
+  { href: "/configuracoes", label: "Configurações", icon: Settings, roles: null },
 ];
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
@@ -116,21 +117,23 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
         {/* Navegação */}
         <nav aria-label="Navegação principal" className="flex-1 overflow-y-auto py-3 space-y-0.5">
-          {navItems.map((item) => {
-            const Icon = item.icon;
-            const isActive = pathname === item.href || pathname.startsWith(item.href + "/");
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                className={`afj-sidebar-nav-item ${isActive ? "active" : ""}`}
-              >
-                <Icon size={16} />
-                <span>{item.label}</span>
-                {isActive && <ChevronRight size={12} className="ml-auto text-afj-gold/60" />}
-              </Link>
-            );
-          })}
+          {navItems
+            .filter((item) => !item.roles || item.roles.includes(user?.role ?? ""))
+            .map((item) => {
+              const Icon = item.icon;
+              const isActive = pathname === item.href || pathname.startsWith(item.href + "/");
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className={`afj-sidebar-nav-item ${isActive ? "active" : ""}`}
+                >
+                  <Icon size={16} />
+                  <span>{item.label}</span>
+                  {isActive && <ChevronRight size={12} className="ml-auto text-afj-gold/60" />}
+                </Link>
+              );
+            })}
         </nav>
 
         {/* Rodapé do sidebar */}
