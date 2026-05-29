@@ -7,7 +7,7 @@ import {
   LayoutDashboard, Scale, FileText, Users, FolderOpen,
   Bot, CheckSquare, DollarSign, Shield, Shapes, Settings,
   Bell, Search, ChevronRight, FileEdit, Menu, X, LogOut, BarChart2, CalendarClock, BookOpen,
-  Moon, Sun, Activity
+  Moon, Sun, Activity, Users2
 } from "lucide-react";
 import { useApprovalCount } from "@/hooks/useApprovals";
 import { useNotifications } from "@/hooks/useNotifications";
@@ -31,6 +31,7 @@ const navItems = [
   { href: "/busca-juridica", label: "Pesquisa Jurídica", icon: BookOpen, roles: null },
   { href: "/auditoria", label: "Auditoria", icon: Shield, roles: ["ADMIN", "SOCIO"] },
   { href: "/admin/health", label: "Monitoramento", icon: Activity, roles: ["ADMIN"] },
+  { href: "/admin/usuarios", label: "Usuários", icon: Users2, roles: ["ADMIN"] },
   { href: "/configuracoes", label: "Configurações", icon: Settings, roles: null },
 ];
 
