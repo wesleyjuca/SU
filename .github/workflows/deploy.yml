@@ -249,6 +249,8 @@ jobs:
       - name: Deploy to Vercel
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: team_ojQCgX1tsKwQeGULllg6XHDQ
+          VERCEL_PROJECT_ID: prj_HYpptvvAFX1WmAjeRXyjaLmulAex
           RAILWAY_URL: ${{ needs.deploy-railway.outputs.railway_url }}
         run: |
           if [ -z "$VERCEL_TOKEN" ]; then
@@ -261,21 +263,12 @@ jobs:
           npm install -g vercel
           cd frontend
 
-          # Set NEXT_PUBLIC_API_URL env var in project (create or update)
-          if [ -n "$RAILWAY_URL" ]; then
-            echo "Configurando NEXT_PUBLIC_API_URL=$RAILWAY_URL..."
-            # Remove existing env var if present (ignore errors)
-            vercel env rm NEXT_PUBLIC_API_URL production --yes --token "$VERCEL_TOKEN" 2>/dev/null || true
-            # Add updated env var
-            echo "$RAILWAY_URL" | vercel env add NEXT_PUBLIC_API_URL production --token "$VERCEL_TOKEN" --yes 2>/dev/null || true
-          fi
-
-          # Deploy from frontend/ (rootDirectory configured in Vercel dashboard)
+          BACKEND_URL="${RAILWAY_URL:-https://su-production-5a83.up.railway.app}"
           echo "Iniciando deploy no Vercel..."
-          DEPLOY_OUTPUT=$(vercel --yes --prod --token "$VERCEL_TOKEN" --name "afj-core" 2>&1) || true
+          DEPLOY_OUTPUT=$(vercel --yes --prod --token "$VERCEL_TOKEN" \
+            --build-env NEXT_PUBLIC_API_URL="$BACKEND_URL" 2>&1) || true
           echo "$DEPLOY_OUTPUT"
 
-          # Extract deployment URL
           DEPLOY_URL=$(echo "$DEPLOY_OUTPUT" | grep -oP 'https://[a-zA-Z0-9._-]+\.vercel\.app' | tail -1 || echo "")
           if [ -n "$DEPLOY_URL" ]; then
             echo ""
