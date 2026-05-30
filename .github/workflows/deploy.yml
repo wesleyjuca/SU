@@ -261,8 +261,7 @@ jobs:
           fi
 
           npm install -g vercel
-          cd frontend
-
+          # Rodar da raiz — vercel.json tem rootDirectory: "frontend"
           BACKEND_URL="${RAILWAY_URL:-https://su-production-5a83.up.railway.app}"
           echo "Iniciando deploy no Vercel..."
           DEPLOY_OUTPUT=$(vercel --yes --prod --token "$VERCEL_TOKEN" \

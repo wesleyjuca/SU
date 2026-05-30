@@ -53,16 +53,25 @@ async def lifespan(app: FastAPI):
     _cfg.APP_START_TIME = datetime.now(timezone.utc)
     log.info("afj_core_starting", version="1.0.0")
 
-    # Criar tables (apenas em desenvolvimento — produção usa Alembic)
+    # Criar tables + garantir colunas adicionadas em migrações posteriores
     try:
         from app.db.base import engine, Base
+        from sqlalchemy import text
         import app.models  # noqa: garante que todos os models são importados
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
+            # Colunas adicionadas após o deploy inicial — idempotente no PostgreSQL
+            await conn.execute(text(
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMPTZ"
+            ))
         log.info("database_ready")
-        await _seed_default_data(engine)
     except Exception as exc:
         log.error("database_startup_failed", error=str(exc))
+
+    try:
+        await _seed_default_data(engine)
+    except Exception as exc:
+        log.warning("seed_warning", error=str(exc))
 
     # Inicializar collections do Qdrant
     try:
