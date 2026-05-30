@@ -9,15 +9,21 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL
 function AfjMonogram({ size = 80 }: { size?: number }) {
   return (
     <svg viewBox="0 0 80 80" width={size} height={size} fill="currentColor" aria-hidden="true">
-      <rect x="2" y="2" width="76" height="76" fill="none" stroke="currentColor" strokeWidth="3.5" />
-      <rect x="10" y="10" width="6" height="60" />
-      <rect x="29" y="10" width="6" height="60" />
-      <rect x="10" y="37" width="25" height="5" />
-      <rect x="43" y="10" width="6" height="42" />
-      <rect x="43" y="10" width="25" height="5" />
-      <rect x="43" y="27" width="19" height="5" />
-      <rect x="62" y="10" width="6" height="46" />
-      <path d="M68,56 Q68,70 55,70 Q49,70 49,63" fill="none" stroke="currentColor" strokeWidth="6" strokeLinecap="round" />
+      {/* Shield outer frame: flat top, straight sides, bottom curves to center point */}
+      <path d="M 4,4 L 76,4 L 76,56 Q 76,78 40,78 Q 4,78 4,56 Z"
+            fill="none" stroke="currentColor" strokeWidth="3.5" />
+      {/* A */}
+      <rect x="10" y="11" width="6" height="57" />
+      <rect x="29" y="11" width="6" height="57" />
+      <rect x="10" y="38" width="25" height="5" />
+      {/* F */}
+      <rect x="43" y="11" width="6" height="41" />
+      <rect x="43" y="11" width="25" height="5" />
+      <rect x="43" y="27" width="18" height="5" />
+      {/* J */}
+      <rect x="62" y="11" width="6" height="44" />
+      <path d="M 68,55 Q 68,68 55,68 Q 49,68 49,62"
+            fill="none" stroke="currentColor" strokeWidth="6" strokeLinecap="round" />
     </svg>
   );
 }
