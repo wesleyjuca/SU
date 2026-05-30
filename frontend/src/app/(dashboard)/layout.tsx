@@ -89,7 +89,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       )}
 
       {/* ─── Sidebar AFJ ─────────────────────────────────────────────── */}
-      <aside aria-label="Menu lateral" className={`afj-sidebar fixed md:static inset-y-0 left-0 z-30 transform transition-transform duration-200 ${sidebarOpen ? "translate-x-0" : "-translate-x-full"} md:translate-x-0`}>
+      <aside aria-label="Menu lateral" style={{ background: "linear-gradient(180deg, #3D4557 0%, #2C3547 100%)" }} className={`afj-sidebar fixed md:static inset-y-0 left-0 z-30 transform transition-transform duration-200 ${sidebarOpen ? "translate-x-0" : "-translate-x-full"} md:translate-x-0`}>
         {/* Logo — monograma geométrico AFJ */}
         <div className="afj-sidebar-logo">
           <div className="flex items-center gap-3">
