@@ -90,6 +90,7 @@ const DEFAULT_THEME: TenantTheme = {
   appName: "AFJ CORE",
   logoUrl: null,
   logoDarkUrl: null,
+  faviconUrl: null,
 };
 
 interface ThemeStore {

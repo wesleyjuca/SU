@@ -6,6 +6,45 @@ import structlog
 log = structlog.get_logger()
 
 
+async def _seed_default_data(engine) -> None:
+    """Cria tenant padrão e usuários iniciais se o banco estiver vazio."""
+    from sqlalchemy.ext.asyncio import AsyncSession
+    from sqlalchemy import select
+    from app.models.tenant import Tenant, TenantConfig
+    from app.models.user import User
+    from app.core.security import hash_password
+    import uuid
+
+    async with AsyncSession(engine) as session:
+        result = await session.execute(select(Tenant).limit(1))
+        tenant = result.scalar_one_or_none()
+        if not tenant:
+            tenant = Tenant(
+                id=uuid.uuid4(), name="AFJ Advogados",
+                slug="afj", plan="STANDARD", is_active=True,
+            )
+            session.add(tenant)
+            session.add(TenantConfig(id=uuid.uuid4(), tenant_id=tenant.id))
+            await session.flush()
+
+        SEED = [
+            ("admin@afjadvogados.com",    "Admin@123",    "Administrador", "ADMIN"),
+            ("socio@afjadvogados.com",    "Socio@123",    "Sócio",         "SOCIO"),
+            ("advogado@afjadvogados.com", "Advogado@123", "Advogado",      "ADVOGADO"),
+        ]
+        for email, password, full_name, role in SEED:
+            exists = (await session.execute(select(User).where(User.email == email))).scalar_one_or_none()
+            if not exists:
+                session.add(User(
+                    id=uuid.uuid4(), email=email,
+                    hashed_password=hash_password(password),
+                    full_name=full_name, role=role,
+                    is_active=True, tenant_id=tenant.id,
+                ))
+        await session.commit()
+    log.info("seed_complete")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # ─── STARTUP ─────────────────────────────────────────────────────────────
@@ -18,10 +57,10 @@ async def lifespan(app: FastAPI):
     try:
         from app.db.base import engine, Base
         import app.models  # noqa: garante que todos os models são importados
-        # Em produção, remover este bloco e usar apenas Alembic
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         log.info("database_ready")
+        await _seed_default_data(engine)
     except Exception as exc:
         log.error("database_startup_failed", error=str(exc))
 
