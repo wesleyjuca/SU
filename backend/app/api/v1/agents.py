@@ -131,7 +131,19 @@ async def get_run(
 
 
 async def _run_agent_task(ctx: AgentContext, run_id: str):
-    """Executa o grafo LangGraph em background."""
+    """Executa o grafo LangGraph em background e atualiza o AgentRun."""
+    from app.db.base import AsyncSessionLocal
+    from app.models.agent_run import AgentRun as AR
+    from datetime import datetime
+    from decimal import Decimal
+    import structlog
+    log = structlog.get_logger()
+
+    started = datetime.utcnow()
+    status = "FAILED"
+    output: dict = {}
+    error_msg: str | None = None
+
     try:
         state = {
             "context": ctx,
@@ -143,11 +155,30 @@ async def _run_agent_task(ctx: AgentContext, run_id: str):
             "done": False,
         }
         config = {"configurable": {"thread_id": run_id}}
-        await orchestrator_graph.ainvoke(state, config=config)
+        final_state = await orchestrator_graph.ainvoke(state, config=config)
+        status = "AWAITING_APPROVAL" if final_state.get("pending_approval") else "SUCCESS"
+        output = final_state.get("final_output") or {}
     except Exception as exc:
-        import structlog
-        log = structlog.get_logger()
         log.error("background_agent_failed", run_id=run_id, error=str(exc))
+        error_msg = str(exc)
+
+    elapsed_ms = int((datetime.utcnow() - started).total_seconds() * 1000)
+    async with AsyncSessionLocal() as db:
+        try:
+            result = await db.execute(select(AR).where(AR.id == uuid.UUID(run_id)))
+            agent_run = result.scalar_one_or_none()
+            if agent_run:
+                agent_run.status = status
+                agent_run.output_data = output
+                agent_run.error_message = error_msg
+                agent_run.completed_at = datetime.utcnow()
+                agent_run.duration_ms = elapsed_ms
+                agent_run.tokens_used = ctx.total_tokens or None
+                agent_run.cost_usd = Decimal(str(ctx.total_cost_usd)) if ctx.total_cost_usd else None
+                agent_run.requires_approval = ctx.requires_approval
+                await db.commit()
+        except Exception as exc:
+            log.error("agent_run_update_failed", run_id=run_id, error=str(exc))
 
 
 def _run_to_response(run: AgentRun) -> AgentRunResponse:

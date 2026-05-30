@@ -203,6 +203,46 @@ async def mark_paid(
     return {"message": "Marcado como pago", "id": entry_id}
 
 
+@router.get("/monthly")
+async def monthly_summary(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Retorna receitas e despesas pagas agrupadas por mês (últimos 6 meses)."""
+    from sqlalchemy import func, extract
+    from datetime import date, timedelta
+
+    six_months_ago = date.today().replace(day=1) - timedelta(days=150)
+    result = await db.execute(
+        select(
+            extract("year", FinancialEntry.created_at).label("ano"),
+            extract("month", FinancialEntry.created_at).label("mes"),
+            FinancialEntry.tipo,
+            func.sum(FinancialEntry.valor).label("total"),
+        )
+        .where(
+            FinancialEntry.tenant_id == current_user.tenant_id,
+            FinancialEntry.status == "PAGO",
+            FinancialEntry.created_at >= six_months_ago,
+        )
+        .group_by("ano", "mes", FinancialEntry.tipo)
+        .order_by("ano", "mes")
+    )
+    rows = result.all()
+
+    months: dict[str, dict] = {}
+    for row in rows:
+        key = f"{int(row.ano)}-{int(row.mes):02d}"
+        if key not in months:
+            months[key] = {"mes": key, "receitas": 0.0, "despesas": 0.0}
+        if row.tipo == "RECEITA":
+            months[key]["receitas"] = float(row.total)
+        else:
+            months[key]["despesas"] = float(row.total)
+
+    return {"data": list(months.values())}
+
+
 @router.get("/summary")
 async def financial_summary(
     current_user: User = Depends(get_current_user),

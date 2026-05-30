@@ -20,6 +20,37 @@ import structlog
 
 log = structlog.get_logger()
 
+# Mapa UF → tribunais relevantes (TJ estadual + TRF regional + TRT regional)
+UF_TO_TRIBUNAIS: dict[str, list[str]] = {
+    "AC": ["TJAC", "TRF1", "TRT14"],
+    "AL": ["TJAL", "TRF5", "TRT19"],
+    "AM": ["TJAM", "TRF1", "TRT11"],
+    "AP": ["TJAP", "TRF1", "TRT8"],
+    "BA": ["TJBA", "TRF1", "TRT5"],
+    "CE": ["TJCE", "TRF5", "TRT7"],
+    "DF": ["TJDFT", "TRF1", "TRT10"],
+    "ES": ["TJES", "TRF2", "TRT17"],
+    "GO": ["TJGO", "TRF1", "TRT18"],
+    "MA": ["TJMA", "TRF1", "TRT16"],
+    "MG": ["TJMG", "TRF1", "TRT3"],
+    "MS": ["TJMS", "TRF3", "TRT24"],
+    "MT": ["TJMT", "TRF1", "TRT23"],
+    "PA": ["TJPA", "TRF1", "TRT8"],
+    "PB": ["TJPB", "TRF5", "TRT13"],
+    "PE": ["TJPE", "TRF5", "TRT6"],
+    "PI": ["TJPI", "TRF1", "TRT22"],
+    "PR": ["TJPR", "TRF4", "TRT9"],
+    "RJ": ["TJRJ", "TRF2", "TRT1"],
+    "RN": ["TJRN", "TRF5", "TRT21"],
+    "RO": ["TJRO", "TRF1", "TRT14"],
+    "RR": ["TJRR", "TRF1", "TRT11"],
+    "RS": ["TJRS", "TRF4", "TRT4"],
+    "SC": ["TJSC", "TRF4", "TRT12"],
+    "SE": ["TJSE", "TRF5", "TRT20"],
+    "SP": ["TJSP", "TRF3", "TRT2"],
+    "TO": ["TJTO", "TRF1", "TRT10"],
+}
+
 
 class ProcessAgent(BaseAgent):
     name: ClassVar[str] = "process_agent"
@@ -231,13 +262,12 @@ class ProcessAgent(BaseAgent):
         if not oab:
             return AgentResult(status=AgentStatus.FAILED, agent_name=self.name, error="oab é obrigatório")
 
-        # Se tribunal específico fornecido, busca nele; caso contrário busca em todos os TJs
+        # Se tribunal específico fornecido, busca nele; caso contrário busca em todos os tribunais da UF
         if tribunal:
             tribunais_busca = [tribunal.upper()]
         else:
-            # Busca no TJ do estado da OAB por padrão
             uf_upper = uf.upper() if uf else ""
-            tribunais_busca = [f"TJ{uf_upper}"] if uf_upper else ["TJSP"]
+            tribunais_busca = UF_TO_TRIBUNAIS.get(uf_upper, [f"TJ{uf_upper}"] if uf_upper else ["TJSP"])
 
         todos_processos: list[str] = []
         for trib in tribunais_busca:

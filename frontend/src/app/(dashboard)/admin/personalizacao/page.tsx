@@ -1,6 +1,6 @@
 "use client";
 import { useState, useRef } from "react";
-import { Palette, Type, Layout, Download, Upload, Check, Sun } from "lucide-react";
+import { Palette, Type, Layout, Download, Upload, Check, Sun, ImageIcon } from "lucide-react";
 import { applyTheme } from "@/lib/theme";
 import { useThemeStore } from "@/store";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
@@ -142,7 +142,9 @@ export default function PersonalizacaoPage() {
   const [previewFont, setPreviewFont] = useState("Optima, 'Optima Nova', Georgia, serif");
   const [appName, setAppName] = useState(theme.appName);
   const [logoUrl, setLogoUrl] = useState(theme.logoUrl ?? "");
+  const [logoUploading, setLogoUploading] = useState(false);
   const importRef = useRef<HTMLInputElement>(null);
+  const logoFileRef = useRef<HTMLInputElement>(null);
 
   async function saveBranding(updates: Record<string, string>) {
     setSaving(true);
@@ -157,6 +159,31 @@ export default function PersonalizacaoPage() {
       setTimeout(() => setSaved(false), 2000);
     } catch {}
     setSaving(false);
+  }
+
+  async function uploadLogoFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setLogoUploading(true);
+    try {
+      const token = localStorage.getItem("afj_access_token");
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await fetch("/api/v1/tenant/logo-upload", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body: formData,
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setLogoUrl(data.logo_url);
+        setTheme({ ...theme, logoUrl: data.logo_url });
+        setSaved(true);
+        setTimeout(() => setSaved(false), 2000);
+      }
+    } catch {}
+    setLogoUploading(false);
+    if (logoFileRef.current) logoFileRef.current.value = "";
   }
 
   function applyColor(color: string) {
@@ -270,13 +297,31 @@ export default function PersonalizacaoPage() {
 
                 <div>
                   <label className="block text-[10px] font-semibold text-afj-black/55 mb-1.5 uppercase tracking-widest">
-                    URL do Logo (opcional)
+                    Logo do Sistema
                   </label>
+                  {/* Upload de arquivo */}
+                  <input
+                    ref={logoFileRef}
+                    type="file"
+                    accept="image/png,image/jpeg,image/svg+xml,image/webp"
+                    className="hidden"
+                    onChange={uploadLogoFile}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => logoFileRef.current?.click()}
+                    disabled={logoUploading}
+                    className="w-full flex items-center justify-center gap-2 border-2 border-dashed border-afj-cream-dark hover:border-afj-gold/50 rounded-sm py-4 text-sm text-afj-black/50 hover:text-afj-black transition-colors disabled:opacity-60"
+                  >
+                    <ImageIcon size={18} className="text-afj-gold" />
+                    {logoUploading ? "Enviando..." : "Clique para enviar imagem (PNG, JPG, SVG, WebP — máx. 2MB)"}
+                  </button>
+                  <p className="text-[10px] text-afj-black/35 mt-1.5">ou informe uma URL</p>
                   <input
                     type="url"
                     value={logoUrl}
                     onChange={(e) => setLogoUrl(e.target.value)}
-                    className="w-full bg-afj-cream border border-afj-cream-dark rounded-sm px-4 py-2.5 text-sm focus:outline-none focus:border-afj-gold focus:bg-white transition-colors"
+                    className="w-full bg-afj-cream border border-afj-cream-dark rounded-sm px-4 py-2.5 text-sm focus:outline-none focus:border-afj-gold focus:bg-white transition-colors mt-1"
                     placeholder="https://..."
                   />
                   {logoUrl && (

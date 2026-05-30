@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
-import { DollarSign, TrendingUp, TrendingDown, Plus, CheckCircle, Clock, Trash2, FileDown } from "lucide-react";
+import { DollarSign, TrendingUp, TrendingDown, Plus, CheckCircle, Clock, Trash2, FileDown, BarChart3 } from "lucide-react";
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
 import { useForm } from "react-hook-form";
@@ -31,6 +32,12 @@ interface Summary {
   a_receber: number;
 }
 
+interface MonthlyData {
+  mes: string;
+  receitas: number;
+  despesas: number;
+}
+
 const STATUS_STYLE: Record<string, string> = {
   PENDENTE: "badge-pendente",
   PAGO: "badge-ativo",
@@ -41,6 +48,7 @@ export default function FinanceiroPage() {
   const toast = useToast();
   const [entries, setEntries] = useState<Entry[]>([]);
   const [summary, setSummary] = useState<Summary | null>(null);
+  const [monthlyData, setMonthlyData] = useState<MonthlyData[]>([]);
   const [loading, setLoading] = useState(true);
   const [filtroTipo, setFiltroTipo] = useState("");
   const [filtroStatus, setFiltroStatus] = useState("");
@@ -58,6 +66,7 @@ export default function FinanceiroPage() {
   });
 
   useEffect(() => { fetchEntries(); fetchSummary(); }, [filtroTipo, filtroStatus]);
+  useEffect(() => { fetchMonthly(); }, []);
 
   async function fetchEntries() {
     setLoading(true);
@@ -82,6 +91,19 @@ export default function FinanceiroPage() {
       if (res.ok) {
         const data = await res.json();
         setSummary(data.summary ?? data);
+      }
+    } catch {}
+  }
+
+  async function fetchMonthly() {
+    try {
+      const token = localStorage.getItem("afj_access_token");
+      const res = await fetch("/api/v1/financial/monthly", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setMonthlyData(data.data ?? []);
       }
     } catch {}
   }
@@ -200,6 +222,30 @@ export default function FinanceiroPage() {
               {fmt(summary.saldo_atual || 0)}
             </p>
           </div>
+        </div>
+      )}
+
+      {/* Gráfico mensal */}
+      {monthlyData.length > 0 && (
+        <div className="afj-card p-5">
+          <div className="flex items-center gap-2 mb-4">
+            <BarChart3 size={16} className="text-afj-gold" />
+            <p className="text-sm font-semibold text-afj-black">Receitas vs Despesas — últimos 6 meses</p>
+          </div>
+          <ResponsiveContainer width="100%" height={220}>
+            <BarChart data={monthlyData} margin={{ top: 0, right: 10, left: 0, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#E8E3DA" />
+              <XAxis dataKey="mes" tick={{ fontSize: 11, fill: "#1A1A1A99" }} />
+              <YAxis tick={{ fontSize: 11, fill: "#1A1A1A99" }} tickFormatter={(v) => `R$${(v/1000).toFixed(0)}k`} />
+              <Tooltip
+                formatter={(value: number) => [`R$ ${value.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`, undefined]}
+                contentStyle={{ fontSize: 12 }}
+              />
+              <Legend wrapperStyle={{ fontSize: 12 }} />
+              <Bar dataKey="receitas" fill="#16a34a" name="Receitas" radius={[2, 2, 0, 0]} />
+              <Bar dataKey="despesas" fill="#ef4444" name="Despesas" radius={[2, 2, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
         </div>
       )}
 
