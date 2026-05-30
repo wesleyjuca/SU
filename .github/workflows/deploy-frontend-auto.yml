@@ -37,15 +37,15 @@ jobs:
       - name: Deploy to Vercel (production)
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: team_ojQCgX1tsKwQeGULllg6XHDQ
+          VERCEL_PROJECT_ID: prj_HYpptvvAFX1WmAjeRXyjaLmulAex
           RAILWAY_URL: ${{ secrets.RAILWAY_URL }}
         run: |
           cd frontend
-          # Determinar URL do backend Railway (secret ou fallback)
           BACKEND_URL="${RAILWAY_URL:-https://su-production-5a83.up.railway.app}"
           echo "Backend URL: $BACKEND_URL"
           echo "Iniciando deploy no Vercel..."
-          DEPLOY_OUTPUT=$(vercel --yes --prod --token "$VERCEL_TOKEN" --name "afj-core" \
-            --build-env API_URL="$BACKEND_URL" \
+          DEPLOY_OUTPUT=$(vercel --yes --prod --token "$VERCEL_TOKEN" \
             --build-env NEXT_PUBLIC_API_URL="$BACKEND_URL" 2>&1)
           EXIT_CODE=$?
           echo "$DEPLOY_OUTPUT"
