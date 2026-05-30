@@ -50,11 +50,13 @@ async def trigger_agent(
     Retorna imediatamente com o run_id para acompanhamento.
     """
     run_id = uuid.uuid4()
+    # Inject tenant_id so agents can scope DB writes correctly
+    task_input = {**body.task_input, "_tenant_id": str(current_user.tenant_id)} if current_user.tenant_id else body.task_input
     ctx = AgentContext(
         run_id=run_id,
         triggered_by=current_user.id,
         task_type=body.task_type,
-        task_input=body.task_input,
+        task_input=task_input,
         priority=body.priority,
         process_id=uuid.UUID(body.process_id) if body.process_id else None,
         client_id=uuid.UUID(body.client_id) if body.client_id else None,
@@ -78,7 +80,7 @@ async def trigger_agent(
         run_agent_task.delay(
             run_id=str(run_id),
             task_type=body.task_type,
-            task_input=body.task_input,
+            task_input=task_input,
             triggered_by=str(current_user.id),
             process_id=body.process_id,
             client_id=body.client_id,
