@@ -153,48 +153,48 @@ export default function DashboardPage() {
 
       {/* ─── KPI Cards ─────────────────────────────────────────────────── */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 animate-fade-in">
-        <div className="kpi-box">
+        <div className="afj-stat-card">
           <div className="flex items-center justify-between">
-            <span className="kpi-label">Processos Ativos</span>
+            <span className="stat-label">Processos Ativos</span>
             <Scale size={18} className="text-afj-gold" />
           </div>
-          <span className="kpi-value">
+          <span className="stat-value">
             {loading ? <Loader2 size={20} className="animate-spin text-afj-gold" /> : (metrics?.processos_ativos ?? "—")}
           </span>
-          <span className="text-xs text-afj-black/40">processos monitorados</span>
+          <span className="stat-sub">processos monitorados</span>
         </div>
 
-        <div className="kpi-box">
+        <div className="afj-stat-card">
           <div className="flex items-center justify-between">
-            <span className="kpi-label">Prazos (7 dias)</span>
+            <span className="stat-label">Prazos (7 dias)</span>
             <AlertTriangle size={18} className="text-amber-500" />
           </div>
-          <span className={`kpi-value ${(metrics?.prazos_proximos_7d ?? 0) > 0 ? "text-amber-600" : ""}`}>
+          <span className={`stat-value ${(metrics?.prazos_proximos_7d ?? 0) > 0 ? "!text-amber-600" : ""}`}>
             {loading ? <Loader2 size={20} className="animate-spin text-amber-500" /> : (metrics?.prazos_proximos_7d ?? "—")}
           </span>
-          <span className="text-xs text-afj-black/40">próximos vencimentos</span>
+          <span className="stat-sub">próximos vencimentos</span>
         </div>
 
-        <div className="kpi-box">
+        <div className="afj-stat-card">
           <div className="flex items-center justify-between">
-            <span className="kpi-label">Aprovações Pendentes</span>
+            <span className="stat-label">Aprovações Pendentes</span>
             <CheckSquare size={18} className="text-red-500" />
           </div>
-          <span className={`kpi-value ${(metrics?.aprovacoes_pendentes ?? 0) > 0 ? "text-red-600" : ""}`}>
+          <span className={`stat-value ${(metrics?.aprovacoes_pendentes ?? 0) > 0 ? "!text-red-600" : ""}`}>
             {loading ? <Loader2 size={20} className="animate-spin text-red-500" /> : (metrics?.aprovacoes_pendentes ?? "—")}
           </span>
-          <span className="text-xs text-afj-black/40">aguardando revisão</span>
+          <span className="stat-sub">aguardando revisão</span>
         </div>
 
-        <div className="kpi-box">
+        <div className="afj-stat-card">
           <div className="flex items-center justify-between">
-            <span className="kpi-label">Custo IA (mês)</span>
+            <span className="stat-label">Custo IA (mês)</span>
             <DollarSign size={18} className="text-afj-gold" />
           </div>
-          <span className="kpi-value">
+          <span className="stat-value">
             {loading ? <Loader2 size={20} className="animate-spin text-afj-gold" /> : metrics ? `$${metrics.custo_ia_mes.toFixed(2)}` : "—"}
           </span>
-          <span className="text-xs text-afj-black/40">{metrics ? `${metrics.tokens_ia_mes.toLocaleString()} tokens` : "tokens utilizados"}</span>
+          <span className="stat-sub">{metrics ? `${metrics.tokens_ia_mes.toLocaleString()} tokens` : "tokens utilizados"}</span>
         </div>
       </div>
 
@@ -220,10 +220,12 @@ export default function DashboardPage() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Status dos 19 agentes */}
         <div className="lg:col-span-1 afj-card p-5">
-          <div className="flex items-center gap-2 mb-4">
-            <Bot size={16} className="text-afj-gold" />
-            <h2 className="font-semibold text-sm text-afj-black">Agentes IA</h2>
-            <span className="ml-auto text-xs text-afj-black/40">
+          <div className="afj-section-header">
+            <div className="flex items-center gap-2">
+              <Bot size={16} className="text-afj-gold" />
+              <span className="afj-section-title">Agentes IA</span>
+            </div>
+            <span className="text-xs text-afj-black/40">
               {metrics?.agentes_ativos_24h ? `${metrics.agentes_ativos_24h} ativos` : "19 agentes"}
             </span>
           </div>
@@ -242,10 +244,12 @@ export default function DashboardPage() {
 
         {/* Feed de atividade */}
         <div className="lg:col-span-2 afj-card p-5">
-          <div className="flex items-center gap-2 mb-4">
-            <Activity size={16} className="text-afj-gold" />
-            <h2 className="font-semibold text-sm text-afj-black">Atividade Recente</h2>
-            <button onClick={loadData} className="ml-auto text-xs text-afj-black/40 hover:text-afj-gold">
+          <div className="afj-section-header">
+            <div className="flex items-center gap-2">
+              <Activity size={16} className="text-afj-gold" />
+              <span className="afj-section-title">Atividade Recente</span>
+            </div>
+            <button onClick={loadData} className="text-xs text-afj-black/40 hover:text-afj-gold">
               Atualizar
             </button>
           </div>

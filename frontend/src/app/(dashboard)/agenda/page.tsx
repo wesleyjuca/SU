@@ -3,6 +3,7 @@ import { useState, useEffect } from "react";
 import { CalendarClock, Calendar, AlertTriangle, CheckCircle, Clock, Loader2, RefreshCw } from "lucide-react";
 import Link from "next/link";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
+import { useToast } from "@/components/ui/Toast";
 
 interface AgendaItem {
   id: string;
@@ -42,6 +43,7 @@ function urgencyLabel(dias: number | null) {
 const FILTRO_DIAS = [7, 15, 30, 60];
 
 export default function AgendaPage() {
+  const toast = useToast();
   const [items, setItems] = useState<AgendaItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [dias, setDias] = useState(30);
@@ -64,12 +66,18 @@ export default function AgendaPage() {
     setCompleting(item.id);
     try {
       const token = localStorage.getItem("afj_access_token");
-      await fetch(`/api/v1/processes/${item.process_id}/deadlines/${item.id}`, {
+      const res = await fetch(`/api/v1/processes/${item.process_id}/deadlines/${item.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({ status: "CUMPRIDO" }),
       });
-      setItems((prev) => prev.filter((i) => i.id !== item.id));
+      if (res.ok) {
+        setItems((prev) => prev.filter((i) => i.id !== item.id));
+      } else {
+        toast.error("Erro ao marcar prazo como cumprido.");
+      }
+    } catch {
+      toast.error("Erro de conexão. Tente novamente.");
     } finally { setCompleting(null); }
   }
 
@@ -154,7 +162,7 @@ export default function AgendaPage() {
     <div className="max-w-5xl mx-auto space-y-5">
       <Breadcrumb crumbs={[{ label: "Dashboard", href: "/dashboard" }, { label: "Agenda de Prazos" }]} />
 
-      <div className="flex items-start justify-between">
+      <div className="afj-page-header">
         <div>
           <h1 className="font-display text-2xl font-semibold text-afj-black">Agenda de Prazos</h1>
           <p className="text-afj-black/50 text-sm mt-0.5">

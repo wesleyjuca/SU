@@ -72,7 +72,7 @@ export default function RelatoriosPage() {
   return (
     <div className="max-w-7xl mx-auto space-y-5">
       <Breadcrumb crumbs={[{ label: "Dashboard", href: "/dashboard" }, { label: "Relatórios" }]} />
-      <div className="flex items-center justify-between">
+      <div className="afj-page-header">
         <div>
           <h1 className="font-display text-2xl font-semibold text-afj-black">Relatórios</h1>
           <p className="text-afj-black/50 text-sm">Análises financeiras, processuais e de IA</p>

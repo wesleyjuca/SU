@@ -1,8 +1,9 @@
 "use client";
 import { useState } from "react";
-import { Play } from "lucide-react";
+import { Play, Loader2 } from "lucide-react";
 import { AgentStatusCard } from "@/components/agents/AgentStatusCard";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
+import { useToast } from "@/components/ui/Toast";
 import type { AgentCardData } from "@/components/agents/AgentStatusCard";
 
 const AGENTS: AgentCardData[] = [
@@ -37,7 +38,9 @@ const CATEGORY_COLORS: Record<string, string> = {
 };
 
 export default function AgentesPage() {
+  const toast = useToast();
   const [taskType, setTaskType] = useState("generate_petition");
+  const [taskDesc, setTaskDesc] = useState("");
   const [result, setResult] = useState<string | null>(null);
   const [triggering, setTriggering] = useState<string | null>(null);
 
@@ -54,17 +57,17 @@ export default function AgentesPage() {
         },
         body: JSON.stringify({
           task_type: taskType,
-          task_input: { descricao: `Teste do agente ${agentName}` },
+          task_input: { descricao: taskDesc || `Tarefa via agente ${agentName}` },
         }),
       });
       if (res.ok) {
         const data = await res.json();
         setResult(`Run iniciado: ${data.run_id}`);
       } else {
-        setResult(`Erro ao iniciar agente: ${res.status}`);
+        toast.error(`Erro ao iniciar agente: ${res.status}`);
       }
     } catch {
-      setResult("Erro de conexão ao iniciar agente.");
+      toast.error("Erro de conexão ao iniciar agente.");
     } finally {
       setTriggering(null);
     }
@@ -92,26 +95,42 @@ export default function AgentesPage() {
           <Play size={14} className="text-afj-gold" />
           Disparar Tarefa
         </h2>
-        <div className="flex gap-3">
-          <select
-            value={taskType}
-            onChange={(e) => setTaskType(e.target.value)}
-            className="border border-afj-cream-dark rounded-md px-3 py-2 text-sm text-afj-black bg-white focus:outline-none focus:border-afj-gold"
-          >
-            <option value="generate_petition">Gerar Petição</option>
-            <option value="review_document">Revisar Documento</option>
-            <option value="search_jurisprudence">Buscar Jurisprudência</option>
-            <option value="monitor_process">Monitorar Processo</option>
-            <option value="generate_strategy">Gerar Estratégia</option>
-            <option value="analytics_report">Relatório Analytics</option>
-          </select>
-          <button
-            onClick={() => triggerAgent("orchestration_agent")}
-            disabled={!!triggering}
-            className="btn-afj-primary rounded-md disabled:opacity-50"
-          >
-            {triggering ? "Iniciando..." : "Executar via Orquestrador"}
-          </button>
+        <div className="space-y-3">
+          <div className="flex gap-3 flex-wrap">
+            <select
+              value={taskType}
+              onChange={(e) => setTaskType(e.target.value)}
+              className="border border-afj-cream-dark rounded-md px-3 py-2 text-sm text-afj-black bg-white focus:outline-none focus:border-afj-gold"
+            >
+              <option value="generate_petition">Gerar Petição</option>
+              <option value="review_document">Revisar Documento</option>
+              <option value="search_jurisprudence">Buscar Jurisprudência</option>
+              <option value="monitor_process">Monitorar Processo</option>
+              <option value="generate_strategy">Gerar Estratégia</option>
+              <option value="analytics_report">Relatório Analytics</option>
+            </select>
+            <button
+              onClick={() => triggerAgent("orchestration_agent")}
+              disabled={!!triggering}
+              className="btn-afj-primary rounded-md disabled:opacity-50 flex items-center gap-2"
+            >
+              {triggering ? (
+                <>
+                  <Loader2 size={14} className="animate-spin" />
+                  Iniciando...
+                </>
+              ) : "Executar via Orquestrador"}
+            </button>
+          </div>
+          <div>
+            <label className="text-xs text-afj-black/60 block mb-1">Descrição da tarefa (opcional)</label>
+            <input
+              value={taskDesc}
+              onChange={(e) => setTaskDesc(e.target.value)}
+              placeholder="Descreva o que o agente deve executar..."
+              className="w-full border border-afj-cream-dark rounded-md px-3 py-2 text-sm focus:outline-none focus:border-afj-gold bg-white"
+            />
+          </div>
         </div>
       </div>
 

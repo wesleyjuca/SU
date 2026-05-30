@@ -65,28 +65,28 @@ export default function PeticoesPage() {
   return (
     <div className="max-w-7xl mx-auto space-y-5">
       <Breadcrumb crumbs={[{ label: "Dashboard", href: "/dashboard" }, { label: "Petições" }]} />
-      <div className="flex items-center justify-between">
+      <div className="afj-page-header">
         <div>
           <h1 className="font-display text-2xl font-semibold text-afj-black">Petições</h1>
           <p className="text-afj-black/50 text-sm">{filtrados.length} petição(ões)</p>
         </div>
-        <Link href="/peticoes/nova" className="btn-afj-primary rounded-md flex items-center gap-2">
+        <Link href="/peticoes/nova" className="btn-afj-primary rounded-sm flex items-center gap-2">
           <Plus size={15} />
           Nova Petição com IA
         </Link>
       </div>
 
       {/* KPIs rápidos */}
-      <div className="grid grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {[
-          { label: "Total", value: totais.todas, color: "text-afj-black" },
-          { label: "Em Revisão", value: totais.aguardando, color: "text-amber-600" },
-          { label: "Aprovadas", value: totais.aprovadas, color: "text-green-600" },
-          { label: "Rascunhos", value: totais.rascunhos, color: "text-afj-black/50" },
-        ].map(({ label, value, color }) => (
-          <div key={label} className="afj-card p-4 text-center">
-            <p className={`text-2xl font-bold ${color}`}>{value}</p>
-            <p className="text-xs text-afj-black/50 mt-1">{label}</p>
+          { label: "Total", value: totais.todas, cls: "" },
+          { label: "Em Revisão", value: totais.aguardando, cls: "!text-amber-600" },
+          { label: "Aprovadas", value: totais.aprovadas, cls: "!text-green-600" },
+          { label: "Rascunhos", value: totais.rascunhos, cls: "!text-afj-black/40" },
+        ].map(({ label, value, cls }) => (
+          <div key={label} className="afj-stat-card">
+            <span className="stat-label">{label}</span>
+            <span className={`stat-value ${cls}`}>{value}</span>
           </div>
         ))}
       </div>
@@ -99,13 +99,13 @@ export default function PeticoesPage() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Buscar por título..."
-            className="w-full pl-9 pr-4 py-2 text-sm border border-afj-cream-dark rounded-md focus:outline-none focus:border-afj-gold bg-white"
+            className="w-full pl-9 pr-4 py-2 text-sm border border-afj-cream-dark rounded-sm focus:outline-none focus:border-afj-gold bg-white"
           />
         </div>
         <select
           value={filtroStatus}
           onChange={(e) => setFiltroStatus(e.target.value)}
-          className="border border-afj-cream-dark rounded-md px-3 py-2 text-sm bg-white focus:outline-none focus:border-afj-gold"
+          className="border border-afj-cream-dark rounded-sm px-3 py-2 text-sm bg-white focus:outline-none focus:border-afj-gold"
         >
           <option value="">Todos os status</option>
           <option value="RASCUNHO">Rascunho</option>
@@ -126,26 +126,26 @@ export default function PeticoesPage() {
           <FileText className="mx-auto text-afj-black/20 mb-3" size={40} />
           <p className="font-semibold text-afj-black">Nenhuma petição encontrada</p>
           <p className="text-afj-black/40 text-sm mt-1">Use o assistente de IA para gerar sua primeira petição</p>
-          <Link href="/peticoes/nova" className="btn-afj-primary rounded-md inline-flex items-center gap-2 mt-4 text-sm">
+          <Link href="/peticoes/nova" className="btn-afj-primary rounded-sm inline-flex items-center gap-2 mt-4 text-sm">
             <Plus size={14} />
             Gerar Petição com IA
           </Link>
         </div>
       ) : (
         <div className="afj-card overflow-hidden">
-          <table className="w-full text-sm">
+          <table className="afj-table">
             <thead>
-              <tr className="border-b border-afj-cream-dark bg-afj-cream/50">
-                <th className="text-left px-4 py-3 text-afj-black/50 font-medium">Título</th>
-                <th className="text-left px-4 py-3 text-afj-black/50 font-medium">Tipo</th>
-                <th className="text-left px-4 py-3 text-afj-black/50 font-medium">Status</th>
-                <th className="text-left px-4 py-3 text-afj-black/50 font-medium">Gerada por IA</th>
-                <th className="text-left px-4 py-3 text-afj-black/50 font-medium">Data</th>
+              <tr>
+                <th>Título</th>
+                <th>Tipo</th>
+                <th>Status</th>
+                <th>Gerada por IA</th>
+                <th>Data</th>
               </tr>
             </thead>
             <tbody>
               {filtrados.map((p) => (
-                <tr key={p.id} className="border-b border-afj-cream-dark hover:bg-afj-cream/30 transition-colors">
+                <tr key={p.id}>
                   <td className="px-4 py-3">
                     <span className="font-medium text-afj-black">{p.titulo}</span>
                   </td>

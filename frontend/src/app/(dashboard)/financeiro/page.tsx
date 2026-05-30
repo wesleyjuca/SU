@@ -2,6 +2,7 @@
 import { useState, useEffect } from "react";
 import { DollarSign, TrendingUp, TrendingDown, Plus, CheckCircle, Clock, Trash2, FileDown } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
+import { useToast } from "@/components/ui/Toast";
 import { useForm } from "react-hook-form";
 import type { Resolver } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -37,6 +38,7 @@ const STATUS_STYLE: Record<string, string> = {
 };
 
 export default function FinanceiroPage() {
+  const toast = useToast();
   const [entries, setEntries] = useState<Entry[]>([]);
   const [summary, setSummary] = useState<Summary | null>(null);
   const [loading, setLoading] = useState(true);
@@ -85,20 +87,26 @@ export default function FinanceiroPage() {
   }
 
   async function salvar(data: FinanceiroInput) {
-    const token = localStorage.getItem("afj_access_token");
-    const res = await fetch("/api/v1/financial", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify({
-        ...data,
-        data_vencimento: data.vencimento || null,
-      }),
-    });
-    if (res.ok) {
-      setShowModal(false);
-      resetFin();
-      fetchEntries();
-      fetchSummary();
+    try {
+      const token = localStorage.getItem("afj_access_token");
+      const res = await fetch("/api/v1/financial", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          ...data,
+          data_vencimento: data.vencimento || null,
+        }),
+      });
+      if (res.ok) {
+        setShowModal(false);
+        resetFin();
+        fetchEntries();
+        fetchSummary();
+      } else {
+        toast.error("Erro ao salvar lançamento. Tente novamente.");
+      }
+    } catch {
+      toast.error("Erro de conexão. Tente novamente.");
     }
   }
 
@@ -228,40 +236,40 @@ export default function FinanceiroPage() {
       ) : (
         <div className="afj-card overflow-hidden">
           <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+          <table className="afj-table">
             <thead>
-              <tr className="border-b border-afj-cream-dark bg-afj-cream/50">
-                <th className="text-left px-4 py-3 text-afj-black/50 font-medium">Descrição</th>
-                <th className="text-left px-4 py-3 text-afj-black/50 font-medium">Tipo</th>
-                <th className="text-left px-4 py-3 text-afj-black/50 font-medium">Categoria</th>
-                <th className="text-left px-4 py-3 text-afj-black/50 font-medium">Valor</th>
-                <th className="text-left px-4 py-3 text-afj-black/50 font-medium">Vencimento</th>
-                <th className="text-left px-4 py-3 text-afj-black/50 font-medium">Status</th>
-                <th className="text-left px-4 py-3 text-afj-black/50 font-medium">Ações</th>
+              <tr>
+                <th>Descrição</th>
+                <th>Tipo</th>
+                <th>Categoria</th>
+                <th>Valor</th>
+                <th>Vencimento</th>
+                <th>Status</th>
+                <th>Ações</th>
               </tr>
             </thead>
             <tbody>
               {entries.length === 0 ? (
-                <tr><td colSpan={7} className="px-4 py-8 text-center text-afj-black/40">Nenhum lançamento encontrado</td></tr>
+                <tr><td colSpan={7} className="text-center text-afj-black/40">Nenhum lançamento encontrado</td></tr>
               ) : entries.map((e) => (
-                <tr key={e.id} className="border-b border-afj-cream-dark hover:bg-afj-cream/30 transition-colors">
-                  <td className="px-4 py-3 font-medium text-afj-black">{e.descricao}</td>
-                  <td className="px-4 py-3">
+                <tr key={e.id}>
+                  <td className="font-medium">{e.descricao}</td>
+                  <td>
                     <span className={`text-xs px-2 py-0.5 rounded-full ${e.tipo === "RECEITA" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}>
                       {e.tipo}
                     </span>
                   </td>
-                  <td className="px-4 py-3 text-afj-black/60 text-xs">{e.categoria || "—"}</td>
-                  <td className={`px-4 py-3 font-semibold ${e.tipo === "RECEITA" ? "text-green-600" : "text-red-500"}`}>
+                  <td className="text-afj-black/60 text-xs">{e.categoria || "—"}</td>
+                  <td className={`font-semibold ${e.tipo === "RECEITA" ? "text-green-600" : "text-red-500"}`}>
                     {fmt(e.valor)}
                   </td>
-                  <td className="px-4 py-3 text-afj-black/60 text-xs">
+                  <td className="text-afj-black/60 text-xs">
                     {e.data_vencimento ? new Date(e.data_vencimento).toLocaleDateString("pt-BR") : "—"}
                   </td>
-                  <td className="px-4 py-3">
+                  <td>
                     <span className={STATUS_STYLE[e.status] ?? "badge-arquivado"}>{e.status}</span>
                   </td>
-                  <td className="px-4 py-3">
+                  <td>
                     <div className="flex items-center gap-2">
                       {e.status === "PENDENTE" && (
                         <button

@@ -38,12 +38,14 @@ export default function AprovacoesPage() {
   return (
     <div className="max-w-7xl mx-auto space-y-4">
       <Breadcrumb crumbs={[{ label: "Dashboard", href: "/dashboard" }, { label: "Aprovações" }]} />
-      <div>
-        <h1 className="font-display text-2xl font-semibold text-afj-black">Aprovações Pendentes</h1>
-        <p className="text-afj-black/50 text-sm">
-          Ações que aguardam validação humana antes de serem executadas
-          {approvals.length > 0 && ` — ${approvals.length} pendente(s)`}
-        </p>
+      <div className="afj-page-header">
+        <div>
+          <h1 className="font-display text-2xl font-semibold text-afj-black">Aprovações Pendentes</h1>
+          <p className="text-afj-black/50 text-sm">
+            Ações que aguardam validação humana antes de serem executadas
+            {approvals.length > 0 && ` — ${approvals.length} pendente(s)`}
+          </p>
+        </div>
       </div>
 
       {loading ? (

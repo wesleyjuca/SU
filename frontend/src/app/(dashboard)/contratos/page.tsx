@@ -2,6 +2,7 @@
 import { useState, useEffect } from "react";
 import { FileSignature, Plus, Search, Calendar, Pencil, Trash2, X, Loader2, RefreshCw } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
+import { useToast } from "@/components/ui/Toast";
 
 interface Contrato {
   id: string;
@@ -46,6 +47,7 @@ const EMPTY_FORM: FormState = {
 };
 
 export default function ContratosPage() {
+  const toast = useToast();
   const [contratos, setContratos] = useState<Contrato[]>([]);
   const [clientes, setClientes] = useState<Cliente[]>([]);
   const [loading, setLoading] = useState(true);
@@ -104,6 +106,8 @@ export default function ContratosPage() {
         setShowModal(false);
         setForm(EMPTY_FORM);
         fetchContratos();
+      } else {
+        toast.error("Erro ao criar contrato. Tente novamente.");
       }
     } finally { setSaving(false); }
   }
@@ -112,7 +116,7 @@ export default function ContratosPage() {
     setSaving(true);
     try {
       const token = localStorage.getItem("afj_access_token");
-      await fetch(`/api/v1/documents/${id}`, {
+      const res = await fetch(`/api/v1/documents/${id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({
@@ -120,19 +124,33 @@ export default function ContratosPage() {
           status: editStatus,
         }),
       });
-      setEditingId(null);
-      fetchContratos();
+      if (res.ok) {
+        setEditingId(null);
+        fetchContratos();
+      } else {
+        toast.error("Erro ao salvar contrato. Tente novamente.");
+      }
+    } catch {
+      toast.error("Erro de conexão. Tente novamente.");
     } finally { setSaving(false); }
   }
 
   async function excluirContrato(id: string) {
-    const token = localStorage.getItem("afj_access_token");
-    await fetch(`/api/v1/documents/${id}`, {
-      method: "DELETE",
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    setDeletingId(null);
-    fetchContratos();
+    try {
+      const token = localStorage.getItem("afj_access_token");
+      const res = await fetch(`/api/v1/documents/${id}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        setDeletingId(null);
+        fetchContratos();
+      } else {
+        toast.error("Erro ao arquivar contrato. Tente novamente.");
+      }
+    } catch {
+      toast.error("Erro de conexão. Tente novamente.");
+    }
   }
 
   const filtrados = contratos.filter((c) =>

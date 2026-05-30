@@ -3,6 +3,7 @@ import { useState, useEffect } from "react";
 import Link from "next/link";
 import { Scale, Plus, AlertTriangle, Search, Pencil, Trash2 } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
+import { useToast } from "@/components/ui/Toast";
 
 interface Processo {
   id: string;
@@ -43,6 +44,7 @@ function diasParaPrazo(prazo: string | null): { dias: number; classe: string } |
 }
 
 export default function ProcessosPage() {
+  const toast = useToast();
   const [processos, setProcessos] = useState<Processo[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
@@ -72,13 +74,18 @@ export default function ProcessosPage() {
 
   async function salvarEdicao() {
     if (!editingId) return;
-    const token = localStorage.getItem("afj_access_token");
-    const res = await fetch(`/api/v1/processes/${editingId}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify(editForm),
-    });
-    if (res.ok) { setEditingId(null); fetchProcessos(); }
+    try {
+      const token = localStorage.getItem("afj_access_token");
+      const res = await fetch(`/api/v1/processes/${editingId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify(editForm),
+      });
+      if (res.ok) { setEditingId(null); fetchProcessos(); }
+      else toast.error("Erro ao salvar processo. Tente novamente.");
+    } catch {
+      toast.error("Erro de conexão. Tente novamente.");
+    }
   }
 
   async function excluirProcesso(id: string) {
@@ -152,40 +159,40 @@ export default function ProcessosPage() {
       ) : (
         <div className="afj-card overflow-hidden">
           <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+          <table className="afj-table">
             <thead>
-              <tr className="border-b border-afj-cream-dark bg-afj-cream/50">
-                <th className="text-left px-4 py-3 text-afj-black/50 font-medium">Número CNJ</th>
-                <th className="text-left px-4 py-3 text-afj-black/50 font-medium">Tribunal</th>
-                <th className="text-left px-4 py-3 text-afj-black/50 font-medium">Área</th>
-                <th className="text-left px-4 py-3 text-afj-black/50 font-medium">Situação</th>
-                <th className="text-left px-4 py-3 text-afj-black/50 font-medium">Próximo Prazo</th>
-                <th className="text-left px-4 py-3 text-afj-black/50 font-medium">Valor da Causa</th>
-                <th className="px-4 py-3" />
+              <tr>
+                <th>Número CNJ</th>
+                <th>Tribunal</th>
+                <th>Área</th>
+                <th>Situação</th>
+                <th>Próximo Prazo</th>
+                <th>Valor da Causa</th>
+                <th />
               </tr>
             </thead>
             <tbody>
               {filtrados.map((p) => {
                 const prazo = diasParaPrazo(p.proximo_prazo_at);
                 return (
-                  <tr key={p.id} className="border-b border-afj-cream-dark hover:bg-afj-cream/30 transition-colors">
-                    <td className="px-4 py-3">
+                  <tr key={p.id}>
+                    <td>
                       <Link href={`/processos/${p.id}`} className="text-afj-gold hover:underline font-mono text-xs">
                         {p.numero_cnj || "Sem CNJ"}
                       </Link>
                     </td>
-                    <td className="px-4 py-3 text-afj-black/80">{p.tribunal}</td>
-                    <td className="px-4 py-3">
+                    <td className="text-afj-black/80">{p.tribunal}</td>
+                    <td>
                       {p.area_direito && (
                         <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${AREA_COLORS[p.area_direito] ?? "bg-gray-100 text-gray-700"}`}>
                           {p.area_direito}
                         </span>
                       )}
                     </td>
-                    <td className="px-4 py-3">
+                    <td>
                       <span className={SITUACAO_STYLE[p.situacao] ?? "badge-arquivado"}>{p.situacao}</span>
                     </td>
-                    <td className="px-4 py-3">
+                    <td>
                       {prazo ? (
                         <span className={`flex items-center gap-1 text-xs ${prazo.classe}`}>
                           {prazo.dias < 0 ? <AlertTriangle size={12} /> : null}
@@ -195,10 +202,10 @@ export default function ProcessosPage() {
                         <span className="text-afj-black/30 text-xs">—</span>
                       )}
                     </td>
-                    <td className="px-4 py-3 text-afj-black/60 text-xs">
+                    <td className="text-afj-black/60 text-xs">
                       {p.valor_causa ? `R$ ${p.valor_causa.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}` : "—"}
                     </td>
-                    <td className="px-4 py-3">
+                    <td>
                       <div className="flex items-center gap-2">
                         <button
                           onClick={() => { setEditingId(p.id); setEditForm({ tribunal: p.tribunal, situacao: p.situacao, area_direito: p.area_direito ?? "" }); }}
@@ -243,6 +250,16 @@ export default function ProcessosPage() {
                   <option value="SUSPENSO">Suspenso</option>
                   <option value="ARQUIVADO">Arquivado</option>
                   <option value="ENCERRADO">Encerrado</option>
+                </select>
+              </div>
+              <div>
+                <label className="text-xs text-afj-black/60 block mb-1">Área do Direito</label>
+                <select value={editForm.area_direito ?? ""} onChange={(e) => setEditForm({ ...editForm, area_direito: e.target.value })}
+                  className="w-full border border-afj-cream-dark rounded-md px-3 py-2 text-sm focus:outline-none focus:border-afj-gold">
+                  <option value="">Sem área definida</option>
+                  {["CIVIL", "TRABALHISTA", "TRIBUTARIO", "PENAL", "PREVIDENCIARIO", "CONSUMIDOR", "EMPRESARIAL"].map((a) => (
+                    <option key={a} value={a}>{a}</option>
+                  ))}
                 </select>
               </div>
             </div>

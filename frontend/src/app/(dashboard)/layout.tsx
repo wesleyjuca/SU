@@ -14,6 +14,7 @@ import { useNotifications } from "@/hooks/useNotifications";
 import { NotificationDropdown } from "@/components/layout/NotificationDropdown";
 import { SearchModal } from "@/components/layout/SearchModal";
 import { BottomNav } from "@/components/layout/BottomNav";
+import { ToastProvider } from "@/components/ui/Toast";
 
 const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, roles: null },
@@ -80,6 +81,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   }, []);
 
   return (
+    <ToastProvider>
     <div className="flex h-screen overflow-hidden">
       {/* Mobile overlay */}
       {sidebarOpen && (
@@ -253,5 +255,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
       <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)} />
     </div>
+    </ToastProvider>
   );
 }

@@ -91,7 +91,7 @@ export default function UsuariosPage() {
   return (
     <div className="max-w-4xl mx-auto space-y-5">
       <Breadcrumb crumbs={[{ label: "Dashboard", href: "/dashboard" }, { label: "Admin" }, { label: "Usuários" }]} />
-      <div className="flex items-center justify-between">
+      <div className="afj-page-header">
         <div>
           <h1 className="font-display text-2xl font-semibold text-afj-black">Usuários</h1>
           <p className="text-afj-black/50 text-sm">Gerencie membros do escritório</p>

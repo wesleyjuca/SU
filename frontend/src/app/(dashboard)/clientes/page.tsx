@@ -2,6 +2,7 @@
 import { useState, useEffect } from "react";
 import { Users, Plus, Search, Phone, Mail, Pencil, Trash2, ExternalLink } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
+import { useToast } from "@/components/ui/Toast";
 import Link from "next/link";
 
 interface Cliente {
@@ -25,6 +26,7 @@ const STATUS_STYLE: Record<string, string> = {
 };
 
 export default function ClientesPage() {
+  const toast = useToast();
   const [clientes, setClientes] = useState<Cliente[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
@@ -50,13 +52,18 @@ export default function ClientesPage() {
 
   async function salvarEdicao() {
     if (!editingId) return;
-    const token = localStorage.getItem("afj_access_token");
-    const res = await fetch(`/api/v1/clients/${editingId}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify(editForm),
-    });
-    if (res.ok) { setEditingId(null); fetchClientes(); }
+    try {
+      const token = localStorage.getItem("afj_access_token");
+      const res = await fetch(`/api/v1/clients/${editingId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify(editForm),
+      });
+      if (res.ok) { setEditingId(null); fetchClientes(); }
+      else toast.error("Erro ao salvar cliente. Tente novamente.");
+    } catch {
+      toast.error("Erro de conexão. Tente novamente.");
+    }
   }
 
   async function excluirCliente(id: string) {
@@ -141,7 +148,7 @@ export default function ClientesPage() {
                 <div className="flex items-center gap-2">
                   {!c.lgpd_consent && <span className="text-xs text-amber-600">⚠ LGPD</span>}
                   <Link href={`/clientes/${c.id}`} className="text-afj-black/30 hover:text-afj-gold transition-colors" aria-label="Ver detalhes"><ExternalLink size={12} /></Link>
-                  <button onClick={() => { setEditingId(c.id); setEditForm({ nome_completo: c.nome_completo, email: c.email ?? "", telefone: c.telefone ?? "", status: c.status }); }} className="text-afj-black/30 hover:text-afj-gold transition-colors" aria-label="Editar cliente"><Pencil size={12} /></button>
+                  <button onClick={() => { setEditingId(c.id); setEditForm({ nome_completo: c.nome_completo, email: c.email ?? "", telefone: c.telefone ?? "", whatsapp: c.whatsapp ?? "", razao_social: c.razao_social ?? "", status: c.status, lgpd_consent: c.lgpd_consent, tipo: c.tipo }); }} className="text-afj-black/30 hover:text-afj-gold transition-colors" aria-label="Editar cliente"><Pencil size={12} /></button>
                   <button onClick={() => setDeletingId(c.id)} className="text-afj-black/30 hover:text-red-500 transition-colors" aria-label="Remover cliente"><Trash2 size={12} /></button>
                 </div>
               </div>
@@ -160,6 +167,7 @@ export default function ClientesPage() {
                 { label: "Nome Completo", key: "nome_completo", type: "text" },
                 { label: "E-mail", key: "email", type: "email" },
                 { label: "Telefone", key: "telefone", type: "tel" },
+                { label: "WhatsApp", key: "whatsapp", type: "tel" },
               ].map(({ label, key, type }) => (
                 <div key={key}>
                   <label className="text-xs text-afj-black/60 block mb-1">{label}</label>
@@ -167,6 +175,13 @@ export default function ClientesPage() {
                     className="w-full border border-afj-cream-dark rounded-md px-3 py-2 text-sm focus:outline-none focus:border-afj-gold" />
                 </div>
               ))}
+              {editForm.tipo === "PJ" && (
+                <div>
+                  <label className="text-xs text-afj-black/60 block mb-1">Razão Social</label>
+                  <input type="text" value={editForm.razao_social ?? ""} onChange={(e) => setEditForm({ ...editForm, razao_social: e.target.value })}
+                    className="w-full border border-afj-cream-dark rounded-md px-3 py-2 text-sm focus:outline-none focus:border-afj-gold" />
+                </div>
+              )}
               <div>
                 <label className="text-xs text-afj-black/60 block mb-1">Status</label>
                 <select value={editForm.status ?? ""} onChange={(e) => setEditForm({ ...editForm, status: e.target.value })}
@@ -176,6 +191,10 @@ export default function ClientesPage() {
                   <option value="INATIVO">Inativo</option>
                 </select>
               </div>
+              <label className="flex items-center gap-2 text-sm cursor-pointer">
+                <input type="checkbox" checked={!!editForm.lgpd_consent} onChange={(e) => setEditForm({ ...editForm, lgpd_consent: e.target.checked })} />
+                <span className="text-afj-black/70">Consentimento LGPD coletado</span>
+              </label>
             </div>
             <div className="flex gap-3 mt-5">
               <button onClick={() => setEditingId(null)} className="flex-1 btn-afj-outline rounded-md">Cancelar</button>
