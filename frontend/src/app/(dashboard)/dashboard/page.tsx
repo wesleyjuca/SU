@@ -1,8 +1,16 @@
 "use client";
 import { useState, useEffect } from "react";
+import dynamic from "next/dynamic";
 import { Scale, AlertTriangle, CheckSquare, DollarSign, Bot, Activity, Loader2, BarChart2 } from "lucide-react";
 import Link from "next/link";
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
+import { useAgentWebSocket } from "@/hooks/useAgentWebSocket";
+import { OnboardingWizard } from "@/components/onboarding/OnboardingWizard";
+import { PushPermissionBanner } from "@/components/notifications/PushPermissionBanner";
+
+const MiniFinancialChart = dynamic(() => import("@/components/dashboard/MiniFinancialChart"), {
+  ssr: false,
+  loading: () => <div className="h-full bg-afj-cream-dark/30 animate-pulse rounded-sm" />,
+});
 
 interface FinanceiroMes {
   mes: string;
@@ -62,8 +70,14 @@ export default function DashboardPage() {
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [runs, setRuns] = useState<AgentRun[]>([]);
   const [loading, setLoading] = useState(true);
-  const [agentStatus, setAgentStatus] = useState<Record<string, string>>({});
   const [finData, setFinData] = useState<FinanceiroMes[]>([]);
+  const [showOnboarding, setShowOnboarding] = useState(false);
+
+  // Real-time agent status via WebSocket (falls back to polling-derived status)
+  const wsAgentStatus = useAgentWebSocket();
+  const [pollAgentStatus, setPollAgentStatus] = useState<Record<string, string>>({});
+  // Merge: WebSocket updates take precedence
+  const agentStatus = { ...pollAgentStatus, ...wsAgentStatus };
 
   useEffect(() => {
     loadData();
@@ -89,7 +103,7 @@ export default function DashboardPage() {
         const list: AgentRun[] = Array.isArray(data) ? data : (data.runs ?? []);
         setRuns(list);
 
-        // Build agent status map from recent runs
+        // Build poll-based agent status map from recent runs (WebSocket takes precedence)
         const statusMap: Record<string, string> = {};
         for (const run of list) {
           const ag = run.agent_name;
@@ -101,11 +115,21 @@ export default function DashboardPage() {
               : "idle";
           }
         }
-        setAgentStatus(statusMap);
+        setPollAgentStatus(statusMap);
       }
       if (finRes.status === "fulfilled" && finRes.value.ok) {
         const d = await finRes.value.json();
         setFinData(d.mensal ?? []);
+      }
+
+      // Show onboarding for first-time users with no processes
+      if (typeof window !== "undefined" && !localStorage.getItem("afj_onboarded")) {
+        const m = metricsRes.status === "fulfilled" && metricsRes.value.ok
+          ? await metricsRes.value.clone().json().catch(() => null)
+          : null;
+        if (!m || m.processos_ativos === 0) {
+          setShowOnboarding(true);
+        }
       }
     } finally {
       setLoading(false);
@@ -116,14 +140,19 @@ export default function DashboardPage() {
     loading ? "..." : v !== undefined ? `${prefix}${v}${suffix}` : "—";
 
   return (
+    <>
+    {showOnboarding && (
+      <OnboardingWizard onComplete={() => setShowOnboarding(false)} />
+    )}
     <div className="space-y-6 max-w-7xl mx-auto">
+      {!showOnboarding && <PushPermissionBanner />}
       <div>
         <h1 className="font-display text-2xl font-semibold text-afj-black">Dashboard</h1>
         <p className="text-afj-black/50 text-sm mt-0.5">Visão geral do escritório em tempo real</p>
       </div>
 
       {/* ─── KPI Cards ─────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 animate-fade-in">
         <div className="kpi-box">
           <div className="flex items-center justify-between">
             <span className="kpi-label">Processos Ativos</span>
@@ -182,27 +211,7 @@ export default function DashboardPage() {
             </Link>
           </div>
           <div style={{ height: 160 }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={finData} barCategoryGap="30%">
-                <XAxis
-                  dataKey="mes"
-                  tickFormatter={(v) => new Date(v + "-01").toLocaleDateString("pt-BR", { month: "short" })}
-                  tick={{ fontSize: 11, fill: "#6B7280" }}
-                  axisLine={false}
-                  tickLine={false}
-                />
-                <YAxis hide />
-                <Tooltip
-                  formatter={(v: number, name: string) => [
-                    `R$ ${v.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`,
-                    name === "receitas" ? "Receitas" : "Despesas",
-                  ]}
-                  contentStyle={{ fontSize: 12, borderRadius: 4, border: "1px solid #EAE5D8" }}
-                />
-                <Bar dataKey="receitas" fill="#B8954A" radius={[3, 3, 0, 0]} />
-                <Bar dataKey="despesas" fill="#DC2626" radius={[3, 3, 0, 0]} opacity={0.7} />
-              </BarChart>
-            </ResponsiveContainer>
+            <MiniFinancialChart data={finData} />
           </div>
         </div>
       )}
@@ -257,24 +266,13 @@ export default function DashboardPage() {
                 </div>
               ))}
             </div>
-          ) : (
-            <div className="space-y-3">
-              {[
-                { tipo: "Sistema", msg: "AFJ CORE SYSTEM operacional", color: "bg-green-500" },
-                { tipo: "Agentes", msg: "19 agentes carregados e prontos", color: "bg-afj-gold" },
-                { tipo: "Banco", msg: "Schema do banco criado e indexado", color: "bg-blue-500" },
-                { tipo: "Qdrant", msg: "6 collections de memória institucional criadas", color: "bg-purple-500" },
-              ].map((item, i) => (
-                <div key={i} className="flex items-start gap-3 text-sm">
-                  <span className={`w-1.5 h-1.5 rounded-full mt-1.5 flex-shrink-0 ${item.color}`} />
-                  <div className="flex-1 min-w-0">
-                    <span className="font-medium text-afj-black/80">[{item.tipo}]</span>{" "}
-                    <span className="text-afj-black/60">{item.msg}</span>
-                  </div>
-                </div>
-              ))}
+          ) : !loading ? (
+            <div className="py-8 text-center">
+              <Bot size={28} className="mx-auto text-afj-black/15 mb-2" />
+              <p className="text-sm text-afj-black/40">Nenhuma execução de agente recente</p>
+              <p className="text-xs text-afj-black/25 mt-1">Execute um agente para ver a atividade aqui</p>
             </div>
-          )}
+          ) : null}
 
           <div className="mt-6 p-4 bg-afj-gold/5 border border-afj-gold/20 rounded-lg">
             <p className="text-sm text-afj-black/70">
@@ -293,5 +291,6 @@ export default function DashboardPage() {
         </div>
       </div>
     </div>
+    </>
   );
 }

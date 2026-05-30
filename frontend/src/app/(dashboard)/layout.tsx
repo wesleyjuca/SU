@@ -6,28 +6,33 @@ import { useUserStore } from "@/store";
 import {
   LayoutDashboard, Scale, FileText, Users, FolderOpen,
   Bot, CheckSquare, DollarSign, Shield, Shapes, Settings,
-  Bell, Search, ChevronRight, FileEdit, Menu, X, LogOut, BarChart2, CalendarClock
+  Bell, Search, ChevronRight, FileEdit, Menu, X, LogOut, BarChart2, CalendarClock, BookOpen,
+  Moon, Sun, Activity, Users2
 } from "lucide-react";
 import { useApprovalCount } from "@/hooks/useApprovals";
 import { useNotifications } from "@/hooks/useNotifications";
 import { NotificationDropdown } from "@/components/layout/NotificationDropdown";
 import { SearchModal } from "@/components/layout/SearchModal";
+import { BottomNav } from "@/components/layout/BottomNav";
 
 const navItems = [
-  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/processos", label: "Processos", icon: Scale },
-  { href: "/agenda", label: "Agenda", icon: CalendarClock },
-  { href: "/peticoes", label: "Petições", icon: FileEdit },
-  { href: "/clientes", label: "Clientes", icon: Users },
-  { href: "/documentos", label: "Documentos", icon: FolderOpen },
-  { href: "/contratos", label: "Contratos", icon: FileText },
-  { href: "/agentes", label: "Agentes IA", icon: Bot },
-  { href: "/aprovacoes", label: "Aprovações", icon: CheckSquare },
-  { href: "/financeiro", label: "Financeiro", icon: DollarSign },
-  { href: "/relatorios", label: "Relatórios", icon: BarChart2 },
-  { href: "/visual-law", label: "Visual Law", icon: Shapes },
-  { href: "/auditoria", label: "Auditoria", icon: Shield },
-  { href: "/configuracoes", label: "Configurações", icon: Settings },
+  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, roles: null },
+  { href: "/processos", label: "Processos", icon: Scale, roles: null },
+  { href: "/agenda", label: "Agenda", icon: CalendarClock, roles: null },
+  { href: "/peticoes", label: "Petições", icon: FileEdit, roles: null },
+  { href: "/clientes", label: "Clientes", icon: Users, roles: null },
+  { href: "/documentos", label: "Documentos", icon: FolderOpen, roles: null },
+  { href: "/contratos", label: "Contratos", icon: FileText, roles: null },
+  { href: "/agentes", label: "Agentes IA", icon: Bot, roles: null },
+  { href: "/aprovacoes", label: "Aprovações", icon: CheckSquare, roles: null },
+  { href: "/financeiro", label: "Financeiro", icon: DollarSign, roles: null },
+  { href: "/relatorios", label: "Relatórios", icon: BarChart2, roles: null },
+  { href: "/visual-law", label: "Visual Law", icon: Shapes, roles: null },
+  { href: "/busca-juridica", label: "Pesquisa Jurídica", icon: BookOpen, roles: null },
+  { href: "/auditoria", label: "Auditoria", icon: Shield, roles: ["ADMIN", "SOCIO"] },
+  { href: "/admin/health", label: "Monitoramento", icon: Activity, roles: ["ADMIN"] },
+  { href: "/admin/usuarios", label: "Usuários", icon: Users2, roles: ["ADMIN"] },
+  { href: "/configuracoes", label: "Configurações", icon: Settings, roles: null },
 ];
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
@@ -37,6 +42,19 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const [notifOpen, setNotifOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [dark, setDark] = useState(false);
+
+  useEffect(() => {
+    const saved = localStorage.getItem("afj_dark");
+    if (saved === "1") { document.documentElement.classList.add("dark"); setDark(true); }
+  }, []);
+
+  function toggleDark() {
+    const next = !dark;
+    setDark(next);
+    document.documentElement.classList.toggle("dark", next);
+    localStorage.setItem("afj_dark", next ? "1" : "0");
+  }
 
   useEffect(() => {
     function handleKey(e: KeyboardEvent) {
@@ -77,15 +95,17 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 flex-shrink-0 text-afj-gold">
               <svg viewBox="0 0 80 80" className="w-9 h-9" fill="currentColor" aria-hidden="true">
-                <rect x="2" y="2" width="76" height="76" fill="none" stroke="currentColor" strokeWidth="3.5"/>
-                <rect x="10" y="10" width="6" height="60"/>
-                <rect x="29" y="10" width="6" height="60"/>
-                <rect x="10" y="37" width="25" height="5"/>
-                <rect x="43" y="10" width="6" height="42"/>
-                <rect x="43" y="10" width="25" height="5"/>
-                <rect x="43" y="27" width="19" height="5"/>
-                <rect x="62" y="10" width="6" height="46"/>
-                <path d="M68,56 Q68,70 55,70 Q49,70 49,63" fill="none" stroke="currentColor" strokeWidth="6" strokeLinecap="round"/>
+                <path d="M 4,4 L 76,4 L 76,56 Q 76,78 40,78 Q 4,78 4,56 Z"
+                      fill="none" stroke="currentColor" strokeWidth="3.5"/>
+                <rect x="10" y="11" width="6" height="57"/>
+                <rect x="29" y="11" width="6" height="57"/>
+                <rect x="10" y="38" width="25" height="5"/>
+                <rect x="43" y="11" width="6" height="41"/>
+                <rect x="43" y="11" width="25" height="5"/>
+                <rect x="43" y="27" width="18" height="5"/>
+                <rect x="62" y="11" width="6" height="44"/>
+                <path d="M 68,55 Q 68,68 55,68 Q 49,68 49,62"
+                      fill="none" stroke="currentColor" strokeWidth="6" strokeLinecap="round"/>
               </svg>
             </div>
             <div>
@@ -101,21 +121,23 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
         {/* Navegação */}
         <nav aria-label="Navegação principal" className="flex-1 overflow-y-auto py-3 space-y-0.5">
-          {navItems.map((item) => {
-            const Icon = item.icon;
-            const isActive = pathname === item.href || pathname.startsWith(item.href + "/");
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                className={`afj-sidebar-nav-item ${isActive ? "active" : ""}`}
-              >
-                <Icon size={16} />
-                <span>{item.label}</span>
-                {isActive && <ChevronRight size={12} className="ml-auto text-afj-gold/60" />}
-              </Link>
-            );
-          })}
+          {navItems
+            .filter((item) => !item.roles || item.roles.includes(user?.role ?? ""))
+            .map((item) => {
+              const Icon = item.icon;
+              const isActive = pathname === item.href || pathname.startsWith(item.href + "/");
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className={`afj-sidebar-nav-item ${isActive ? "active" : ""}`}
+                >
+                  <Icon size={16} />
+                  <span>{item.label}</span>
+                  {isActive && <ChevronRight size={12} className="ml-auto text-afj-gold/60" />}
+                </Link>
+              );
+            })}
         </nav>
 
         {/* Rodapé do sidebar */}
@@ -188,6 +210,14 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             </button>
           </div>
           <div className="flex items-center gap-3">
+            <button
+              onClick={toggleDark}
+              className="text-afj-black/40 hover:text-afj-black transition-colors p-1"
+              aria-label={dark ? "Modo claro" : "Modo escuro"}
+              title={dark ? "Modo claro" : "Modo escuro"}
+            >
+              {dark ? <Sun size={16} /> : <Moon size={16} />}
+            </button>
             <div className="relative">
               <button
                 onClick={() => setNotifOpen((o) => !o)}
@@ -209,11 +239,14 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           </div>
         </header>
 
-        {/* Área de conteúdo com scroll */}
-        <main className="flex-1 overflow-y-auto p-6 bg-afj-cream">
+        {/* Área de conteúdo com scroll — pb-16 evita sobreposição da bottom nav no mobile */}
+        <main className="flex-1 overflow-y-auto p-6 pb-20 md:pb-6 bg-afj-cream">
           {children}
         </main>
       </div>
+
+      {/* Bottom navigation — apenas mobile */}
+      <BottomNav approvalCount={approvalCount} />
 
       <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)} />
     </div>

@@ -1,7 +1,11 @@
 "use client";
 import { useState, useEffect } from "react";
-import { DollarSign, TrendingUp, TrendingDown, Plus, CheckCircle, Clock, Trash2 } from "lucide-react";
+import { DollarSign, TrendingUp, TrendingDown, Plus, CheckCircle, Clock, Trash2, FileDown } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
+import { useForm } from "react-hook-form";
+import type { Resolver } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { FinanceiroSchema, type FinanceiroInput } from "@/lib/schemas";
 
 interface Entry {
   id: string;
@@ -40,13 +44,15 @@ export default function FinanceiroPage() {
   const [filtroStatus, setFiltroStatus] = useState("");
   const [showModal, setShowModal] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [form, setForm] = useState({
-    tipo: "RECEITA",
-    categoria: "",
-    descricao: "",
-    valor: "",
-    data_vencimento: "",
-    status: "PENDENTE",
+
+  const {
+    register: registerFin,
+    handleSubmit: handleSubmitFin,
+    reset: resetFin,
+    formState: { errors: finErrors, isSubmitting: finSubmitting },
+  } = useForm<FinanceiroInput>({
+    resolver: zodResolver(FinanceiroSchema) as Resolver<FinanceiroInput>,
+    defaultValues: { tipo: "RECEITA", status: "PENDENTE" },
   });
 
   useEffect(() => { fetchEntries(); fetchSummary(); }, [filtroTipo, filtroStatus]);
@@ -78,19 +84,22 @@ export default function FinanceiroPage() {
     } catch {}
   }
 
-  async function salvar(e: React.FormEvent) {
-    e.preventDefault();
+  async function salvar(data: FinanceiroInput) {
     const token = localStorage.getItem("afj_access_token");
     const res = await fetch("/api/v1/financial", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
       body: JSON.stringify({
-        ...form,
-        valor: parseFloat(form.valor),
-        data_vencimento: form.data_vencimento || null,
+        ...data,
+        data_vencimento: data.vencimento || null,
       }),
     });
-    if (res.ok) { setShowModal(false); fetchEntries(); fetchSummary(); }
+    if (res.ok) {
+      setShowModal(false);
+      resetFin();
+      fetchEntries();
+      fetchSummary();
+    }
   }
 
   async function excluirLancamento(id: string) {
@@ -100,6 +109,22 @@ export default function FinanceiroPage() {
       headers: { Authorization: `Bearer ${token}` },
     });
     if (res.ok) { setDeletingId(null); fetchEntries(); fetchSummary(); }
+  }
+
+  async function exportarCSV() {
+    const token = localStorage.getItem("afj_access_token");
+    const res = await fetch("/api/v1/financial/export", {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (res.ok) {
+      const blob = await res.blob();
+      const a = Object.assign(document.createElement("a"), {
+        href: URL.createObjectURL(blob),
+        download: "financeiro.csv",
+      });
+      a.click();
+      URL.revokeObjectURL(a.href);
+    }
   }
 
   async function marcarPago(id: string) {
@@ -122,10 +147,16 @@ export default function FinanceiroPage() {
           <h1 className="font-display text-2xl font-semibold text-afj-black">Financeiro</h1>
           <p className="text-afj-black/50 text-sm">Honorários, despesas e fluxo de caixa</p>
         </div>
-        <button onClick={() => setShowModal(true)} className="btn-afj-primary rounded-md flex items-center gap-2">
-          <Plus size={15} />
-          Novo Lançamento
-        </button>
+        <div className="flex gap-2">
+          <button onClick={exportarCSV} className="btn-afj-outline rounded-md flex items-center gap-2" title="Exportar CSV" aria-label="Exportar lançamentos como CSV">
+            <FileDown size={14} />
+            Exportar
+          </button>
+          <button onClick={() => setShowModal(true)} className="btn-afj-primary rounded-md flex items-center gap-2">
+            <Plus size={15} />
+            Novo Lançamento
+          </button>
+        </div>
       </div>
 
       {/* KPIs */}
@@ -275,45 +306,77 @@ export default function FinanceiroPage() {
       {/* Modal */}
       {showModal && (
         <div className="fixed inset-0 bg-afj-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl p-6 w-full max-w-md shadow-2xl">
+          <div className="bg-white rounded-sm p-6 w-full max-w-md shadow-2xl">
             <h2 className="font-display text-xl font-semibold text-afj-black mb-5">Novo Lançamento</h2>
-            <form onSubmit={salvar} className="space-y-4">
+            <form onSubmit={handleSubmitFin(salvar)} className="space-y-4">
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-xs text-afj-black/60 block mb-1">Tipo *</label>
-                  <select value={form.tipo} onChange={(e) => setForm({ ...form, tipo: e.target.value })}
-                    className="w-full border border-afj-cream-dark rounded-md px-3 py-2 text-sm focus:outline-none focus:border-afj-gold">
+                  <select
+                    {...registerFin("tipo")}
+                    className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold"
+                  >
                     <option value="RECEITA">Receita</option>
                     <option value="DESPESA">Despesa</option>
                   </select>
+                  {finErrors.tipo && <p className="text-xs text-red-500 mt-1">{finErrors.tipo.message}</p>}
                 </div>
                 <div>
                   <label className="text-xs text-afj-black/60 block mb-1">Status</label>
-                  <select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}
-                    className="w-full border border-afj-cream-dark rounded-md px-3 py-2 text-sm focus:outline-none focus:border-afj-gold">
+                  <select
+                    {...registerFin("status")}
+                    className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold"
+                  >
                     <option value="PENDENTE">Pendente</option>
                     <option value="PAGO">Pago</option>
                   </select>
                 </div>
               </div>
-              {[
-                { label: "Descrição *", key: "descricao", type: "text" },
-                { label: "Categoria", key: "categoria", type: "text" },
-                { label: "Valor (R$) *", key: "valor", type: "number" },
-                { label: "Vencimento", key: "data_vencimento", type: "date" },
-              ].map(({ label, key, type }) => (
-                <div key={key}>
-                  <label className="text-xs text-afj-black/60 block mb-1">{label}</label>
-                  <input type={type} step={type === "number" ? "0.01" : undefined}
-                    value={(form as any)[key]}
-                    onChange={(e) => setForm({ ...form, [key]: e.target.value })}
-                    className="w-full border border-afj-cream-dark rounded-md px-3 py-2 text-sm focus:outline-none focus:border-afj-gold"
-                    required={label.includes("*")} />
-                </div>
-              ))}
+              <div>
+                <label className="text-xs text-afj-black/60 block mb-1">Descrição *</label>
+                <input
+                  {...registerFin("descricao")}
+                  type="text"
+                  placeholder="Ex: Honorários advocatícios"
+                  className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold"
+                />
+                {finErrors.descricao && <p className="text-xs text-red-500 mt-1">{finErrors.descricao.message}</p>}
+              </div>
+              <div>
+                <label className="text-xs text-afj-black/60 block mb-1">Categoria</label>
+                <input
+                  {...registerFin("categoria")}
+                  type="text"
+                  placeholder="Ex: Honorários, Custas..."
+                  className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-afj-black/60 block mb-1">Valor (R$) *</label>
+                <input
+                  {...registerFin("valor")}
+                  type="number"
+                  step="0.01"
+                  placeholder="0,00"
+                  className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold"
+                />
+                {finErrors.valor && <p className="text-xs text-red-500 mt-1">{finErrors.valor.message}</p>}
+              </div>
+              <div>
+                <label className="text-xs text-afj-black/60 block mb-1">Vencimento</label>
+                <input
+                  {...registerFin("vencimento")}
+                  type="date"
+                  className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold"
+                />
+              </div>
               <div className="flex gap-3 pt-2">
-                <button type="button" onClick={() => setShowModal(false)} className="flex-1 btn-afj-outline rounded-md">Cancelar</button>
-                <button type="submit" className="flex-1 btn-afj-primary rounded-md">Salvar</button>
+                <button type="button" onClick={() => { setShowModal(false); resetFin(); }} className="flex-1 btn-afj-outline rounded-sm">
+                  Cancelar
+                </button>
+                <button type="submit" disabled={finSubmitting} className="flex-1 btn-afj-primary rounded-sm disabled:opacity-50">
+                  {finSubmitting ? "Salvando..." : "Salvar"}
+                </button>
               </div>
             </form>
           </div>

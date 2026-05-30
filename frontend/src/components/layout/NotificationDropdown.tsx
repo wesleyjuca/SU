@@ -1,7 +1,7 @@
 "use client";
 import { useRef, useEffect } from "react";
 import Link from "next/link";
-import { Bell, Check, CheckCheck, ExternalLink, X } from "lucide-react";
+import { Bell, Check, CheckCheck, ExternalLink, X, Clock, FileText, CheckSquare, Bot } from "lucide-react";
 import { useNotifications } from "@/hooks/useNotifications";
 import { useNotificationStore } from "@/store";
 
@@ -12,12 +12,12 @@ const PRIORITY_COLORS: Record<string, string> = {
   LOW: "border-l-gray-300",
 };
 
-const TIPO_ICONS: Record<string, string> = {
-  PRAZO_VENCENDO: "⏰",
-  NOVO_ANDAMENTO: "📋",
-  APROVACAO_PENDENTE: "✅",
-  AGENTE_CONCLUIDO: "🤖",
-  SISTEMA: "🔔",
+const TIPO_ICONS: Record<string, React.ReactNode> = {
+  PRAZO_VENCENDO: <Clock size={13} className="text-amber-500 flex-shrink-0" />,
+  NOVO_ANDAMENTO: <FileText size={13} className="text-blue-500 flex-shrink-0" />,
+  APROVACAO_PENDENTE: <CheckSquare size={13} className="text-afj-gold flex-shrink-0" />,
+  AGENTE_CONCLUIDO: <Bot size={13} className="text-purple-500 flex-shrink-0" />,
+  SISTEMA: <Bell size={13} className="text-afj-black/40 flex-shrink-0" />,
 };
 
 interface NotificationDropdownProps {
@@ -98,7 +98,7 @@ export function NotificationDropdown({ open, onClose }: NotificationDropdownProp
               <div className="flex items-start justify-between gap-2">
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-1.5 mb-0.5">
-                    <span className="text-xs">{TIPO_ICONS[notif.tipo ?? "SISTEMA"] ?? "🔔"}</span>
+                    {TIPO_ICONS[notif.tipo ?? "SISTEMA"] ?? <Bell size={13} className="text-afj-black/40 flex-shrink-0" />}
                     <p className={`text-xs font-medium truncate ${notif.lida ? "text-afj-black/60" : "text-afj-black"}`}>
                       {notif.titulo}
                     </p>

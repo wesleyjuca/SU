@@ -43,6 +43,73 @@
     @apply bg-afj-cream text-afj-black font-sans antialiased;
   }
 
+  /* ─── Dark mode ──────────────────────────────────────────────────────────── */
+  .dark body {
+    @apply bg-[#0f1117] text-[#f0ece4];
+  }
+
+  .dark .afj-card {
+    background: #1a1f2e;
+    border-color: rgba(255, 255, 255, 0.08);
+    color: #f0ece4;
+  }
+
+  .dark .afj-sidebar {
+    background: #111520;
+  }
+
+  .dark header {
+    background: #15192a;
+    border-color: rgba(255, 255, 255, 0.08);
+  }
+
+  .dark main {
+    background: #0f1117;
+  }
+
+  .dark .kpi-box {
+    background: #1a1f2e;
+    border-color: rgba(255, 255, 255, 0.08);
+  }
+
+  .dark select,
+  .dark input,
+  .dark textarea {
+    background: #1a1f2e;
+    border-color: rgba(255, 255, 255, 0.12);
+    color: #f0ece4;
+  }
+
+  .dark .bg-white {
+    background: #1a1f2e;
+  }
+
+  .dark .bg-afj-cream,
+  .dark .bg-afj-cream\/50,
+  .dark .bg-afj-cream\/30 {
+    background: rgba(26, 31, 46, 0.8);
+  }
+
+  .dark .text-afj-black {
+    color: #f0ece4;
+  }
+
+  .dark .text-afj-black\/50,
+  .dark .text-afj-black\/60,
+  .dark .text-afj-black\/70 {
+    color: rgba(240, 236, 228, 0.55);
+  }
+
+  .dark .text-afj-black\/40,
+  .dark .text-afj-black\/30,
+  .dark .text-afj-black\/25 {
+    color: rgba(240, 236, 228, 0.35);
+  }
+
+  .dark .border-afj-cream-dark {
+    border-color: rgba(255, 255, 255, 0.08);
+  }
+
   h1, h2, h3 {
     @apply font-display;
   }

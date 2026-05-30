@@ -3,12 +3,39 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_, text
 from datetime import datetime, timezone, timedelta
+import json
+from typing import Any, Callable, Awaitable
 
 from app.db.base import get_db
 from app.dependencies import get_current_user
 from app.models.user import User
 
 router = APIRouter(prefix="/system", tags=["system"])
+
+
+async def _cached(key: str, ttl: int, compute_fn: Callable[[], Awaitable[Any]]) -> Any:
+    """Fetch from Redis cache or compute and store result."""
+    try:
+        from app.db.redis import get_redis
+        redis = await get_redis()
+        if redis:
+            cached = await redis.get(f"analytics:{key}")
+            if cached:
+                return json.loads(cached)
+    except Exception:
+        pass
+
+    result = await compute_fn()
+
+    try:
+        from app.db.redis import get_redis
+        redis = await get_redis()
+        if redis:
+            await redis.setex(f"analytics:{key}", ttl, json.dumps(result))
+    except Exception:
+        pass
+
+    return result
 
 # Mapa de itens de nav por role
 NAV_ALL = [
@@ -23,6 +50,7 @@ NAV_ALL = [
     {"href": "/financeiro", "label": "Financeiro", "icon": "DollarSign"},
     {"href": "/visual-law", "label": "Visual Law", "icon": "Shapes"},
     {"href": "/auditoria", "label": "Auditoria", "icon": "Shield"},
+    {"href": "/admin/health", "label": "Monitoramento", "icon": "Activity"},
     {"href": "/configuracoes", "label": "Configurações", "icon": "Settings"},
 ]
 
@@ -45,295 +73,428 @@ async def get_nav(current_user: User = Depends(get_current_user)):
 
 @router.get("/metrics")
 async def get_metrics(
+    force_refresh: bool = False,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """KPIs reais para o dashboard."""
+    """KPIs reais para o dashboard (cache 60s)."""
     from app.models.process import LegalProcess, ProcessDeadline
     from app.models.approval import Approval
     from app.models.agent_run import AgentRun
 
-    now = datetime.now(timezone.utc)
-    next_7d = now + timedelta(days=7)
+    cache_key = f"metrics:{current_user.tenant_id}"
 
-    # Processos ativos
-    r1 = await db.execute(
-        select(func.count(LegalProcess.id)).where(LegalProcess.situacao == "ATIVO")
-    )
-    processos_ativos = r1.scalar_one() or 0
+    if force_refresh:
+        try:
+            from app.db.redis import get_redis
+            redis = await get_redis()
+            if redis:
+                await redis.delete(f"analytics:{cache_key}")
+        except Exception:
+            pass
 
-    # Prazos nos próximos 7 dias
-    r2 = await db.execute(
-        select(func.count(ProcessDeadline.id)).where(
-            and_(
-                ProcessDeadline.status == "PENDENTE",
-                ProcessDeadline.data_prazo <= next_7d.date(),
-                ProcessDeadline.data_prazo >= now.date(),
+    async def compute():
+        now = datetime.now(timezone.utc)
+        next_7d = now + timedelta(days=7)
+
+        r1 = await db.execute(
+            select(func.count(LegalProcess.id)).where(
+                LegalProcess.situacao == "ATIVO",
+                LegalProcess.tenant_id == current_user.tenant_id,
             )
         )
-    )
-    prazos_proximos = r2.scalar_one() or 0
+        processos_ativos = r1.scalar_one() or 0
 
-    # Aprovações pendentes
-    r3 = await db.execute(
-        select(func.count(Approval.id)).where(Approval.status == "PENDENTE")
-    )
-    aprovacoes_pendentes = r3.scalar_one() or 0
-
-    # Custo IA do mês (soma de tokens usados * custo estimado)
-    inicio_mes = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    r4 = await db.execute(
-        select(func.coalesce(func.sum(AgentRun.tokens_used), 0)).where(
-            AgentRun.started_at >= inicio_mes
+        r2 = await db.execute(
+            select(func.count(ProcessDeadline.id)).where(
+                and_(
+                    ProcessDeadline.status == "PENDENTE",
+                    ProcessDeadline.data_prazo <= next_7d.date(),
+                    ProcessDeadline.data_prazo >= now.date(),
+                )
+            )
         )
-    )
-    tokens_mes = r4.scalar_one() or 0
-    custo_ia_mes = round(float(tokens_mes) * 0.000015, 2)  # ~$15/1M tokens
+        prazos_proximos = r2.scalar_one() or 0
 
-    # Agentes ativos (runs nas últimas 24h)
-    r5 = await db.execute(
-        select(func.count(AgentRun.id)).where(
-            AgentRun.started_at >= now - timedelta(hours=24),
-            AgentRun.status.in_(["RUNNING", "AWAITING_APPROVAL"]),
+        r3 = await db.execute(
+            select(func.count(Approval.id)).where(
+                Approval.status == "PENDENTE",
+                Approval.tenant_id == current_user.tenant_id,
+            )
         )
-    )
-    agentes_ativos = r5.scalar_one() or 0
+        aprovacoes_pendentes = r3.scalar_one() or 0
 
-    return {
-        "processos_ativos": processos_ativos,
-        "prazos_proximos_7d": prazos_proximos,
-        "aprovacoes_pendentes": aprovacoes_pendentes,
-        "custo_ia_mes": custo_ia_mes,
-        "tokens_ia_mes": int(tokens_mes),
-        "agentes_ativos_24h": agentes_ativos,
-        "updated_at": now.isoformat(),
-    }
+        inicio_mes = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        r4 = await db.execute(
+            select(func.coalesce(func.sum(AgentRun.tokens_used), 0)).where(
+                AgentRun.started_at >= inicio_mes,
+                AgentRun.tenant_id == current_user.tenant_id,
+            )
+        )
+        tokens_mes = r4.scalar_one() or 0
+        custo_ia_mes = round(float(tokens_mes) * 0.000015, 2)
+
+        r5 = await db.execute(
+            select(func.count(AgentRun.id)).where(
+                AgentRun.started_at >= now - timedelta(hours=24),
+                AgentRun.status.in_(["RUNNING", "AWAITING_APPROVAL"]),
+                AgentRun.tenant_id == current_user.tenant_id,
+            )
+        )
+        agentes_ativos = r5.scalar_one() or 0
+
+        return {
+            "processos_ativos": processos_ativos,
+            "prazos_proximos_7d": prazos_proximos,
+            "aprovacoes_pendentes": aprovacoes_pendentes,
+            "custo_ia_mes": custo_ia_mes,
+            "tokens_ia_mes": int(tokens_mes),
+            "agentes_ativos_24h": agentes_ativos,
+            "updated_at": now.isoformat(),
+        }
+
+    return await _cached(cache_key, 60, compute)
 
 
 @router.get("/analytics/financeiro")
 async def analytics_financeiro(
     meses: int = Query(default=6, ge=1, le=24),
+    force_refresh: bool = False,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Dados financeiros para gráficos: receitas/despesas por mês e por categoria."""
+    """Dados financeiros para gráficos (cache 5 min)."""
     from app.models.financial import FinancialEntry
 
     tid = current_user.tenant_id
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(days=meses * 31)
+    cache_key = f"fin:{tid}:{meses}"
 
-    # Receitas e despesas mensais
-    q_mensal = await db.execute(
-        select(
-            func.date_trunc("month", func.coalesce(FinancialEntry.data_pagamento, FinancialEntry.created_at)).label("mes"),
-            FinancialEntry.tipo,
-            func.sum(FinancialEntry.valor).label("total"),
-        ).where(
-            and_(
-                FinancialEntry.tenant_id == tid,
-                FinancialEntry.status != "CANCELADO",
-                FinancialEntry.created_at >= cutoff,
-            )
-        ).group_by("mes", FinancialEntry.tipo).order_by("mes")
-    )
-    rows_mensal = q_mensal.all()
+    if force_refresh:
+        try:
+            from app.db.redis import get_redis
+            r = await get_redis()
+            if r:
+                await r.delete(f"analytics:{cache_key}")
+        except Exception:
+            pass
 
-    receitas_por_mes: dict = {}
-    despesas_por_mes: dict = {}
-    for row in rows_mensal:
-        mes_str = row.mes.strftime("%Y-%m") if row.mes else "?"
-        val = float(row.total or 0)
-        if row.tipo == "RECEITA":
-            receitas_por_mes[mes_str] = receitas_por_mes.get(mes_str, 0) + val
-        else:
-            despesas_por_mes[mes_str] = despesas_por_mes.get(mes_str, 0) + val
+    async def compute():
+        q_mensal = await db.execute(
+            select(
+                func.date_trunc("month", func.coalesce(FinancialEntry.data_pagamento, FinancialEntry.created_at)).label("mes"),
+                FinancialEntry.tipo,
+                func.sum(FinancialEntry.valor).label("total"),
+            ).where(
+                and_(
+                    FinancialEntry.tenant_id == tid,
+                    FinancialEntry.status != "CANCELADO",
+                    FinancialEntry.created_at >= cutoff,
+                )
+            ).group_by("mes", FinancialEntry.tipo).order_by("mes")
+        )
+        rows_mensal = q_mensal.all()
 
-    # Unir meses em lista ordenada
-    all_months = sorted(set(list(receitas_por_mes) + list(despesas_por_mes)))
-    mensal = [
-        {
-            "mes": m,
-            "receitas": round(receitas_por_mes.get(m, 0), 2),
-            "despesas": round(despesas_por_mes.get(m, 0), 2),
+        receitas_por_mes: dict = {}
+        despesas_por_mes: dict = {}
+        for row in rows_mensal:
+            mes_str = row.mes.strftime("%Y-%m") if row.mes else "?"
+            val = float(row.total or 0)
+            if row.tipo == "RECEITA":
+                receitas_por_mes[mes_str] = receitas_por_mes.get(mes_str, 0) + val
+            else:
+                despesas_por_mes[mes_str] = despesas_por_mes.get(mes_str, 0) + val
+
+        all_months = sorted(set(list(receitas_por_mes) + list(despesas_por_mes)))
+        mensal = [
+            {
+                "mes": m,
+                "receitas": round(receitas_por_mes.get(m, 0), 2),
+                "despesas": round(despesas_por_mes.get(m, 0), 2),
+            }
+            for m in all_months
+        ]
+
+        saldo = 0.0
+        for item in mensal:
+            saldo += item["receitas"] - item["despesas"]
+            item["saldo"] = round(saldo, 2)
+
+        q_cat = await db.execute(
+            select(
+                func.coalesce(FinancialEntry.categoria, "Outros").label("categoria"),
+                FinancialEntry.tipo,
+                func.sum(FinancialEntry.valor).label("total"),
+            ).where(
+                and_(FinancialEntry.tenant_id == tid, FinancialEntry.status == "PAGO")
+            ).group_by("categoria", FinancialEntry.tipo).order_by(func.sum(FinancialEntry.valor).desc()).limit(10)
+        )
+        por_categoria = [
+            {"categoria": r.categoria, "tipo": r.tipo, "total": float(r.total or 0)}
+            for r in q_cat.all()
+        ]
+
+        q_tot = await db.execute(
+            select(FinancialEntry.tipo, FinancialEntry.status, func.sum(FinancialEntry.valor).label("t"))
+            .where(FinancialEntry.tenant_id == tid)
+            .group_by(FinancialEntry.tipo, FinancialEntry.status)
+        )
+        totais: dict = {}
+        for r in q_tot.all():
+            totais[f"{r.tipo}_{r.status}"] = float(r.t or 0)
+
+        return {
+            "mensal": mensal,
+            "por_categoria": por_categoria,
+            "summary": {
+                "receitas_pagas": round(totais.get("RECEITA_PAGO", 0), 2),
+                "receitas_pendentes": round(totais.get("RECEITA_PENDENTE", 0), 2),
+                "despesas_pagas": round(totais.get("DESPESA_PAGO", 0), 2),
+                "despesas_pendentes": round(totais.get("DESPESA_PENDENTE", 0), 2),
+            },
         }
-        for m in all_months
-    ]
 
-    # Saldo acumulado
-    saldo = 0.0
-    for item in mensal:
-        saldo += item["receitas"] - item["despesas"]
-        item["saldo"] = round(saldo, 2)
-
-    # Por categoria (pagos)
-    q_cat = await db.execute(
-        select(
-            func.coalesce(FinancialEntry.categoria, "Outros").label("categoria"),
-            FinancialEntry.tipo,
-            func.sum(FinancialEntry.valor).label("total"),
-        ).where(
-            and_(FinancialEntry.tenant_id == tid, FinancialEntry.status == "PAGO")
-        ).group_by("categoria", FinancialEntry.tipo).order_by(func.sum(FinancialEntry.valor).desc()).limit(10)
-    )
-    por_categoria = [
-        {"categoria": r.categoria, "tipo": r.tipo, "total": float(r.total or 0)}
-        for r in q_cat.all()
-    ]
-
-    # Totais gerais
-    q_tot = await db.execute(
-        select(FinancialEntry.tipo, FinancialEntry.status, func.sum(FinancialEntry.valor).label("t"))
-        .where(FinancialEntry.tenant_id == tid)
-        .group_by(FinancialEntry.tipo, FinancialEntry.status)
-    )
-    totais: dict = {}
-    for r in q_tot.all():
-        totais[f"{r.tipo}_{r.status}"] = float(r.t or 0)
-
-    return {
-        "mensal": mensal,
-        "por_categoria": por_categoria,
-        "summary": {
-            "receitas_pagas": round(totais.get("RECEITA_PAGO", 0), 2),
-            "receitas_pendentes": round(totais.get("RECEITA_PENDENTE", 0), 2),
-            "despesas_pagas": round(totais.get("DESPESA_PAGO", 0), 2),
-            "despesas_pendentes": round(totais.get("DESPESA_PENDENTE", 0), 2),
-        },
-    }
+    return await _cached(cache_key, 300, compute)
 
 
 @router.get("/analytics/processos")
 async def analytics_processos(
+    force_refresh: bool = False,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Estatísticas de processos para gráficos."""
+    """Estatísticas de processos para gráficos (cache 10 min)."""
     from app.models.process import LegalProcess
 
     tid = current_user.tenant_id
     now = datetime.now(timezone.utc)
     cutoff_6m = now - timedelta(days=183)
+    cache_key = f"proc:{tid}"
 
-    # Por situação
-    q_sit = await db.execute(
-        select(LegalProcess.situacao, func.count(LegalProcess.id).label("count"))
-        .where(LegalProcess.tenant_id == tid)
-        .group_by(LegalProcess.situacao)
-    )
-    por_situacao = [{"situacao": r.situacao or "Indefinido", "count": r.count} for r in q_sit.all()]
+    if force_refresh:
+        try:
+            from app.db.redis import get_redis
+            r = await get_redis()
+            if r:
+                await r.delete(f"analytics:{cache_key}")
+        except Exception:
+            pass
 
-    # Por área do direito
-    q_area = await db.execute(
-        select(
-            func.coalesce(LegalProcess.area_direito, "Não definido").label("area"),
-            func.count(LegalProcess.id).label("count"),
+    async def compute():
+        q_sit = await db.execute(
+            select(LegalProcess.situacao, func.count(LegalProcess.id).label("count"))
+            .where(LegalProcess.tenant_id == tid)
+            .group_by(LegalProcess.situacao)
         )
-        .where(LegalProcess.tenant_id == tid)
-        .group_by("area")
-        .order_by(func.count(LegalProcess.id).desc())
-        .limit(8)
-    )
-    por_area = [{"area": r.area, "count": r.count} for r in q_area.all()]
+        por_situacao = [{"situacao": r.situacao or "Indefinido", "count": r.count} for r in q_sit.all()]
 
-    # Criados por mês (últimos 6 meses)
-    q_mes = await db.execute(
-        select(
-            func.date_trunc("month", LegalProcess.created_at).label("mes"),
-            func.count(LegalProcess.id).label("count"),
+        q_area = await db.execute(
+            select(
+                func.coalesce(LegalProcess.area_direito, "Não definido").label("area"),
+                func.count(LegalProcess.id).label("count"),
+            )
+            .where(LegalProcess.tenant_id == tid)
+            .group_by("area")
+            .order_by(func.count(LegalProcess.id).desc())
+            .limit(8)
         )
-        .where(and_(LegalProcess.tenant_id == tid, LegalProcess.created_at >= cutoff_6m))
-        .group_by("mes")
-        .order_by("mes")
-    )
-    criados_por_mes = [
-        {"mes": r.mes.strftime("%Y-%m") if r.mes else "?", "count": r.count}
-        for r in q_mes.all()
-    ]
+        por_area = [{"area": r.area, "count": r.count} for r in q_area.all()]
 
-    return {
-        "por_situacao": por_situacao,
-        "por_area": por_area,
-        "criados_por_mes": criados_por_mes,
-        "total": sum(r["count"] for r in por_situacao),
-    }
+        q_mes = await db.execute(
+            select(
+                func.date_trunc("month", LegalProcess.created_at).label("mes"),
+                func.count(LegalProcess.id).label("count"),
+            )
+            .where(and_(LegalProcess.tenant_id == tid, LegalProcess.created_at >= cutoff_6m))
+            .group_by("mes")
+            .order_by("mes")
+        )
+        criados_por_mes = [
+            {"mes": r.mes.strftime("%Y-%m") if r.mes else "?", "count": r.count}
+            for r in q_mes.all()
+        ]
+
+        return {
+            "por_situacao": por_situacao,
+            "por_area": por_area,
+            "criados_por_mes": criados_por_mes,
+            "total": sum(r["count"] for r in por_situacao),
+        }
+
+    return await _cached(cache_key, 600, compute)
 
 
 @router.get("/analytics/agentes")
 async def analytics_agentes(
     dias: int = Query(default=30, ge=1, le=90),
+    force_refresh: bool = False,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Métricas de performance e custo dos agentes IA."""
+    """Métricas de performance e custo dos agentes IA (cache 2 min)."""
     from app.models.agent_run import AgentRun
 
     tid = current_user.tenant_id
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(days=dias)
+    cache_key = f"agents:{tid}:{dias}"
 
-    # Por agente (custo, execuções, taxa sucesso)
-    q_ag = await db.execute(
-        select(
-            AgentRun.agent_name,
-            func.sum(AgentRun.cost_usd).label("custo"),
-            func.sum(AgentRun.tokens_used).label("tokens"),
-            func.count(AgentRun.id).label("execucoes"),
-            func.avg(AgentRun.duration_ms).label("avg_ms"),
-            func.sum(
-                func.cast(AgentRun.status == "SUCCESS", func.Integer if False else text("INTEGER"))
-            ).label("sucessos"),
+    if force_refresh:
+        try:
+            from app.db.redis import get_redis
+            r = await get_redis()
+            if r:
+                await r.delete(f"analytics:{cache_key}")
+        except Exception:
+            pass
+
+    async def compute():
+        q_ag = await db.execute(
+            select(
+                AgentRun.agent_name,
+                func.sum(AgentRun.cost_usd).label("custo"),
+                func.sum(AgentRun.tokens_used).label("tokens"),
+                func.count(AgentRun.id).label("execucoes"),
+                func.avg(AgentRun.duration_ms).label("avg_ms"),
+            )
+            .where(and_(AgentRun.tenant_id == tid, AgentRun.started_at >= cutoff))
+            .group_by(AgentRun.agent_name)
+            .order_by(func.sum(AgentRun.cost_usd).desc())
+            .limit(12)
         )
-        .where(and_(AgentRun.tenant_id == tid, AgentRun.started_at >= cutoff))
-        .group_by(AgentRun.agent_name)
-        .order_by(func.sum(AgentRun.cost_usd).desc())
-        .limit(12)
-    )
-    por_agente = [
-        {
-            "agent": r.agent_name,
-            "custo": round(float(r.custo or 0), 4),
-            "tokens": int(r.tokens or 0),
-            "execucoes": r.execucoes,
-            "avg_ms": int(r.avg_ms or 0),
-        }
-        for r in q_ag.all()
-    ]
+        por_agente = [
+            {
+                "agent": r.agent_name,
+                "custo": round(float(r.custo or 0), 4),
+                "tokens": int(r.tokens or 0),
+                "execucoes": r.execucoes,
+                "avg_ms": int(r.avg_ms or 0),
+            }
+            for r in q_ag.all()
+        ]
 
-    # Por dia (execuções + custo)
-    q_dia = await db.execute(
-        select(
-            func.date_trunc("day", AgentRun.started_at).label("dia"),
-            func.count(AgentRun.id).label("total"),
-            func.sum(AgentRun.cost_usd).label("custo"),
+        q_dia = await db.execute(
+            select(
+                func.date_trunc("day", AgentRun.started_at).label("dia"),
+                func.count(AgentRun.id).label("total"),
+                func.sum(AgentRun.cost_usd).label("custo"),
+            )
+            .where(and_(AgentRun.tenant_id == tid, AgentRun.started_at >= cutoff))
+            .group_by("dia")
+            .order_by("dia")
         )
-        .where(and_(AgentRun.tenant_id == tid, AgentRun.started_at >= cutoff))
-        .group_by("dia")
-        .order_by("dia")
-    )
-    por_dia = [
-        {
-            "dia": r.dia.strftime("%Y-%m-%d") if r.dia else "?",
-            "total": r.total,
-            "custo": round(float(r.custo or 0), 4),
+        por_dia = [
+            {
+                "dia": r.dia.strftime("%Y-%m-%d") if r.dia else "?",
+                "total": r.total,
+                "custo": round(float(r.custo or 0), 4),
+            }
+            for r in q_dia.all()
+        ]
+
+        q_tot = await db.execute(
+            select(
+                func.count(AgentRun.id).label("total"),
+                func.sum(AgentRun.cost_usd).label("custo"),
+                func.sum(AgentRun.tokens_used).label("tokens"),
+            ).where(and_(AgentRun.tenant_id == tid, AgentRun.started_at >= cutoff))
+        )
+        tot = q_tot.one()
+
+        return {
+            "por_agente": por_agente,
+            "por_dia": por_dia,
+            "total_execucoes": int(tot.total or 0),
+            "total_custo": round(float(tot.custo or 0), 4),
+            "total_tokens": int(tot.tokens or 0),
         }
-        for r in q_dia.all()
-    ]
 
-    # Totais
-    q_tot = await db.execute(
-        select(
-            func.count(AgentRun.id).label("total"),
-            func.sum(AgentRun.cost_usd).label("custo"),
-            func.sum(AgentRun.tokens_used).label("tokens"),
-        ).where(and_(AgentRun.tenant_id == tid, AgentRun.started_at >= cutoff))
-    )
-    tot = q_tot.one()
+    return await _cached(cache_key, 120, compute)
 
+
+@router.get("/health/detailed")
+async def health_detailed(current_user: User = Depends(get_current_user)):
+    """Health check detalhado com latências — apenas para ADMIN."""
+    if current_user.role not in ("ADMIN", "SOCIO"):
+        from fastapi import HTTPException
+        raise HTTPException(status_code=403, detail="Acesso negado")
+
+    import time
+
+    async def probe_postgres(db_session) -> tuple[bool, int]:
+        t0 = time.monotonic()
+        try:
+            await db_session.execute(text("SELECT 1"))
+            return True, int((time.monotonic() - t0) * 1000)
+        except Exception:
+            return False, -1
+
+    async def probe_redis() -> tuple[bool, int]:
+        t0 = time.monotonic()
+        try:
+            from app.db.redis import get_redis
+            redis = await get_redis()
+            if redis:
+                await redis.ping()
+                return True, int((time.monotonic() - t0) * 1000)
+        except Exception:
+            pass
+        return False, -1
+
+    async def probe_qdrant() -> tuple[bool, int]:
+        t0 = time.monotonic()
+        try:
+            from app.db.qdrant import get_qdrant
+            qdrant = await get_qdrant()
+            if qdrant:
+                return True, int((time.monotonic() - t0) * 1000)
+        except Exception:
+            pass
+        return False, -1
+
+    from app.db.base import get_db as _get_db
+    from app.db.base import AsyncSessionLocal
+    from app.models.agent import AgentRun
+
+    async with AsyncSessionLocal() as db_check:
+        pg_ok, pg_ms = await probe_postgres(db_check)
+    redis_ok, redis_ms = await probe_redis()
+    qdrant_ok, qdrant_ms = await probe_qdrant()
+
+    # Recent agent activity
+    async with AsyncSessionLocal() as db2:
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+        q = await db2.execute(
+            select(
+                AgentRun.agent_name,
+                AgentRun.status,
+                AgentRun.started_at,
+            )
+            .where(AgentRun.started_at >= cutoff)
+            .order_by(AgentRun.started_at.desc())
+            .limit(20)
+        )
+        recent_runs = [
+            {"agent": r.agent_name, "status": r.status, "started_at": r.started_at.isoformat()}
+            for r in q.all()
+        ]
+
+    services = {
+        "postgresql": {"ok": pg_ok, "latency_ms": pg_ms},
+        "redis": {"ok": redis_ok, "latency_ms": redis_ms},
+        "qdrant": {"ok": qdrant_ok, "latency_ms": qdrant_ms},
+    }
+    all_ok = all(s["ok"] for s in services.values())
+
+    from app.config import settings as cfg
     return {
-        "por_agente": por_agente,
-        "por_dia": por_dia,
-        "total_execucoes": int(tot.total or 0),
-        "total_custo": round(float(tot.custo or 0), 4),
-        "total_tokens": int(tot.tokens or 0),
+        "status": "operational" if all_ok else "degraded",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "version": cfg.VERSION,
+        "environment": cfg.ENVIRONMENT,
+        "services": services,
+        "email_enabled": cfg.EMAIL_ENABLED,
+        "sentry_enabled": bool(cfg.SENTRY_DSN),
+        "recent_agent_runs": recent_runs,
     }

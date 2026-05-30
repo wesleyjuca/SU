@@ -9,7 +9,7 @@ import uuid
 from app.db.base import get_db
 from app.dependencies import get_current_user
 from app.models.user import User
-from app.models.document import Document, Petition
+from app.models.document import Document, Petition, Contract
 from app.core.exceptions import NotFoundError
 
 router = APIRouter(prefix="/documents", tags=["documents"])
@@ -182,6 +182,49 @@ async def create_version(
     db.add(version)
     await db.flush()
     return {"document_id": doc_id, "versao": doc.versao, "version_id": str(version.id)}
+
+
+class ContractCreate(BaseModel):
+    client_id: str | None = None
+    tipo: str = "HONORARIOS"
+    titulo: str
+    descricao: str | None = None
+    valor_total: float | None = None
+    data_inicio: str | None = None
+    data_fim: str | None = None
+    renovacao_auto: bool = False
+
+
+@router.post("/contracts/create", status_code=201)
+async def create_contract(
+    body: ContractCreate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Cria um contrato (Document tipo=CONTRATO + Contract associado)."""
+    from datetime import datetime, timezone
+    doc = Document(
+        tipo="CONTRATO",
+        titulo=body.titulo,
+        status="RASCUNHO",
+        gerado_por_ia=False,
+        created_by=current_user.id,
+        tenant_id=current_user.tenant_id,
+    )
+    db.add(doc)
+    await db.flush()
+    contract = Contract(
+        document_id=doc.id,
+        client_id=uuid.UUID(body.client_id) if body.client_id else None,
+        tipo=body.tipo,
+        valor_total=body.valor_total,
+        data_inicio=datetime.fromisoformat(body.data_inicio) if body.data_inicio else None,
+        data_fim=datetime.fromisoformat(body.data_fim) if body.data_fim else None,
+        renovacao_auto=body.renovacao_auto,
+    )
+    db.add(contract)
+    await db.flush()
+    return {"id": str(doc.id), "titulo": doc.titulo, "status": doc.status, "tipo": doc.tipo}
 
 
 @router.post("/petitions/generate", status_code=202)

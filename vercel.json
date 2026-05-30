@@ -1,3 +1,5 @@
 {
+  "rootDirectory": "frontend",
+  "framework": "nextjs",
   "regions": ["gru1"]
 }

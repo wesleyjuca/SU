@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect } from "react";
-import { FolderOpen, Search, FileText, Download, Eye } from "lucide-react";
+import { FolderOpen, Search, FileText, Download } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 
 interface Documento {
@@ -58,6 +58,22 @@ export default function DocumentosPage() {
   const filtrados = docs.filter((d) =>
     !search || d.titulo.toLowerCase().includes(search.toLowerCase())
   );
+
+  async function downloadDoc(id: string, titulo: string) {
+    const token = localStorage.getItem("afj_access_token");
+    const res = await fetch(`/api/v1/documents/${id}/download`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (res.ok) {
+      const blob = await res.blob();
+      const a = Object.assign(document.createElement("a"), {
+        href: URL.createObjectURL(blob),
+        download: `${titulo.slice(0, 60)}.pdf`,
+      });
+      a.click();
+      URL.revokeObjectURL(a.href);
+    }
+  }
 
   return (
     <div className="max-w-7xl mx-auto space-y-5">
@@ -159,8 +175,13 @@ export default function DocumentosPage() {
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-2">
-                      <button className="text-afj-black/40 hover:text-afj-gold transition-colors" title="Visualizar">
-                        <Eye size={14} />
+                      <button
+                        onClick={() => downloadDoc(d.id, d.titulo)}
+                        className="text-afj-black/40 hover:text-afj-gold transition-colors"
+                        title="Baixar PDF"
+                        aria-label="Baixar documento como PDF"
+                      >
+                        <Download size={14} />
                       </button>
                     </div>
                   </td>

@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from app.db.base import get_db
 from app.dependencies import get_current_user, require_role
 from app.models.user import User
-from app.models.client import Client, ClientInteraction
+from app.models.client import Client, ClientContact, ClientInteraction
 from app.core.exceptions import NotFoundError
 
 router = APIRouter(prefix="/clients", tags=["clients"])
@@ -43,6 +43,15 @@ class ClientResponse(BaseModel):
     origem: str | None
     lgpd_consent: bool
     created_at: str
+
+
+class ContactCreate(BaseModel):
+    nome: str
+    cargo: str | None = None
+    email: str | None = None
+    telefone: str | None = None
+    whatsapp: str | None = None  # stored in telefone if no dedicated column
+    is_primary: bool = False
 
 
 class InteractionCreate(BaseModel):
@@ -190,6 +199,123 @@ async def get_interactions(
     ]
 
 
+@router.get("/{client_id}/contacts")
+async def list_contacts(
+    client_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(Client).where(
+            Client.id == uuid.UUID(client_id),
+            Client.tenant_id == current_user.tenant_id,
+        )
+    )
+    if not result.scalar_one_or_none():
+        raise NotFoundError("Cliente", client_id)
+
+    contacts_result = await db.execute(
+        select(ClientContact)
+        .where(ClientContact.client_id == uuid.UUID(client_id))
+        .order_by(ClientContact.is_primary.desc())
+    )
+    contacts = contacts_result.scalars().all()
+    return [_contact_to_dict(c) for c in contacts]
+
+
+@router.post("/{client_id}/contacts", status_code=201)
+async def create_contact(
+    client_id: str,
+    body: ContactCreate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(Client).where(
+            Client.id == uuid.UUID(client_id),
+            Client.tenant_id == current_user.tenant_id,
+        )
+    )
+    if not result.scalar_one_or_none():
+        raise NotFoundError("Cliente", client_id)
+
+    contact = ClientContact(
+        client_id=uuid.UUID(client_id),
+        nome=body.nome,
+        cargo=body.cargo,
+        email=body.email,
+        telefone=body.telefone or body.whatsapp,
+        is_primary=body.is_primary,
+    )
+    db.add(contact)
+    await db.flush()
+    return _contact_to_dict(contact)
+
+
+@router.put("/{client_id}/contacts/{contact_id}")
+async def update_contact(
+    client_id: str,
+    contact_id: str,
+    body: ContactCreate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(Client).where(
+            Client.id == uuid.UUID(client_id),
+            Client.tenant_id == current_user.tenant_id,
+        )
+    )
+    if not result.scalar_one_or_none():
+        raise NotFoundError("Cliente", client_id)
+
+    contact_result = await db.execute(
+        select(ClientContact).where(
+            ClientContact.id == uuid.UUID(contact_id),
+            ClientContact.client_id == uuid.UUID(client_id),
+        )
+    )
+    contact = contact_result.scalar_one_or_none()
+    if not contact:
+        raise NotFoundError("Contato", contact_id)
+
+    contact.nome = body.nome
+    contact.cargo = body.cargo
+    contact.email = body.email
+    contact.telefone = body.telefone or body.whatsapp
+    contact.is_primary = body.is_primary
+    return _contact_to_dict(contact)
+
+
+@router.delete("/{client_id}/contacts/{contact_id}", status_code=204)
+async def delete_contact(
+    client_id: str,
+    contact_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(Client).where(
+            Client.id == uuid.UUID(client_id),
+            Client.tenant_id == current_user.tenant_id,
+        )
+    )
+    if not result.scalar_one_or_none():
+        raise NotFoundError("Cliente", client_id)
+
+    contact_result = await db.execute(
+        select(ClientContact).where(
+            ClientContact.id == uuid.UUID(contact_id),
+            ClientContact.client_id == uuid.UUID(client_id),
+        )
+    )
+    contact = contact_result.scalar_one_or_none()
+    if not contact:
+        raise NotFoundError("Contato", contact_id)
+
+    await db.delete(contact)
+
+
 @router.delete("/{client_id}", status_code=204)
 async def delete_client(
     client_id: str,
@@ -281,6 +407,18 @@ async def erase_client_data(
         "anonimizado_em": datetime.now(timezone.utc).isoformat(),
         "base_legal": "LGPD art. 18 — Direito ao esquecimento",
         "realizado_por": str(current_user.id),
+    }
+
+
+def _contact_to_dict(c: ClientContact) -> dict:
+    return {
+        "id": str(c.id),
+        "nome": c.nome,
+        "cargo": c.cargo,
+        "email": c.email,
+        "telefone": c.telefone,
+        "whatsapp": c.telefone,
+        "is_primary": c.is_primary,
     }
 
 

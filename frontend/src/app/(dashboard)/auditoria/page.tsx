@@ -30,12 +30,6 @@ export default function AuditoriaPage() {
     setLoading(true);
     try {
       const token = localStorage.getItem("afj_access_token");
-      const res = await fetch("/api/v1/agents/trigger", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ task_type: "audit_report", task_input: { limit: 100 } }),
-      });
-      // Fallback: tentar endpoint direto de audit se existir
       const logsRes = await fetch("/api/v1/audit?limit=100", {
         headers: { Authorization: `Bearer ${token}` },
       });
