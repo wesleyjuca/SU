@@ -252,10 +252,10 @@ jobs:
           RAILWAY_URL: ${{ needs.deploy-railway.outputs.railway_url }}
         run: |
           if [ -z "$VERCEL_TOKEN" ]; then
-            echo "::notice::VERCEL_TOKEN not set — skipping Vercel deployment."
-            echo "Para habilitar: Settings → Secrets → New secret → VERCEL_TOKEN"
+            echo "::error::VERCEL_TOKEN não configurado — deploy Vercel cancelado."
+            echo "Para habilitar: Settings → Secrets → Actions → New secret → VERCEL_TOKEN"
             echo "Obtenha o token em: https://vercel.com/account/tokens"
-            exit 0
+            exit 1
           fi
 
           npm install -g vercel
