@@ -151,6 +151,22 @@ export default function DashboardPage() {
         <p className="text-afj-black/50 text-sm mt-0.5">Visão geral do escritório em tempo real</p>
       </div>
 
+      {/* ─── Quick Actions ──────────────────────────────────────────────── */}
+      <div className="flex flex-wrap gap-2">
+        {[
+          { href: "/processos/novo", label: "Novo Processo" },
+          { href: "/clientes", label: "Novo Cliente" },
+          { href: "/peticoes/nova", label: "Nova Petição" },
+          { href: "/agentes", label: "Agentes IA" },
+          { href: "/aprovacoes", label: "Aprovações" },
+        ].map((a) => (
+          <Link key={a.href} href={a.href}
+            className="text-xs text-afj-black/60 hover:text-afj-gold border border-afj-cream-dark hover:border-afj-gold/40 bg-white px-3 py-1.5 rounded-sm transition-colors">
+            {a.label}
+          </Link>
+        ))}
+      </div>
+
       {/* ─── KPI Cards ─────────────────────────────────────────────────── */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 animate-fade-in">
         <div className="afj-stat-card">
@@ -278,16 +294,16 @@ export default function DashboardPage() {
             </div>
           ) : null}
 
-          <div className="mt-6 p-4 bg-afj-gold/5 border border-afj-gold/20 rounded-lg">
+          <div className="mt-6 p-4 bg-afj-gold/5 border border-afj-gold/20 rounded-sm">
             <p className="text-sm text-afj-black/70">
               <span className="font-semibold text-afj-black">AFJ CORE SYSTEM</span> está operacional.
               Configure as integrações de tribunal e adicione processos para iniciar o monitoramento automático.
             </p>
             <div className="mt-3 flex gap-2">
-              <Link href="/processos" className="btn-afj-primary text-xs py-1.5 px-3 rounded">
+              <Link href="/processos" className="btn-afj-primary text-xs py-1.5 px-3 rounded-sm">
                 Adicionar Processo
               </Link>
-              <Link href="/agentes" className="btn-afj-outline text-xs py-1.5 px-3 rounded">
+              <Link href="/agentes" className="btn-afj-outline text-xs py-1.5 px-3 rounded-sm">
                 Ver Agentes
               </Link>
             </div>

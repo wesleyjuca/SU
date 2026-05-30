@@ -43,76 +43,77 @@
     @apply bg-afj-cream text-afj-black font-sans antialiased;
   }
 
-  /* ─── Dark mode ──────────────────────────────────────────────────────────── */
-  .dark body {
-    @apply bg-[#0f1117] text-[#f0ece4];
-  }
-
-  .dark .afj-card {
-    background: #1a1f2e;
-    border-color: rgba(255, 255, 255, 0.08);
-    color: #f0ece4;
-  }
-
-  .dark .afj-sidebar {
-    background: #111520;
-  }
-
-  .dark header {
-    background: #15192a;
-    border-color: rgba(255, 255, 255, 0.08);
-  }
-
-  .dark main {
-    background: #0f1117;
-  }
-
-  .dark .kpi-box {
-    background: #1a1f2e;
-    border-color: rgba(255, 255, 255, 0.08);
-  }
-
-  .dark select,
-  .dark input,
-  .dark textarea {
-    background: #1a1f2e;
-    border-color: rgba(255, 255, 255, 0.12);
-    color: #f0ece4;
-  }
-
-  .dark .bg-white {
-    background: #1a1f2e;
-  }
-
-  .dark .bg-afj-cream,
-  .dark .bg-afj-cream\/50,
-  .dark .bg-afj-cream\/30 {
-    background: rgba(26, 31, 46, 0.8);
-  }
-
-  .dark .text-afj-black {
-    color: #f0ece4;
-  }
-
-  .dark .text-afj-black\/50,
-  .dark .text-afj-black\/60,
-  .dark .text-afj-black\/70 {
-    color: rgba(240, 236, 228, 0.55);
-  }
-
-  .dark .text-afj-black\/40,
-  .dark .text-afj-black\/30,
-  .dark .text-afj-black\/25 {
-    color: rgba(240, 236, 228, 0.35);
-  }
-
-  .dark .border-afj-cream-dark {
-    border-color: rgba(255, 255, 255, 0.08);
-  }
-
   h1, h2, h3 {
     @apply font-display;
   }
+}
+
+/* ─── Dark mode (CSS literal para evitar merging incorreto pelo minimizador) ── */
+.dark body {
+  background: #0f1117;
+  color: #f0ece4;
+}
+
+.dark .afj-card {
+  background: #1a1f2e;
+  border-color: rgba(255, 255, 255, 0.08);
+  color: #f0ece4;
+}
+
+.dark .afj-sidebar {
+  background: #111520;
+}
+
+.dark header {
+  background: #15192a;
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+.dark main {
+  background: #0f1117;
+}
+
+.dark .kpi-box {
+  background: #1a1f2e;
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+.dark select,
+.dark input,
+.dark textarea {
+  background: #1a1f2e;
+  border-color: rgba(255, 255, 255, 0.12);
+  color: #f0ece4;
+}
+
+.dark .bg-white {
+  background: #1a1f2e;
+}
+
+.dark .bg-afj-cream,
+.dark .bg-afj-cream\/50,
+.dark .bg-afj-cream\/30 {
+  background: rgba(26, 31, 46, 0.8);
+}
+
+.dark .text-afj-black {
+  color: #f0ece4;
+}
+
+.dark .text-afj-black\/50,
+.dark .text-afj-black\/60,
+.dark .text-afj-black\/70 {
+  color: rgba(240, 236, 228, 0.55);
+}
+
+.dark .text-afj-black\/40,
+.dark .text-afj-black\/30,
+.dark .text-afj-black\/25 {
+  color: rgba(240, 236, 228, 0.35);
+}
+
+.dark .border-afj-cream-dark {
+  border-color: rgba(255, 255, 255, 0.08);
 }
 
 @layer components {
@@ -141,7 +142,10 @@
     box-shadow: 0 1px 3px rgba(30,34,41,0.05), 0 1px 2px rgba(30,34,41,0.03);
     transition: box-shadow 0.2s ease;
   }
-  .afj-card:hover { box-shadow: 0 4px 12px rgba(30,34,41,0.08); }
+
+  .afj-card:hover {
+    box-shadow: 0 4px 12px rgba(30,34,41,0.08);
+  }
 
   .afj-card-premium {
     @apply bg-white border border-afj-gold/25 rounded-sm shadow-md;
@@ -213,14 +217,19 @@
 
   /* ─── Tabela premium ──────────────────────────────────────────────────── */
   .afj-table { @apply w-full text-sm; }
+
   .afj-table thead th {
     @apply text-[10px] font-semibold text-afj-black/40 uppercase tracking-widest
            bg-afj-cream/60 border-b border-afj-cream-dark px-4 py-3 text-left;
   }
+
   .afj-table tbody tr {
     @apply border-b border-afj-cream-dark/60 hover:bg-afj-cream/50 transition-colors;
   }
-  .afj-table tbody td { @apply px-4 py-3 text-afj-black; }
+
+  .afj-table tbody td {
+    @apply px-4 py-3 text-afj-black;
+  }
 
   /* ─── KPI / Stat card premium ─────────────────────────────────────────── */
   .afj-stat-card {
@@ -229,19 +238,28 @@
     box-shadow: 0 1px 3px rgba(30,34,41,0.06);
     transition: box-shadow 0.2s ease;
   }
-  .afj-stat-card:hover { box-shadow: 0 4px 12px rgba(30,34,41,0.10); }
+
+  .afj-stat-card:hover {
+    box-shadow: 0 4px 12px rgba(30,34,41,0.10);
+  }
+
   .afj-stat-card .stat-value {
     @apply font-display text-3xl font-bold text-afj-black;
   }
+
   .afj-stat-card .stat-label {
     @apply text-[10px] text-afj-black/40 uppercase tracking-widest;
   }
-  .afj-stat-card .stat-sub { @apply text-xs text-afj-black/30 mt-0.5; }
+
+  .afj-stat-card .stat-sub {
+    @apply text-xs text-afj-black/30 mt-0.5;
+  }
 
   /* ─── Cabeçalho de seção ──────────────────────────────────────────────── */
   .afj-section-header {
     @apply flex items-center justify-between mb-4 pb-3 border-b border-afj-cream-dark;
   }
+
   .afj-section-title {
     @apply text-[11px] font-semibold text-afj-black/50 uppercase tracking-[0.12em];
   }
@@ -254,5 +272,4 @@
   .afj-empty-state {
     @apply flex flex-col items-center justify-center py-16 text-center gap-3;
   }
-
 }
