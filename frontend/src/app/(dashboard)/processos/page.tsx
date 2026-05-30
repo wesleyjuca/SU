@@ -107,31 +107,59 @@ export default function ProcessosPage() {
   async function capturarPorOab() {
     if (!oabForm.oab.trim()) return;
     setOabLoading(true);
+    const oab = oabForm.oab.trim();
+    const uf = oabForm.uf;
     try {
       const token = localStorage.getItem("afj_access_token");
       const res = await fetch("/api/v1/agents/trigger", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({
-          task_type: "process_agent",
-          task_input: { action: "search_by_oab", oab: oabForm.oab.trim(), uf: oabForm.uf },
+          task_type: "search_by_oab",
+          task_input: { action: "search_by_oab", oab, uf },
         }),
       });
-      if (res.ok) {
-        const data = await res.json();
-        toast.success(`Captura iniciada! ID: ${data.run_id.slice(0, 8)}... Os processos aparecerão em breve.`);
-        setShowOabModal(false);
-        setOabForm({ oab: "", uf: "AC" });
-        setTimeout(fetchProcessos, 3000);
-      } else {
+      if (!res.ok) {
         const d = await res.json().catch(() => ({}));
         toast.error(d.detail || "Erro ao iniciar captura.");
+        return;
       }
+      const data = await res.json();
+      setShowOabModal(false);
+      setOabForm({ oab: "", uf: "AC" });
+      toast.success(`Buscando processos da OAB ${oab}/${uf}...`);
+      // Poll para verificar resultado após alguns segundos
+      setTimeout(() => checkOabResult(data.run_id, oab, uf, token!), 6000);
     } catch {
       toast.error("Erro de conexão.");
     } finally {
       setOabLoading(false);
     }
+  }
+
+  async function checkOabResult(runId: string, oab: string, uf: string, token: string) {
+    try {
+      const res = await fetch(`/api/v1/agents/runs/${runId}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) return;
+      const run = await res.json();
+      if (run.status === "SUCCESS") {
+        const found = run.output?.processos_encontrados ?? 0;
+        const saved = run.output?.processos_salvos ?? 0;
+        if (found > 0) {
+          toast.success(`${found} processo(s) encontrados, ${saved} novo(s) importado(s) para OAB ${oab}/${uf}.`);
+          fetchProcessos();
+        } else {
+          toast.success(`Nenhum processo encontrado para OAB ${oab}/${uf}. Verifique o número e a UF.`);
+        }
+      } else if (run.status === "FAILED") {
+        toast.error(`Falha na captura: ${run.error_message || "Erro desconhecido"}`);
+      } else {
+        // Ainda processando — tenta novamente em 5s
+        setTimeout(() => checkOabResult(runId, oab, uf, token), 5000);
+      }
+    } catch {}
   }
 
   async function excluirProcesso(id: string) {

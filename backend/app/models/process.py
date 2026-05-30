@@ -1,4 +1,4 @@
-from sqlalchemy import String, Boolean, ForeignKey, Text, Numeric, Date
+from sqlalchemy import String, Boolean, ForeignKey, Text, Numeric, Date, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID as PGUUID, JSONB, ARRAY
 from sqlalchemy import DateTime, func
@@ -10,9 +10,12 @@ from app.db.base import Base
 
 class LegalProcess(Base):
     __tablename__ = "legal_processes"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "numero_cnj", name="uq_tenant_processo_cnj"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    numero_cnj: Mapped[str | None] = mapped_column(String(25), unique=True, index=True)
+    numero_cnj: Mapped[str | None] = mapped_column(String(25), index=True)  # uniqueness via uq_tenant_processo_cnj
     numero_original: Mapped[str | None] = mapped_column(String(50))
     tribunal: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     vara: Mapped[str | None] = mapped_column(String(255))

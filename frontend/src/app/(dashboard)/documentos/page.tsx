@@ -1,6 +1,6 @@
 "use client";
-import { useState, useEffect } from "react";
-import { FolderOpen, Search, FileText, Download } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
+import { FolderOpen, Search, FileText, Download, Upload, ScanLine, X } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
 
@@ -40,6 +40,9 @@ export default function DocumentosPage() {
   const [search, setSearch] = useState("");
   const [filtroTipo, setFiltroTipo] = useState("");
   const [filtroStatus, setFiltroStatus] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const [ocrRunning, setOcrRunning] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { fetchDocs(); }, [filtroTipo, filtroStatus]);
 
@@ -60,6 +63,59 @@ export default function DocumentosPage() {
   const filtrados = docs.filter((d) =>
     !search || d.titulo.toLowerCase().includes(search.toLowerCase())
   );
+
+  async function uploadDoc(file: File) {
+    setUploading(true);
+    try {
+      const token = localStorage.getItem("afj_access_token");
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("titulo", file.name.replace(/\.[^/.]+$/, ""));
+      formData.append("tipo", "OUTROS");
+      const res = await fetch("/api/v1/documents/upload", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body: formData,
+      });
+      if (res.ok) {
+        toast.success(`"${file.name}" enviado com sucesso.`);
+        fetchDocs();
+      } else {
+        const d = await res.json().catch(() => ({}));
+        toast.error(d.detail || "Erro ao enviar arquivo.");
+      }
+    } catch {
+      toast.error("Erro de conexão ao enviar arquivo.");
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }
+
+  async function processarOcr(docId: string) {
+    setOcrRunning(docId);
+    try {
+      const token = localStorage.getItem("afj_access_token");
+      const res = await fetch("/api/v1/agents/trigger", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          task_type: "ocr_document",
+          task_input: { document_id: docId },
+        }),
+      });
+      if (res.ok) {
+        toast.success("OCR iniciado. O texto extraído aparecerá em instantes.");
+        setTimeout(fetchDocs, 5000);
+      } else {
+        toast.error("Erro ao iniciar OCR.");
+      }
+    } catch {
+      toast.error("Erro de conexão.");
+    } finally {
+      setOcrRunning(null);
+    }
+  }
 
   async function downloadDoc(id: string, titulo: string) {
     try {
@@ -90,6 +146,23 @@ export default function DocumentosPage() {
         <div>
           <h1 className="font-display text-2xl font-semibold text-afj-black">Documentos</h1>
           <p className="text-afj-black/50 text-sm">{filtrados.length} documento(s)</p>
+        </div>
+        <div className="flex items-center gap-3">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".pdf,.png,.jpg,.jpeg,.doc,.docx"
+            className="hidden"
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadDoc(f); }}
+          />
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={uploading}
+            className="btn-afj-outline rounded-sm flex items-center gap-2 disabled:opacity-50"
+          >
+            {uploading ? <X size={14} className="animate-spin" /> : <Upload size={14} />}
+            {uploading ? "Enviando..." : "Upload"}
+          </button>
         </div>
       </div>
 
@@ -182,10 +255,19 @@ export default function DocumentosPage() {
                     {new Date(d.created_at).toLocaleDateString("pt-BR")}
                   </td>
                   <td className="px-4 py-3">
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-3">
+                      <button
+                        onClick={() => processarOcr(d.id)}
+                        disabled={ocrRunning === d.id}
+                        className="text-afj-black/30 hover:text-afj-gold transition-colors disabled:opacity-40"
+                        title="Processar OCR"
+                        aria-label="Processar OCR do documento"
+                      >
+                        <ScanLine size={14} />
+                      </button>
                       <button
                         onClick={() => downloadDoc(d.id, d.titulo)}
-                        className="text-afj-black/40 hover:text-afj-gold transition-colors"
+                        className="text-afj-black/30 hover:text-afj-gold transition-colors"
                         title="Baixar PDF"
                         aria-label="Baixar documento como PDF"
                       >
