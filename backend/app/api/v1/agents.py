@@ -68,6 +68,7 @@ async def trigger_agent(
         triggered_by=current_user.id,
         input_data=body.task_input,
         status="RUNNING",
+        tenant_id=current_user.tenant_id,
     )
     db.add(agent_run)
 
@@ -101,7 +102,9 @@ async def list_runs(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    query = select(AgentRun).order_by(desc(AgentRun.started_at)).limit(limit)
+    query = select(AgentRun).where(
+        AgentRun.tenant_id == current_user.tenant_id
+    ).order_by(desc(AgentRun.started_at)).limit(limit)
     if agent_name:
         query = query.where(AgentRun.agent_name == agent_name)
     if status:
@@ -120,7 +123,7 @@ async def get_run(
 ):
     result = await db.execute(select(AgentRun).where(AgentRun.id == uuid.UUID(run_id)))
     run = result.scalar_one_or_none()
-    if not run:
+    if not run or run.tenant_id != current_user.tenant_id:
         raise NotFoundError("AgentRun", run_id)
     return _run_to_response(run)
 

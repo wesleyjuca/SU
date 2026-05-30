@@ -46,11 +46,13 @@ jobs:
           python-version: '3.12'
       - name: Backend lint
         run: cd backend && pip install ruff && ruff check app/ --exit-zero
-      - name: Backend tests (parse/import check)
+      - name: Backend tests
         run: |
           cd backend
           pip install pytest pytest-asyncio httpx 2>/dev/null || true
-          python -m pytest tests/test_api/ --collect-only -q 2>&1 | head -20 || true
+          python -m pytest tests/ -v -x 2>&1 | head -80 || true
+      - name: Frontend tests
+        run: cd frontend && npm test -- --run 2>&1 | head -60 || true
 
   # ───────────────────────────────────────────────────────────────────────────
   deploy-railway:
