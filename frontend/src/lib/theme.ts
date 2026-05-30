@@ -5,6 +5,7 @@ export interface TenantTheme {
   appName: string;
   logoUrl: string | null;
   logoDarkUrl: string | null;
+  faviconUrl: string | null;
 }
 
 const STORAGE_KEY = "afj_theme";
@@ -16,6 +17,7 @@ const DEFAULT_THEME: TenantTheme = {
   appName: "AFJ CORE",
   logoUrl: null,
   logoDarkUrl: null,
+  faviconUrl: null,
 };
 
 export function applyTheme(theme: TenantTheme): void {
@@ -27,6 +29,15 @@ export function applyTheme(theme: TenantTheme): void {
   // Derived shades (lighten/darken approximation)
   root.style.setProperty("--brand-primary-light", _lighten(theme.primaryColor, 20));
   root.style.setProperty("--brand-primary-dark", _darken(theme.primaryColor, 20));
+
+  if (theme.faviconUrl) {
+    try {
+      const link = (document.querySelector("link[rel='icon']") as HTMLLinkElement)
+        ?? Object.assign(document.createElement("link"), { rel: "icon" });
+      link.href = theme.faviconUrl;
+      if (!link.parentNode) document.head.appendChild(link);
+    } catch {}
+  }
 
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(theme));
@@ -61,6 +72,7 @@ export async function fetchAndApplyTheme(): Promise<TenantTheme> {
       appName: data.app_name ?? DEFAULT_THEME.appName,
       logoUrl: data.logo_url ?? null,
       logoDarkUrl: data.logo_dark_url ?? null,
+      faviconUrl: data.favicon_url ?? null,
     };
     return applyAndReturn(theme);
   } catch {

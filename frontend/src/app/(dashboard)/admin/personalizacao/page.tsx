@@ -7,7 +7,7 @@ import { Breadcrumb } from "@/components/layout/Breadcrumb";
 
 const TABS = [
   { id: "escritorio", label: "Escritório", icon: Building2 },
-  { id: "marca", label: "Marca", icon: Layout },
+  { id: "marca", label: "Aparência", icon: Layout },
   { id: "cores", label: "Cores", icon: Palette },
   { id: "tipografia", label: "Tipografia", icon: Type },
   { id: "templates", label: "Templates", icon: Sun },
@@ -157,6 +157,7 @@ export default function PersonalizacaoPage() {
   const [logoUploading, setLogoUploading] = useState(false);
   const [faviconUrl, setFaviconUrl] = useState("");
   const [faviconUploading, setFaviconUploading] = useState(false);
+  const [useLogoAsFavicon, setUseLogoAsFavicon] = useState(false);
   const [officeName, setOfficeName] = useState("");
   const [slogan, setSlogan] = useState("");
   const [modules, setModules] = useState<Record<string, boolean>>({});
@@ -290,6 +291,16 @@ export default function PersonalizacaoPage() {
         const data = await res.json();
         setLogoUrl(data.logo_url);
         setTheme({ ...theme, logoUrl: data.logo_url });
+        if (useLogoAsFavicon) {
+          const token2 = localStorage.getItem("afj_access_token");
+          await fetch("/api/v1/tenant/branding", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${token2}` },
+            body: JSON.stringify({ favicon_url: data.logo_url }),
+          });
+          setFaviconUrl(data.logo_url);
+          applyTheme({ ...theme, logoUrl: data.logo_url, faviconUrl: data.logo_url });
+        }
         setSaved(true);
         setTimeout(() => setSaved(false), 2000);
       }
@@ -509,16 +520,29 @@ export default function PersonalizacaoPage() {
                       <img src={logoUrl} alt="Logo preview" className="h-10 object-contain" />
                     </div>
                   )}
+                  <label className="flex items-center gap-2 mt-3 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={useLogoAsFavicon}
+                      onChange={(e) => setUseLogoAsFavicon(e.target.checked)}
+                      className="accent-afj-gold w-4 h-4"
+                    />
+                    <span className="text-sm text-afj-black/70">Usar esta imagem também como favicon</span>
+                  </label>
                 </div>
               </div>
 
               <button
-                onClick={() => saveBranding({ app_name: appName, logo_url: logoUrl })}
+                onClick={() => saveBranding({
+                  app_name: appName,
+                  logo_url: logoUrl,
+                  ...(useLogoAsFavicon && logoUrl ? { favicon_url: logoUrl } : {}),
+                })}
                 disabled={saving}
                 className="btn-afj-primary py-2.5 rounded-sm flex items-center gap-2"
               >
                 {saved ? <Check size={14} /> : null}
-                {saving ? "Salvando..." : saved ? "Salvo!" : "Salvar Marca"}
+                {saving ? "Salvando..." : saved ? "Salvo!" : "Salvar Aparência"}
               </button>
             </div>
           )}
