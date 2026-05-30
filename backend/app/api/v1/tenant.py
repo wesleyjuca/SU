@@ -1,5 +1,5 @@
 """Endpoints de configuração de tenant/escritório."""
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel
@@ -122,6 +122,29 @@ async def update_modules(
     await db.flush()
     await invalidate_tenant_cache(DEFAULT_TENANT_SLUG)
     return {"modules_enabled": config.modules_enabled}
+
+
+@router.post("/logo-upload")
+async def upload_logo(
+    file: UploadFile = File(...),
+    current_user: User = Depends(require_role("ADMIN")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Recebe arquivo de imagem, converte para base64 data URL e salva como logo_url."""
+    import base64
+    ALLOWED = {"image/png", "image/jpeg", "image/svg+xml", "image/webp"}
+    if file.content_type not in ALLOWED:
+        raise HTTPException(status_code=400, detail="Tipo não suportado. Use PNG, JPG, SVG ou WebP.")
+    contents = await file.read()
+    if len(contents) > 2 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Arquivo muito grande. Máximo 2MB.")
+    b64 = base64.b64encode(contents).decode()
+    data_url = f"data:{file.content_type};base64,{b64}"
+    config = await _get_or_create_config(db)
+    config.logo_url = data_url
+    await db.flush()
+    await invalidate_tenant_cache(DEFAULT_TENANT_SLUG)
+    return {"logo_url": data_url}
 
 
 @router.put("/nav")

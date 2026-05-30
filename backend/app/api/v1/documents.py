@@ -236,6 +236,9 @@ async def generate_petition(
     """Dispara o petition_agent para geração de petição (assíncrono)."""
     from app.agents.petition.petition_agent import PetitionAgent
     from app.agents.brain.context import AgentContext
+    from app.models.agent_run import AgentRun
+    from datetime import datetime
+    from decimal import Decimal
 
     ctx = AgentContext(
         triggered_by=current_user.id,
@@ -249,11 +252,33 @@ async def generate_petition(
         client_id=uuid.UUID(body.client_id) if body.client_id else None,
     )
 
+    # Criar AgentRun para que o frontend consiga fazer polling pelo run_id
+    run_id = ctx.run_id
+    agent_run = AgentRun(
+        id=run_id,
+        agent_name="petition_agent",
+        trigger_type="MANUAL",
+        triggered_by=current_user.id,
+        input_data=ctx.task_input,
+        status="RUNNING",
+        tenant_id=current_user.tenant_id,
+    )
+    db.add(agent_run)
+    await db.flush()
+
     agent = PetitionAgent(db=db)
     result = await agent.run(ctx)
 
+    # Atualizar AgentRun com resultado (commit via get_db dependency ao final)
+    agent_run.status = result.status.value
+    agent_run.output_data = result.output
+    agent_run.completed_at = datetime.utcnow()
+    agent_run.tokens_used = result.tokens_used or None
+    agent_run.cost_usd = Decimal(str(result.cost_usd)) if result.cost_usd else None
+    agent_run.requires_approval = result.needs_approval
+
     return {
-        "run_id": str(ctx.run_id),
+        "run_id": str(run_id),
         "status": result.status.value,
         "document_id": result.output.get("document_id"),
         "approval_required": result.approval_required,

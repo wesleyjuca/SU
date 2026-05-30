@@ -2,7 +2,8 @@
 import Link from "next/link";
 import { useState, useEffect } from "react";
 import { usePathname } from "next/navigation";
-import { useUserStore } from "@/store";
+import { useUserStore, useThemeStore } from "@/store";
+import { fetchAndApplyTheme } from "@/lib/theme";
 import {
   LayoutDashboard, Scale, FileText, Users, FolderOpen,
   Bot, CheckSquare, DollarSign, Shield, Shapes, Settings,
@@ -95,6 +96,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     return () => window.removeEventListener("keydown", handleKey);
   }, []);
   const { user, setUser } = useUserStore();
+  const { theme, setTheme } = useThemeStore();
 
   useEffect(() => {
     if (!user) {
@@ -103,6 +105,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         if (stored) setUser(JSON.parse(stored));
       } catch {}
     }
+  }, []);
+
+  useEffect(() => {
+    fetchAndApplyTheme().then((t) => setTheme(t)).catch(() => {});
   }, []);
 
   return (
@@ -118,32 +124,43 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
       {/* ─── Sidebar AFJ ─────────────────────────────────────────────── */}
       <aside aria-label="Menu lateral" style={{ background: "linear-gradient(180deg, #3D4557 0%, #2C3547 100%)" }} className={`afj-sidebar fixed md:static inset-y-0 left-0 z-30 transform transition-transform duration-200 ${sidebarOpen ? "translate-x-0" : "-translate-x-full"} md:translate-x-0`}>
-        {/* Logo — monograma geométrico AFJ */}
+        {/* Logo — dinâmico ou monograma AFJ como fallback */}
         <div className="afj-sidebar-logo">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 flex-shrink-0 text-afj-gold">
-              <svg viewBox="0 0 80 80" className="w-9 h-9" fill="currentColor" aria-hidden="true">
-                <path d="M 4,4 L 76,4 L 76,56 Q 76,78 40,78 Q 4,78 4,56 Z"
-                      fill="none" stroke="currentColor" strokeWidth="3.5"/>
-                <rect x="10" y="11" width="6" height="57"/>
-                <rect x="29" y="11" width="6" height="57"/>
-                <rect x="10" y="38" width="25" height="5"/>
-                <rect x="43" y="11" width="6" height="41"/>
-                <rect x="43" y="11" width="25" height="5"/>
-                <rect x="43" y="27" width="18" height="5"/>
-                <rect x="62" y="11" width="6" height="44"/>
-                <path d="M 68,55 Q 68,68 55,68 Q 49,68 49,62"
-                      fill="none" stroke="currentColor" strokeWidth="6" strokeLinecap="round"/>
-              </svg>
-            </div>
-            <div>
-              <p className="text-afj-cream text-[11px] font-bold tracking-[0.18em] uppercase font-display">
-                AFJ CORE
-              </p>
-              <p className="text-afj-cream/35 text-[9px] tracking-widest uppercase mt-0.5">
-                Sistema Jurídico IA
-              </p>
-            </div>
+            {theme.logoUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={theme.logoUrl}
+                alt={theme.appName}
+                className="h-9 w-auto max-w-[140px] object-contain"
+              />
+            ) : (
+              <>
+                <div className="w-9 h-9 flex-shrink-0 text-afj-gold">
+                  <svg viewBox="0 0 80 80" className="w-9 h-9" fill="currentColor" aria-hidden="true">
+                    <path d="M 4,4 L 76,4 L 76,56 Q 76,78 40,78 Q 4,78 4,56 Z"
+                          fill="none" stroke="currentColor" strokeWidth="3.5"/>
+                    <rect x="10" y="11" width="6" height="57"/>
+                    <rect x="29" y="11" width="6" height="57"/>
+                    <rect x="10" y="38" width="25" height="5"/>
+                    <rect x="43" y="11" width="6" height="41"/>
+                    <rect x="43" y="11" width="25" height="5"/>
+                    <rect x="43" y="27" width="18" height="5"/>
+                    <rect x="62" y="11" width="6" height="44"/>
+                    <path d="M 68,55 Q 68,68 55,68 Q 49,68 49,62"
+                          fill="none" stroke="currentColor" strokeWidth="6" strokeLinecap="round"/>
+                  </svg>
+                </div>
+                <div>
+                  <p className="text-afj-cream text-[11px] font-bold tracking-[0.18em] uppercase font-display">
+                    {theme.appName || "AFJ CORE"}
+                  </p>
+                  <p className="text-afj-cream/35 text-[9px] tracking-widest uppercase mt-0.5">
+                    Sistema Jurídico IA
+                  </p>
+                </div>
+              </>
+            )}
           </div>
         </div>
 
