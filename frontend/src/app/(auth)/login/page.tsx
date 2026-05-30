@@ -9,21 +9,20 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL
 function AfjMonogram({ size = 80 }: { size?: number }) {
   return (
     <svg viewBox="0 0 80 80" width={size} height={size} fill="currentColor" aria-hidden="true">
-      {/* Shield outer frame: flat top, straight sides, bottom curves to center point */}
       <path d="M 4,4 L 76,4 L 76,56 Q 76,78 40,78 Q 4,78 4,56 Z"
             fill="none" stroke="currentColor" strokeWidth="3.5" />
       {/* A */}
-      <rect x="10" y="11" width="6" height="57" />
-      <rect x="29" y="11" width="6" height="57" />
-      <rect x="10" y="38" width="25" height="5" />
+      <rect x="10" y="11" width="7" height="57" />
+      <rect x="29" y="11" width="7" height="57" />
+      <rect x="10" y="38" width="26" height="6" />
       {/* F */}
-      <rect x="43" y="11" width="6" height="41" />
-      <rect x="43" y="11" width="25" height="5" />
-      <rect x="43" y="27" width="18" height="5" />
+      <rect x="43" y="11" width="7" height="41" />
+      <rect x="43" y="11" width="25" height="6" />
+      <rect x="43" y="27" width="18" height="6" />
       {/* J */}
-      <rect x="62" y="11" width="6" height="44" />
-      <path d="M 68,55 Q 68,68 55,68 Q 49,68 49,62"
-            fill="none" stroke="currentColor" strokeWidth="6" strokeLinecap="round" />
+      <rect x="62" y="11" width="7" height="44" />
+      <path d="M 69,55 Q 69,68 55,68 Q 49,68 49,62"
+            fill="none" stroke="currentColor" strokeWidth="7" strokeLinecap="round" />
     </svg>
   );
 }
@@ -65,8 +64,12 @@ export default function LoginPage() {
       });
 
       window.location.href = "/dashboard";
-    } catch {
-      setError("Erro de conexão com o servidor. Verifique a disponibilidade do backend.");
+    } catch (err: unknown) {
+      if (err instanceof TypeError && err.message.toLowerCase().includes("fetch")) {
+        setError("Sistema temporariamente indisponível. Tente novamente em instantes.");
+      } else {
+        setError("Erro ao conectar ao servidor. Verifique sua conexão.");
+      }
     } finally {
       setLoading(false);
     }
@@ -75,12 +78,11 @@ export default function LoginPage() {
   return (
     <div className="min-h-screen flex">
       {/* Painel esquerdo — identidade visual AFJ (desktop only) */}
-      <div className="hidden lg:flex lg:w-2/5 bg-afj-navy flex-col items-center justify-center p-12 relative overflow-hidden select-none">
-        <div
-          className="absolute inset-0 opacity-[0.035]"
-          style={{ backgroundImage: `repeating-linear-gradient(45deg, #B8954A 0px, #B8954A 1px, transparent 1px, transparent 14px)` }}
-        />
-        <div className="absolute right-0 top-0 bottom-0 w-px bg-gradient-to-b from-transparent via-afj-gold/30 to-transparent" />
+      <div
+        className="hidden lg:flex lg:w-2/5 flex-col items-center justify-center p-12 relative overflow-hidden select-none"
+        style={{ background: "linear-gradient(160deg, #3D4557 0%, #2C3547 100%)" }}
+      >
+        <div className="absolute right-0 top-0 bottom-0 w-px bg-gradient-to-b from-transparent via-afj-gold/40 to-transparent" />
 
         <div className="relative z-10 flex flex-col items-center text-center">
           <div className="text-afj-gold mb-8">
@@ -124,7 +126,7 @@ export default function LoginPage() {
             <p className="text-afj-black/40 text-[10px] tracking-widest uppercase mt-0.5">Advogados</p>
           </div>
 
-          <div className="bg-white border border-afj-cream-dark rounded-sm shadow-sm p-8 animate-fade-in">
+          <div className="bg-white border-t-2 border-afj-gold border border-afj-cream-dark rounded-sm shadow-sm p-8 animate-fade-in">
             <h2 className="font-display text-2xl font-semibold text-afj-black mb-1">
               Acesso ao Sistema
             </h2>
@@ -147,7 +149,7 @@ export default function LoginPage() {
                   required
                   autoComplete="email"
                   placeholder="seu@afj.adv.br"
-                  className="w-full bg-afj-cream border border-afj-cream-dark text-afj-black rounded-sm px-4 py-2.5 text-sm placeholder:text-afj-black/25 focus:outline-none focus:border-afj-gold focus:bg-white transition-colors"
+                  className="w-full bg-afj-cream border border-afj-cream-dark text-afj-black rounded-sm px-4 py-2.5 text-sm placeholder:text-afj-black/25 focus:outline-none focus:border-afj-gold focus:ring-1 focus:ring-afj-gold/30 focus:bg-white transition-colors"
                 />
               </div>
 
@@ -164,7 +166,7 @@ export default function LoginPage() {
                     required
                     autoComplete="current-password"
                     placeholder="••••••••"
-                    className="w-full bg-afj-cream border border-afj-cream-dark text-afj-black rounded-sm px-4 py-2.5 pr-11 text-sm placeholder:text-afj-black/25 focus:outline-none focus:border-afj-gold focus:bg-white transition-colors"
+                    className="w-full bg-afj-cream border border-afj-cream-dark text-afj-black rounded-sm px-4 py-2.5 pr-11 text-sm placeholder:text-afj-black/25 focus:outline-none focus:border-afj-gold focus:ring-1 focus:ring-afj-gold/30 focus:bg-white transition-colors"
                   />
                   <button
                     type="button"
