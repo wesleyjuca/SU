@@ -1,0 +1,57 @@
+name: 🔼 Auto Deploy Frontend → Vercel
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "frontend/**"
+      - "vercel.json"
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Deploy Vercel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Verificar VERCEL_TOKEN
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          if [ -z "$VERCEL_TOKEN" ]; then
+            echo "::error::VERCEL_TOKEN não configurado em GitHub Secrets."
+            echo "Acesse: Settings → Secrets → Actions → New secret → VERCEL_TOKEN"
+            echo "Obtenha o token em: https://vercel.com/account/tokens"
+            exit 1
+          fi
+          echo "✅ VERCEL_TOKEN encontrado."
+
+      - name: Install Vercel CLI
+        run: npm install -g vercel
+
+      - name: Deploy to Vercel (production)
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          cd frontend
+          echo "Iniciando deploy no Vercel..."
+          DEPLOY_OUTPUT=$(vercel --yes --prod --token "$VERCEL_TOKEN" --name "afj-core" 2>&1)
+          EXIT_CODE=$?
+          echo "$DEPLOY_OUTPUT"
+          if [ $EXIT_CODE -ne 0 ]; then
+            echo "::error::Deploy Vercel falhou. Veja os logs acima."
+            exit 1
+          fi
+          DEPLOY_URL=$(echo "$DEPLOY_OUTPUT" | grep -oP 'https://[a-zA-Z0-9._-]+\.vercel\.app' | tail -1 || echo "")
+          if [ -n "$DEPLOY_URL" ]; then
+            echo ""
+            echo "════════════════════════════════════════"
+            echo "  ✅ DEPLOY CONCLUÍDO!"
+            echo "  URL: $DEPLOY_URL"
+            echo "════════════════════════════════════════"
+          fi

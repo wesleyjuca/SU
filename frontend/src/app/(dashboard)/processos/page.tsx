@@ -1,9 +1,10 @@
 "use client";
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import { Scale, Plus, AlertTriangle, Search, Pencil, Trash2 } from "lucide-react";
+import { Scale, Plus, AlertTriangle, Search, Pencil, Trash2, Phone, Mail } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
+import { ViewToggle } from "@/components/ui/ViewToggle";
 
 interface Processo {
   id: string;
@@ -52,6 +53,16 @@ export default function ProcessosPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<Partial<Processo>>({});
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [view, setView] = useState<"table" | "grid">(() => {
+    if (typeof window !== "undefined") {
+      return (localStorage.getItem("processos_view") as "table" | "grid") ?? "table";
+    }
+    return "table";
+  });
+
+  useEffect(() => {
+    localStorage.setItem("processos_view", view);
+  }, [view]);
 
   useEffect(() => {
     fetchProcessos();
@@ -110,10 +121,13 @@ export default function ProcessosPage() {
           <h1 className="font-display text-2xl font-semibold text-afj-black">Processos</h1>
           <p className="text-afj-black/50 text-sm">{filtrados.length} processo(s) encontrado(s)</p>
         </div>
-        <Link href="/processos/novo" className="btn-afj-primary rounded-md flex items-center gap-2">
-          <Plus size={15} />
-          Novo Processo
-        </Link>
+        <div className="flex items-center gap-3">
+          <ViewToggle view={view} onChange={setView} />
+          <Link href="/processos/novo" className="btn-afj-primary rounded-sm flex items-center gap-2">
+            <Plus size={15} />
+            Novo Processo
+          </Link>
+        </div>
       </div>
 
       {/* Filtros */}
@@ -124,13 +138,13 @@ export default function ProcessosPage() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Buscar por número CNJ ou tribunal..."
-            className="w-full pl-9 pr-4 py-2 text-sm border border-afj-cream-dark rounded-md focus:outline-none focus:border-afj-gold bg-white"
+            className="w-full pl-9 pr-4 py-2 text-sm border border-afj-cream-dark rounded-sm focus:outline-none focus:border-afj-gold bg-white"
           />
         </div>
         <select
           value={filtroArea}
           onChange={(e) => setFiltroArea(e.target.value)}
-          className="border border-afj-cream-dark rounded-md px-3 py-2 text-sm text-afj-black bg-white focus:outline-none focus:border-afj-gold"
+          className="border border-afj-cream-dark rounded-sm px-3 py-2 text-sm text-afj-black bg-white focus:outline-none focus:border-afj-gold"
         >
           <option value="">Todas as áreas</option>
           {["CIVIL", "TRABALHISTA", "TRIBUTARIO", "PENAL", "PREVIDENCIARIO", "CONSUMIDOR"].map((a) => (
@@ -139,113 +153,175 @@ export default function ProcessosPage() {
         </select>
       </div>
 
-      {/* Tabela */}
       {loading ? (
-        <div className="afj-card p-4 space-y-3">
-          {Array.from({ length: 5 }).map((_, i) => (
-            <div key={i} className="h-11 bg-afj-cream-dark rounded animate-pulse" />
-          ))}
-        </div>
+        view === "table" ? (
+          <div className="afj-card p-4 space-y-3">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <div key={i} className="h-11 bg-afj-cream-dark rounded animate-pulse" />
+            ))}
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <div key={i} className="afj-card p-4 h-40 animate-pulse bg-afj-cream-dark/40" />
+            ))}
+          </div>
+        )
       ) : filtrados.length === 0 ? (
         <div className="afj-card p-12 text-center">
           <Scale className="mx-auto text-afj-black/20 mb-3" size={40} />
           <p className="font-semibold text-afj-black">Nenhum processo cadastrado</p>
           <p className="text-afj-black/40 text-sm mt-1">Adicione o primeiro processo para iniciar o monitoramento</p>
-          <Link href="/processos/novo" className="btn-afj-primary rounded-md inline-flex items-center gap-2 mt-4 text-sm">
+          <Link href="/processos/novo" className="btn-afj-primary rounded-sm inline-flex items-center gap-2 mt-4 text-sm">
             <Plus size={14} />
             Adicionar Processo
           </Link>
         </div>
-      ) : (
+      ) : view === "table" ? (
         <div className="afj-card overflow-hidden">
           <div className="overflow-x-auto">
-          <table className="afj-table">
-            <thead>
-              <tr>
-                <th>Número CNJ</th>
-                <th>Tribunal</th>
-                <th>Área</th>
-                <th>Situação</th>
-                <th>Próximo Prazo</th>
-                <th>Valor da Causa</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {filtrados.map((p) => {
-                const prazo = diasParaPrazo(p.proximo_prazo_at);
-                return (
-                  <tr key={p.id}>
-                    <td>
-                      <Link href={`/processos/${p.id}`} className="text-afj-gold hover:underline font-mono text-xs">
-                        {p.numero_cnj || "Sem CNJ"}
-                      </Link>
-                    </td>
-                    <td className="text-afj-black/80">{p.tribunal}</td>
-                    <td>
-                      {p.area_direito && (
-                        <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${AREA_COLORS[p.area_direito] ?? "bg-gray-100 text-gray-700"}`}>
-                          {p.area_direito}
-                        </span>
-                      )}
-                    </td>
-                    <td>
-                      <span className={SITUACAO_STYLE[p.situacao] ?? "badge-arquivado"}>{p.situacao}</span>
-                    </td>
-                    <td>
-                      {prazo ? (
-                        <span className={`flex items-center gap-1 text-xs ${prazo.classe}`}>
-                          {prazo.dias < 0 ? <AlertTriangle size={12} /> : null}
-                          {prazo.dias < 0 ? `Venceu há ${Math.abs(prazo.dias)}d` : `${prazo.dias}d`}
-                        </span>
-                      ) : (
-                        <span className="text-afj-black/30 text-xs">—</span>
-                      )}
-                    </td>
-                    <td className="text-afj-black/60 text-xs">
-                      {p.valor_causa ? `R$ ${p.valor_causa.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}` : "—"}
-                    </td>
-                    <td>
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={() => { setEditingId(p.id); setEditForm({ tribunal: p.tribunal, situacao: p.situacao, area_direito: p.area_direito ?? "" }); }}
-                          className="text-afj-black/30 hover:text-afj-gold transition-colors"
-                          aria-label="Editar processo"
-                        >
-                          <Pencil size={13} />
-                        </button>
-                        <button
-                          onClick={() => setDeletingId(p.id)}
-                          className="text-afj-black/30 hover:text-red-500 transition-colors"
-                          aria-label="Arquivar processo"
-                        >
-                          <Trash2 size={13} />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+            <table className="afj-table">
+              <thead>
+                <tr>
+                  <th>Número CNJ</th>
+                  <th>Tribunal</th>
+                  <th>Área</th>
+                  <th>Situação</th>
+                  <th>Próximo Prazo</th>
+                  <th>Valor da Causa</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {filtrados.map((p) => {
+                  const prazo = diasParaPrazo(p.proximo_prazo_at);
+                  return (
+                    <tr key={p.id}>
+                      <td>
+                        <Link href={`/processos/${p.id}`} className="text-afj-gold hover:underline font-mono text-xs">
+                          {p.numero_cnj || "Sem CNJ"}
+                        </Link>
+                      </td>
+                      <td className="text-afj-black/80">{p.tribunal}</td>
+                      <td>
+                        {p.area_direito && (
+                          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${AREA_COLORS[p.area_direito] ?? "bg-gray-100 text-gray-700"}`}>
+                            {p.area_direito}
+                          </span>
+                        )}
+                      </td>
+                      <td>
+                        <span className={SITUACAO_STYLE[p.situacao] ?? "badge-arquivado"}>{p.situacao}</span>
+                      </td>
+                      <td>
+                        {prazo ? (
+                          <span className={`flex items-center gap-1 text-xs ${prazo.classe}`}>
+                            {prazo.dias < 0 ? <AlertTriangle size={12} /> : null}
+                            {prazo.dias < 0 ? `Venceu há ${Math.abs(prazo.dias)}d` : `${prazo.dias}d`}
+                          </span>
+                        ) : (
+                          <span className="text-afj-black/30 text-xs">—</span>
+                        )}
+                      </td>
+                      <td className="text-afj-black/60 text-xs">
+                        {p.valor_causa ? `R$ ${p.valor_causa.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}` : "—"}
+                      </td>
+                      <td>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => { setEditingId(p.id); setEditForm({ tribunal: p.tribunal, situacao: p.situacao, area_direito: p.area_direito ?? "" }); }}
+                            className="text-afj-black/30 hover:text-afj-gold transition-colors"
+                            aria-label="Editar processo"
+                          >
+                            <Pencil size={13} />
+                          </button>
+                          <button
+                            onClick={() => setDeletingId(p.id)}
+                            className="text-afj-black/30 hover:text-red-500 transition-colors"
+                            aria-label="Arquivar processo"
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
         </div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {filtrados.map((p) => {
+            const prazo = diasParaPrazo(p.proximo_prazo_at);
+            return (
+              <div key={p.id} className="afj-card p-4 hover:border-afj-gold/30 transition-colors">
+                <div className="flex items-start justify-between mb-2">
+                  {p.area_direito ? (
+                    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${AREA_COLORS[p.area_direito] ?? "bg-gray-100 text-gray-700"}`}>
+                      {p.area_direito}
+                    </span>
+                  ) : (
+                    <span />
+                  )}
+                  <span className={SITUACAO_STYLE[p.situacao] ?? "badge-arquivado"}>{p.situacao}</span>
+                </div>
+                <Link href={`/processos/${p.id}`} className="block mt-2">
+                  <p className="font-mono text-xs text-afj-gold hover:underline">{p.numero_cnj || "Sem CNJ"}</p>
+                  <p className="font-semibold text-afj-black text-sm mt-1">{p.tribunal}</p>
+                  {p.vara && <p className="text-xs text-afj-black/50">{p.vara}</p>}
+                </Link>
+                <div className="mt-3 space-y-1">
+                  {prazo && (
+                    <p className={`text-xs flex items-center gap-1 ${prazo.classe}`}>
+                      {prazo.dias < 0 ? <AlertTriangle size={11} /> : null}
+                      {prazo.dias < 0 ? `Prazo venceu há ${Math.abs(prazo.dias)}d` : `Próximo prazo: ${prazo.dias}d`}
+                    </p>
+                  )}
+                  {p.valor_causa && (
+                    <p className="text-xs text-afj-black/60">
+                      R$ {p.valor_causa.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                    </p>
+                  )}
+                </div>
+                <div className="mt-3 pt-2 border-t border-afj-cream-dark flex items-center justify-end gap-2">
+                  <button
+                    onClick={() => { setEditingId(p.id); setEditForm({ tribunal: p.tribunal, situacao: p.situacao, area_direito: p.area_direito ?? "" }); }}
+                    className="text-afj-black/30 hover:text-afj-gold transition-colors"
+                    aria-label="Editar processo"
+                  >
+                    <Pencil size={13} />
+                  </button>
+                  <button
+                    onClick={() => setDeletingId(p.id)}
+                    className="text-afj-black/30 hover:text-red-500 transition-colors"
+                    aria-label="Arquivar processo"
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
       )}
+
       {/* Modal edição */}
       {editingId && (
         <div className="fixed inset-0 bg-afj-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl p-6 w-full max-w-md shadow-2xl">
+          <div className="bg-white rounded-sm p-6 w-full max-w-md shadow-2xl">
             <h2 className="font-display text-lg font-semibold text-afj-black mb-4">Editar Processo</h2>
             <div className="space-y-3">
               <div>
                 <label className="text-xs text-afj-black/60 block mb-1">Tribunal</label>
                 <input value={editForm.tribunal ?? ""} onChange={(e) => setEditForm({ ...editForm, tribunal: e.target.value })}
-                  className="w-full border border-afj-cream-dark rounded-md px-3 py-2 text-sm focus:outline-none focus:border-afj-gold" />
+                  className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold" />
               </div>
               <div>
                 <label className="text-xs text-afj-black/60 block mb-1">Situação</label>
                 <select value={editForm.situacao ?? ""} onChange={(e) => setEditForm({ ...editForm, situacao: e.target.value })}
-                  className="w-full border border-afj-cream-dark rounded-md px-3 py-2 text-sm focus:outline-none focus:border-afj-gold">
+                  className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold">
                   <option value="ATIVO">Ativo</option>
                   <option value="SUSPENSO">Suspenso</option>
                   <option value="ARQUIVADO">Arquivado</option>
@@ -255,7 +331,7 @@ export default function ProcessosPage() {
               <div>
                 <label className="text-xs text-afj-black/60 block mb-1">Área do Direito</label>
                 <select value={editForm.area_direito ?? ""} onChange={(e) => setEditForm({ ...editForm, area_direito: e.target.value })}
-                  className="w-full border border-afj-cream-dark rounded-md px-3 py-2 text-sm focus:outline-none focus:border-afj-gold">
+                  className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold">
                   <option value="">Sem área definida</option>
                   {["CIVIL", "TRABALHISTA", "TRIBUTARIO", "PENAL", "PREVIDENCIARIO", "CONSUMIDOR", "EMPRESARIAL"].map((a) => (
                     <option key={a} value={a}>{a}</option>
@@ -264,8 +340,8 @@ export default function ProcessosPage() {
               </div>
             </div>
             <div className="flex gap-3 mt-5">
-              <button onClick={() => setEditingId(null)} className="flex-1 btn-afj-outline rounded-md">Cancelar</button>
-              <button onClick={salvarEdicao} className="flex-1 btn-afj-primary rounded-md">Salvar</button>
+              <button onClick={() => setEditingId(null)} className="flex-1 btn-afj-outline rounded-sm">Cancelar</button>
+              <button onClick={salvarEdicao} className="flex-1 btn-afj-primary rounded-sm">Salvar</button>
             </div>
           </div>
         </div>
@@ -274,12 +350,12 @@ export default function ProcessosPage() {
       {/* Modal confirmação exclusão */}
       {deletingId && (
         <div className="fixed inset-0 bg-afj-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl p-6 w-full max-w-sm shadow-2xl text-center">
+          <div className="bg-white rounded-sm p-6 w-full max-w-sm shadow-2xl text-center">
             <p className="font-semibold text-afj-black mb-2">Arquivar processo?</p>
             <p className="text-afj-black/50 text-sm mb-5">O processo será marcado como arquivado e removido da lista ativa.</p>
             <div className="flex gap-3">
-              <button onClick={() => setDeletingId(null)} className="flex-1 btn-afj-outline rounded-md">Cancelar</button>
-              <button onClick={() => excluirProcesso(deletingId)} className="flex-1 bg-red-500 text-white rounded-md py-2 text-sm font-medium hover:bg-red-600">Arquivar</button>
+              <button onClick={() => setDeletingId(null)} className="flex-1 btn-afj-outline rounded-sm">Cancelar</button>
+              <button onClick={() => excluirProcesso(deletingId)} className="flex-1 bg-red-500 text-white rounded-sm py-2 text-sm font-medium hover:bg-red-600">Arquivar</button>
             </div>
           </div>
         </div>
