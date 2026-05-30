@@ -41,7 +41,7 @@ jobs:
           VERCEL_PROJECT_ID: prj_HYpptvvAFX1WmAjeRXyjaLmulAex
           RAILWAY_URL: ${{ secrets.RAILWAY_URL }}
         run: |
-          cd frontend
+          # Rodar da raiz — vercel.json tem rootDirectory: "frontend"
           BACKEND_URL="${RAILWAY_URL:-https://su-production-5a83.up.railway.app}"
           echo "Backend URL: $BACKEND_URL"
           echo "Iniciando deploy no Vercel..."
