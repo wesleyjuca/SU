@@ -46,10 +46,15 @@ function diasParaPrazo(prazo: string | null): { dias: number; classe: string } |
   return { dias: diff, classe: "text-afj-black/50" };
 }
 
+const PAGE_SIZE = 50;
+
 export default function ProcessosPage() {
   const toast = useToast();
   const [processos, setProcessos] = useState<Processo[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
+  const [offset, setOffset] = useState(0);
   const [search, setSearch] = useState("");
   const [filtroArea, setFiltroArea] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -70,21 +75,30 @@ export default function ProcessosPage() {
   }, [view]);
 
   useEffect(() => {
-    fetchProcessos();
+    fetchProcessos(0, false);
   }, [filtroArea]);
 
-  async function fetchProcessos() {
-    setLoading(true);
+  async function fetchProcessos(newOffset = 0, append = false) {
+    if (append) setLoadingMore(true);
+    else setLoading(true);
     try {
       const token = localStorage.getItem("afj_access_token");
       const params = new URLSearchParams();
       if (filtroArea) params.set("area_direito", filtroArea);
+      params.set("limit", String(PAGE_SIZE));
+      params.set("offset", String(newOffset));
       const res = await fetch(`/api/v1/processes?${params}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (res.ok) setProcessos(await res.json());
+      if (res.ok) {
+        const data: Processo[] = await res.json();
+        setProcessos((prev) => append ? [...prev, ...data] : data);
+        setHasMore(data.length === PAGE_SIZE);
+        setOffset(newOffset + data.length);
+      }
     } finally {
-      setLoading(false);
+      if (append) setLoadingMore(false);
+      else setLoading(false);
     }
   }
 
@@ -97,7 +111,7 @@ export default function ProcessosPage() {
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify(editForm),
       });
-      if (res.ok) { setEditingId(null); fetchProcessos(); }
+      if (res.ok) { setEditingId(null); fetchProcessos(0, false); }
       else toast.error("Erro ao salvar processo. Tente novamente.");
     } catch {
       toast.error("Erro de conexão. Tente novamente.");
@@ -168,7 +182,7 @@ export default function ProcessosPage() {
       method: "DELETE",
       headers: { Authorization: `Bearer ${token}` },
     });
-    if (res.ok) { setDeletingId(null); fetchProcessos(); }
+    if (res.ok) { setDeletingId(null); fetchProcessos(0, false); }
   }
 
   const filtrados = processos.filter((p) =>
@@ -374,6 +388,19 @@ export default function ProcessosPage() {
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* Carregar mais */}
+      {hasMore && !loading && (
+        <div className="flex justify-center">
+          <button
+            onClick={() => fetchProcessos(offset, true)}
+            disabled={loadingMore}
+            className="btn-afj-outline rounded-sm text-sm disabled:opacity-50"
+          >
+            {loadingMore ? "Carregando..." : `Carregar mais processos`}
+          </button>
         </div>
       )}
 

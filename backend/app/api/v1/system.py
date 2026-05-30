@@ -79,7 +79,7 @@ async def get_metrics(
 ):
     """KPIs reais para o dashboard (cache 60s)."""
     from app.models.process import LegalProcess, ProcessDeadline
-    from app.models.approval import Approval
+    from app.models.agent_run import Approval
     from app.models.agent_run import AgentRun
 
     cache_key = f"metrics:{current_user.tenant_id}"
@@ -455,7 +455,7 @@ async def health_detailed(current_user: User = Depends(get_current_user)):
 
     from app.db.base import get_db as _get_db
     from app.db.base import AsyncSessionLocal
-    from app.models.agent import AgentRun
+    from app.models.agent_run import AgentRun
 
     async with AsyncSessionLocal() as db_check:
         pg_ok, pg_ms = await probe_postgres(db_check)

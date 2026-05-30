@@ -97,7 +97,15 @@ export default function NovaPeticaoPage() {
 
   async function pollStatus(rid: string) {
     const token = localStorage.getItem("afj_access_token");
+    let attempts = 0;
+    const MAX_ATTEMPTS = 60; // 3 minutos
     const interval = setInterval(async () => {
+      if (++attempts > MAX_ATTEMPTS) {
+        clearInterval(interval);
+        setError("Tempo limite excedido. A geração demorou mais que o esperado. Tente novamente.");
+        setStep(2);
+        return;
+      }
       try {
         const res = await fetch(`/api/v1/agents/runs/${rid}`, {
           headers: { Authorization: `Bearer ${token}` },

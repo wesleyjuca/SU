@@ -46,9 +46,11 @@ async def list_approvals(
     """Lista aprovações pendentes para o usuário atual."""
     query = (
         select(Approval)
-        .where(Approval.status == status)
+        .where(
+            Approval.status == status,
+            Approval.tenant_id == current_user.tenant_id,
+        )
         .order_by(
-            # URGENT primeiro, depois por data de criação
             Approval.prioridade.desc(),
             desc(Approval.created_at),
         )

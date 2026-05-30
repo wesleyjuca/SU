@@ -44,7 +44,12 @@ async def list_documents(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    query = select(Document).order_by(desc(Document.created_at)).limit(limit)
+    query = (
+        select(Document)
+        .where(Document.tenant_id == current_user.tenant_id)
+        .order_by(desc(Document.created_at))
+        .limit(limit)
+    )
     if tipo:
         query = query.where(Document.tipo == tipo)
     if status:

@@ -26,10 +26,15 @@ const STATUS_STYLE: Record<string, string> = {
   INATIVO: "badge-arquivado",
 };
 
+const PAGE_SIZE = 50;
+
 export default function ClientesPage() {
   const toast = useToast();
   const [clientes, setClientes] = useState<Cliente[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
+  const [offset, setOffset] = useState(0);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
   const [showModal, setShowModal] = useState(false);
@@ -48,17 +53,28 @@ export default function ClientesPage() {
     localStorage.setItem("clientes_view", view);
   }, [view]);
 
-  useEffect(() => { fetchClientes(); }, [status]);
+  useEffect(() => { fetchClientes(0, false); }, [status]);
 
-  async function fetchClientes() {
-    setLoading(true);
+  async function fetchClientes(newOffset = 0, append = false) {
+    if (append) setLoadingMore(true);
+    else setLoading(true);
     try {
       const token = localStorage.getItem("afj_access_token");
       const params = new URLSearchParams();
       if (status) params.set("status", status);
+      params.set("limit", String(PAGE_SIZE));
+      params.set("offset", String(newOffset));
       const res = await fetch(`/api/v1/clients?${params}`, { headers: { Authorization: `Bearer ${token}` } });
-      if (res.ok) setClientes(await res.json());
-    } finally { setLoading(false); }
+      if (res.ok) {
+        const data: Cliente[] = await res.json();
+        setClientes((prev) => append ? [...prev, ...data] : data);
+        setHasMore(data.length === PAGE_SIZE);
+        setOffset(newOffset + data.length);
+      }
+    } finally {
+      if (append) setLoadingMore(false);
+      else setLoading(false);
+    }
   }
 
   async function salvarEdicao() {
@@ -70,7 +86,7 @@ export default function ClientesPage() {
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify(editForm),
       });
-      if (res.ok) { setEditingId(null); fetchClientes(); }
+      if (res.ok) { setEditingId(null); fetchClientes(0, false); }
       else toast.error("Erro ao salvar cliente. Tente novamente.");
     } catch {
       toast.error("Erro de conexão. Tente novamente.");
@@ -83,7 +99,7 @@ export default function ClientesPage() {
       method: "DELETE",
       headers: { Authorization: `Bearer ${token}` },
     });
-    if (res.ok) { setDeletingId(null); fetchClientes(); }
+    if (res.ok) { setDeletingId(null); fetchClientes(0, false); }
   }
 
   async function salvarCliente(e: React.FormEvent) {
@@ -94,7 +110,7 @@ export default function ClientesPage() {
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
       body: JSON.stringify(form),
     });
-    if (res.ok) { setShowModal(false); fetchClientes(); }
+    if (res.ok) { setShowModal(false); fetchClientes(0, false); }
   }
 
   const filtrados = clientes.filter((c) =>
@@ -223,6 +239,19 @@ export default function ClientesPage() {
               </tbody>
             </table>
           </div>
+        </div>
+      )}
+
+      {/* Carregar mais */}
+      {hasMore && !loading && (
+        <div className="flex justify-center">
+          <button
+            onClick={() => fetchClientes(offset, true)}
+            disabled={loadingMore}
+            className="btn-afj-outline rounded-sm text-sm disabled:opacity-50"
+          >
+            {loadingMore ? "Carregando..." : `Carregar mais clientes`}
+          </button>
         </div>
       )}
 
