@@ -37,10 +37,16 @@ jobs:
       - name: Deploy to Vercel (production)
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          RAILWAY_URL: ${{ secrets.RAILWAY_URL }}
         run: |
           cd frontend
+          # Determinar URL do backend Railway (secret ou fallback)
+          BACKEND_URL="${RAILWAY_URL:-https://su-production-5a83.up.railway.app}"
+          echo "Backend URL: $BACKEND_URL"
           echo "Iniciando deploy no Vercel..."
-          DEPLOY_OUTPUT=$(vercel --yes --prod --token "$VERCEL_TOKEN" --name "afj-core" 2>&1)
+          DEPLOY_OUTPUT=$(vercel --yes --prod --token "$VERCEL_TOKEN" --name "afj-core" \
+            --build-env API_URL="$BACKEND_URL" \
+            --build-env NEXT_PUBLIC_API_URL="$BACKEND_URL" 2>&1)
           EXIT_CODE=$?
           echo "$DEPLOY_OUTPUT"
           if [ $EXIT_CODE -ne 0 ]; then
@@ -53,5 +59,6 @@ jobs:
             echo "════════════════════════════════════════"
             echo "  ✅ DEPLOY CONCLUÍDO!"
             echo "  URL: $DEPLOY_URL"
+            echo "  Backend: $BACKEND_URL"
             echo "════════════════════════════════════════"
           fi
