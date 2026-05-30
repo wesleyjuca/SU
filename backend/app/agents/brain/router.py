@@ -3,6 +3,9 @@
 TASK_ROUTE_MAP: dict[str, str | list[str]] = {
     # ─── Rotas diretas ────────────────────────────────────────────────────────
     "monitor_process": "process_agent",
+    "process_agent": "process_agent",       # alias direto
+    "search_by_oab": "process_agent",       # captura por OAB
+    "poll_process": "process_agent",        # polling de processo
     "generate_petition": "petition_agent",
     "review_document": "review_agent",
     "search_jurisprudence": "jurisprudence_agent",

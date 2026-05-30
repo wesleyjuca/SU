@@ -51,7 +51,8 @@ class Settings(BaseSettings):
         return v
 
     # ─── Integrações externas ────────────────────────────────────────────────
-    CNJ_API_KEY: str = ""           # DataJud: https://datajud-wiki.cnj.jus.br/
+    # Chave pública CNJ DataJud (documentada em https://datajud-wiki.cnj.jus.br/)
+    CNJ_API_KEY: str = "cDZHYzlZa0JadVREZDJCendFbGpZVlJBZFM4Z1JUdzRGbENnUVJBanFrTHlDWDhFN05oYjY4WUpUeVFGWUt"
 
     # ─── IA ──────────────────────────────────────────────────────────────────
     ANTHROPIC_API_KEY: str = ""
