@@ -55,7 +55,7 @@ const navSections = [
     title: "SISTEMA",
     items: [
       { href: "/auditoria", label: "Auditoria", icon: Shield, roles: ["ADMIN", "SOCIO"] },
-      { href: "/admin/health", label: "Monitoramento", icon: Activity, roles: ["ADMIN"] },
+      { href: "/admin/health", label: "Saúde do Sistema", icon: Activity, roles: ["ADMIN"] },
       { href: "/admin/usuarios", label: "Usuários", icon: Users2, roles: ["ADMIN"] },
       { href: "/admin/personalizacao", label: "Personalização", icon: Palette, roles: ["ADMIN"] },
       { href: "/configuracoes", label: "Configurações", icon: Settings, roles: null },

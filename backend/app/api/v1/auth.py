@@ -40,6 +40,7 @@ async def login(body: LoginRequest, request: Request, db: AsyncSession = Depends
     if not user or not verify_password(body.password, user.hashed_password):
         raise UnauthorizedError("E-mail ou senha incorretos")
 
+    user.last_login_at = datetime.now(timezone.utc)
     access_token = create_access_token(str(user.id), user.role)
     refresh_token_str, token_hash = create_refresh_token(str(user.id))
 

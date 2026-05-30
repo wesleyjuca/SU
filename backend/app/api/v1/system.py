@@ -50,7 +50,7 @@ NAV_ALL = [
     {"href": "/financeiro", "label": "Financeiro", "icon": "DollarSign"},
     {"href": "/visual-law", "label": "Visual Law", "icon": "Shapes"},
     {"href": "/auditoria", "label": "Auditoria", "icon": "Shield"},
-    {"href": "/admin/health", "label": "Monitoramento", "icon": "Activity"},
+    {"href": "/admin/health", "label": "Saúde do Sistema", "icon": "Activity"},
     {"href": "/configuracoes", "label": "Configurações", "icon": "Settings"},
 ]
 
@@ -415,12 +415,13 @@ async def analytics_agentes(
 
 @router.get("/health/detailed")
 async def health_detailed(current_user: User = Depends(get_current_user)):
-    """Health check detalhado com latências — apenas para ADMIN."""
+    """Health check detalhado com latências — apenas para ADMIN/SOCIO."""
     if current_user.role not in ("ADMIN", "SOCIO"):
         from fastapi import HTTPException
         raise HTTPException(status_code=403, detail="Acesso negado")
 
     import time
+    import asyncio
 
     async def probe_postgres(db_session) -> tuple[bool, int]:
         t0 = time.monotonic()
@@ -453,24 +454,48 @@ async def health_detailed(current_user: User = Depends(get_current_user)):
             pass
         return False, -1
 
-    from app.db.base import get_db as _get_db
+    async def probe_anthropic() -> tuple[bool, int]:
+        """Verifica conectividade com a API Anthropic listando modelos (sem gerar tokens)."""
+        t0 = time.monotonic()
+        try:
+            from app.config import settings as _cfg
+            import httpx
+            async with httpx.AsyncClient(timeout=5) as c:
+                r = await c.get(
+                    "https://api.anthropic.com/v1/models",
+                    headers={"x-api-key": _cfg.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01"},
+                )
+                ok = r.status_code == 200
+                return ok, int((time.monotonic() - t0) * 1000)
+        except Exception:
+            return False, -1
+
+    async def probe_datajud() -> tuple[bool, int]:
+        """Verifica acesso ao CNJ DataJud (API pública)."""
+        t0 = time.monotonic()
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=5) as c:
+                r = await c.get("https://api-publica.datajud.cnj.jus.br/", timeout=5)
+                return r.status_code < 500, int((time.monotonic() - t0) * 1000)
+        except Exception:
+            return False, -1
+
     from app.db.base import AsyncSessionLocal
     from app.models.agent_run import AgentRun
 
     async with AsyncSessionLocal() as db_check:
         pg_ok, pg_ms = await probe_postgres(db_check)
-    redis_ok, redis_ms = await probe_redis()
-    qdrant_ok, qdrant_ms = await probe_qdrant()
 
-    # Recent agent activity
+    (redis_ok, redis_ms), (qdrant_ok, qdrant_ms), (anthropic_ok, anthropic_ms), (datajud_ok, datajud_ms) = await asyncio.gather(
+        probe_redis(), probe_qdrant(), probe_anthropic(), probe_datajud()
+    )
+
+    # Recent agent activity (last 24h)
     async with AsyncSessionLocal() as db2:
         cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
         q = await db2.execute(
-            select(
-                AgentRun.agent_name,
-                AgentRun.status,
-                AgentRun.started_at,
-            )
+            select(AgentRun.agent_name, AgentRun.status, AgentRun.started_at)
             .where(AgentRun.started_at >= cutoff)
             .order_by(AgentRun.started_at.desc())
             .limit(20)
@@ -480,19 +505,25 @@ async def health_detailed(current_user: User = Depends(get_current_user)):
             for r in q.all()
         ]
 
+    from app.config import settings as cfg
     services = {
         "postgresql": {"ok": pg_ok, "latency_ms": pg_ms},
         "redis": {"ok": redis_ok, "latency_ms": redis_ms},
         "qdrant": {"ok": qdrant_ok, "latency_ms": qdrant_ms},
+        "anthropic": {"ok": anthropic_ok, "latency_ms": anthropic_ms},
+        "datajud": {"ok": datajud_ok, "latency_ms": datajud_ms},
     }
-    all_ok = all(s["ok"] for s in services.values())
+    core_ok = all(services[k]["ok"] for k in ("postgresql", "redis"))
 
-    from app.config import settings as cfg
+    app_start = getattr(cfg, "APP_START_TIME", None)
+    uptime_seconds = int((datetime.now(timezone.utc) - app_start).total_seconds()) if app_start else None
+
     return {
-        "status": "operational" if all_ok else "degraded",
+        "status": "operational" if core_ok else "degraded",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "version": cfg.VERSION,
         "environment": cfg.ENVIRONMENT,
+        "uptime_seconds": uptime_seconds,
         "services": services,
         "email_enabled": cfg.EMAIL_ENABLED,
         "sentry_enabled": bool(cfg.SENTRY_DSN),

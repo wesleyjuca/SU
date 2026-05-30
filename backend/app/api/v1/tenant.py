@@ -23,6 +23,8 @@ class ThemeResponse(BaseModel):
     logo_dark_url: str | None
     favicon_url: str | None
     app_name: str
+    office_name: str | None = None
+    slogan: str | None = None
 
 
 class TenantConfigResponse(ThemeResponse):
@@ -45,6 +47,8 @@ class BrandingUpdate(BaseModel):
     logo_dark_url: str | None = None
     favicon_url: str | None = None
     app_name: str | None = None
+    office_name: str | None = None  # armazenado em metadata.office_name
+    slogan: str | None = None       # armazenado em metadata.slogan
 
 
 class ModulesUpdate(BaseModel):
@@ -66,6 +70,7 @@ async def get_theme(
     db: AsyncSession = Depends(get_db),
 ):
     config = await get_tenant_config(db)
+    meta = config.get("metadata") or {}
     return ThemeResponse(
         primary_color=config["primary_color"],
         secondary_color=config["secondary_color"],
@@ -74,6 +79,8 @@ async def get_theme(
         logo_dark_url=config["logo_dark_url"],
         favicon_url=config["favicon_url"],
         app_name=config["app_name"],
+        office_name=meta.get("office_name"),
+        slogan=meta.get("slogan"),
     )
 
 
@@ -94,10 +101,18 @@ async def update_branding(
 ):
     config = await _get_or_create_config(db)
     updates = body.model_dump(exclude_none=True)
+    meta_updates = {}
+    for field in ("office_name", "slogan"):
+        if field in updates:
+            meta_updates[field] = updates.pop(field)
     for field, value in updates.items():
         setattr(config, field, value)
+    if meta_updates:
+        current_meta = config.metadata or {}
+        config.metadata = {**current_meta, **meta_updates}
     await db.flush()
     await invalidate_tenant_cache(DEFAULT_TENANT_SLUG)
+    meta = config.metadata or {}
     return ThemeResponse(
         primary_color=config.primary_color,
         secondary_color=config.secondary_color,
@@ -106,6 +121,8 @@ async def update_branding(
         logo_dark_url=config.logo_dark_url,
         favicon_url=config.favicon_url,
         app_name=config.app_name,
+        office_name=meta.get("office_name"),
+        slogan=meta.get("slogan"),
     )
 
 
@@ -145,6 +162,30 @@ async def upload_logo(
     await db.flush()
     await invalidate_tenant_cache(DEFAULT_TENANT_SLUG)
     return {"logo_url": data_url}
+
+
+@router.post("/favicon-upload")
+async def upload_favicon(
+    file: UploadFile = File(...),
+    current_user: User = Depends(require_role("ADMIN")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Recebe arquivo de favicon, converte para base64 data URL e salva como favicon_url."""
+    import base64
+    ALLOWED = {"image/png", "image/x-icon", "image/vnd.microsoft.icon", "image/svg+xml"}
+    if file.content_type not in ALLOWED:
+        raise HTTPException(status_code=400, detail="Tipo não suportado. Use PNG, ICO ou SVG.")
+    contents = await file.read()
+    if len(contents) > 512 * 1024:
+        raise HTTPException(status_code=400, detail="Arquivo muito grande. Máximo 512KB.")
+    b64 = base64.b64encode(contents).decode()
+    ct = file.content_type if file.content_type != "image/x-icon" else "image/vnd.microsoft.icon"
+    data_url = f"data:{ct};base64,{b64}"
+    config = await _get_or_create_config(db)
+    config.favicon_url = data_url
+    await db.flush()
+    await invalidate_tenant_cache(DEFAULT_TENANT_SLUG)
+    return {"favicon_url": data_url}
 
 
 @router.put("/nav")
