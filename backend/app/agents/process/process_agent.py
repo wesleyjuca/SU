@@ -9,10 +9,13 @@ Polling agendado via Celery Beat. Detecta:
 """
 from typing import ClassVar
 from datetime import datetime, timezone
+import uuid
+
 from app.agents.base.agent import BaseAgent
 from app.agents.base.result import AgentResult, AgentStatus
 from app.agents.brain.context import AgentContext
-from app.integrations.anthropic_client import call_claude, AFJ_LEGAL_SYSTEM_PROMPT
+from app.integrations.anthropic_client import call_claude
+from app.integrations.tribunais.cnj import CNJDataJudClient
 import structlog
 
 log = structlog.get_logger()
@@ -40,6 +43,15 @@ class ProcessAgent(BaseAgent):
                 error=f"Ação desconhecida: {action}",
             )
 
+    async def _get_db(self):
+        """Returns self.db if injected, otherwise creates a new session."""
+        if self.db:
+            return self.db, False  # (session, owned)
+        from app.db.base import AsyncSessionLocal
+        session = AsyncSessionLocal()
+        await session.begin()
+        return session, True  # (session, owned — must close)
+
     async def _poll_single_process(self, ctx: AgentContext, task: dict) -> AgentResult:
         """Busca andamentos de um processo específico."""
         numero_cnj = task.get("numero_cnj")
@@ -48,14 +60,7 @@ class ProcessAgent(BaseAgent):
         if not numero_cnj or not tribunal:
             return AgentResult(status=AgentStatus.FAILED, agent_name=self.name, error="numero_cnj e tribunal são obrigatórios")
 
-        # Instanciar conector do tribunal
         client = self._get_tribunal_client(tribunal)
-        if not client:
-            return AgentResult(
-                status=AgentStatus.PARTIAL,
-                agent_name=self.name,
-                output={"aviso": f"Conector para {tribunal} ainda não implementado"},
-            )
 
         try:
             movimentos = await client.fetch_movements(numero_cnj)
@@ -69,13 +74,25 @@ class ProcessAgent(BaseAgent):
         total_cost = 0.0
 
         for mov in movimentos:
-            resumo, tokens, _, cost = await self._resumir_movimento(mov)
+            resumo, tokens, _, cost = await self._resumir_movimento({"descricao": mov.descricao})
             total_tokens += tokens
             total_cost += cost
-            movimentos_com_resumo.append({**mov, "ai_resumo": resumo})
+            movimentos_com_resumo.append({
+                "data": mov.data.isoformat() if mov.data else None,
+                "descricao": mov.descricao,
+                "tipo": mov.tipo,
+                "documento_url": mov.documento_url,
+                "raw_data": mov.raw_data,
+                "ai_resumo": resumo,
+            })
 
         # Detectar prazos em movimentos
         prazos_detectados = await self._detectar_prazos(movimentos_com_resumo)
+
+        # Persistir movimentos no banco
+        process_id = ctx.process_id or (uuid.UUID(task["process_id"]) if task.get("process_id") else None)
+        if process_id and movimentos:
+            await self._save_movements(process_id, movimentos, movimentos_com_resumo)
 
         ctx.set_state("novos_movimentos", len(movimentos))
         ctx.set_state("prazos_detectados", len(prazos_detectados))
@@ -94,25 +111,65 @@ class ProcessAgent(BaseAgent):
             cost_usd=total_cost,
         )
 
+    async def _save_movements(self, process_id: uuid.UUID, movimentos, movimentos_com_resumo: list[dict]):
+        """Persiste movimentos no ProcessMovement evitando duplicatas."""
+        from sqlalchemy import select
+        from app.models.process import ProcessMovement
+
+        db, owned = await self._get_db()
+        try:
+            for mov, enriched in zip(movimentos, movimentos_com_resumo):
+                # Evitar duplicatas por data + descrição
+                existing = await db.execute(
+                    select(ProcessMovement).where(
+                        ProcessMovement.process_id == process_id,
+                        ProcessMovement.data_movimento == mov.data,
+                        ProcessMovement.descricao == mov.descricao,
+                    )
+                )
+                if existing.scalar_one_or_none():
+                    continue
+
+                pm = ProcessMovement(
+                    process_id=process_id,
+                    data_movimento=mov.data,
+                    descricao=mov.descricao,
+                    tipo=mov.tipo,
+                    documento_url=mov.documento_url,
+                    raw_html=str(mov.raw_data) if mov.raw_data else None,
+                    ai_summary=enriched.get("ai_resumo"),
+                )
+                db.add(pm)
+            await db.commit()
+        except Exception as exc:
+            await db.rollback()
+            log.error("save_movements_failed", process_id=str(process_id), error=str(exc))
+        finally:
+            if owned:
+                await db.close()
+
     async def _poll_all_active(self, ctx: AgentContext) -> AgentResult:
         """Polling batch de todos os processos com monitoramento ativo."""
-        if not self.db:
-            return AgentResult(status=AgentStatus.FAILED, agent_name=self.name, error="DB não disponível")
+        db, owned = await self._get_db()
 
-        from sqlalchemy import select, func
-        from app.models.process import LegalProcess
-        from app.config import settings
+        try:
+            from sqlalchemy import select
+            from app.models.process import LegalProcess
+            from app.config import settings
 
-        result = await self.db.execute(
-            select(LegalProcess)
-            .where(
-                LegalProcess.monitoring_active == True,
-                LegalProcess.situacao != "ARQUIVADO",
+            result = await db.execute(
+                select(LegalProcess)
+                .where(
+                    LegalProcess.monitoring_active == True,
+                    LegalProcess.situacao != "ARQUIVADO",
+                )
+                .order_by(LegalProcess.proximo_prazo_at.asc().nulls_last())
+                .limit(settings.PROCESS_POLLING_BATCH_SIZE)
             )
-            .order_by(LegalProcess.proximo_prazo_at.asc().nulls_last())
-            .limit(settings.PROCESS_POLLING_BATCH_SIZE)
-        )
-        processos = result.scalars().all()
+            processos = result.scalars().all()
+        finally:
+            if owned:
+                await db.close()
 
         polled = 0
         errors = 0
@@ -126,6 +183,7 @@ class ProcessAgent(BaseAgent):
                         "action": "poll_process",
                         "numero_cnj": processo.numero_cnj,
                         "tribunal": processo.tribunal,
+                        "process_id": str(processo.id),
                     },
                     process_id=processo.id,
                 )
@@ -134,7 +192,17 @@ class ProcessAgent(BaseAgent):
                     polled += 1
                     novos_movimentos += sub_ctx.get_state("novos_movimentos", 0)
                     # Atualizar last_polled_at
-                    processo.last_polled_at = datetime.now(timezone.utc)
+                    db2, owned2 = await self._get_db()
+                    try:
+                        from sqlalchemy import update
+                        from app.models.process import LegalProcess as LP
+                        await db2.execute(
+                            update(LP).where(LP.id == processo.id).values(last_polled_at=datetime.now(timezone.utc))
+                        )
+                        await db2.commit()
+                    finally:
+                        if owned2:
+                            await db2.close()
                 else:
                     errors += 1
             except Exception as exc:
@@ -154,25 +222,102 @@ class ProcessAgent(BaseAgent):
         )
 
     async def _search_by_oab(self, ctx: AgentContext, task: dict) -> AgentResult:
-        """Busca processos vinculados a uma OAB específica."""
+        """Busca processos vinculados a uma OAB específica e salva no banco."""
         oab = task.get("oab")
         uf = task.get("uf", "")
         tribunal = task.get("tribunal")
+        tenant_id_str = task.get("_tenant_id")
 
-        client = self._get_tribunal_client(tribunal) if tribunal else None
-        if not client:
-            return AgentResult(
-                status=AgentStatus.PARTIAL,
-                agent_name=self.name,
-                output={"aviso": f"Busca por OAB para {tribunal} não disponível ainda"},
+        if not oab:
+            return AgentResult(status=AgentStatus.FAILED, agent_name=self.name, error="oab é obrigatório")
+
+        # Se tribunal específico fornecido, busca nele; caso contrário busca em todos os TJs
+        if tribunal:
+            tribunais_busca = [tribunal.upper()]
+        else:
+            # Busca no TJ do estado da OAB por padrão
+            uf_upper = uf.upper() if uf else ""
+            tribunais_busca = [f"TJ{uf_upper}"] if uf_upper else ["TJSP"]
+
+        todos_processos: list[str] = []
+        for trib in tribunais_busca:
+            client = self._get_tribunal_client(trib)
+            try:
+                processos = await client.search_by_oab(oab, uf)
+                todos_processos.extend(processos)
+            except Exception as exc:
+                log.warning("oab_search_tribunal_failed", tribunal=trib, oab=oab, error=str(exc))
+
+        # Persistir processos encontrados
+        salvos = 0
+        if todos_processos and tenant_id_str:
+            salvos = await self._save_processes_from_oab(
+                processos_numeros=todos_processos,
+                tribunal=tribunais_busca[0] if len(tribunais_busca) == 1 else "VÁRIOS",
+                oab=oab,
+                uf=uf,
+                tenant_id=uuid.UUID(tenant_id_str),
             )
 
-        processos = await client.search_by_oab(oab, uf)
         return AgentResult(
             status=AgentStatus.SUCCESS,
             agent_name=self.name,
-            output={"oab": oab, "processos_encontrados": processos},
+            output={
+                "oab": oab,
+                "uf": uf,
+                "processos_encontrados": len(todos_processos),
+                "processos_salvos": salvos,
+                "numeros_cnj": todos_processos[:50],  # limita payload
+            },
         )
+
+    async def _save_processes_from_oab(
+        self,
+        processos_numeros: list[str],
+        tribunal: str,
+        oab: str,
+        uf: str,
+        tenant_id: uuid.UUID,
+    ) -> int:
+        """Persiste processos encontrados por OAB no banco, evitando duplicatas."""
+        from sqlalchemy import select
+        from app.models.process import LegalProcess
+
+        db, owned = await self._get_db()
+        salvos = 0
+        try:
+            for numero_cnj in processos_numeros:
+                if not numero_cnj:
+                    continue
+                existing = await db.execute(
+                    select(LegalProcess).where(
+                        LegalProcess.numero_cnj == numero_cnj,
+                        LegalProcess.tenant_id == tenant_id,
+                    )
+                )
+                if existing.scalar_one_or_none():
+                    continue
+
+                processo = LegalProcess(
+                    tenant_id=tenant_id,
+                    numero_cnj=numero_cnj,
+                    tribunal=tribunal if tribunal != "VÁRIOS" else f"TJ{uf.upper()}",
+                    uf=uf.upper() if uf else None,
+                    situacao="ATIVO",
+                    oab_responsavel=oab,
+                    monitoring_active=True,
+                    metadata_json={"fonte_captura": "OAB", "oab_origem": oab},
+                )
+                db.add(processo)
+                salvos += 1
+            await db.commit()
+        except Exception as exc:
+            await db.rollback()
+            log.error("save_processes_from_oab_failed", oab=oab, error=str(exc))
+        finally:
+            if owned:
+                await db.close()
+        return salvos
 
     async def _resumir_movimento(self, movimento: dict) -> tuple[str, int, int, float]:
         """Gera resumo IA de um andamento processual (2-3 frases)."""
@@ -188,11 +333,10 @@ class ProcessAgent(BaseAgent):
         return content, input_t + output_t, output_t, cost
 
     async def _detectar_prazos(self, movimentos: list[dict]) -> list[dict]:
-        """Detecta prazos em movimentos recentes usando IA."""
+        """Detecta prazos em movimentos recentes usando heurística."""
         prazos = []
         for mov in movimentos:
             descricao = mov.get("descricao", "") + " " + mov.get("ai_resumo", "")
-            # Heurística simples — expansão futura com NLP especializado
             palavras_prazo = ["prazo", "dias", "intimar", "intimação", "citar", "citação", "manifestar", "responder em"]
             if any(p in descricao.lower() for p in palavras_prazo):
                 prazos.append({
@@ -203,16 +347,9 @@ class ProcessAgent(BaseAgent):
                 })
         return prazos
 
-    def _get_tribunal_client(self, tribunal: str):
-        """Retorna o conector correto para o tribunal."""
-        from app.integrations.tribunais.base import BaseTribunalClient
-        # Mapeamento de conectores disponíveis (implementados progressivamente)
-        conectores = {
-            # "PJE": PJeClient,
-            # "ESAJ": ESAJClient,
-        }
-        client_class = conectores.get(tribunal.upper())
-        return client_class() if client_class else None
+    def _get_tribunal_client(self, tribunal: str) -> CNJDataJudClient:
+        """Retorna cliente DataJud CNJ para o tribunal informado."""
+        return CNJDataJudClient(tribunal=tribunal.upper())
 
     async def _register_tools(self):
         return []

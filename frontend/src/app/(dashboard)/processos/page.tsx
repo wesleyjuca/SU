@@ -1,10 +1,12 @@
 "use client";
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import { Scale, Plus, AlertTriangle, Search, Pencil, Trash2, Phone, Mail } from "lucide-react";
+import { Scale, Plus, AlertTriangle, Search, Pencil, Trash2, Download } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
 import { ViewToggle } from "@/components/ui/ViewToggle";
+
+const UF_LIST = ["AC","AL","AM","AP","BA","CE","DF","ES","GO","MA","MG","MS","MT","PA","PB","PE","PI","PR","RJ","RN","RO","RR","RS","SC","SE","SP","TO"];
 
 interface Processo {
   id: string;
@@ -53,6 +55,9 @@ export default function ProcessosPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<Partial<Processo>>({});
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [showOabModal, setShowOabModal] = useState(false);
+  const [oabForm, setOabForm] = useState({ oab: "", uf: "AC" });
+  const [oabLoading, setOabLoading] = useState(false);
   const [view, setView] = useState<"table" | "grid">(() => {
     if (typeof window !== "undefined") {
       return (localStorage.getItem("processos_view") as "table" | "grid") ?? "table";
@@ -99,6 +104,36 @@ export default function ProcessosPage() {
     }
   }
 
+  async function capturarPorOab() {
+    if (!oabForm.oab.trim()) return;
+    setOabLoading(true);
+    try {
+      const token = localStorage.getItem("afj_access_token");
+      const res = await fetch("/api/v1/agents/trigger", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          task_type: "process_agent",
+          task_input: { action: "search_by_oab", oab: oabForm.oab.trim(), uf: oabForm.uf },
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        toast.success(`Captura iniciada! ID: ${data.run_id.slice(0, 8)}... Os processos aparecerão em breve.`);
+        setShowOabModal(false);
+        setOabForm({ oab: "", uf: "AC" });
+        setTimeout(fetchProcessos, 3000);
+      } else {
+        const d = await res.json().catch(() => ({}));
+        toast.error(d.detail || "Erro ao iniciar captura.");
+      }
+    } catch {
+      toast.error("Erro de conexão.");
+    } finally {
+      setOabLoading(false);
+    }
+  }
+
   async function excluirProcesso(id: string) {
     const token = localStorage.getItem("afj_access_token");
     const res = await fetch(`/api/v1/processes/${id}`, {
@@ -123,6 +158,13 @@ export default function ProcessosPage() {
         </div>
         <div className="flex items-center gap-3">
           <ViewToggle view={view} onChange={setView} />
+          <button
+            onClick={() => setShowOabModal(true)}
+            className="btn-afj-outline rounded-sm flex items-center gap-2"
+          >
+            <Download size={15} />
+            Capturar por OAB
+          </button>
           <Link href="/processos/novo" className="btn-afj-primary rounded-sm flex items-center gap-2">
             <Plus size={15} />
             Novo Processo
@@ -342,6 +384,51 @@ export default function ProcessosPage() {
             <div className="flex gap-3 mt-5">
               <button onClick={() => setEditingId(null)} className="flex-1 btn-afj-outline rounded-sm">Cancelar</button>
               <button onClick={salvarEdicao} className="flex-1 btn-afj-primary rounded-sm">Salvar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal captura por OAB */}
+      {showOabModal && (
+        <div className="fixed inset-0 bg-afj-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-sm p-6 w-full max-w-sm shadow-2xl">
+            <h2 className="font-display text-lg font-semibold text-afj-black mb-1">Capturar por OAB</h2>
+            <p className="text-afj-black/50 text-sm mb-4">Importa automaticamente todos os processos vinculados ao número da OAB via CNJ DataJud.</p>
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs text-afj-black/60 block mb-1">Número OAB *</label>
+                <input
+                  value={oabForm.oab}
+                  onChange={(e) => setOabForm({ ...oabForm, oab: e.target.value })}
+                  placeholder="Ex: 123456"
+                  className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-afj-black/60 block mb-1">UF da OAB *</label>
+                <select
+                  value={oabForm.uf}
+                  onChange={(e) => setOabForm({ ...oabForm, uf: e.target.value })}
+                  className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold bg-white"
+                >
+                  {UF_LIST.map((uf) => (
+                    <option key={uf} value={uf}>{uf}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            <div className="flex gap-3 mt-5">
+              <button onClick={() => setShowOabModal(false)} className="flex-1 btn-afj-outline rounded-sm">
+                Cancelar
+              </button>
+              <button
+                onClick={capturarPorOab}
+                disabled={oabLoading || !oabForm.oab.trim()}
+                className="flex-1 btn-afj-primary rounded-sm disabled:opacity-50"
+              >
+                {oabLoading ? "Iniciando..." : "Buscar e Importar"}
+              </button>
             </div>
           </div>
         </div>

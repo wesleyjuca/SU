@@ -50,6 +50,9 @@ class Settings(BaseSettings):
                 return [v]
         return v
 
+    # ─── Integrações externas ────────────────────────────────────────────────
+    CNJ_API_KEY: str = ""           # DataJud: https://datajud-wiki.cnj.jus.br/
+
     # ─── IA ──────────────────────────────────────────────────────────────────
     ANTHROPIC_API_KEY: str = ""
     OPENAI_API_KEY: str = ""
