@@ -2,6 +2,7 @@
 import { useState, useEffect } from "react";
 import { FolderOpen, Search, FileText, Download } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
+import { useToast } from "@/components/ui/Toast";
 
 interface Documento {
   id: string;
@@ -33,6 +34,7 @@ const TIPO_COLORS: Record<string, string> = {
 };
 
 export default function DocumentosPage() {
+  const toast = useToast();
   const [docs, setDocs] = useState<Documento[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
@@ -60,18 +62,24 @@ export default function DocumentosPage() {
   );
 
   async function downloadDoc(id: string, titulo: string) {
-    const token = localStorage.getItem("afj_access_token");
-    const res = await fetch(`/api/v1/documents/${id}/download`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (res.ok) {
-      const blob = await res.blob();
-      const a = Object.assign(document.createElement("a"), {
-        href: URL.createObjectURL(blob),
-        download: `${titulo.slice(0, 60)}.pdf`,
+    try {
+      const token = localStorage.getItem("afj_access_token");
+      const res = await fetch(`/api/v1/documents/${id}/download`, {
+        headers: { Authorization: `Bearer ${token}` },
       });
-      a.click();
-      URL.revokeObjectURL(a.href);
+      if (res.ok) {
+        const blob = await res.blob();
+        const a = Object.assign(document.createElement("a"), {
+          href: URL.createObjectURL(blob),
+          download: `${titulo.slice(0, 60)}.pdf`,
+        });
+        a.click();
+        URL.revokeObjectURL(a.href);
+      } else {
+        toast.error("Erro ao baixar documento. Tente novamente.");
+      }
+    } catch {
+      toast.error("Erro de conexão ao baixar documento.");
     }
   }
 
@@ -93,13 +101,13 @@ export default function DocumentosPage() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Buscar por título..."
-            className="w-full pl-9 pr-4 py-2 text-sm border border-afj-cream-dark rounded-md focus:outline-none focus:border-afj-gold bg-white"
+            className="w-full pl-9 pr-4 py-2 text-sm border border-afj-cream-dark rounded-sm focus:outline-none focus:border-afj-gold bg-white"
           />
         </div>
         <select
           value={filtroTipo}
           onChange={(e) => setFiltroTipo(e.target.value)}
-          className="border border-afj-cream-dark rounded-md px-3 py-2 text-sm bg-white focus:outline-none focus:border-afj-gold"
+          className="border border-afj-cream-dark rounded-sm px-3 py-2 text-sm bg-white focus:outline-none focus:border-afj-gold"
         >
           <option value="">Todos os tipos</option>
           {["PETICAO", "CONTRATO", "PROCURACAO", "PARECER", "RECURSO", "OUTROS"].map((t) => (
@@ -109,7 +117,7 @@ export default function DocumentosPage() {
         <select
           value={filtroStatus}
           onChange={(e) => setFiltroStatus(e.target.value)}
-          className="border border-afj-cream-dark rounded-md px-3 py-2 text-sm bg-white focus:outline-none focus:border-afj-gold"
+          className="border border-afj-cream-dark rounded-sm px-3 py-2 text-sm bg-white focus:outline-none focus:border-afj-gold"
         >
           <option value="">Todos os status</option>
           <option value="RASCUNHO">Rascunho</option>
@@ -133,21 +141,21 @@ export default function DocumentosPage() {
         </div>
       ) : (
         <div className="afj-card overflow-hidden">
-          <table className="w-full text-sm">
+          <table className="afj-table">
             <thead>
-              <tr className="border-b border-afj-cream-dark bg-afj-cream/50">
-                <th className="text-left px-4 py-3 text-afj-black/50 font-medium">Título</th>
-                <th className="text-left px-4 py-3 text-afj-black/50 font-medium">Tipo</th>
-                <th className="text-left px-4 py-3 text-afj-black/50 font-medium">Status</th>
-                <th className="text-left px-4 py-3 text-afj-black/50 font-medium">Versão</th>
-                <th className="text-left px-4 py-3 text-afj-black/50 font-medium">Origem</th>
-                <th className="text-left px-4 py-3 text-afj-black/50 font-medium">Data</th>
-                <th className="text-left px-4 py-3 text-afj-black/50 font-medium">Ações</th>
+              <tr>
+                <th>Título</th>
+                <th>Tipo</th>
+                <th>Status</th>
+                <th>Versão</th>
+                <th>Origem</th>
+                <th>Data</th>
+                <th>Ações</th>
               </tr>
             </thead>
             <tbody>
               {filtrados.map((d) => (
-                <tr key={d.id} className="border-b border-afj-cream-dark hover:bg-afj-cream/30 transition-colors">
+                <tr key={d.id}>
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-2">
                       <FileText size={14} className="text-afj-black/30 flex-shrink-0" />

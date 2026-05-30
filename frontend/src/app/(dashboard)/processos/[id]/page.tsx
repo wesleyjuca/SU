@@ -3,6 +3,7 @@ import { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { ArrowLeft, Scale, AlertTriangle, Calendar, Clock, Plus, CheckCircle, Loader2, Edit3, X } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
+import { useToast } from "@/components/ui/Toast";
 import { ProcessTimelineCard } from "@/components/processes/ProcessTimeline";
 import type { Processo, Movimentacao, Prazo } from "@/types";
 
@@ -29,6 +30,7 @@ export default function ProcessoDetailPage() {
   const router = useRouter();
   const id = params.id as string;
 
+  const toast = useToast();
   const [processo, setProcesso] = useState<Processo | null>(null);
   const [movimentacoes, setMovimentacoes] = useState<Movimentacao[]>([]);
   const [prazos, setPrazos] = useState<Prazo[]>([]);
@@ -80,6 +82,8 @@ export default function ProcessoDetailPage() {
         setShowMovModal(false);
         setMovForm({ descricao: "", tipo: "Despacho", data_movimento: "" });
         fetchAll();
+      } else {
+        toast.error("Erro ao registrar movimentação. Tente novamente.");
       }
     } finally { setSavingMov(false); }
   }
@@ -105,6 +109,8 @@ export default function ProcessoDetailPage() {
         setShowPrazoModal(false);
         setPrazoForm({ descricao: "", tipo: "", data_prazo: "", data_fatal: "", observacoes: "" });
         fetchAll();
+      } else {
+        toast.error("Erro ao salvar prazo. Tente novamente.");
       }
     } finally { setSavingPrazo(false); }
   }
@@ -113,12 +119,18 @@ export default function ProcessoDetailPage() {
     setCumpridoId(prazoId);
     try {
       const token = localStorage.getItem("afj_access_token");
-      await fetch(`/api/v1/processes/${id}/deadlines/${prazoId}`, {
+      const res = await fetch(`/api/v1/processes/${id}/deadlines/${prazoId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({ status: "CUMPRIDO" }),
       });
-      fetchAll();
+      if (res.ok) {
+        fetchAll();
+      } else {
+        toast.error("Erro ao marcar prazo como cumprido.");
+      }
+    } catch {
+      toast.error("Erro de conexão. Tente novamente.");
     } finally { setCumpridoId(null); }
   }
 

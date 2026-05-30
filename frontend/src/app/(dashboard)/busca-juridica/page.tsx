@@ -97,11 +97,13 @@ export default function BuscaJuridicaPage() {
     <div className="max-w-4xl mx-auto space-y-5">
       <Breadcrumb crumbs={[{ label: "Dashboard", href: "/dashboard" }, { label: "Pesquisa Jurídica" }]} />
 
-      <div>
-        <h1 className="font-display text-2xl font-semibold text-afj-black">Pesquisa Jurídica</h1>
-        <p className="text-afj-black/50 text-sm mt-0.5">
-          Busca semântica em jurisprudência, legislação, doutrina e memórias do escritório
-        </p>
+      <div className="afj-page-header">
+        <div>
+          <h1 className="font-display text-2xl font-semibold text-afj-black">Pesquisa Jurídica</h1>
+          <p className="text-afj-black/50 text-sm mt-0.5">
+            Busca semântica em jurisprudência, legislação, doutrina e memórias do escritório
+          </p>
+        </div>
       </div>
 
       {/* Formulário de busca */}

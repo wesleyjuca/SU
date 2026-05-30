@@ -50,9 +50,11 @@ export default function AuditoriaPage() {
   return (
     <div className="max-w-7xl mx-auto space-y-5">
       <Breadcrumb crumbs={[{ label: "Dashboard", href: "/dashboard" }, { label: "Auditoria" }]} />
-      <div>
-        <h1 className="font-display text-2xl font-semibold text-afj-black">Auditoria</h1>
-        <p className="text-afj-black/50 text-sm">Registro imutável de todas as ações do sistema</p>
+      <div className="afj-page-header">
+        <div>
+          <h1 className="font-display text-2xl font-semibold text-afj-black">Auditoria</h1>
+          <p className="text-afj-black/50 text-sm">Registro imutável de todas as ações do sistema</p>
+        </div>
       </div>
 
       <div className="grid grid-cols-3 gap-3">
@@ -86,13 +88,13 @@ export default function AuditoriaPage() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Buscar por ação, recurso ou agente..."
-            className="w-full pl-9 pr-4 py-2 text-sm border border-afj-cream-dark rounded-md focus:outline-none focus:border-afj-gold bg-white"
+            className="w-full pl-9 pr-4 py-2 text-sm border border-afj-cream-dark rounded-sm focus:outline-none focus:border-afj-gold bg-white"
           />
         </div>
         <select
           value={filtroSucesso}
           onChange={(e) => setFiltroSucesso(e.target.value)}
-          className="border border-afj-cream-dark rounded-md px-3 py-2 text-sm bg-white focus:outline-none focus:border-afj-gold"
+          className="border border-afj-cream-dark rounded-sm px-3 py-2 text-sm bg-white focus:outline-none focus:border-afj-gold"
         >
           <option value="">Todos</option>
           <option value="true">Sucesso</option>
@@ -114,20 +116,20 @@ export default function AuditoriaPage() {
         </div>
       ) : (
         <div className="afj-card overflow-hidden">
-          <table className="w-full text-xs">
+          <table className="afj-table">
             <thead>
-              <tr className="border-b border-afj-cream-dark bg-afj-cream/50">
-                <th className="text-left px-4 py-3 text-afj-black/50 font-medium">Timestamp</th>
-                <th className="text-left px-4 py-3 text-afj-black/50 font-medium">Ação</th>
-                <th className="text-left px-4 py-3 text-afj-black/50 font-medium">Recurso</th>
-                <th className="text-left px-4 py-3 text-afj-black/50 font-medium">Agente / IP</th>
-                <th className="text-left px-4 py-3 text-afj-black/50 font-medium">PII</th>
-                <th className="text-left px-4 py-3 text-afj-black/50 font-medium">Status</th>
+              <tr>
+                <th>Timestamp</th>
+                <th>Ação</th>
+                <th>Recurso</th>
+                <th>Agente / IP</th>
+                <th>PII</th>
+                <th>Status</th>
               </tr>
             </thead>
             <tbody>
               {filtrados.map((l) => (
-                <tr key={l.event_id} className="border-b border-afj-cream-dark hover:bg-afj-cream/20 transition-colors">
+                <tr key={l.event_id}>
                   <td className="px-4 py-2.5 font-mono text-afj-black/50">
                     {new Date(l.timestamp).toLocaleString("pt-BR")}
                   </td>

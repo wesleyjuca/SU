@@ -93,7 +93,7 @@ export default function HealthPage() {
     <div className="max-w-6xl mx-auto space-y-5">
       <Breadcrumb crumbs={[{ label: "Dashboard", href: "/dashboard" }, { label: "Monitoramento" }]} />
 
-      <div className="flex items-start justify-between">
+      <div className="afj-page-header">
         <div>
           <h1 className="font-display text-2xl font-semibold text-afj-black">Monitoramento do Sistema</h1>
           <p className="text-afj-black/50 text-sm">Status em tempo real dos serviços AFJ CORE</p>
