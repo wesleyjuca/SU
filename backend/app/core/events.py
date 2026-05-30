@@ -9,12 +9,15 @@ log = structlog.get_logger()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # ─── STARTUP ─────────────────────────────────────────────────────────────
+    from datetime import datetime, timezone
+    from app.config import settings as _cfg
+    _cfg.APP_START_TIME = datetime.now(timezone.utc)
     log.info("afj_core_starting", version="1.0.0")
 
     # Criar tables (apenas em desenvolvimento — produção usa Alembic)
     try:
         from app.db.base import engine, Base
-        from app.models import *  # noqa: garante que todos os models são importados
+        import app.models  # noqa: garante que todos os models são importados
         # Em produção, remover este bloco e usar apenas Alembic
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
