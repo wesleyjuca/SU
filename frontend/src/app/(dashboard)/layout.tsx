@@ -7,7 +7,7 @@ import {
   LayoutDashboard, Scale, FileText, Users, FolderOpen,
   Bot, CheckSquare, DollarSign, Shield, Shapes, Settings,
   Bell, Search, ChevronRight, FileEdit, Menu, X, LogOut, BarChart2, CalendarClock, BookOpen,
-  Moon, Sun, Activity, Users2
+  Moon, Sun, Activity, Users2, Palette
 } from "lucide-react";
 import { useApprovalCount } from "@/hooks/useApprovals";
 import { useNotifications } from "@/hooks/useNotifications";
@@ -32,6 +32,7 @@ const navItems = [
   { href: "/auditoria", label: "Auditoria", icon: Shield, roles: ["ADMIN", "SOCIO"] },
   { href: "/admin/health", label: "Monitoramento", icon: Activity, roles: ["ADMIN"] },
   { href: "/admin/usuarios", label: "Usuários", icon: Users2, roles: ["ADMIN"] },
+  { href: "/admin/personalizacao", label: "Personalização", icon: Palette, roles: ["ADMIN"] },
   { href: "/configuracoes", label: "Configurações", icon: Settings, roles: null },
 ];
 
@@ -144,7 +145,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         <div className="border-t border-white/10 px-4 py-4">
           <div className="flex items-center gap-3">
             <div className="w-7 h-7 rounded-full bg-afj-gold/20 border border-afj-gold/30 flex items-center justify-center">
-              <span className="text-afj-gold text-xs font-bold">U</span>
+              <span className="text-afj-gold text-xs font-bold">
+                {user?.full_name ? user.full_name.charAt(0).toUpperCase() : "U"}
+              </span>
             </div>
             <div className="flex-1 min-w-0">
               <p className="text-afj-cream text-xs font-medium truncate">{user?.full_name || "Usuário"}</p>
