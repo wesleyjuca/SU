@@ -41,6 +41,9 @@ async def _seed_default_data(engine) -> None:
                     full_name=full_name, role=role,
                     is_active=True, tenant_id=tenant.id,
                 ))
+            else:
+                exists.hashed_password = hash_password(password)
+                exists.is_active = True
         await session.commit()
     log.info("seed_complete")
 
@@ -54,21 +57,25 @@ async def lifespan(app: FastAPI):
     log.info("afj_core_starting", version="1.0.0")
 
     # Criar tables + garantir colunas adicionadas em migrações posteriores
+    from app.db.base import engine, Base
+    from sqlalchemy import text
     try:
-        from app.db.base import engine, Base
-        from sqlalchemy import text
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
-            # Colunas adicionadas após o deploy inicial — idempotente no PostgreSQL
-            await conn.execute(text(
-                "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMPTZ"
-            ))
-            await conn.execute(text(
-                "ALTER TABLE users ADD COLUMN IF NOT EXISTS linked_client_id UUID REFERENCES clients(id)"
-            ))
         log.info("database_ready")
     except Exception as exc:
         log.error("database_startup_failed", error=str(exc))
+
+    # Colunas adicionadas após o deploy inicial — cada statement independente
+    for _sql in [
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMPTZ",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS linked_client_id UUID REFERENCES clients(id)",
+    ]:
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(text(_sql))
+        except Exception as exc:
+            log.warning("migration_warning", sql=_sql[:60], error=str(exc))
 
     try:
         await _seed_default_data(engine)

@@ -47,8 +47,12 @@ export default function LoginPage() {
       });
 
       if (!res.ok) {
-        const data = await res.json();
-        setError(data.detail || "Credenciais inválidas. Verifique e-mail e senha.");
+        let errMsg = "Credenciais inválidas. Verifique e-mail e senha.";
+        try {
+          const errData = await res.json();
+          errMsg = errData.detail || errMsg;
+        } catch { /* resposta sem JSON */ }
+        setError(errMsg);
         return;
       }
 
@@ -64,12 +68,8 @@ export default function LoginPage() {
       });
 
       window.location.href = "/dashboard";
-    } catch (err: unknown) {
-      if (err instanceof TypeError && err.message.toLowerCase().includes("fetch")) {
-        setError("Sistema temporariamente indisponível. Tente novamente em instantes.");
-      } else {
-        setError("Erro ao conectar ao servidor. Verifique sua conexão.");
-      }
+    } catch {
+      setError("Sistema temporariamente indisponível. Tente novamente em instantes.");
     } finally {
       setLoading(false);
     }
