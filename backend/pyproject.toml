@@ -64,11 +64,10 @@ pytz = "^2024.2"
 structlog = "^24.4.0"
 pywebpush = ">=2.0.0"
 
-[tool.poetry.dev-dependencies]
+[tool.poetry.group.dev.dependencies]
 pytest = "^8.3.0"
 pytest-asyncio = "^0.24.0"
 pytest-cov = "^6.0.0"
-httpx = "^0.28.0"
 black = "^24.10.0"
 ruff = "^0.8.0"
 mypy = "^1.13.0"
