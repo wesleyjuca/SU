@@ -11,7 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir poetry==1.8.4
+RUN pip install --no-cache-dir poetry==2.3.3
 RUN poetry config virtualenvs.create false
 
 COPY pyproject.toml poetry.lock* ./
