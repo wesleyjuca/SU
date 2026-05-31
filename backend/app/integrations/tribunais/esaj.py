@@ -1,6 +1,5 @@
 """Conector e-SAJ — Sistema de Automação da Justiça (TJSP, TJBA, TJMS, etc.)."""
 from datetime import datetime
-from typing import Optional
 import httpx
 import re
 import structlog

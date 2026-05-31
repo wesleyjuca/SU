@@ -1,7 +1,5 @@
 from enum import Enum
 from dataclasses import dataclass, field
-from typing import Any
-import uuid
 
 
 class AgentStatus(str, Enum):

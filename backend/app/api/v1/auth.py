@@ -2,7 +2,6 @@ from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from datetime import datetime, timezone, timedelta
-import hashlib
 
 from app.db.base import get_db
 from app.models.user import User, Session
@@ -34,7 +33,7 @@ class RefreshRequest(BaseModel):
 
 @router.post("/login", response_model=TokenResponse)
 async def login(body: LoginRequest, request: Request, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(User).where(User.email == body.email, User.is_active == True))
+    result = await db.execute(select(User).where(User.email == body.email, User.is_active.is_(True)))
     user = result.scalar_one_or_none()
 
     if not user or not verify_password(body.password, user.hashed_password):
@@ -80,7 +79,7 @@ async def refresh(body: RefreshRequest, db: AsyncSession = Depends(get_db)):
     if not session:
         raise UnauthorizedError("Refresh token inválido ou expirado")
 
-    user_result = await db.execute(select(User).where(User.id == session.user_id, User.is_active == True))
+    user_result = await db.execute(select(User).where(User.id == session.user_id, User.is_active.is_(True)))
     user = user_result.scalar_one_or_none()
     if not user:
         raise UnauthorizedError()

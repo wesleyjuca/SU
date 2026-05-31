@@ -4,6 +4,7 @@ import { Palette, Type, Layout, Download, Upload, Check, Sun, ImageIcon, Buildin
 import { applyTheme } from "@/lib/theme";
 import { useThemeStore } from "@/store";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
+import { useToast } from "@/components/ui/Toast";
 
 const TABS = [
   { id: "escritorio", label: "Escritório", icon: Building2 },
@@ -147,6 +148,7 @@ function LivePreview({ color, font }: { color: string; font: string }) {
 
 export default function PersonalizacaoPage() {
   const { theme, setTheme } = useThemeStore();
+  const toast = useToast();
   const [tab, setTab] = useState<TabId>("escritorio");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -188,7 +190,9 @@ export default function PersonalizacaoPage() {
         if (data.favicon_url) setFaviconUrl(data.favicon_url);
         if (data.dashboard_widgets?.length) setWidgets(data.dashboard_widgets);
       }
-    } catch {}
+    } catch {
+      toast.error("Erro ao carregar configurações.");
+    }
   }
 
   async function saveBranding(updates: Record<string, string>) {
@@ -209,7 +213,9 @@ export default function PersonalizacaoPage() {
       const next = [entry, ...themeHistory].slice(0, 5);
       setThemeHistory(next);
       localStorage.setItem("afj_theme_history", JSON.stringify(next));
-    } catch {}
+    } catch {
+      toast.error("Erro ao salvar. Tente novamente.");
+    }
     setSaving(false);
   }
 
@@ -239,7 +245,9 @@ export default function PersonalizacaoPage() {
         const data = await res.json();
         setFaviconUrl(data.favicon_url);
       }
-    } catch {}
+    } catch {
+      toast.error("Erro ao enviar favicon. Tente novamente.");
+    }
     setFaviconUploading(false);
     if (faviconFileRef.current) faviconFileRef.current.value = "";
   }
@@ -255,7 +263,9 @@ export default function PersonalizacaoPage() {
       });
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
-    } catch {}
+    } catch {
+      toast.error("Erro ao salvar módulos. Tente novamente.");
+    }
     setModulesLoading(false);
   }
 
@@ -270,7 +280,9 @@ export default function PersonalizacaoPage() {
       });
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
-    } catch {}
+    } catch {
+      toast.error("Erro ao salvar widgets. Tente novamente.");
+    }
     setSaving(false);
   }
 
@@ -304,7 +316,9 @@ export default function PersonalizacaoPage() {
         setSaved(true);
         setTimeout(() => setSaved(false), 2000);
       }
-    } catch {}
+    } catch {
+      toast.error("Erro ao enviar logo. Tente novamente.");
+    }
     setLogoUploading(false);
     if (logoFileRef.current) logoFileRef.current.value = "";
   }

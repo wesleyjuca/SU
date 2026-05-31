@@ -5,7 +5,6 @@ API DataJud CNJ também disponível para o STJ via CNJDataJudClient(tribunal='ST
 """
 from __future__ import annotations
 
-import re
 from datetime import datetime
 from typing import Optional
 

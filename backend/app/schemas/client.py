@@ -1,6 +1,6 @@
 """Schemas Pydantic para clientes com validação brasileira."""
 import re
-from pydantic import BaseModel, field_validator, EmailStr
+from pydantic import BaseModel, field_validator
 
 
 def _digits_only(v: str) -> str:

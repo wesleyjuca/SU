@@ -8,7 +8,6 @@ from app.core.security import hash_password
 import uuid
 import secrets
 import string
-from datetime import datetime, timezone
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -198,13 +197,13 @@ async def get_user_activity(
     logs = result.scalars().all()
     return [
         {
-            "timestamp": l.timestamp.isoformat(),
-            "action": l.action,
-            "resource_type": l.resource_type,
-            "resource_id": str(l.resource_id) if l.resource_id else None,
-            "success": l.success,
-            "error_detail": l.error_detail,
-            "ip_address": l.ip_address,
+            "timestamp": entry.timestamp.isoformat(),
+            "action": entry.action,
+            "resource_type": entry.resource_type,
+            "resource_id": str(entry.resource_id) if entry.resource_id else None,
+            "success": entry.success,
+            "error_detail": entry.error_detail,
+            "ip_address": entry.ip_address,
         }
-        for l in logs
+        for entry in logs
     ]

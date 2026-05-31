@@ -11,7 +11,6 @@ Fluxo:
   7. Cria Document + Petition no DB
   8. Seta requires_approval = True → aguarda validação humana
 """
-import time
 import uuid
 from typing import ClassVar
 
@@ -19,7 +18,7 @@ from app.agents.base.agent import BaseAgent
 from app.agents.base.result import AgentResult, AgentStatus
 from app.agents.brain.context import AgentContext
 from app.integrations.anthropic_client import call_claude, AFJ_LEGAL_SYSTEM_PROMPT
-from app.agents.petition.templates.base_template import get_template, TIPO_PETICAO_MAP
+from app.agents.petition.templates.base_template import get_template
 import structlog
 
 log = structlog.get_logger()

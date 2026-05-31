@@ -57,7 +57,6 @@ async def lifespan(app: FastAPI):
     try:
         from app.db.base import engine, Base
         from sqlalchemy import text
-        import app.models  # noqa: garante que todos os models são importados
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
             # Colunas adicionadas após o deploy inicial — idempotente no PostgreSQL

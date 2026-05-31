@@ -1,6 +1,6 @@
-from sqlalchemy import String, Boolean, ForeignKey, Text, BigInteger, event
+from sqlalchemy import String, Boolean, ForeignKey, Text, BigInteger
 from sqlalchemy.orm import Mapped, mapped_column
-from sqlalchemy.dialects.postgresql import UUID as PGUUID, JSONB, INET
+from sqlalchemy.dialects.postgresql import UUID as PGUUID, JSONB
 from sqlalchemy import DateTime, func
 import uuid
 from datetime import datetime

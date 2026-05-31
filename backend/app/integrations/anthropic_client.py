@@ -1,6 +1,5 @@
 """Wrapper para a API Claude (Anthropic) com rastreio de custo e tokens."""
 import anthropic
-from typing import AsyncIterator
 from app.config import settings
 
 _client: anthropic.AsyncAnthropic | None = None

@@ -1,11 +1,9 @@
 """Endpoints para gestão de processos judiciais."""
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc, func
+from sqlalchemy import select, desc
 from pydantic import BaseModel
-from typing import Any
 import uuid
-from datetime import date
 
 from app.db.base import get_db
 from app.dependencies import get_current_user

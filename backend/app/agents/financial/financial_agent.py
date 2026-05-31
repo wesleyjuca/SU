@@ -4,7 +4,6 @@ from datetime import datetime, timezone
 from app.agents.base.agent import BaseAgent
 from app.agents.base.result import AgentResult, AgentStatus
 from app.agents.brain.context import AgentContext
-from app.integrations.anthropic_client import call_claude
 import structlog
 
 log = structlog.get_logger()

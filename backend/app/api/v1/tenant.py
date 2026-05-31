@@ -4,7 +4,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel
 from typing import Any
-import uuid
 
 from app.db.base import get_db
 from app.dependencies import get_current_user, require_role

@@ -9,7 +9,7 @@ import uuid
 from app.db.base import get_db
 from app.dependencies import get_current_user
 from app.models.user import User
-from app.models.document import Document, Petition, Contract
+from app.models.document import Document, Contract
 from app.core.exceptions import NotFoundError
 
 router = APIRouter(prefix="/documents", tags=["documents"])
@@ -207,7 +207,7 @@ async def create_contract(
     db: AsyncSession = Depends(get_db),
 ):
     """Cria um contrato (Document tipo=CONTRATO + Contract associado)."""
-    from datetime import datetime, timezone
+    from datetime import datetime
     doc = Document(
         tipo="CONTRATO",
         titulo=body.titulo,

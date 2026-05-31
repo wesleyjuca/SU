@@ -1,17 +1,13 @@
-from fastapi import Depends, Header
+from fastapi import Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 from jose import JWTError
 
 from app.db.base import get_db
-from app.db.redis import get_redis
-from app.db.qdrant import get_qdrant
 from app.core.security import decode_access_token, is_token_blacklisted
 from app.core.exceptions import UnauthorizedError, ForbiddenError
 from app.models.user import User
 from sqlalchemy import select
-import redis.asyncio as aioredis
-from qdrant_client import AsyncQdrantClient
 
 bearer_scheme = HTTPBearer(auto_error=False)
 

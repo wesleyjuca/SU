@@ -1,7 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import ClassVar
 import time
-import uuid
 import structlog
 
 from app.agents.brain.context import AgentContext

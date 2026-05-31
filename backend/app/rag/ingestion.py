@@ -1,5 +1,4 @@
 """Pipeline de ingestão de documentos para Qdrant."""
-from pathlib import Path
 from uuid import uuid4
 from typing import Optional
 import hashlib

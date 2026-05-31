@@ -37,7 +37,7 @@ class CourtMonitorAgent(BaseAgent):
             return AgentResult(status=AgentStatus.PARTIAL, agent_name=self.name, output={"message": "DB necessário"})
 
         from sqlalchemy import select
-        from app.models.process import LegalProcess, ProcessDeadline
+        from app.models.process import ProcessDeadline
         from datetime import date, timedelta
 
         hoje = date.today()

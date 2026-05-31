@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, or_
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel
 from typing import Any
 import uuid
 from datetime import datetime, timezone

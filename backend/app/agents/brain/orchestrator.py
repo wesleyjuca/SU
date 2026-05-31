@@ -6,13 +6,13 @@ Fluxo:
   → [INTERRUPT para aprovação humana, se necessário]
   → post_process → audit_close
 """
-from typing import TypedDict, Annotated
+from typing import TypedDict
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 import structlog
 
 from app.agents.brain.context import AgentContext
-from app.agents.brain.router import classify_task, TASK_ROUTE_MAP
+from app.agents.brain.router import classify_task
 from app.agents.base.result import AgentResult, AgentStatus
 
 log = structlog.get_logger()

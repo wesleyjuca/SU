@@ -14,7 +14,7 @@ def check_upcoming_deadlines(self):
         from datetime import date, timedelta
         from sqlalchemy import select
         from app.db.base import AsyncSessionLocal
-        from app.models.process import ProcessDeadline, LegalProcess
+        from app.models.process import ProcessDeadline
         from app.models.notification import Notification
 
         async with AsyncSessionLocal() as db:
