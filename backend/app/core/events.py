@@ -63,6 +63,9 @@ async def lifespan(app: FastAPI):
             await conn.execute(text(
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMPTZ"
             ))
+            await conn.execute(text(
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS linked_client_id UUID REFERENCES clients(id)"
+            ))
         log.info("database_ready")
     except Exception as exc:
         log.error("database_startup_failed", error=str(exc))

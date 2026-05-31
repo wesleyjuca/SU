@@ -3,10 +3,11 @@ import { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
 import {
   ArrowLeft, Users, Plus, MessageSquare, Phone, Mail, Scale,
-  Loader2, X, AlertTriangle, Download, Trash2, Settings2
+  Loader2, X, AlertTriangle, Download, Trash2, Settings2, Globe, Copy, Check as CheckIcon
 } from "lucide-react";
 import Link from "next/link";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
+import { useToast } from "@/components/ui/Toast";
 
 interface Cliente {
   id: string;
@@ -75,6 +76,7 @@ export default function ClienteDetailPage() {
   const params = useParams();
   const router = useRouter();
   const id = params.id as string;
+  const toast = useToast();
 
   const [cliente, setCliente] = useState<Cliente | null>(null);
   const [interactions, setInteractions] = useState<Interaction[]>([]);
@@ -88,6 +90,10 @@ export default function ClienteDetailPage() {
   const [savingContato, setSavingContato] = useState(false);
   const [deletingContatoId, setDeletingContatoId] = useState<string | null>(null);
   const [confirmErase, setConfirmErase] = useState(false);
+  const [inviting, setInviting] = useState(false);
+  const [showPortalModal, setShowPortalModal] = useState(false);
+  const [portalCredentials, setPortalCredentials] = useState<{ email: string; temp_password: string } | null>(null);
+  const [copied, setCopied] = useState(false);
   const [interForm, setInterForm] = useState({ tipo: "EMAIL", descricao: "" });
   const [contatoForm, setContatoForm] = useState({
     nome: "", cargo: "", email: "", telefone: "", whatsapp: "", is_primary: false,
@@ -175,6 +181,34 @@ export default function ClienteDetailPage() {
     }
   }
 
+  async function convidarPortal() {
+    setInviting(true);
+    try {
+      const token = localStorage.getItem("afj_access_token");
+      const res = await fetch(`/api/v1/users/${id}/invite-portal`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.detail || "Erro ao criar acesso ao portal.");
+        return;
+      }
+      setPortalCredentials({ email: data.email, temp_password: data.temp_password });
+      setShowPortalModal(true);
+    } catch {
+      toast.error("Erro ao criar acesso ao portal.");
+    } finally {
+      setInviting(false);
+    }
+  }
+
+  async function copyPassword(pwd: string) {
+    await navigator.clipboard.writeText(pwd);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }
+
   async function apagarDados() {
     const token = localStorage.getItem("afj_access_token");
     const res = await fetch(`/api/v1/lgpd/clients/${id}/data`, {
@@ -225,9 +259,19 @@ export default function ClienteDetailPage() {
               <p className="text-afj-black/50 text-sm mt-0.5">{cliente.razao_social}</p>
             )}
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <span className="text-xs bg-afj-cream px-2 py-0.5 rounded">{cliente.tipo}</span>
             <span className={STATUS_STYLE[cliente.status] ?? "badge-arquivado"}>{cliente.status}</span>
+            {cliente.email && (
+              <button
+                onClick={convidarPortal}
+                disabled={inviting}
+                className="btn-afj-outline rounded-sm flex items-center gap-1.5 text-xs py-1.5 px-3 disabled:opacity-60"
+              >
+                {inviting ? <Loader2 size={12} className="animate-spin" /> : <Globe size={12} />}
+                Portal
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -573,6 +617,53 @@ export default function ClienteDetailPage() {
                 Excluir
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Acesso ao Portal criado */}
+      {showPortalModal && portalCredentials && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-sm shadow-xl w-full max-w-sm p-6">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-9 h-9 rounded bg-green-100 flex items-center justify-center flex-shrink-0">
+                <Globe size={16} className="text-green-600" />
+              </div>
+              <h2 className="font-semibold text-afj-black">Acesso ao Portal Criado</h2>
+            </div>
+            <p className="text-sm text-afj-black/60 mb-4">
+              Compartilhe as credenciais abaixo com o cliente de forma segura.
+            </p>
+            <div className="space-y-3 bg-afj-cream rounded-sm p-3 mb-4">
+              <div>
+                <p className="text-[10px] text-afj-black/40 uppercase tracking-widest">E-mail</p>
+                <p className="text-sm font-medium text-afj-black">{portalCredentials.email}</p>
+              </div>
+              <div>
+                <p className="text-[10px] text-afj-black/40 uppercase tracking-widest mb-1">Senha Temporária</p>
+                <div className="flex items-center gap-2">
+                  <code className="flex-1 text-sm font-mono bg-white border border-afj-cream-dark rounded px-2 py-1">
+                    {portalCredentials.temp_password}
+                  </code>
+                  <button
+                    onClick={() => copyPassword(portalCredentials.temp_password)}
+                    className="p-1.5 text-afj-black/40 hover:text-afj-gold transition-colors"
+                    title="Copiar senha"
+                  >
+                    {copied ? <CheckIcon size={14} className="text-green-600" /> : <Copy size={14} />}
+                  </button>
+                </div>
+              </div>
+            </div>
+            <p className="text-xs text-afj-black/40 mb-4">
+              URL do portal: <strong>/portal/login</strong>
+            </p>
+            <button
+              onClick={() => { setShowPortalModal(false); setPortalCredentials(null); }}
+              className="w-full btn-afj-primary rounded-sm"
+            >
+              Fechar
+            </button>
           </div>
         </div>
       )}

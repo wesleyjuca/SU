@@ -175,6 +175,63 @@ async def reset_password(
     return {"temp_password": new_password, "message": "Senha resetada com sucesso"}
 
 
+@router.post("/{client_id}/invite-portal", status_code=201)
+async def invite_portal_user(
+    client_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Cria acesso ao portal do cliente para um Client entity (apenas ADMIN)."""
+    _require_admin(current_user)
+    from app.models.client import Client
+
+    client = (await db.execute(
+        select(Client).where(
+            Client.id == uuid.UUID(client_id),
+            Client.tenant_id == current_user.tenant_id,
+        )
+    )).scalar_one_or_none()
+    if not client:
+        raise HTTPException(status_code=404, detail="Cliente não encontrado")
+    if not client.email:
+        raise HTTPException(status_code=422, detail="Cliente sem e-mail cadastrado")
+
+    existing_portal = (await db.execute(
+        select(User).where(User.linked_client_id == client.id)
+    )).scalar_one_or_none()
+    if existing_portal:
+        raise HTTPException(status_code=409, detail="Este cliente já possui acesso ao portal")
+
+    existing_email = (await db.execute(
+        select(User).where(User.email == client.email)
+    )).scalar_one_or_none()
+    if existing_email:
+        raise HTTPException(status_code=409, detail="E-mail já possui acesso interno ao sistema")
+
+    alphabet = string.ascii_letters + string.digits + "!@#$"
+    temp_password = "".join(secrets.choice(alphabet) for _ in range(12))
+
+    portal_user = User(
+        id=uuid.uuid4(),
+        email=client.email,
+        full_name=client.nome_completo,
+        role="CLIENT",
+        hashed_password=hash_password(temp_password),
+        is_active=True,
+        tenant_id=current_user.tenant_id,
+        linked_client_id=client.id,
+    )
+    db.add(portal_user)
+    await db.commit()
+    return {
+        "portal_user_id": str(portal_user.id),
+        "email": client.email,
+        "temp_password": temp_password,
+        "portal_url": "/portal/login",
+        "message": "Acesso ao portal criado com sucesso",
+    }
+
+
 @router.get("/{user_id}/activity")
 async def get_user_activity(
     user_id: str,
