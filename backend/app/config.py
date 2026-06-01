@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     POSTGRES_DB: str = "afj_core"
 
     # ─── Redis ───────────────────────────────────────────────────────────────
-    REDIS_URL: str
+    REDIS_URL: str = ""            # opcional — sem Redis, rate-limit/blacklist viram no-op
     REDIS_PASSWORD: str = ""       # auto-derived from REDIS_URL if empty
     CELERY_BROKER_URL: str = ""    # defaults to REDIS_URL
     CELERY_RESULT_BACKEND: str = ""  # defaults to REDIS_URL
@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     QDRANT_API_KEY: str = ""
 
     # ─── Segurança ───────────────────────────────────────────────────────────
-    SECRET_KEY: str
+    SECRET_KEY: str = ""           # opcional — gera fallback efêmero se vazio (ver derive_from_urls)
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
@@ -86,6 +86,21 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def derive_from_urls(self) -> "Settings":
+        # Normalizar DATABASE_URL para o driver async — o Railway fornece postgresql://
+        if self.DATABASE_URL:
+            url = self.DATABASE_URL
+            if url.startswith("postgres://"):
+                url = "postgresql://" + url[len("postgres://"):]
+            if url.startswith("postgresql://"):
+                url = "postgresql+asyncpg://" + url[len("postgresql://"):]
+            # asyncpg rejeita params libpq na URL (sslmode/channel_binding/gssencmode)
+            if "?" in url:
+                base, _, query = url.partition("?")
+                kept = [kv for kv in query.split("&")
+                        if kv and kv.split("=", 1)[0] not in {"sslmode", "channel_binding", "gssencmode"}]
+                url = base + ("?" + "&".join(kept) if kept else "")
+            self.DATABASE_URL = url
+
         # Fill Celery URLs from Redis if not set
         if not self.CELERY_BROKER_URL:
             self.CELERY_BROKER_URL = self.REDIS_URL
@@ -101,6 +116,16 @@ class Settings(BaseSettings):
             parsed = urlparse(self.DATABASE_URL)
             if parsed.password:
                 self.POSTGRES_PASSWORD = parsed.password
+        # SECRET_KEY: fallback efêmero se não configurado (modo config mínima)
+        if not self.SECRET_KEY:
+            import secrets as _secrets
+            self.SECRET_KEY = _secrets.token_urlsafe(48)
+            print(
+                "[AFJ][WARN] SECRET_KEY não definido — gerado valor efêmero. "
+                "Tokens são invalidados a cada restart; defina SECRET_KEY no Railway "
+                "para sessões estáveis em produção.",
+                flush=True,
+            )
         # Derive ENCRYPTION_KEY from SECRET_KEY if not set
         if not self.ENCRYPTION_KEY and self.SECRET_KEY:
             self.ENCRYPTION_KEY = self.SECRET_KEY[:32].ljust(32, "0")

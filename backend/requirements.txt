@@ -66,7 +66,6 @@ passlib==1.7.4
 pdfminer-six==20251230
 pdfplumber==0.11.9
 pillow==11.3.0
-playwright==1.60.0
 portalocker==3.2.0
 prompt-toolkit==3.0.52
 propcache==0.5.2
@@ -91,7 +90,6 @@ python-jose==3.5.0
 python-multipart==0.0.12
 pytz==2024.2
 pywebpush==2.3.0
-pywin32==311
 pyyaml==6.0.3
 qdrant-client==1.18.0
 redis==5.3.1

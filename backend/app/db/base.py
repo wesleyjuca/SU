@@ -7,6 +7,7 @@ engine = create_async_engine(
     settings.DATABASE_URL,
     echo=settings.DEBUG,
     pool_pre_ping=True,
+    pool_recycle=300,  # recicla conexões ociosas (quedas comuns no Railway)
     pool_size=10,
     max_overflow=20,
 )
