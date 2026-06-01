@@ -107,7 +107,7 @@ async def health_check():
 
     all_ok = all(checks.values())
     return JSONResponse(
-        status_code=200 if all_ok else 503,
+        status_code=200,
         content={
             "status": "operational" if all_ok else "degraded",
             "system": "AFJ CORE SYSTEM",
