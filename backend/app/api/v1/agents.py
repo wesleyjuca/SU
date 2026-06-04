@@ -11,7 +11,7 @@ from app.dependencies import get_current_user
 from app.models.user import User
 from app.models.agent_run import AgentRun
 from app.agents.brain.context import AgentContext
-from app.agents.brain.orchestrator import orchestrator_graph
+from app.agents.brain.orchestrator import get_orchestrator_graph
 from app.core.exceptions import NotFoundError
 
 router = APIRouter(prefix="/agents", tags=["agents"])
@@ -155,7 +155,7 @@ async def _run_agent_task(ctx: AgentContext, run_id: str):
             "done": False,
         }
         config = {"configurable": {"thread_id": run_id}}
-        final_state = await orchestrator_graph.ainvoke(state, config=config)
+        final_state = await get_orchestrator_graph().ainvoke(state, config=config)
         status = "AWAITING_APPROVAL" if final_state.get("pending_approval") else "SUCCESS"
         output = final_state.get("final_output") or {}
     except Exception as exc:

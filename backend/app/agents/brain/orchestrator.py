@@ -181,6 +181,13 @@ async def _instantiate_agent(route: str, ctx: AgentContext):
         return None
 
 
-# Instância compilada do grafo (singleton)
-_checkpointer = MemorySaver()
-orchestrator_graph = build_orchestrator_graph().compile(checkpointer=_checkpointer)
+# Lazy singleton — built on first call so a LangGraph failure doesn't crash the whole app
+_orchestrator_graph = None
+
+
+def get_orchestrator_graph():
+    global _orchestrator_graph
+    if _orchestrator_graph is None:
+        checkpointer = MemorySaver()
+        _orchestrator_graph = build_orchestrator_graph().compile(checkpointer=checkpointer)
+    return _orchestrator_graph

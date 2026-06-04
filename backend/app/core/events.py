@@ -82,6 +82,14 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         log.warning("seed_warning", error=str(exc))
 
+    # Pré-compilar o grafo LangGraph para evitar latência no primeiro request
+    try:
+        from app.agents.brain.orchestrator import get_orchestrator_graph
+        get_orchestrator_graph()
+        log.info("orchestrator_ready")
+    except Exception as exc:
+        log.warning("orchestrator_warmup_failed", error=str(exc))
+
     # Inicializar collections do Qdrant
     try:
         from app.db.qdrant import get_qdrant
