@@ -32,7 +32,12 @@ async def erase_client_data(
     Direito ao esquecimento (LGPD art. 18 IV) — anonimiza dados pessoais do titular.
     Operação irreversível. Registra audit trail com base legal.
     """
-    result = await db.execute(select(Client).where(Client.id == uuid.UUID(client_id)))
+    result = await db.execute(
+        select(Client).where(
+            Client.id == uuid.UUID(client_id),
+            Client.tenant_id == current_user.tenant_id,
+        )
+    )
     client = result.scalar_one_or_none()
     if not client:
         raise NotFoundError("Cliente", client_id)
@@ -79,7 +84,12 @@ async def export_client_data(
     db: AsyncSession = Depends(get_db),
 ):
     """Portabilidade de dados (LGPD art. 18 V) — exporta dados em formato legível."""
-    result = await db.execute(select(Client).where(Client.id == uuid.UUID(client_id)))
+    result = await db.execute(
+        select(Client).where(
+            Client.id == uuid.UUID(client_id),
+            Client.tenant_id == current_user.tenant_id,
+        )
+    )
     client = result.scalar_one_or_none()
     if not client:
         raise NotFoundError("Cliente", client_id)
@@ -127,7 +137,12 @@ async def get_consent_history(
     db: AsyncSession = Depends(get_db),
 ):
     """Histórico de consentimentos LGPD do titular."""
-    result = await db.execute(select(Client).where(Client.id == uuid.UUID(client_id)))
+    result = await db.execute(
+        select(Client).where(
+            Client.id == uuid.UUID(client_id),
+            Client.tenant_id == current_user.tenant_id,
+        )
+    )
     client = result.scalar_one_or_none()
     if not client:
         raise NotFoundError("Cliente", client_id)
@@ -157,7 +172,12 @@ async def register_consent(
     db: AsyncSession = Depends(get_db),
 ):
     """Registra novo consentimento ou revogação LGPD."""
-    result = await db.execute(select(Client).where(Client.id == uuid.UUID(client_id)))
+    result = await db.execute(
+        select(Client).where(
+            Client.id == uuid.UUID(client_id),
+            Client.tenant_id == current_user.tenant_id,
+        )
+    )
     client = result.scalar_one_or_none()
     if not client:
         raise NotFoundError("Cliente", client_id)

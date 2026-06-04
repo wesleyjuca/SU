@@ -67,7 +67,12 @@ async def get_approval(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(Approval).where(Approval.id == uuid.UUID(approval_id)))
+    result = await db.execute(
+        select(Approval).where(
+            Approval.id == uuid.UUID(approval_id),
+            Approval.tenant_id == current_user.tenant_id,
+        )
+    )
     approval = result.scalar_one_or_none()
     if not approval:
         raise NotFoundError("Approval", approval_id)
@@ -86,7 +91,12 @@ async def resolve_approval(
     Regra: rejeição EXIGE justificativa.
     Após resolução, retoma o workflow LangGraph se aplicável.
     """
-    result = await db.execute(select(Approval).where(Approval.id == uuid.UUID(approval_id)))
+    result = await db.execute(
+        select(Approval).where(
+            Approval.id == uuid.UUID(approval_id),
+            Approval.tenant_id == current_user.tenant_id,
+        )
+    )
     approval = result.scalar_one_or_none()
     if not approval:
         raise NotFoundError("Approval", approval_id)

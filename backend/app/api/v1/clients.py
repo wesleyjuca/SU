@@ -159,7 +159,12 @@ async def add_interaction(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(Client).where(Client.id == uuid.UUID(client_id)))
+    result = await db.execute(
+        select(Client).where(
+            Client.id == uuid.UUID(client_id),
+            Client.tenant_id == current_user.tenant_id,
+        )
+    )
     if not result.scalar_one_or_none():
         raise NotFoundError("Cliente", client_id)
 
@@ -181,6 +186,14 @@ async def get_interactions(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    client_check = await db.execute(
+        select(Client.id).where(
+            Client.id == uuid.UUID(client_id),
+            Client.tenant_id == current_user.tenant_id,
+        )
+    )
+    if not client_check.scalar_one_or_none():
+        raise NotFoundError("Cliente", client_id)
     result = await db.execute(
         select(ClientInteraction)
         .where(ClientInteraction.client_id == uuid.UUID(client_id))

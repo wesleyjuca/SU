@@ -58,7 +58,7 @@ class TenantConfig(Base):
 
     document_templates: Mapped[dict | None] = mapped_column(JSONB, default=dict)
     custom_css: Mapped[str | None] = mapped_column(Text, nullable=True)
-    metadata: Mapped[dict | None] = mapped_column(JSONB, default=dict)
+    extra_data: Mapped[dict | None] = mapped_column(JSONB, default=dict)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     tenant: Mapped["Tenant"] = relationship(back_populates="config")

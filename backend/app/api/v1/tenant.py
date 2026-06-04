@@ -107,11 +107,11 @@ async def update_branding(
     for field, value in updates.items():
         setattr(config, field, value)
     if meta_updates:
-        current_meta = config.metadata or {}
-        config.metadata = {**current_meta, **meta_updates}
+        current_meta = config.extra_data or {}
+        config.extra_data = {**current_meta, **meta_updates}
     await db.flush()
     await invalidate_tenant_cache(DEFAULT_TENANT_SLUG)
-    meta = config.metadata or {}
+    meta = config.extra_data or {}
     return ThemeResponse(
         primary_color=config.primary_color,
         secondary_color=config.secondary_color,

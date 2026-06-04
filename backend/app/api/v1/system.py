@@ -106,11 +106,14 @@ async def get_metrics(
         processos_ativos = r1.scalar_one() or 0
 
         r2 = await db.execute(
-            select(func.count(ProcessDeadline.id)).where(
+            select(func.count(ProcessDeadline.id))
+            .join(LegalProcess, ProcessDeadline.process_id == LegalProcess.id)
+            .where(
                 and_(
                     ProcessDeadline.status == "PENDENTE",
                     ProcessDeadline.data_prazo <= next_7d.date(),
                     ProcessDeadline.data_prazo >= now.date(),
+                    LegalProcess.tenant_id == current_user.tenant_id,
                 )
             )
         )

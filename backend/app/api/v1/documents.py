@@ -68,7 +68,12 @@ async def get_document(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(Document).where(Document.id == uuid.UUID(doc_id)))
+    result = await db.execute(
+        select(Document).where(
+            Document.id == uuid.UUID(doc_id),
+            Document.tenant_id == current_user.tenant_id,
+        )
+    )
     doc = result.scalar_one_or_none()
     if not doc:
         raise NotFoundError("Documento", doc_id)
@@ -81,7 +86,12 @@ async def get_document_content(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(Document).where(Document.id == uuid.UUID(doc_id)))
+    result = await db.execute(
+        select(Document).where(
+            Document.id == uuid.UUID(doc_id),
+            Document.tenant_id == current_user.tenant_id,
+        )
+    )
     doc = result.scalar_one_or_none()
     if not doc:
         raise NotFoundError("Documento", doc_id)
@@ -108,7 +118,12 @@ async def update_document(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(Document).where(Document.id == uuid.UUID(doc_id)))
+    result = await db.execute(
+        select(Document).where(
+            Document.id == uuid.UUID(doc_id),
+            Document.tenant_id == current_user.tenant_id,
+        )
+    )
     doc = result.scalar_one_or_none()
     if not doc:
         raise NotFoundError("Documento", doc_id)
@@ -124,7 +139,12 @@ async def archive_document(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(Document).where(Document.id == uuid.UUID(doc_id)))
+    result = await db.execute(
+        select(Document).where(
+            Document.id == uuid.UUID(doc_id),
+            Document.tenant_id == current_user.tenant_id,
+        )
+    )
     doc = result.scalar_one_or_none()
     if not doc:
         raise NotFoundError("Documento", doc_id)
@@ -141,7 +161,12 @@ async def download_document(
     from fastapi.responses import Response as FastAPIResponse
     from app.utils.pdf_builder import build_petition_pdf
 
-    result = await db.execute(select(Document).where(Document.id == uuid.UUID(doc_id)))
+    result = await db.execute(
+        select(Document).where(
+            Document.id == uuid.UUID(doc_id),
+            Document.tenant_id == current_user.tenant_id,
+        )
+    )
     doc = result.scalar_one_or_none()
     if not doc:
         raise NotFoundError("Documento", doc_id)
@@ -171,7 +196,12 @@ async def create_version(
     db: AsyncSession = Depends(get_db),
 ):
     from app.models.document import DocumentVersion
-    result = await db.execute(select(Document).where(Document.id == uuid.UUID(doc_id)))
+    result = await db.execute(
+        select(Document).where(
+            Document.id == uuid.UUID(doc_id),
+            Document.tenant_id == current_user.tenant_id,
+        )
+    )
     doc = result.scalar_one_or_none()
     if not doc:
         raise NotFoundError("Documento", doc_id)

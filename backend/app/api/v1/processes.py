@@ -161,6 +161,14 @@ async def get_movements(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    proc_check = await db.execute(
+        select(LegalProcess.id).where(
+            LegalProcess.id == uuid.UUID(process_id),
+            LegalProcess.tenant_id == current_user.tenant_id,
+        )
+    )
+    if not proc_check.scalar_one_or_none():
+        raise NotFoundError("Processo", process_id)
     result = await db.execute(
         select(ProcessMovement)
         .where(ProcessMovement.process_id == uuid.UUID(process_id))
@@ -187,6 +195,14 @@ async def get_deadlines(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    proc_check = await db.execute(
+        select(LegalProcess.id).where(
+            LegalProcess.id == uuid.UUID(process_id),
+            LegalProcess.tenant_id == current_user.tenant_id,
+        )
+    )
+    if not proc_check.scalar_one_or_none():
+        raise NotFoundError("Processo", process_id)
     result = await db.execute(
         select(ProcessDeadline)
         .where(
@@ -268,7 +284,12 @@ async def create_movement(
     db: AsyncSession = Depends(get_db),
 ):
     from datetime import datetime, timezone
-    result = await db.execute(select(LegalProcess).where(LegalProcess.id == uuid.UUID(process_id)))
+    result = await db.execute(
+        select(LegalProcess).where(
+            LegalProcess.id == uuid.UUID(process_id),
+            LegalProcess.tenant_id == current_user.tenant_id,
+        )
+    )
     if not result.scalar_one_or_none():
         raise NotFoundError("Processo", process_id)
     data_mov = (

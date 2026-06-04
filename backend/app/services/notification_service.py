@@ -39,7 +39,7 @@ async def create_notification(
         corpo=corpo,
         priority=priority,
         link=link,
-        metadata=metadata or {},
+        extra_data=metadata or {},
     )
     db.add(notif)
     await db.commit()

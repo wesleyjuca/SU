@@ -20,7 +20,7 @@ def _serialize(n) -> dict:
         "lida": n.lida,
         "priority": n.priority,
         "link": n.link,
-        "metadata": n.metadata,
+        "metadata": n.extra_data,
         "created_at": n.created_at.isoformat(),
         "read_at": n.read_at.isoformat() if n.read_at else None,
     }
