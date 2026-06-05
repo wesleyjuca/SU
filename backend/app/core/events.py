@@ -1,9 +1,13 @@
 """Eventos de startup e shutdown da aplicação FastAPI."""
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from fastapi import FastAPI
 import structlog
 
 log = structlog.get_logger()
+
+# Horário de início do processo — lido por system.py para calcular uptime
+APP_START_TIME: datetime | None = None
 
 
 async def _seed_default_data(engine) -> None:
@@ -51,10 +55,9 @@ async def _seed_default_data(engine) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # ─── STARTUP ─────────────────────────────────────────────────────────────
-    from datetime import datetime, timezone
-    from app.config import settings as _cfg
-    _cfg.APP_START_TIME = datetime.now(timezone.utc)
-    log.info("afj_core_starting", version="1.0.0")
+    global APP_START_TIME
+    APP_START_TIME = datetime.now(timezone.utc)
+    log.info("afj_core_starting", version="1.0.0", started_at=APP_START_TIME.isoformat())
 
     # Criar tables + garantir colunas adicionadas em migrações posteriores
     from app.db.base import engine, Base

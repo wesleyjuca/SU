@@ -518,8 +518,8 @@ async def health_detailed(current_user: User = Depends(get_current_user)):
     }
     core_ok = all(services[k]["ok"] for k in ("postgresql", "redis"))
 
-    app_start = getattr(cfg, "APP_START_TIME", None)
-    uptime_seconds = int((datetime.now(timezone.utc) - app_start).total_seconds()) if app_start else None
+    from app.core.events import APP_START_TIME
+    uptime_seconds = int((datetime.now(timezone.utc) - APP_START_TIME).total_seconds()) if APP_START_TIME else None
 
     return {
         "status": "operational" if core_ok else "degraded",
