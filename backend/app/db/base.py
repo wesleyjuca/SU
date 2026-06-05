@@ -2,12 +2,16 @@ from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, Asyn
 from sqlalchemy.orm import DeclarativeBase
 from app.config import settings
 
+# Se DATABASE_URL não estiver configurado, cria engine com URL placeholder.
+# Todas as tentativas de conexão falharão com "Connection refused",
+# mas o app sobe e responde ao /health com status "degraded" (HTTP 200).
+_db_url = settings.DATABASE_URL or "postgresql+asyncpg://notset:notset@127.0.0.1:5432/notset"
 
 engine = create_async_engine(
-    settings.DATABASE_URL,
+    _db_url,
     echo=settings.DEBUG,
     pool_pre_ping=True,
-    pool_recycle=300,  # recicla conexões ociosas (quedas comuns no Railway)
+    pool_recycle=300,
     pool_size=10,
     max_overflow=20,
 )
