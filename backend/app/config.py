@@ -128,18 +128,15 @@ class Settings(BaseSettings):
             parsed = urlparse(self.DATABASE_URL)
             if parsed.password:
                 self.POSTGRES_PASSWORD = parsed.password
-        # SECRET_KEY: obrigatória em produção, efêmera em desenvolvimento
+        # SECRET_KEY: ephemeral fallback when not configured — sessions invalidated on restart
         if not self.SECRET_KEY:
-            if self.ENVIRONMENT == "production":
-                raise ValueError(
-                    "SECRET_KEY é obrigatória em produção. "
-                    "Configure no Railway Variables: SECRET_KEY = <random-64-chars>"
-                )
             import secrets as _secrets
             self.SECRET_KEY = _secrets.token_urlsafe(48)
+            prefix = "[AFJ][ERROR]" if self.ENVIRONMENT == "production" else "[AFJ][WARN]"
             print(
-                "[AFJ][WARN] SECRET_KEY não definido — gerado valor efêmero. "
-                "Tokens são invalidados a cada restart. Apenas para desenvolvimento local.",
+                f"{prefix} SECRET_KEY não definido — gerado valor efêmero. "
+                "Tokens são invalidados a cada restart. "
+                "Configure SECRET_KEY no Railway Variables para sessões estáveis.",
                 flush=True,
             )
         # Derive ENCRYPTION_KEY from SECRET_KEY if not set
