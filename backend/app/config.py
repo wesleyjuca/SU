@@ -65,6 +65,18 @@ class Settings(BaseSettings):
     PROCESS_POLLING_INTERVAL_MINUTES: int = 30
     PROCESS_POLLING_BATCH_SIZE: int = 50
     PUBLICATION_SCAN_HOUR: int = 7
+    DEADLINE_ALERT_DAYS: list[int] = [3, 7, 15]
+
+    @field_validator("DEADLINE_ALERT_DAYS", mode="before")
+    @classmethod
+    def parse_deadline_alert_days(cls, v):
+        if isinstance(v, str):
+            try:
+                import json as _json
+                return _json.loads(v)
+            except Exception:
+                return [int(x.strip()) for x in v.split(",") if x.strip().isdigit()]
+        return v
 
     # ─── Email (SMTP) ─────────────────────────────────────────────────────────
     SMTP_HOST: str = "smtp.gmail.com"
@@ -116,14 +128,18 @@ class Settings(BaseSettings):
             parsed = urlparse(self.DATABASE_URL)
             if parsed.password:
                 self.POSTGRES_PASSWORD = parsed.password
-        # SECRET_KEY: fallback efêmero se não configurado (modo config mínima)
+        # SECRET_KEY: obrigatória em produção, efêmera em desenvolvimento
         if not self.SECRET_KEY:
+            if self.ENVIRONMENT == "production":
+                raise ValueError(
+                    "SECRET_KEY é obrigatória em produção. "
+                    "Configure no Railway Variables: SECRET_KEY = <random-64-chars>"
+                )
             import secrets as _secrets
             self.SECRET_KEY = _secrets.token_urlsafe(48)
             print(
                 "[AFJ][WARN] SECRET_KEY não definido — gerado valor efêmero. "
-                "Tokens são invalidados a cada restart; defina SECRET_KEY no Railway "
-                "para sessões estáveis em produção.",
+                "Tokens são invalidados a cada restart. Apenas para desenvolvimento local.",
                 flush=True,
             )
         # Derive ENCRYPTION_KEY from SECRET_KEY if not set

@@ -40,7 +40,7 @@ async def retrieve(
                 limit=k,
                 query_filter=qdrant_filter,
                 with_payload=True,
-                score_threshold=0.6,  # descartar resultados de baixa relevância
+                score_threshold=0.35,  # threshold permissivo para documentos jurídicos
             )
             for hit in hits:
                 all_results.append({

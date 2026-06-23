@@ -222,18 +222,16 @@ class ProcessAgent(BaseAgent):
                 if result_poll.succeeded:
                     polled += 1
                     novos_movimentos += sub_ctx.get_state("novos_movimentos", 0)
-                    # Atualizar last_polled_at
-                    db2, owned2 = await self._get_db()
-                    try:
-                        from sqlalchemy import update
-                        from app.models.process import LegalProcess as LP
+                    # Atualizar last_polled_at usando context manager para evitar leak de conexão
+                    from sqlalchemy import update
+                    from app.models.process import LegalProcess as LP
+                    from sqlalchemy.ext.asyncio import AsyncSession
+                    from app.db.base import engine
+                    async with AsyncSession(engine) as db2:
                         await db2.execute(
                             update(LP).where(LP.id == processo.id).values(last_polled_at=datetime.now(timezone.utc))
                         )
                         await db2.commit()
-                    finally:
-                        if owned2:
-                            await db2.close()
                 else:
                     errors += 1
             except Exception as exc:

@@ -146,9 +146,11 @@ async def change_password(
 ):
     if not verify_password(body.current_password, current_user.hashed_password):
         raise UnauthorizedError("Senha atual incorreta")
-    if len(body.new_password) < 8:
+    import re as _re
+    _PWD_RE = _re.compile(r'^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&_\-#])[A-Za-z\d@$!%*?&_\-#]{8,}$')
+    if not _PWD_RE.match(body.new_password):
         from fastapi import HTTPException
-        raise HTTPException(status_code=422, detail="Nova senha deve ter ao menos 8 caracteres")
+        raise HTTPException(status_code=422, detail="Senha deve ter 8+ caracteres com maiúscula, minúscula, número e símbolo (@$!%*?&_-#)")
     current_user.hashed_password = hash_password(body.new_password)
     await db.flush()
     return {"message": "Senha alterada com sucesso"}

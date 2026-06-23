@@ -66,11 +66,16 @@ class EProcClient(BaseTribunalClient):
     ) -> list[MovementData]:
         authenticated = await self.authenticate()
         if not authenticated:
-            return []
+            log.warning("eproc_fallback_datajud", numero_cnj=numero_cnj, tribunal=self.tribunal)
+            from app.integrations.tribunais.cnj import CNJDataJudClient as DataJudClient
+            fallback = DataJudClient(tribunal=self.tribunal)
+            return await fallback.fetch_movements(numero_cnj, since)
         return []
 
     async def search_by_oab(self, oab: str, uf: str) -> list[str]:
         authenticated = await self.authenticate()
         if not authenticated:
-            return []
+            from app.integrations.tribunais.cnj import CNJDataJudClient as DataJudClient
+            fallback = DataJudClient(tribunal=self.tribunal)
+            return await fallback.search_by_oab(oab, uf)
         return []

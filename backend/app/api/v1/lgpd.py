@@ -64,6 +64,7 @@ async def erase_client_data(
             error_detail=None,
         )
         db.add(log)
+        await db.flush()
     except Exception:
         pass
 

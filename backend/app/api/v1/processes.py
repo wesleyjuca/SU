@@ -157,7 +157,7 @@ async def get_process(
 @router.get("/{process_id}/movements")
 async def get_movements(
     process_id: str,
-    limit: int = 100,
+    limit: int = Query(default=50, ge=1, le=200),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -292,11 +292,11 @@ async def create_movement(
     )
     if not result.scalar_one_or_none():
         raise NotFoundError("Processo", process_id)
-    data_mov = (
-        datetime.fromisoformat(body.data_movimento)
-        if body.data_movimento
-        else datetime.now(timezone.utc)
-    )
+    try:
+        data_mov = datetime.fromisoformat(body.data_movimento) if body.data_movimento else datetime.now(timezone.utc)
+    except ValueError:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=422, detail="Formato de data inválido. Use ISO 8601: YYYY-MM-DDTHH:MM:SS")
     movement = ProcessMovement(
         process_id=uuid.UUID(process_id),
         descricao=body.descricao,

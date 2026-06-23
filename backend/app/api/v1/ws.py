@@ -61,6 +61,13 @@ async def websocket_endpoint(
                     await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
                 except asyncio.TimeoutError:
                     await websocket.send_json({"type": "PING"})
+                    # Aguardar PONG por 10s; fechar se cliente não responder
+                    try:
+                        pong = await asyncio.wait_for(websocket.receive_text(), timeout=10.0)
+                        if pong != "PONG":
+                            break
+                    except asyncio.TimeoutError:
+                        break
                 except WebSocketDisconnect:
                     break
 

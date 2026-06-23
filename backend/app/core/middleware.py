@@ -99,7 +99,16 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         elif path == AGENT_TRIGGER_PATH:
             rule_key = "agents_trigger"
             auth_header = request.headers.get("authorization", "")
-            identifier = auth_header[-16:] if auth_header else client_ip
+            if auth_header:
+                try:
+                    from jose import jwt as _jwt
+                    token = auth_header.replace("Bearer ", "").replace("bearer ", "")
+                    payload = _jwt.get_unverified_claims(token)
+                    identifier = payload.get("jti") or payload.get("sub") or client_ip
+                except Exception:
+                    identifier = client_ip
+            else:
+                identifier = client_ip
         else:
             rule_key = "default"
             identifier = client_ip

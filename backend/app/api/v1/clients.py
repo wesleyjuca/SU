@@ -176,6 +176,7 @@ async def add_interaction(
         metadata_json=body.metadata_json,
     )
     db.add(interaction)
+    await db.flush()
     return {"message": "Interação registrada", "client_id": client_id}
 
 
@@ -360,7 +361,12 @@ async def export_client_data(
     db: AsyncSession = Depends(get_db),
 ):
     """LGPD art. 18 VI — portabilidade de dados."""
-    result = await db.execute(select(Client).where(Client.id == uuid.UUID(client_id)))
+    result = await db.execute(
+        select(Client).where(
+            Client.id == uuid.UUID(client_id),
+            Client.tenant_id == current_user.tenant_id,
+        )
+    )
     client = result.scalar_one_or_none()
     if not client:
         raise NotFoundError("Cliente", client_id)
@@ -398,7 +404,12 @@ async def erase_client_data(
     db: AsyncSession = Depends(get_db),
 ):
     """LGPD art. 18 VI — direito ao esquecimento: anonimiza dados sensíveis."""
-    result = await db.execute(select(Client).where(Client.id == uuid.UUID(client_id)))
+    result = await db.execute(
+        select(Client).where(
+            Client.id == uuid.UUID(client_id),
+            Client.tenant_id == current_user.tenant_id,
+        )
+    )
     client = result.scalar_one_or_none()
     if not client:
         raise NotFoundError("Cliente", client_id)
@@ -430,7 +441,7 @@ def _contact_to_dict(c: ClientContact) -> dict:
         "cargo": c.cargo,
         "email": c.email,
         "telefone": c.telefone,
-        "whatsapp": c.telefone,
+        "whatsapp": c.whatsapp,
         "is_primary": c.is_primary,
     }
 

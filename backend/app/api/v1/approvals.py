@@ -111,6 +111,7 @@ async def resolve_approval(
     approval.approved_by = current_user.id
     approval.rejection_reason = body.rejection_reason
     approval.resolved_at = datetime.now(timezone.utc)
+    await db.flush()
 
     # Retomar o workflow LangGraph se houver run associado
     if approval.run_id and body.approved:
@@ -128,7 +129,8 @@ async def resolve_approval(
 
 async def _resume_workflow(run_id: str, approved: bool, modifications: dict | None = None, reason: str | None = None):
     """Retoma o grafo LangGraph do checkpoint salvo."""
-    from app.agents.brain.orchestrator import orchestrator_graph
+    from app.agents.brain.orchestrator import get_orchestrator_graph
+    orchestrator_graph = get_orchestrator_graph()
     config = {"configurable": {"thread_id": run_id}}
     try:
         state = await orchestrator_graph.aget_state(config)

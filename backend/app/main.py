@@ -54,7 +54,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
-    allow_origin_regex=r"https://.*\.(vercel\.app|railway\.app)",
+    allow_origin_regex=r"https://afj-core(-[a-z0-9]+)?\.vercel\.app|https://su(-[a-z0-9]+)?\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

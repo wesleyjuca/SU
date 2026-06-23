@@ -54,13 +54,15 @@ class JurisprudenceAgent(BaseAgent):
 
         if not chunks:
             return AgentResult(
-                status=AgentStatus.SUCCESS,
+                status=AgentStatus.FAILED,
                 agent_name=self.name,
+                error="BLOQUEADOR: Nenhuma jurisprudência verificada encontrada para esta consulta. "
+                      "Petição não pode avançar sem fundamentação jurisprudencial. "
+                      "Adicione acórdãos via ingestão RAG ou refine os termos de busca.",
                 output={
                     "encontrados": 0,
                     "resultados": [],
-                    "aviso": "Nenhuma jurisprudência encontrada na base para esta consulta. "
-                             "Adicione acórdãos via ingestão RAG antes de gerar petições.",
+                    "bloqueador": True,
                     "query": search_query,
                 },
             )

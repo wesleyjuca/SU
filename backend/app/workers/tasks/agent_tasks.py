@@ -48,7 +48,7 @@ async def _run_async(
     """Lógica assíncrona do worker: monta contexto, executa grafo, persiste resultado."""
     from app.db.base import AsyncSessionLocal
     from app.agents.brain.context import AgentContext
-    from app.agents.brain.orchestrator import orchestrator_graph
+    from app.agents.brain.orchestrator import get_orchestrator_graph
     from app.models.agent_run import AgentRun
     from sqlalchemy import select
 
@@ -78,12 +78,21 @@ async def _run_async(
         }
         config = {"configurable": {"thread_id": run_id}}
 
+        orchestrator_graph = get_orchestrator_graph()
         started = datetime.utcnow()
         try:
-            final_state = await orchestrator_graph.ainvoke(state, config=config)
+            final_state = await asyncio.wait_for(
+                orchestrator_graph.ainvoke(state, config=config),
+                timeout=300.0,
+            )
             status = "AWAITING_APPROVAL" if final_state.get("pending_approval") else "SUCCESS"
             output = final_state.get("final_output") or {}
             error_msg = None
+        except asyncio.TimeoutError:
+            status = "FAILED"
+            output = {}
+            error_msg = "Agent timeout after 300s"
+            log.error("orchestration_timeout", run_id=run_id)
         except Exception as exc:
             status = "FAILED"
             output = {}
