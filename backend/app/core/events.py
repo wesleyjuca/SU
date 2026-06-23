@@ -1,4 +1,5 @@
 """Eventos de startup e shutdown da aplicação FastAPI."""
+import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Optional
@@ -52,15 +53,43 @@ async def _seed_default_data(engine) -> None:
     log.info("seed_complete")
 
 
+async def _background_warmup() -> None:
+    """Optional warmup that runs after the app is already serving requests."""
+    await asyncio.sleep(2)
+
+    try:
+        from app.agents.brain.orchestrator import get_orchestrator_graph
+        get_orchestrator_graph()
+        log.info("orchestrator_ready")
+    except Exception as exc:
+        log.warning("orchestrator_warmup_failed", error=str(exc))
+
+    from app.config import settings as _cfg
+    _qdrant_configured = bool(
+        _cfg.QDRANT_API_KEY or
+        (_cfg.QDRANT_URL and _cfg.QDRANT_URL not in {"http://qdrant:6333", "http://localhost:6333"})
+    )
+    if _qdrant_configured:
+        try:
+            from app.db.qdrant import get_qdrant
+            from app.rag.collections import ensure_collections
+            qdrant = await get_qdrant()
+            await asyncio.wait_for(ensure_collections(qdrant), timeout=15.0)
+            log.info("qdrant_collections_ready")
+        except Exception as exc:
+            log.warning("qdrant_startup_warning", error=str(exc))
+    else:
+        log.info("qdrant_skipped", reason="QDRANT_URL is default placeholder — skipping init")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # ─── STARTUP ─────────────────────────────────────────────────────────────
+    # ─── STARTUP (fast — must complete before Railway health check) ───────────
     global APP_START_TIME
     from datetime import timezone
     APP_START_TIME = datetime.now(timezone.utc)
     log.info("afj_core_starting", version="1.0.0")
 
-    # Criar tables + seed apenas quando DATABASE_URL estiver configurado
     from app.db.base import engine, Base, _has_real_db
     from sqlalchemy import text
     if _has_real_db:
@@ -88,38 +117,8 @@ async def lifespan(app: FastAPI):
     else:
         log.warning("database_skipped", reason="DATABASE_URL not configured — running in degraded mode")
 
-    # Pré-compilar o grafo LangGraph para evitar latência no primeiro request
-    try:
-        import asyncio as _asyncio
-        from app.agents.brain.orchestrator import get_orchestrator_graph
-        await _asyncio.wait_for(
-            _asyncio.get_event_loop().run_in_executor(None, get_orchestrator_graph),
-            timeout=30.0,
-        )
-        log.info("orchestrator_ready")
-    except Exception as exc:
-        log.warning("orchestrator_warmup_failed", error=str(exc))
-
-    # Inicializar collections do Qdrant (apenas se URL configurada explicitamente)
-    from app.config import settings as _cfg
-    _qdrant_configured = bool(
-        _cfg.QDRANT_API_KEY or
-        (_cfg.QDRANT_URL and _cfg.QDRANT_URL not in {"http://qdrant:6333", "http://localhost:6333"})
-    )
-    if _qdrant_configured:
-        try:
-            import asyncio as _asyncio
-            from app.db.qdrant import get_qdrant
-            from app.rag.collections import ensure_collections
-            qdrant = await get_qdrant()
-            await _asyncio.wait_for(ensure_collections(qdrant), timeout=15.0)
-            log.info("qdrant_collections_ready")
-        except Exception as exc:
-            log.warning("qdrant_startup_warning", error=str(exc))
-    else:
-        log.info("qdrant_skipped", reason="QDRANT_URL is default placeholder — skipping init")
-
     log.info("afj_core_ready", message="AFJ CORE SYSTEM iniciado com sucesso")
+    asyncio.create_task(_background_warmup())
 
     yield
 
