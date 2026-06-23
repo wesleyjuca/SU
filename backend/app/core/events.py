@@ -60,31 +60,33 @@ async def lifespan(app: FastAPI):
     APP_START_TIME = datetime.now(timezone.utc)
     log.info("afj_core_starting", version="1.0.0")
 
-    # Criar tables + garantir colunas adicionadas em migrações posteriores
-    from app.db.base import engine, Base
+    # Criar tables + seed apenas quando DATABASE_URL estiver configurado
+    from app.db.base import engine, Base, _has_real_db
     from sqlalchemy import text
-    try:
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-        log.info("database_ready")
-    except Exception as exc:
-        log.error("database_startup_failed", error=str(exc))
-
-    # Colunas adicionadas após o deploy inicial — cada statement independente
-    for _sql in [
-        "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMPTZ",
-        "ALTER TABLE users ADD COLUMN IF NOT EXISTS linked_client_id UUID REFERENCES clients(id)",
-    ]:
+    if _has_real_db:
         try:
             async with engine.begin() as conn:
-                await conn.execute(text(_sql))
+                await conn.run_sync(Base.metadata.create_all)
+            log.info("database_ready")
         except Exception as exc:
-            log.warning("migration_warning", sql=_sql[:60], error=str(exc))
+            log.error("database_startup_failed", error=str(exc))
 
-    try:
-        await _seed_default_data(engine)
-    except Exception as exc:
-        log.warning("seed_warning", error=str(exc))
+        for _sql in [
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMPTZ",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS linked_client_id UUID REFERENCES clients(id)",
+        ]:
+            try:
+                async with engine.begin() as conn:
+                    await conn.execute(text(_sql))
+            except Exception as exc:
+                log.warning("migration_warning", sql=_sql[:60], error=str(exc))
+
+        try:
+            await _seed_default_data(engine)
+        except Exception as exc:
+            log.warning("seed_warning", error=str(exc))
+    else:
+        log.warning("database_skipped", reason="DATABASE_URL not configured — running in degraded mode")
 
     # Pré-compilar o grafo LangGraph para evitar latência no primeiro request
     try:

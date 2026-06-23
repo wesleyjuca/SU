@@ -7,13 +7,16 @@ from app.config import settings
 # All actual queries will fail gracefully (connection refused) instead of at startup.
 _db_url = settings.DATABASE_URL or "postgresql+asyncpg://notset:notset@127.0.0.1:5432/notset"
 
+_has_real_db = bool(settings.DATABASE_URL)
+
 engine = create_async_engine(
     _db_url,
     echo=settings.DEBUG,
-    pool_pre_ping=True,
-    pool_recycle=300,  # recicla conexões ociosas (quedas comuns no Railway)
-    pool_size=10,
-    max_overflow=20,
+    pool_pre_ping=_has_real_db,  # skip ping when using placeholder
+    pool_recycle=300,
+    pool_size=5 if _has_real_db else 1,
+    max_overflow=10 if _has_real_db else 0,
+    connect_args={"timeout": 5},  # fail fast when DB unreachable
 )
 
 AsyncSessionLocal = async_sessionmaker(
