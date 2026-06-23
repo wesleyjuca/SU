@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     API_V1_STR: str = "/api/v1"
 
     # ─── Banco de dados ──────────────────────────────────────────────────────
-    DATABASE_URL: str
+    DATABASE_URL: str = ""  # obrigatório em produção; vazio → app inicia em modo degradado
     POSTGRES_USER: str = "afj"
     POSTGRES_PASSWORD: str = ""   # auto-derived from DATABASE_URL if empty
     POSTGRES_DB: str = "afj_core"
@@ -98,6 +98,13 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def derive_from_urls(self) -> "Settings":
+        # DATABASE_URL obrigatória em produção — avisa mas não impede startup
+        if not self.DATABASE_URL:
+            print(
+                "[AFJ][ERROR] DATABASE_URL não definido — banco indisponível. "
+                "No Railway: Variables → DATABASE_URL = ${{Postgres.DATABASE_URL}}",
+                flush=True,
+            )
         # Normalizar DATABASE_URL para o driver async — o Railway fornece postgresql://
         if self.DATABASE_URL:
             url = self.DATABASE_URL

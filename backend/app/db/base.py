@@ -3,8 +3,12 @@ from sqlalchemy.orm import DeclarativeBase
 from app.config import settings
 
 
+# Fallback placeholder prevents crash at import when DATABASE_URL is not yet set.
+# All actual queries will fail gracefully (connection refused) instead of at startup.
+_db_url = settings.DATABASE_URL or "postgresql+asyncpg://notset:notset@127.0.0.1:5432/notset"
+
 engine = create_async_engine(
-    settings.DATABASE_URL,
+    _db_url,
     echo=settings.DEBUG,
     pool_pre_ping=True,
     pool_recycle=300,  # recicla conexões ociosas (quedas comuns no Railway)
