@@ -74,6 +74,12 @@ async def global_exception_handler(request: Request, exc: Exception):
     return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
 
+@app.get("/ping")
+async def ping():
+    """Lightweight liveness probe — responds as soon as the app is up."""
+    return {"ok": True}
+
+
 @app.get("/health")
 async def health_check():
     from sqlalchemy import text
