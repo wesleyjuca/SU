@@ -22,6 +22,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY backend/requirements.txt ./
+RUN pip install --upgrade pip wheel setuptools
 RUN pip install --prefer-binary -r requirements.txt
 
 COPY backend/ .
