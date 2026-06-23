@@ -35,6 +35,16 @@ async def websocket_endpoint(
     log.info("ws_connected", user_id=user_id)
 
     redis = await get_redis()
+    if not redis:
+        await websocket.send_json({"type": "CONNECTED", "user_id": user_id, "warning": "realtime_unavailable"})
+        try:
+            while True:
+                await asyncio.wait_for(websocket.receive_text(), timeout=60.0)
+        except (asyncio.TimeoutError, WebSocketDisconnect):
+            pass
+        _connections.get(user_id, set()).discard(websocket)
+        return
+
     channel = f"user:{user_id}:events"
 
     try:
