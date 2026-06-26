@@ -61,7 +61,6 @@ numpy==2.4.6
 openai==1.109.1
 orjson==3.11.9
 packaging==25.0
-passlib==1.7.4
 pdfminer-six==20251230
 pdfplumber==0.11.9
 pillow==11.3.0

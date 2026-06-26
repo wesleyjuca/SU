@@ -36,7 +36,13 @@ async def login(body: LoginRequest, request: Request, db: AsyncSession = Depends
     result = await db.execute(select(User).where(User.email == body.email, User.is_active.is_(True)))
     user = result.scalar_one_or_none()
 
-    if not user or not verify_password(body.password, user.hashed_password):
+    ok = False
+    if user:
+        try:
+            ok = verify_password(body.password, user.hashed_password)
+        except Exception:
+            ok = False
+    if not user or not ok:
         raise UnauthorizedError("E-mail ou senha incorretos")
 
     user.last_login_at = datetime.now(timezone.utc)
