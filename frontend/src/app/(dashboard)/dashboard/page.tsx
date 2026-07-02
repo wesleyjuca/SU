@@ -95,8 +95,10 @@ export default function DashboardPage() {
         fetch("/api/v1/system/analytics/financeiro?meses=6", { headers }),
       ]);
 
+      let metricsData: Metrics | null = null;
       if (metricsRes.status === "fulfilled" && metricsRes.value.ok) {
-        setMetrics(await metricsRes.value.json());
+        metricsData = await metricsRes.value.json();
+        setMetrics(metricsData);
       }
       if (runsRes.status === "fulfilled" && runsRes.value.ok) {
         const data = await runsRes.value.json();
@@ -124,10 +126,7 @@ export default function DashboardPage() {
 
       // Show onboarding for first-time users with no processes
       if (typeof window !== "undefined" && !localStorage.getItem("afj_onboarded")) {
-        const m = metricsRes.status === "fulfilled" && metricsRes.value.ok
-          ? await metricsRes.value.clone().json().catch(() => null)
-          : null;
-        if (!m || m.processos_ativos === 0) {
+        if (!metricsData || metricsData.processos_ativos === 0) {
           setShowOnboarding(true);
         }
       }

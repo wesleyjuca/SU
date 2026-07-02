@@ -328,7 +328,12 @@ async def review_document(
     db: AsyncSession = Depends(get_db),
 ):
     """Dispara o review_agent para revisão de um documento."""
-    result = await db.execute(select(Document).where(Document.id == uuid.UUID(doc_id)))
+    result = await db.execute(
+        select(Document).where(
+            Document.id == uuid.UUID(doc_id),
+            Document.tenant_id == current_user.tenant_id,
+        )
+    )
     doc = result.scalar_one_or_none()
     if not doc:
         raise NotFoundError("Documento", doc_id)

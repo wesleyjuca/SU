@@ -126,7 +126,7 @@ async def create_process(
     db: AsyncSession = Depends(get_db),
 ):
     process = LegalProcess(
-        **body.model_dump(exclude_none=True),
+        **body.model_dump(exclude_none=True, exclude={"client_id"}),
         responsavel_id=current_user.id,
         tenant_id=current_user.tenant_id,
         client_id=uuid.UUID(body.client_id) if body.client_id else None,
@@ -374,6 +374,16 @@ async def update_deadline(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    # Garante que o processo pertence ao tenant do usuário antes de tocar no prazo
+    proc_check = await db.execute(
+        select(LegalProcess.id).where(
+            LegalProcess.id == uuid.UUID(process_id),
+            LegalProcess.tenant_id == current_user.tenant_id,
+        )
+    )
+    if not proc_check.scalar_one_or_none():
+        raise NotFoundError("Processo", process_id)
+
     result = await db.execute(
         select(ProcessDeadline).where(
             ProcessDeadline.id == uuid.UUID(deadline_id),
