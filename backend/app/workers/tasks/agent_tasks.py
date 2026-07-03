@@ -82,6 +82,7 @@ async def _run_async(
 
         orchestrator_graph = get_orchestrator_graph()
         started = datetime.utcnow()
+        final_state: dict = {}
         try:
             final_state = await asyncio.wait_for(
                 orchestrator_graph.ainvoke(state, config=config),
@@ -112,6 +113,10 @@ async def _run_async(
             from decimal import Decimal
             agent_run.cost_usd = Decimal(str(ctx.total_cost_usd)) if ctx.total_cost_usd else None
             agent_run.requires_approval = ctx.requires_approval
+            # HITL: cria o Approval PENDENTE na mesma transação
+            if status == "AWAITING_APPROVAL":
+                from app.services.approval_service import create_approval_from_state
+                await create_approval_from_state(db, agent_run, final_state)
             await db.commit()
 
         # Publicar evento WebSocket

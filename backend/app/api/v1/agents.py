@@ -162,6 +162,7 @@ async def _run_agent_task(ctx: AgentContext, run_id: str):
     except Exception as exc:
         log.error("background_agent_failed", run_id=run_id, error=str(exc))
         error_msg = str(exc)
+        final_state = {}
 
     elapsed_ms = int((datetime.utcnow() - started).total_seconds() * 1000)
     async with AsyncSessionLocal() as db:
@@ -177,6 +178,10 @@ async def _run_agent_task(ctx: AgentContext, run_id: str):
                 agent_run.tokens_used = ctx.total_tokens or None
                 agent_run.cost_usd = Decimal(str(ctx.total_cost_usd)) if ctx.total_cost_usd else None
                 agent_run.requires_approval = ctx.requires_approval
+                # HITL: cria o Approval PENDENTE na mesma transação
+                if status == "AWAITING_APPROVAL":
+                    from app.services.approval_service import create_approval_from_state
+                    await create_approval_from_state(db, agent_run, final_state)
                 await db.commit()
         except Exception as exc:
             log.error("agent_run_update_failed", run_id=run_id, error=str(exc))

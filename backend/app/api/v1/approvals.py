@@ -111,40 +111,25 @@ async def resolve_approval(
     approval.approved_by = current_user.id
     approval.rejection_reason = body.rejection_reason
     approval.resolved_at = datetime.now(timezone.utc)
-    await db.flush()
 
-    # Retomar o workflow LangGraph se houver run associado
-    if approval.run_id and body.approved:
-        await _resume_workflow(str(approval.run_id), approved=True, modifications=body.modifications)
-    elif approval.run_id and not body.approved:
-        await _resume_workflow(str(approval.run_id), approved=False, reason=body.rejection_reason)
+    # Executa a ação de forma síncrona (substitui a retomada por checkpoint LangGraph,
+    # que era código morto). A ação crítica só ocorre AQUI, após decisão humana.
+    from app.services.approval_service import execute_approved_action, mark_rejected_action
+    execution: dict | None = None
+    if body.approved:
+        execution = await execute_approved_action(db, approval, body.modifications)
+    else:
+        await mark_rejected_action(db, approval)
+
+    await db.flush()
 
     action = "APROVADO" if body.approved else "REJEITADO"
     return {
         "message": f"Aprovação {action} com sucesso",
         "approval_id": approval_id,
         "resolved_by": current_user.full_name,
+        "execution": execution,
     }
-
-
-async def _resume_workflow(run_id: str, approved: bool, modifications: dict | None = None, reason: str | None = None):
-    """Retoma o grafo LangGraph do checkpoint salvo."""
-    from app.agents.brain.orchestrator import get_orchestrator_graph
-    orchestrator_graph = get_orchestrator_graph()
-    config = {"configurable": {"thread_id": run_id}}
-    try:
-        state = await orchestrator_graph.aget_state(config)
-        if state and state.values:
-            ctx = state.values.get("context")
-            if ctx:
-                ctx.approved = approved
-                ctx.rejection_reason = reason
-                # Retomar execução
-                await orchestrator_graph.aupdate_state(config, {"context": ctx})
-                await orchestrator_graph.ainvoke(None, config=config)
-    except Exception as exc:
-        import structlog
-        structlog.get_logger().error("workflow_resume_failed", run_id=run_id, error=str(exc))
 
 
 def _to_response(a: Approval) -> ApprovalResponse:
