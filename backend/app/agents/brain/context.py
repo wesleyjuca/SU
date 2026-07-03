@@ -21,6 +21,7 @@ class AgentContext:
     priority: str = "NORMAL"                  # LOW, NORMAL, HIGH, URGENT
 
     # ─── Contexto jurídico ────────────────────────────────────────────────────
+    tenant_id: uuid.UUID | None = None         # escopo multi-tenant das escritas do agente
     process_id: uuid.UUID | None = None
     client_id: uuid.UUID | None = None
     document_id: uuid.UUID | None = None
@@ -76,6 +77,7 @@ class AgentContext:
             "task_type": self.task_type,
             "task_input": self.task_input,
             "priority": self.priority,
+            "tenant_id": str(self.tenant_id) if self.tenant_id else None,
             "process_id": str(self.process_id) if self.process_id else None,
             "client_id": str(self.client_id) if self.client_id else None,
             "document_id": str(self.document_id) if self.document_id else None,

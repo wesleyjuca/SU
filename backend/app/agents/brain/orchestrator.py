@@ -47,11 +47,30 @@ async def node_execute_agent(state: OrchestratorState) -> OrchestratorState:
     ctx = state["context"]
     route = state["route"]
 
-    agent = await _instantiate_agent(route, ctx)
-    if not agent:
+    agent_class = _resolve_agent_class(route)
+    if not agent_class:
         return {**state, "error": f"Agente não encontrado: {route}", "done": True}
 
-    result = await agent.run(ctx)
+    # Injeta dependências reais: sem isto o RAG (recall) retorna [] e nada é
+    # persistido (Document/Petition/AgentMemory ficam órfãos).
+    from app.db.base import AsyncSessionLocal
+    from app.db.redis import get_redis
+
+    redis = await get_redis()
+    qdrant = await _get_qdrant_if_configured()
+
+    async with AsyncSessionLocal() as session:
+        agent = agent_class(db=session, redis=redis, qdrant=qdrant)
+        result = await agent.run(ctx)
+        try:
+            if result.status == AgentStatus.FAILED:
+                await session.rollback()
+            else:
+                await session.commit()
+        except Exception as exc:
+            await session.rollback()
+            log.error("agent_session_commit_failed", route=route, error=str(exc))
+
     results = state.get("agent_results", []) + [result]
 
     if result.status == AgentStatus.FAILED:
@@ -143,8 +162,29 @@ def build_orchestrator_graph() -> StateGraph:
     return graph
 
 
-async def _instantiate_agent(route: str, ctx: AgentContext):
-    """Instancia o agente correto baseado na rota."""
+async def _get_qdrant_if_configured():
+    """Retorna o cliente Qdrant apenas se configurado — senão None (RAG desligado).
+
+    Mesmo guard do warmup em app/core/events.py: evita tentar conectar a um
+    placeholder (ambiente de preview sem Qdrant) e travar o nó do agente.
+    """
+    from app.config import settings as _cfg
+    configured = bool(
+        _cfg.QDRANT_API_KEY or
+        (_cfg.QDRANT_URL and _cfg.QDRANT_URL not in {"http://qdrant:6333", "http://localhost:6333"})
+    )
+    if not configured:
+        return None
+    try:
+        from app.db.qdrant import get_qdrant
+        return await get_qdrant()
+    except Exception as exc:
+        log.warning("qdrant_unavailable_for_agent", error=str(exc))
+        return None
+
+
+def _resolve_agent_class(route: str):
+    """Resolve a classe do agente pela rota (sem instanciar)."""
     agent_map = {
         "process_agent": "app.agents.process.process_agent.ProcessAgent",
         "petition_agent": "app.agents.petition.petition_agent.PetitionAgent",
@@ -174,8 +214,7 @@ async def _instantiate_agent(route: str, ctx: AgentContext):
     try:
         import importlib
         module = importlib.import_module(module_path)
-        agent_class = getattr(module, class_name)
-        return agent_class()
+        return getattr(module, class_name)
     except (ImportError, AttributeError) as exc:
         log.error("agent_import_failed", route=route, error=str(exc))
         return None

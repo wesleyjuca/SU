@@ -58,6 +58,7 @@ async def trigger_agent(
         task_type=body.task_type,
         task_input=task_input,
         priority=body.priority,
+        tenant_id=current_user.tenant_id,
         process_id=uuid.UUID(body.process_id) if body.process_id else None,
         client_id=uuid.UUID(body.client_id) if body.client_id else None,
     )

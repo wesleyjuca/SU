@@ -57,12 +57,14 @@ async def _run_async(
         result = await db.execute(select(AgentRun).where(AgentRun.id == uuid.UUID(run_id)))
         agent_run = result.scalar_one_or_none()
 
+        _tenant = task_input.get("_tenant_id") if isinstance(task_input, dict) else None
         ctx = AgentContext(
             run_id=uuid.UUID(run_id),
             triggered_by=uuid.UUID(triggered_by) if triggered_by else None,
             task_type=task_type,
             task_input=task_input,
             priority=priority,
+            tenant_id=uuid.UUID(_tenant) if _tenant else None,
             process_id=uuid.UUID(process_id) if process_id else None,
             client_id=uuid.UUID(client_id) if client_id else None,
         )
