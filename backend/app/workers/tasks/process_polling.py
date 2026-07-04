@@ -8,7 +8,7 @@ log = structlog.get_logger()
 @celery_app.task(name="app.workers.tasks.process_polling.poll_all_processes", bind=True, max_retries=3)
 def poll_all_processes(self):
     """Executa polling batch de processos — roda a cada 30 minutos via Beat."""
-    import asyncio
+    from app.workers.async_utils import run_worker_coro
 
     async def _run():
         from app.db.base import AsyncSessionLocal
@@ -23,7 +23,7 @@ def poll_all_processes(self):
             return result.output
 
     try:
-        return asyncio.run(_run())
+        return run_worker_coro(_run())
     except Exception as exc:
         log.error("process_poll_failed", error=str(exc))
         raise self.retry(exc=exc, countdown=60)

@@ -21,8 +21,9 @@ def run_agent_task(self, run_id: str, task_type: str, task_input: dict,
                    triggered_by: str | None = None, process_id: str | None = None,
                    client_id: str | None = None, priority: str = "NORMAL"):
     """Executa um agente via orquestrador LangGraph dentro do Celery worker."""
+    from app.workers.async_utils import run_worker_coro
     try:
-        asyncio.run(_run_async(
+        run_worker_coro(_run_async(
             run_id=run_id,
             task_type=task_type,
             task_input=task_input,
