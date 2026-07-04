@@ -65,11 +65,13 @@ class AuditMiddleware(BaseHTTPMiddleware):
             from app.models.audit_log import AuditLog
 
             user_id = getattr(request.state, "user_id", None)
+            tenant_id = getattr(request.state, "tenant_id", None)
             action = f"{request.method}:{request.url.path}"
 
             async with AsyncSessionLocal() as audit_session:
                 entry = AuditLog(
                     user_id=user_id,
+                    tenant_id=tenant_id,
                     action=action,
                     ip_address=request.client.host if request.client else None,
                     user_agent=request.headers.get("user-agent"),

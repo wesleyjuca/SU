@@ -1,4 +1,4 @@
-from fastapi import Depends
+from fastapi import Depends, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 from jose import JWTError
@@ -13,6 +13,7 @@ bearer_scheme = HTTPBearer(auto_error=False)
 
 
 async def get_current_user(
+    request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
     db: AsyncSession = Depends(get_db),
 ) -> User:
@@ -33,6 +34,11 @@ async def get_current_user(
     user = result.scalar_one_or_none()
     if not user:
         raise UnauthorizedError("Usuário não encontrado ou inativo")
+
+    # Atribui o autor na request.state para o AuditMiddleware registrar a trilha
+    # LGPD com user_id/tenant_id (o middleware roda após a rota, então já estará setado).
+    request.state.user_id = user.id
+    request.state.tenant_id = user.tenant_id
     return user
 
 
