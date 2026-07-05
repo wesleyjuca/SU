@@ -1,0 +1,355 @@
+# Instincts generated from https://github.com/wesleyjuca/SU
+# Generated: 2026-06-23T05:34:48.252Z
+# Version: 2.0
+# NOTE: This file supplements (does not replace) any existing curated instincts.
+# High-confidence manually curated instincts should be preserved alongside these.
+
+---
+id: SU-commit-conventional
+trigger: "when writing a commit message"
+confidence: 0.85
+domain: git
+source: repo-analysis
+source_repo: https://github.com/wesleyjuca/SU
+---
+
+# SU Commit Conventional
+
+## Action
+
+Use conventional commit format with prefixes: fix
+
+## Evidence
+
+- 1 commits analyzed
+- Detected conventional commit pattern
+- Examples: fix: comprehensive security hardening and system improvements
+
+---
+id: SU-commit-length
+trigger: "when writing a commit message"
+confidence: 0.6
+domain: git
+source: repo-analysis
+source_repo: https://github.com/wesleyjuca/SU
+---
+
+# SU Commit Length
+
+## Action
+
+Write moderate-length commit messages (~61 characters)
+
+## Evidence
+
+- Average commit message length: 61 chars
+- Based on 1 commits
+
+---
+id: SU-naming-files
+trigger: "when creating a new file"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/wesleyjuca/SU
+---
+
+# SU Naming Files
+
+## Action
+
+Use camelCase naming convention
+
+## Evidence
+
+- Analyzed file naming patterns in repository
+- Dominant pattern: camelCase
+
+---
+id: SU-export-style
+trigger: "when exporting from a module"
+confidence: 0.7
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/wesleyjuca/SU
+---
+
+# SU Export Style
+
+## Action
+
+Prefer default exports
+
+## Evidence
+
+- Export pattern analysis
+- Dominant style: default
+
+---
+id: SU-test-separate
+trigger: "when writing tests"
+confidence: 0.8
+domain: testing
+source: repo-analysis
+source_repo: https://github.com/wesleyjuca/SU
+---
+
+# SU Test Separate
+
+## Action
+
+Place tests in the tests/ or __tests__/ directory, mirroring src structure
+
+## Evidence
+
+- Separate test directory pattern detected
+- Tests live in dedicated test folders
+
+---
+id: su-instinct-file-naming
+trigger: "When creating a new Python file"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: wesleyjuca/SU
+---
+
+# Su Instinct File Naming
+
+## Action
+
+Name the file using camelCase
+
+## Evidence
+
+- Pattern in namingConventions.files
+
+---
+id: su-instinct-function-naming
+trigger: "When defining a new function in Python"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: wesleyjuca/SU
+---
+
+# Su Instinct Function Naming
+
+## Action
+
+Use camelCase for the function name
+
+## Evidence
+
+- Pattern in namingConventions.functions
+
+---
+id: su-instinct-class-naming
+trigger: "When defining a new class in Python"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: wesleyjuca/SU
+---
+
+# Su Instinct Class Naming
+
+## Action
+
+Use PascalCase for the class name
+
+## Evidence
+
+- Pattern in namingConventions.classes
+
+---
+id: su-instinct-constant-naming
+trigger: "When defining a constant in Python"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: wesleyjuca/SU
+---
+
+# Su Instinct Constant Naming
+
+## Action
+
+Use SCREAMING_SNAKE_CASE for the constant name
+
+## Evidence
+
+- Pattern in namingConventions.constants
+
+---
+id: su-instinct-import-style
+trigger: "When importing modules in Python"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: wesleyjuca/SU
+---
+
+# Su Instinct Import Style
+
+## Action
+
+Use absolute import paths
+
+## Evidence
+
+- Pattern in importStyle
+
+---
+id: su-instinct-export-style
+trigger: "When exporting modules or objects"
+confidence: 0.7
+domain: code-style
+source: repo-analysis
+source_repo: wesleyjuca/SU
+---
+
+# Su Instinct Export Style
+
+## Action
+
+Use default export style
+
+## Evidence
+
+- Pattern in exportStyle
+
+---
+id: su-instinct-commit-format
+trigger: "When writing a git commit message"
+confidence: 0.9
+domain: git
+source: repo-analysis
+source_repo: wesleyjuca/SU
+---
+
+# Su Instinct Commit Format
+
+## Action
+
+Start the message with the prefix 'fix:' followed by a concise description
+
+## Evidence
+
+- Seen in commit: 'fix: comprehensive security hardening and system improvements'
+- Pattern in commits.prefixes
+
+---
+id: su-instinct-commit-length
+trigger: "When writing a git commit message"
+confidence: 0.7
+domain: git
+source: repo-analysis
+source_repo: wesleyjuca/SU
+---
+
+# Su Instinct Commit Length
+
+## Action
+
+Keep the message around 61 characters on average
+
+## Evidence
+
+- Pattern in commits.averageLength
+
+---
+id: su-instinct-error-handling
+trigger: "When handling errors in Python code"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: wesleyjuca/SU
+---
+
+# Su Instinct Error Handling
+
+## Action
+
+Use try-catch blocks for error handling
+
+## Evidence
+
+- Pattern in errorHandling.style
+
+---
+id: su-instinct-no-custom-errors
+trigger: "When defining error handling logic"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: wesleyjuca/SU
+---
+
+# Su Instinct No Custom Errors
+
+## Action
+
+Do not create custom error classes
+
+## Evidence
+
+- Pattern in errorHandling.customErrorClasses
+
+---
+id: su-instinct-no-global-error-handler
+trigger: "When setting up error handling for the application"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: wesleyjuca/SU
+---
+
+# Su Instinct No Global Error Handler
+
+## Action
+
+Do not implement a global error handler
+
+## Evidence
+
+- Pattern in errorHandling.globalHandler
+
+---
+id: su-instinct-test-location
+trigger: "When adding or organizing tests"
+confidence: 0.8
+domain: testing
+source: repo-analysis
+source_repo: wesleyjuca/SU
+---
+
+# Su Instinct Test Location
+
+## Action
+
+Place tests in a separate folder from source code
+
+## Evidence
+
+- Pattern in architecture.folderStructure.testLocation
+
+---
+id: su-instinct-folder-organization
+trigger: "When organizing project files"
+confidence: 0.8
+domain: architecture
+source: repo-analysis
+source_repo: wesleyjuca/SU
+---
+
+# Su Instinct Folder Organization
+
+## Action
+
+Use 'backend' and 'frontend' as common top-level folders
+
+## Evidence
+
+- Pattern in architecture.folderStructure.commonFolders
+
