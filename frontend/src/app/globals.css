@@ -1,9 +1,37 @@
-/* ─── Fonte oficial AFJ: Optima ──────────────────────────────────────────── */
+/* ─── Fonte oficial AFJ: Optima (woff2 self-hosted, por peso/estilo) ──────── */
 @font-face {
   font-family: 'Optima';
-  src: url('/fonts/Optima.ttc') format('truetype');
-  font-weight: 100 900;
+  src: url('/fonts/Optima-Regular.woff2') format('woff2');
+  font-weight: 400 500;
   font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Optima';
+  src: url('/fonts/Optima-Bold.woff2') format('woff2');
+  font-weight: 600 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Optima';
+  src: url('/fonts/Optima-ExtraBlack.woff2') format('woff2');
+  font-weight: 800 900;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Optima';
+  src: url('/fonts/Optima-Italic.woff2') format('woff2');
+  font-weight: 400 500;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Optima';
+  src: url('/fonts/Optima-BoldItalic.woff2') format('woff2');
+  font-weight: 600 700;
+  font-style: italic;
   font-display: swap;
 }
 
@@ -45,6 +73,18 @@
 
   h1, h2, h3 {
     @apply font-display;
+  }
+
+  /* Acabamento: anel dourado sutil no foco por teclado (acessibilidade) */
+  a:focus-visible,
+  button:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible,
+  [tabindex]:focus-visible {
+    outline: 2px solid rgba(184, 149, 74, 0.55);
+    outline-offset: 2px;
+    border-radius: 3px;
   }
 }
 
