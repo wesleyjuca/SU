@@ -138,7 +138,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               <>
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
-                  src="/logo-afj-mark.svg"
+                  src="/logo-afj-mark.png"
                   alt="AFJ Advogados"
                   className="h-9 w-auto flex-shrink-0 object-contain"
                 />
