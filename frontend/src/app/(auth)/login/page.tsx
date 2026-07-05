@@ -2,9 +2,9 @@
 import { useState } from "react";
 import { AlertCircle, Eye, EyeOff } from "lucide-react";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL
-  ? `${process.env.NEXT_PUBLIC_API_URL}/api/v1`
-  : "/api/v1";
+// Sempre relativo (mesma origem): o rewrite do Next proxya para o backend
+// server-side, evitando CORS na chamada de login.
+const API_BASE = "/api/v1";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");

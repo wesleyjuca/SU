@@ -1,6 +1,6 @@
-const BASE = process.env.NEXT_PUBLIC_API_URL
-  ? `${process.env.NEXT_PUBLIC_API_URL}/api/v1`
-  : "/api/v1";
+// Sempre relativo (mesma origem): o Next reescreve /api/v1/* → backend (API_URL)
+// server-side, então o navegador nunca faz chamada cross-origin (sem CORS).
+const BASE = "/api/v1";
 const TIMEOUT_MS = 30_000;
 const MAX_RETRIES = 3;
 
