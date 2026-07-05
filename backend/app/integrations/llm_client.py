@@ -10,7 +10,13 @@ permitindo trocar/plugar múltiplas IAs sem alterar nenhum agente.
 
 Retorno padronizado: (content, input_tokens, output_tokens, cost_usd).
 """
+import contextvars
 from app.config import settings
+
+# Credenciais de IA por-requisição (BYOK). Setado pelo orquestrador com a IA do
+# usuário disparador; quando presente, sobrepõe as settings do sistema.
+# Formato: {"provider": str, "api_key": str, "model": str | None}
+ai_creds_ctx: "contextvars.ContextVar[dict | None]" = contextvars.ContextVar("ai_creds", default=None)
 
 # ─── Preços aproximados por 1M tokens (input/output) ─────────────────────────
 MODEL_PRICING = {
@@ -28,8 +34,8 @@ MODEL_PRICING = {
 
 GEMINI_OPENAI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 
-_anthropic_client = None
-_gemini_client = None
+# Cache de clientes por (provider, api_key) — chaves diferem por usuário (BYOK)
+_client_cache: dict = {}
 
 
 def _cost(model: str, input_tokens: int, output_tokens: int) -> float:
@@ -47,16 +53,16 @@ def _default_model(provider: str) -> str:
 
 
 # ─── Anthropic ───────────────────────────────────────────────────────────────
-def _get_anthropic():
-    global _anthropic_client
-    if _anthropic_client is None:
+def _get_anthropic(api_key: str):
+    ck = ("anthropic", api_key)
+    if ck not in _client_cache:
         import anthropic
-        _anthropic_client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
-    return _anthropic_client
+        _client_cache[ck] = anthropic.AsyncAnthropic(api_key=api_key)
+    return _client_cache[ck]
 
 
-async def _call_anthropic(messages, system, model, max_tokens, temperature):
-    client = _get_anthropic()
+async def _call_anthropic(api_key, messages, system, model, max_tokens, temperature):
+    client = _get_anthropic(api_key)
     kwargs = {"model": model, "max_tokens": max_tokens, "temperature": temperature, "messages": messages}
     if system:
         kwargs["system"] = system
@@ -66,17 +72,16 @@ async def _call_anthropic(messages, system, model, max_tokens, temperature):
 
 
 # ─── Gemini (via endpoint OpenAI-compatível) ─────────────────────────────────
-def _get_gemini():
-    global _gemini_client
-    if _gemini_client is None:
+def _get_gemini(api_key: str):
+    ck = ("gemini", api_key)
+    if ck not in _client_cache:
         from openai import AsyncOpenAI
-        key = settings.GEMINI_API_KEY or settings.OPENAI_API_KEY
-        _gemini_client = AsyncOpenAI(api_key=key, base_url=GEMINI_OPENAI_BASE_URL)
-    return _gemini_client
+        _client_cache[ck] = AsyncOpenAI(api_key=api_key, base_url=GEMINI_OPENAI_BASE_URL)
+    return _client_cache[ck]
 
 
-async def _call_gemini(messages, system, model, max_tokens, temperature):
-    client = _get_gemini()
+async def _call_gemini(api_key, messages, system, model, max_tokens, temperature):
+    client = _get_gemini(api_key)
     # OpenAI-compat: system vira uma mensagem role=system no início
     oai_messages = ([{"role": "system", "content": system}] if system else []) + list(messages)
     resp = await client.chat.completions.create(
@@ -101,13 +106,26 @@ async def call_llm(
     temperature: float = 0.3,
     provider: str | None = None,
 ) -> tuple[str, int, int, float]:
-    """Chama o LLM do provider ativo e retorna (content, input_tokens, output_tokens, cost_usd)."""
-    prov = resolve_provider(provider)
-    mdl = model or _default_model(prov)
+    """Chama o LLM e retorna (content, input_tokens, output_tokens, cost_usd).
+
+    Credenciais (BYOK): se o contextvar `ai_creds_ctx` estiver setado (IA do
+    usuário logado), usa provider/chave/modelo dele; senão usa as settings do
+    sistema. Assim a chave do usuário economiza os tokens/custo central.
+    """
+    creds = ai_creds_ctx.get()
+
+    if creds and creds.get("api_key"):
+        prov = resolve_provider(provider or creds.get("provider"))
+        api_key = creds["api_key"]
+        mdl = model or creds.get("model") or _default_model(prov)
+    else:
+        prov = resolve_provider(provider)
+        api_key = (settings.GEMINI_API_KEY or settings.OPENAI_API_KEY) if prov == "gemini" else settings.ANTHROPIC_API_KEY
+        mdl = model or _default_model(prov)
 
     if prov == "gemini":
-        content, in_t, out_t = await _call_gemini(messages, system, mdl, max_tokens, temperature)
+        content, in_t, out_t = await _call_gemini(api_key, messages, system, mdl, max_tokens, temperature)
     else:
-        content, in_t, out_t = await _call_anthropic(messages, system, mdl, max_tokens, temperature)
+        content, in_t, out_t = await _call_anthropic(api_key, messages, system, mdl, max_tokens, temperature)
 
     return content, in_t, out_t, _cost(mdl, in_t, out_t)

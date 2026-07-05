@@ -1,4 +1,4 @@
-from sqlalchemy import String, Boolean, ForeignKey, UniqueConstraint
+from sqlalchemy import String, Boolean, ForeignKey, UniqueConstraint, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 import uuid
@@ -19,6 +19,11 @@ class User(Base):
     role: Mapped[str] = mapped_column(String(50), nullable=False, default="ASSISTENTE")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     mfa_secret: Mapped[str | None] = mapped_column(String(255))
+    # ── BYOK: IA própria do usuário (economiza tokens do sistema) ──
+    ai_provider: Mapped[str | None] = mapped_column(String(20))       # anthropic | gemini
+    ai_api_key_enc: Mapped[str | None] = mapped_column(Text)          # chave cifrada em repouso
+    ai_model: Mapped[str | None] = mapped_column(String(80))
+    ai_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     tenant_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("tenants.id"), nullable=True, index=True)
     linked_client_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("clients.id"), nullable=True)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
