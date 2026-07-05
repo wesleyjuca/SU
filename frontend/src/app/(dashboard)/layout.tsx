@@ -8,7 +8,7 @@ import {
   LayoutDashboard, Scale, FileText, Users, FolderOpen,
   Bot, CheckSquare, DollarSign, Shield, Shapes, Settings,
   Bell, Search, ChevronRight, FileEdit, Menu, X, LogOut, BarChart2, CalendarClock, BookOpen,
-  Moon, Sun, Activity, Users2, Palette
+  Moon, Sun, Activity, Users2, Palette, KeyRound
 } from "lucide-react";
 import { useApprovalCount } from "@/hooks/useApprovals";
 import { useNotifications } from "@/hooks/useNotifications";
@@ -39,6 +39,7 @@ const navSections = [
     title: "INTELIGÊNCIA IA",
     items: [
       { href: "/agentes", label: "Agentes IA", icon: Bot, roles: null },
+      { href: "/minha-ia", label: "Minha IA", icon: KeyRound, roles: null },
       { href: "/aprovacoes", label: "Aprovações", icon: CheckSquare, roles: null },
       { href: "/busca-juridica", label: "Pesquisa Jurídica", icon: BookOpen, roles: null },
       { href: "/visual-law", label: "Visual Law", icon: Shapes, roles: null },

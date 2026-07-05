@@ -35,6 +35,91 @@ class UserUpdate(BaseModel):
     oab_uf: str | None = None
 
 
+class AISettingsUpdate(BaseModel):
+    provider: str | None = None          # anthropic | gemini
+    model: str | None = None
+    api_key: str | None = None           # se omitido, mantém a chave atual
+    enabled: bool | None = None
+
+
+@router.get("/me/ai-settings")
+async def get_my_ai_settings(current_user: User = Depends(get_current_user)):
+    """Configuração de IA própria (BYOK) do usuário. Nunca retorna a chave."""
+    return {
+        "provider": current_user.ai_provider or "gemini",
+        "model": current_user.ai_model or "",
+        "enabled": bool(getattr(current_user, "ai_enabled", False)),
+        "has_key": bool(current_user.ai_api_key_enc),
+    }
+
+
+@router.put("/me/ai-settings")
+async def update_my_ai_settings(
+    body: AISettingsUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.core.crypto import encrypt
+
+    if body.provider is not None:
+        prov = body.provider.lower()
+        if prov not in ("anthropic", "gemini"):
+            raise HTTPException(status_code=422, detail="Provider inválido (anthropic | gemini)")
+        current_user.ai_provider = prov
+    if body.model is not None:
+        current_user.ai_model = body.model.strip() or None
+    if body.api_key:  # só atualiza a chave se enviada
+        enc = encrypt(body.api_key.strip())
+        if not enc:
+            raise HTTPException(status_code=422, detail="Não foi possível salvar a chave")
+        current_user.ai_api_key_enc = enc
+    if body.enabled is not None:
+        current_user.ai_enabled = body.enabled
+
+    if current_user.ai_enabled and not current_user.ai_api_key_enc:
+        raise HTTPException(status_code=422, detail="Configure uma chave de API antes de ativar")
+
+    await db.flush()
+    return {
+        "provider": current_user.ai_provider or "gemini",
+        "model": current_user.ai_model or "",
+        "enabled": bool(current_user.ai_enabled),
+        "has_key": bool(current_user.ai_api_key_enc),
+        "message": "Configuração de IA salva",
+    }
+
+
+@router.post("/me/ai-settings/test")
+async def test_my_ai_settings(current_user: User = Depends(get_current_user)):
+    """Faz uma chamada mínima com a IA do usuário para validar a chave."""
+    from app.core.crypto import decrypt
+    from app.integrations.llm_client import call_llm, ai_creds_ctx
+
+    if not current_user.ai_api_key_enc:
+        raise HTTPException(status_code=422, detail="Nenhuma chave configurada")
+    key = decrypt(current_user.ai_api_key_enc)
+    if not key:
+        raise HTTPException(status_code=422, detail="Chave inválida — salve novamente")
+
+    token = ai_creds_ctx.set({
+        "provider": current_user.ai_provider or None,
+        "api_key": key,
+        "model": current_user.ai_model or None,
+    })
+    try:
+        content, _in, _out, _cost = await call_llm(
+            messages=[{"role": "user", "content": "Responda apenas: OK"}],
+            system="Você é um teste de conexão.",
+            max_tokens=10,
+            temperature=0,
+        )
+        return {"ok": True, "provider": current_user.ai_provider, "sample": (content or "").strip()[:40]}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)[:300]}
+    finally:
+        ai_creds_ctx.reset(token)
+
+
 @router.get("/me")
 async def get_me(current_user: User = Depends(get_current_user)):
     return {

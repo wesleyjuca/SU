@@ -103,6 +103,10 @@ async def lifespan(app: FastAPI):
         for _sql in [
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMPTZ",
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS linked_client_id UUID REFERENCES clients(id)",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS ai_provider VARCHAR(20)",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS ai_api_key_enc TEXT",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS ai_model VARCHAR(80)",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS ai_enabled BOOLEAN DEFAULT FALSE",
         ]:
             try:
                 async with engine.begin() as conn:
