@@ -77,19 +77,8 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-afj-cream-dark">
           <div className="flex items-center gap-2">
-            <div className="w-6 h-6 text-afj-gold">
-              <svg viewBox="0 0 80 80" fill="currentColor">
-                <rect x="2" y="2" width="76" height="76" fill="none" stroke="currentColor" strokeWidth="3.5"/>
-                <rect x="10" y="10" width="6" height="60"/>
-                <rect x="29" y="10" width="6" height="60"/>
-                <rect x="10" y="37" width="25" height="5"/>
-                <rect x="43" y="10" width="6" height="42"/>
-                <rect x="43" y="10" width="25" height="5"/>
-                <rect x="43" y="27" width="19" height="5"/>
-                <rect x="62" y="10" width="6" height="46"/>
-                <path d="M68,56 Q68,70 55,70 Q49,70 49,63" fill="none" stroke="currentColor" strokeWidth="6" strokeLinecap="round"/>
-              </svg>
-            </div>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/logo-afj-mark.png" alt="AFJ" className="h-6 w-auto" />
             <span className="text-xs font-bold tracking-widest uppercase text-afj-black/50">
               Configuração Inicial
             </span>
