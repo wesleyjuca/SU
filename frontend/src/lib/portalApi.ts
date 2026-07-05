@@ -1,6 +1,5 @@
-const BASE = process.env.NEXT_PUBLIC_API_URL
-  ? `${process.env.NEXT_PUBLIC_API_URL}/api/v1`
-  : "/api/v1";
+// Sempre relativo (mesma origem) — rewrite server-side, sem CORS.
+const BASE = "/api/v1";
 
 function getPortalToken(): string | null {
   if (typeof window === "undefined") return null;
