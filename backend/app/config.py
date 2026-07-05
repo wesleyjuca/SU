@@ -55,9 +55,13 @@ class Settings(BaseSettings):
     CNJ_API_KEY: str = "cDZHYzlZa0JadVREZDJCendFbGpZVlJBZFM4Z1JUdzRGbENnUVJBanFrTHlDWDhFN05oYjY4WUpUeVFGWUt"
 
     # ─── IA ──────────────────────────────────────────────────────────────────
+    AI_PROVIDER: str = "anthropic"          # "anthropic" | "gemini" (Google)
     ANTHROPIC_API_KEY: str = ""
     OPENAI_API_KEY: str = ""
+    GEMINI_API_KEY: str = ""                # chave do Google AI Studio / Vertex (aceita GOOGLE_API_KEY)
+    GOOGLE_API_KEY: str = ""                # alias — copiado para GEMINI_API_KEY se este estiver vazio
     DEFAULT_CLAUDE_MODEL: str = "claude-opus-4-7"
+    DEFAULT_GEMINI_MODEL: str = "gemini-2.0-flash"
     DEFAULT_EMBEDDING_MODEL: str = "text-embedding-3-large"
     EMBEDDING_DIMENSIONS: int = 3072
 
@@ -119,6 +123,10 @@ class Settings(BaseSettings):
                         if kv and kv.split("=", 1)[0] not in {"sslmode", "channel_binding", "gssencmode"}]
                 url = base + ("?" + "&".join(kept) if kept else "")
             self.DATABASE_URL = url
+
+        # Gemini: aceitar GOOGLE_API_KEY como alias de GEMINI_API_KEY
+        if not self.GEMINI_API_KEY and self.GOOGLE_API_KEY:
+            self.GEMINI_API_KEY = self.GOOGLE_API_KEY
 
         # Fill Celery URLs from Redis if not set
         if not self.CELERY_BROKER_URL:
