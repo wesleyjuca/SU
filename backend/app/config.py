@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     API_V1_STR: str = "/api/v1"
 
     # ─── Banco de dados ──────────────────────────────────────────────────────
-    DATABASE_URL: str = ""          # obrigatório em produção; vazio → degraded mode
+    DATABASE_URL: str = ""  # obrigatório em produção; vazio → app inicia em modo degradado
     POSTGRES_USER: str = "afj"
     POSTGRES_PASSWORD: str = ""   # auto-derived from DATABASE_URL if empty
     POSTGRES_DB: str = "afj_core"
@@ -65,6 +65,18 @@ class Settings(BaseSettings):
     PROCESS_POLLING_INTERVAL_MINUTES: int = 30
     PROCESS_POLLING_BATCH_SIZE: int = 50
     PUBLICATION_SCAN_HOUR: int = 7
+    DEADLINE_ALERT_DAYS: list[int] = [3, 7, 15]
+
+    @field_validator("DEADLINE_ALERT_DAYS", mode="before")
+    @classmethod
+    def parse_deadline_alert_days(cls, v):
+        if isinstance(v, str):
+            try:
+                import json as _json
+                return _json.loads(v)
+            except Exception:
+                return [int(x.strip()) for x in v.split(",") if x.strip().isdigit()]
+        return v
 
     # ─── Email (SMTP) ─────────────────────────────────────────────────────────
     SMTP_HOST: str = "smtp.gmail.com"
@@ -86,9 +98,10 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def derive_from_urls(self) -> "Settings":
+        # DATABASE_URL obrigatória em produção — avisa mas não impede startup
         if not self.DATABASE_URL:
             print(
-                "[AFJ][WARN] DATABASE_URL não definido — app inicia em modo degradado sem banco. "
+                "[AFJ][ERROR] DATABASE_URL não definido — banco indisponível. "
                 "No Railway: Variables → DATABASE_URL = ${{Postgres.DATABASE_URL}}",
                 flush=True,
             )
@@ -122,14 +135,15 @@ class Settings(BaseSettings):
             parsed = urlparse(self.DATABASE_URL)
             if parsed.password:
                 self.POSTGRES_PASSWORD = parsed.password
-        # SECRET_KEY: fallback efêmero se não configurado (modo config mínima)
+        # SECRET_KEY: ephemeral fallback when not configured — sessions invalidated on restart
         if not self.SECRET_KEY:
             import secrets as _secrets
             self.SECRET_KEY = _secrets.token_urlsafe(48)
+            prefix = "[AFJ][ERROR]" if self.ENVIRONMENT == "production" else "[AFJ][WARN]"
             print(
-                "[AFJ][WARN] SECRET_KEY não definido — gerado valor efêmero. "
-                "Tokens são invalidados a cada restart; defina SECRET_KEY no Railway "
-                "para sessões estáveis em produção.",
+                f"{prefix} SECRET_KEY não definido — gerado valor efêmero. "
+                "Tokens são invalidados a cada restart. "
+                "Configure SECRET_KEY no Railway Variables para sessões estáveis.",
                 flush=True,
             )
         # Derive ENCRYPTION_KEY from SECRET_KEY if not set

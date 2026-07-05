@@ -13,6 +13,8 @@ class PublicationMonitorAgent(BaseAgent):
     name: ClassVar[str] = "publication_monitor_agent"
     description: ClassVar[str] = "Scan diário de DJes e Diários Oficiais para OABs cadastradas"
     requires_human_approval: ClassVar[bool] = False
+    # Vira True quando a varredura real de DJe (por tribunal) for implementada.
+    _dje_implementado: ClassVar[bool] = False
 
     async def execute(self, ctx: AgentContext) -> AgentResult:
         task = ctx.task_input
@@ -27,6 +29,22 @@ class PublicationMonitorAgent(BaseAgent):
                 status=AgentStatus.PARTIAL,
                 agent_name=self.name,
                 output={"message": "Nenhuma OAB cadastrada para monitoramento. Adicione advogados com OAB no sistema."},
+            )
+
+        # Honestidade de status: enquanto a varredura de DJe não estiver implementada,
+        # não reportar SUCCESS (que aparentaria uma busca real com zero resultados).
+        if not self._dje_implementado:
+            return AgentResult(
+                status=AgentStatus.PARTIAL,
+                agent_name=self.name,
+                output={
+                    "data_edicao": data_edicao,
+                    "oabs_monitoradas": len(oabs),
+                    "publicacoes_encontradas": 0,
+                    "resultados": [],
+                    "message": "Varredura de DJe ainda não implementada — integração por tribunal pendente. "
+                               "Nenhuma publicação foi efetivamente consultada.",
+                },
             )
 
         resultados = []

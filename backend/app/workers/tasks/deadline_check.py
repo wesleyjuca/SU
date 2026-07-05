@@ -8,7 +8,7 @@ log = structlog.get_logger()
 @celery_app.task(name="app.workers.tasks.deadline_check.check_upcoming_deadlines", bind=True)
 def check_upcoming_deadlines(self):
     """Verifica prazos nos próximos 3, 7 e 15 dias e envia notificações."""
-    import asyncio
+    from app.workers.async_utils import run_worker_coro
 
     async def _run():
         from datetime import date, timedelta
@@ -73,13 +73,13 @@ def check_upcoming_deadlines(self):
             log.info("deadlines_checked", total_notificacoes=total_notificacoes)
             return {"notificacoes_criadas": total_notificacoes}
 
-    return asyncio.run(_run())
+    return run_worker_coro(_run())
 
 
 @celery_app.task(name="app.workers.tasks.deadline_check.scan_daily_publications", bind=True)
 def scan_daily_publications(self):
     """Scan diário de publicações nos DJes."""
-    import asyncio
+    from app.workers.async_utils import run_worker_coro
 
     async def _run():
         from app.db.base import AsyncSessionLocal
@@ -96,4 +96,4 @@ def scan_daily_publications(self):
             result = await agent.run(ctx)
             return result.output
 
-    return asyncio.run(_run())
+    return run_worker_coro(_run())

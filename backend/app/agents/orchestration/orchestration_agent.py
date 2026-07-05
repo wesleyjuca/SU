@@ -11,7 +11,7 @@ import structlog
 from app.agents.base.agent import BaseAgent
 from app.agents.base.result import AgentResult, AgentStatus
 from app.agents.brain.context import AgentContext
-from app.agents.brain.orchestrator import orchestrator_graph
+from app.agents.brain.orchestrator import get_orchestrator_graph
 
 log = structlog.get_logger()
 
@@ -45,7 +45,7 @@ class OrchestrationAgent(BaseAgent):
         config = {"configurable": {"thread_id": str(ctx.run_id)}}
 
         try:
-            final_state = await orchestrator_graph.ainvoke(state, config=config)
+            final_state = await get_orchestrator_graph().ainvoke(state, config=config)
         except Exception as exc:
             log.error("orchestration_failed", run_id=str(ctx.run_id), error=str(exc))
             return AgentResult(

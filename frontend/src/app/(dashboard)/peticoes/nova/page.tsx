@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { ChevronRight, ChevronLeft, Scale, FileText, Send, CheckCircle, Loader2, Edit3 } from "lucide-react";
 import dynamic from "next/dynamic";
@@ -48,6 +48,13 @@ export default function NovaPeticaoPage() {
   const [runId, setRunId] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+    };
+  }, []);
   const [documentoHtml, setDocumentoHtml] = useState<string>("");
   const [documentoId, setDocumentoId] = useState<string | null>(null);
 
@@ -99,9 +106,11 @@ export default function NovaPeticaoPage() {
     const token = localStorage.getItem("afj_access_token");
     let attempts = 0;
     const MAX_ATTEMPTS = 60; // 3 minutos
+    if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
     const interval = setInterval(async () => {
       if (++attempts > MAX_ATTEMPTS) {
         clearInterval(interval);
+        pollIntervalRef.current = null;
         setError("Tempo limite excedido. A geração demorou mais que o esperado. Tente novamente.");
         setStep(2);
         return;
@@ -115,6 +124,7 @@ export default function NovaPeticaoPage() {
           setStatus(run.status);
           if (run.status === "AWAITING_APPROVAL" || run.status === "SUCCESS") {
             clearInterval(interval);
+            pollIntervalRef.current = null;
             const docId = run.output_data?.document_id as string | undefined;
             if (docId) {
               setDocumentoId(docId);
@@ -131,12 +141,14 @@ export default function NovaPeticaoPage() {
             setStep(4);
           } else if (run.status === "FAILED") {
             clearInterval(interval);
+            pollIntervalRef.current = null;
             setError("O agente falhou ao gerar a petição.");
             setStep(2);
           }
         }
       } catch {}
     }, 3000);
+    pollIntervalRef.current = interval;
   }
 
   const processoSelecionado = processos.find((p) => p.id === form.process_id);

@@ -11,8 +11,8 @@ _SECTION_PATTERNS = [
 ]
 _SECTION_RE = re.compile("|".join(_SECTION_PATTERNS), re.MULTILINE | re.IGNORECASE)
 
-CHUNK_SIZE = 800
-CHUNK_OVERLAP = 100
+CHUNK_SIZE = 1200
+CHUNK_OVERLAP = 200
 
 
 def chunk_document(text: str, metadata: dict[str, Any]) -> list[dict]:

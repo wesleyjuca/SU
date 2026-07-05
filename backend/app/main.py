@@ -53,7 +53,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
-    allow_origin_regex=r"https://.*\.(vercel\.app|railway\.app|onrender\.com)",
+    allow_origin_regex=r"https://afj-core(-[a-z0-9]+)?\.vercel\.app|https://su(-[a-z0-9]+)?\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -71,6 +71,12 @@ app.include_router(api_router, prefix=settings.API_V1_STR)
 async def global_exception_handler(request: Request, exc: Exception):
     log.error("unhandled_exception", path=request.url.path, error=str(exc), exc_info=True)
     return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+
+
+@app.get("/ping")
+async def ping():
+    """Lightweight liveness probe — responds as soon as the app is up."""
+    return {"ok": True}
 
 
 @app.get("/health")

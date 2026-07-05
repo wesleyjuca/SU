@@ -28,7 +28,11 @@ async function clearSession() {
   } catch {}
 }
 
-async function refreshTokens(): Promise<boolean> {
+// Serializa o refresh: 401s concorrentes aguardam a MESMA chamada, evitando
+// que o segundo request use um refresh token já rotacionado (=> logout indevido).
+let refreshPromise: Promise<boolean> | null = null;
+
+async function doRefresh(): Promise<boolean> {
   const refresh = getRefreshToken();
   if (!refresh) return false;
   try {
@@ -48,22 +52,37 @@ async function refreshTokens(): Promise<boolean> {
   return false;
 }
 
+async function refreshTokens(): Promise<boolean> {
+  if (!refreshPromise) {
+    refreshPromise = doRefresh().finally(() => {
+      refreshPromise = null;
+    });
+  }
+  return refreshPromise;
+}
+
 async function fetchWithRetry(url: string, options: RequestInit): Promise<Response> {
+  // Só reenvia métodos idempotentes. Reenviar POST/PUT/PATCH/DELETE que deu
+  // timeout no cliente (mas pode ter tido sucesso no servidor) duplica efeitos.
+  const method = (options.method || "GET").toUpperCase();
+  const idempotent = method === "GET" || method === "HEAD";
+  const maxAttempts = idempotent ? MAX_RETRIES : 1;
+
   let lastError: unknown;
-  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
       const res = await fetch(url, {
         ...options,
         signal: AbortSignal.timeout(TIMEOUT_MS),
       });
-      if (res.status >= 500 && attempt < MAX_RETRIES - 1) {
+      if (res.status >= 500 && attempt < maxAttempts - 1) {
         await sleep(Math.pow(2, attempt) * 500);
         continue;
       }
       return res;
     } catch (e) {
       lastError = e;
-      if (attempt < MAX_RETRIES - 1) await sleep(Math.pow(2, attempt) * 500);
+      if (attempt < maxAttempts - 1) await sleep(Math.pow(2, attempt) * 500);
     }
   }
   throw lastError;

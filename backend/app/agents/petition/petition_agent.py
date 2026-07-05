@@ -177,6 +177,7 @@ Gere a petição completa seguindo o template e as regras absolutas do sistema."
         doc_id = uuid.uuid4()
         doc = Document(
             id=doc_id,
+            tenant_id=ctx.tenant_id,
             process_id=ctx.process_id,
             client_id=ctx.client_id,
             tipo="PETICAO",

@@ -21,7 +21,16 @@ export function useAgentWebSocket() {
     const token = typeof window !== "undefined"
       ? localStorage.getItem("afj_access_token")
       : null;
-    if (!token) return;
+
+    // O endpoint do backend é /api/v1/ws/{user_id} — precisa do id do usuário
+    let userId: string | null = null;
+    try {
+      const raw = typeof window !== "undefined" ? localStorage.getItem("afj_user") : null;
+      userId = raw ? JSON.parse(raw)?.id ?? null : null;
+    } catch {
+      userId = null;
+    }
+    if (!token || !userId) return;
 
     // Close any existing connection
     if (wsRef.current) {
@@ -30,10 +39,13 @@ export function useAgentWebSocket() {
     }
 
     try {
-      const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-      const ws = new WebSocket(
-        `${protocol}://${window.location.host}/api/v1/ws?token=${token}`
-      );
+      // Deriva o host do backend a partir de NEXT_PUBLIC_API_URL (split Vercel/Railway).
+      // Rewrites do Next só fazem proxy de HTTP, não de upgrade WebSocket.
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL;
+      const wsBase = apiUrl
+        ? apiUrl.replace(/^http/, "ws")
+        : `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}`;
+      const ws = new WebSocket(`${wsBase}/api/v1/ws/${userId}?token=${token}`);
 
       ws.onopen = () => {
         if (reconnectTimer.current) {

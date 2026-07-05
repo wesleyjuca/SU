@@ -2,18 +2,21 @@ from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, Asyn
 from sqlalchemy.orm import DeclarativeBase
 from app.config import settings
 
-# Se DATABASE_URL não estiver configurado, cria engine com URL placeholder.
-# Todas as tentativas de conexão falharão com "Connection refused",
-# mas o app sobe e responde ao /health com status "degraded" (HTTP 200).
+
+# Fallback placeholder prevents crash at import when DATABASE_URL is not yet set.
+# All actual queries will fail gracefully (connection refused) instead of at startup.
 _db_url = settings.DATABASE_URL or "postgresql+asyncpg://notset:notset@127.0.0.1:5432/notset"
+
+_has_real_db = bool(settings.DATABASE_URL)
 
 engine = create_async_engine(
     _db_url,
     echo=settings.DEBUG,
-    pool_pre_ping=True,
+    pool_pre_ping=_has_real_db,  # skip ping when using placeholder
     pool_recycle=300,
-    pool_size=10,
-    max_overflow=20,
+    pool_size=5 if _has_real_db else 1,
+    max_overflow=10 if _has_real_db else 0,
+    connect_args={"timeout": 5},  # fail fast when DB unreachable
 )
 
 AsyncSessionLocal = async_sessionmaker(

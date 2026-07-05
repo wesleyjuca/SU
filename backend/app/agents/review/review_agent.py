@@ -6,6 +6,8 @@ Pipeline:
 
 Toda citação não encontrada no Qdrant → [Não Verificado] → bloqueia aprovação.
 """
+import json
+import re
 from typing import ClassVar
 from app.agents.base.agent import BaseAgent
 from app.agents.base.result import AgentResult, AgentStatus
@@ -14,6 +16,19 @@ from app.integrations.anthropic_client import call_claude, AFJ_LEGAL_SYSTEM_PROM
 import structlog
 
 log = structlog.get_logger()
+
+
+def _parse_issues_from_claude(content: str) -> list[dict]:
+    """Extrai lista de issues do bloco JSON retornado por Claude."""
+    match = re.search(r'\{.*\}', content, re.DOTALL)
+    if match:
+        try:
+            data = json.loads(match.group())
+            return data.get("issues", [])
+        except json.JSONDecodeError:
+            pass
+    return []
+
 
 REVIEW_SYSTEM_PROMPT = AFJ_LEGAL_SYSTEM_PROMPT + """
 
@@ -119,7 +134,7 @@ Retorne um JSON com:
             system=REVIEW_SYSTEM_PROMPT,
             max_tokens=2000,
         )
-        return {"resultado": content, "tokens": input_t + output_t, "cost": cost, "issues": []}
+        return {"resultado": content, "tokens": input_t + output_t, "cost": cost, "issues": _parse_issues_from_claude(content)}
 
     async def _etapa_consistencia(self, conteudo: str, jurisprudencia: list, legislacao: list) -> dict:
         juris_str = "\n".join([f"- {j.get('numero', 'N/A')} ({j.get('tribunal', 'N/A')})" for j in jurisprudencia])
@@ -140,7 +155,7 @@ Retorne JSON: {{"issues": [...], "citacoes_nao_verificadas": [...], "aprovado": 
             system=REVIEW_SYSTEM_PROMPT,
             max_tokens=2000,
         )
-        return {"resultado": content, "tokens": input_t + output_t, "cost": cost, "issues": []}
+        return {"resultado": content, "tokens": input_t + output_t, "cost": cost, "issues": _parse_issues_from_claude(content)}
 
     async def _etapa_risco(self, conteudo: str, tipo: str) -> dict:
         prompt = f"""Faça uma análise de RISCO da peça jurídica.

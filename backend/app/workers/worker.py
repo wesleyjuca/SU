@@ -7,7 +7,11 @@ celery_app = Celery(
     "afj_core",
     broker=settings.CELERY_BROKER_URL,
     backend=settings.CELERY_RESULT_BACKEND,
-    include=["app.workers.tasks.process_polling", "app.workers.tasks.deadline_check"],
+    include=[
+        "app.workers.tasks.process_polling",
+        "app.workers.tasks.deadline_check",
+        "app.workers.tasks.agent_tasks",
+    ],
 )
 
 celery_app.conf.update(

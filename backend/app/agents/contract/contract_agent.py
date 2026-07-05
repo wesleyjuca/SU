@@ -52,6 +52,7 @@ Use linguagem jurídica clara e proteja os interesses do escritório."""
             from decimal import Decimal
             doc = Document(
                 id=uuid.UUID(doc_id),
+                tenant_id=ctx.tenant_id,
                 client_id=ctx.client_id,
                 tipo="CONTRATO",
                 titulo=f"Contrato de {tipo.replace('_', ' ').title()}",

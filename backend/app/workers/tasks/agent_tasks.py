@@ -21,8 +21,9 @@ def run_agent_task(self, run_id: str, task_type: str, task_input: dict,
                    triggered_by: str | None = None, process_id: str | None = None,
                    client_id: str | None = None, priority: str = "NORMAL"):
     """Executa um agente via orquestrador LangGraph dentro do Celery worker."""
+    from app.workers.async_utils import run_worker_coro
     try:
-        asyncio.run(_run_async(
+        run_worker_coro(_run_async(
             run_id=run_id,
             task_type=task_type,
             task_input=task_input,
@@ -48,7 +49,7 @@ async def _run_async(
     """Lógica assíncrona do worker: monta contexto, executa grafo, persiste resultado."""
     from app.db.base import AsyncSessionLocal
     from app.agents.brain.context import AgentContext
-    from app.agents.brain.orchestrator import orchestrator_graph
+    from app.agents.brain.orchestrator import get_orchestrator_graph
     from app.models.agent_run import AgentRun
     from sqlalchemy import select
 
@@ -57,12 +58,14 @@ async def _run_async(
         result = await db.execute(select(AgentRun).where(AgentRun.id == uuid.UUID(run_id)))
         agent_run = result.scalar_one_or_none()
 
+        _tenant = task_input.get("_tenant_id") if isinstance(task_input, dict) else None
         ctx = AgentContext(
             run_id=uuid.UUID(run_id),
             triggered_by=uuid.UUID(triggered_by) if triggered_by else None,
             task_type=task_type,
             task_input=task_input,
             priority=priority,
+            tenant_id=uuid.UUID(_tenant) if _tenant else None,
             process_id=uuid.UUID(process_id) if process_id else None,
             client_id=uuid.UUID(client_id) if client_id else None,
         )
@@ -78,12 +81,22 @@ async def _run_async(
         }
         config = {"configurable": {"thread_id": run_id}}
 
+        orchestrator_graph = get_orchestrator_graph()
         started = datetime.utcnow()
+        final_state: dict = {}
         try:
-            final_state = await orchestrator_graph.ainvoke(state, config=config)
+            final_state = await asyncio.wait_for(
+                orchestrator_graph.ainvoke(state, config=config),
+                timeout=300.0,
+            )
             status = "AWAITING_APPROVAL" if final_state.get("pending_approval") else "SUCCESS"
             output = final_state.get("final_output") or {}
             error_msg = None
+        except asyncio.TimeoutError:
+            status = "FAILED"
+            output = {}
+            error_msg = "Agent timeout after 300s"
+            log.error("orchestration_timeout", run_id=run_id)
         except Exception as exc:
             status = "FAILED"
             output = {}
@@ -101,6 +114,10 @@ async def _run_async(
             from decimal import Decimal
             agent_run.cost_usd = Decimal(str(ctx.total_cost_usd)) if ctx.total_cost_usd else None
             agent_run.requires_approval = ctx.requires_approval
+            # HITL: cria o Approval PENDENTE na mesma transação
+            if status == "AWAITING_APPROVAL":
+                from app.services.approval_service import create_approval_from_state
+                await create_approval_from_state(db, agent_run, final_state)
             await db.commit()
 
         # Publicar evento WebSocket

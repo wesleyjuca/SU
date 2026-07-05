@@ -4,12 +4,10 @@ import hashlib
 import secrets
 import uuid
 
+import bcrypt
 from jose import jwt
-from passlib.context import CryptContext
 
 from app.config import settings
-
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 ROLES = {
     "ADMIN": {"level": 100, "permissions": ["*"]},
@@ -21,11 +19,17 @@ ROLES = {
 
 
 def hash_password(password: str) -> str:
-    return pwd_context.hash(password)
+    # bcrypt opera em no máximo 72 bytes — trunca para evitar ValueError no bcrypt 5.x
+    pwd = password.encode("utf-8")[:72]
+    return bcrypt.hashpw(pwd, bcrypt.gensalt()).decode("utf-8")
 
 
 def verify_password(plain: str, hashed: str) -> bool:
-    return pwd_context.verify(plain, hashed)
+    # Retorna False (em vez de lançar) em hash malformado → 401 legítimo, nunca 500
+    try:
+        return bcrypt.checkpw(plain.encode("utf-8")[:72], hashed.encode("utf-8"))
+    except (ValueError, TypeError):
+        return False
 
 
 def create_access_token(subject: str | Any, role: str, extra: dict | None = None) -> str:

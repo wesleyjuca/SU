@@ -509,6 +509,7 @@ async def health_detailed(current_user: User = Depends(get_current_user)):
         ]
 
     from app.config import settings as cfg
+    from app.core.events import APP_START_TIME
     services = {
         "postgresql": {"ok": pg_ok, "latency_ms": pg_ms},
         "redis": {"ok": redis_ok, "latency_ms": redis_ms},
@@ -518,7 +519,6 @@ async def health_detailed(current_user: User = Depends(get_current_user)):
     }
     core_ok = all(services[k]["ok"] for k in ("postgresql", "redis"))
 
-    from app.core.events import APP_START_TIME
     uptime_seconds = int((datetime.now(timezone.utc) - APP_START_TIME).total_seconds()) if APP_START_TIME else None
 
     return {

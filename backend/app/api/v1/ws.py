@@ -35,6 +35,16 @@ async def websocket_endpoint(
     log.info("ws_connected", user_id=user_id)
 
     redis = await get_redis()
+    if not redis:
+        await websocket.send_json({"type": "CONNECTED", "user_id": user_id, "warning": "realtime_unavailable"})
+        try:
+            while True:
+                await asyncio.wait_for(websocket.receive_text(), timeout=60.0)
+        except (asyncio.TimeoutError, WebSocketDisconnect):
+            pass
+        _connections.get(user_id, set()).discard(websocket)
+        return
+
     channel = f"user:{user_id}:events"
 
     try:
@@ -61,6 +71,13 @@ async def websocket_endpoint(
                     await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
                 except asyncio.TimeoutError:
                     await websocket.send_json({"type": "PING"})
+                    # Aguardar PONG por 10s; fechar se cliente não responder
+                    try:
+                        pong = await asyncio.wait_for(websocket.receive_text(), timeout=10.0)
+                        if pong != "PONG":
+                            break
+                    except asyncio.TimeoutError:
+                        break
                 except WebSocketDisconnect:
                     break
 

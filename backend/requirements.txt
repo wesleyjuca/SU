@@ -60,9 +60,7 @@ multidict==6.7.1
 numpy==2.4.6
 openai==1.109.1
 orjson==3.11.9
-ormsgpack==1.12.2
 packaging==25.0
-passlib==1.7.4
 pdfminer-six==20251230
 pdfplumber==0.11.9
 pillow==11.3.0
@@ -114,7 +112,6 @@ typing-inspection==0.4.2
 tzdata==2026.2
 tzlocal==5.3.1
 urllib3==2.7.0
-uuid-utils==0.16.0
 uvicorn==0.32.1
 uvloop==0.22.1
 vine==5.1.0

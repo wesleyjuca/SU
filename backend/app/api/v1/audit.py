@@ -23,7 +23,7 @@ async def list_audit_logs(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("ADMIN", "SOCIO")),
 ):
-    stmt = select(AuditLog).order_by(AuditLog.timestamp.desc())
+    stmt = select(AuditLog).where(AuditLog.tenant_id == current_user.tenant_id).order_by(AuditLog.timestamp.desc())
 
     if action:
         stmt = stmt.where(AuditLog.action.ilike(f"%{action}%"))
@@ -73,6 +73,7 @@ async def audit_summary(
 ):
     by_action = await db.execute(
         select(AuditLog.action, func.count(AuditLog.id).label("total"))
+        .where(AuditLog.tenant_id == current_user.tenant_id)
         .group_by(AuditLog.action)
         .order_by(func.count(AuditLog.id).desc())
         .limit(20)
@@ -80,7 +81,7 @@ async def audit_summary(
 
     by_agent = await db.execute(
         select(AuditLog.agent_name, func.count(AuditLog.id).label("total"))
-        .where(AuditLog.agent_name.isnot(None))
+        .where(AuditLog.agent_name.isnot(None), AuditLog.tenant_id == current_user.tenant_id)
         .group_by(AuditLog.agent_name)
         .order_by(func.count(AuditLog.id).desc())
         .limit(20)
@@ -90,7 +91,7 @@ async def audit_summary(
         select(
             func.count(AuditLog.id).label("total"),
             func.count(AuditLog.id).filter(AuditLog.success == True).label("successes"),
-        )
+        ).where(AuditLog.tenant_id == current_user.tenant_id)
     )
     totals = success_rate.one()
 

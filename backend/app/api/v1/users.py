@@ -126,7 +126,20 @@ async def invite_user(
     )
     db.add(user)
     await db.commit()
-    return {"id": str(user.id), "temp_password": temp_password, "message": "Usuário convidado com sucesso"}
+    # Senha temporária: enviar por email se disponível, nunca expor no JSON
+    from app.config import settings as _cfg
+    if _cfg.EMAIL_ENABLED:
+        try:
+            from app.services.email import send_email
+            await send_email(
+                to=body.email,
+                subject="Seu acesso ao AFJ CORE SYSTEM",
+                body=f"Bem-vindo(a), {body.full_name}!\n\nSenha temporária: {temp_password}\n\nAlterá-la no primeiro acesso.",
+            )
+        except Exception:
+            pass
+    return {"id": str(user.id), "message": "Usuário convidado com sucesso. Senha enviada por email."}
+
 
 
 @router.put("/{user_id}")
