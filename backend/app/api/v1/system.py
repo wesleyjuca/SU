@@ -458,18 +458,27 @@ async def health_detailed(current_user: User = Depends(get_current_user)):
         return False, -1
 
     async def probe_anthropic() -> tuple[bool, int]:
-        """Verifica conectividade com a API Anthropic listando modelos (sem gerar tokens)."""
+        """Verifica conectividade com o provider de IA ATIVO (Anthropic ou Gemini),
+        listando modelos (sem gerar tokens)."""
         t0 = time.monotonic()
         try:
             from app.config import settings as _cfg
+            from app.integrations.llm_client import resolve_provider
             import httpx
+            provider = resolve_provider(None)
             async with httpx.AsyncClient(timeout=5) as c:
-                r = await c.get(
-                    "https://api.anthropic.com/v1/models",
-                    headers={"x-api-key": _cfg.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01"},
-                )
-                ok = r.status_code == 200
-                return ok, int((time.monotonic() - t0) * 1000)
+                if provider == "gemini":
+                    key = _cfg.GEMINI_API_KEY or _cfg.OPENAI_API_KEY
+                    r = await c.get(
+                        "https://generativelanguage.googleapis.com/v1beta/models",
+                        params={"key": key},
+                    )
+                else:
+                    r = await c.get(
+                        "https://api.anthropic.com/v1/models",
+                        headers={"x-api-key": _cfg.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01"},
+                    )
+                return r.status_code == 200, int((time.monotonic() - t0) * 1000)
         except Exception:
             return False, -1
 

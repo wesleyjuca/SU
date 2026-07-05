@@ -1,28 +1,15 @@
-"""Wrapper para a API Claude (Anthropic) com rastreio de custo e tokens."""
-import anthropic
-from app.config import settings
+"""Interface de IA dos agentes.
 
-_client: anthropic.AsyncAnthropic | None = None
-
-
-def get_anthropic_client() -> anthropic.AsyncAnthropic:
-    global _client
-    if _client is None:
-        _client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
-    return _client
-
-
-# Preço aproximado por 1M tokens (input/output) — atualizar conforme tabela Anthropic
-MODEL_PRICING = {
-    "claude-opus-4-7": {"input": 15.0, "output": 75.0},
-    "claude-sonnet-4-6": {"input": 3.0, "output": 15.0},
-    "claude-haiku-4-5-20251001": {"input": 0.25, "output": 1.25},
-}
+`call_claude` é mantido por compatibilidade — hoje delega para a camada
+multi-provider (`app.integrations.llm_client`), que roteia para Anthropic
+Claude ou Google Gemini conforme `settings.AI_PROVIDER`. Nenhum agente
+precisa mudar.
+"""
+from app.integrations.llm_client import call_llm, MODEL_PRICING, _cost as _calc_cost
 
 
 def calculate_cost(model: str, input_tokens: int, output_tokens: int) -> float:
-    pricing = MODEL_PRICING.get(model, MODEL_PRICING["claude-sonnet-4-6"])
-    return (input_tokens * pricing["input"] + output_tokens * pricing["output"]) / 1_000_000
+    return _calc_cost(model, input_tokens, output_tokens)
 
 
 async def call_claude(
@@ -32,30 +19,18 @@ async def call_claude(
     max_tokens: int = 8096,
     temperature: float = 0.3,
 ) -> tuple[str, int, int, float]:
+    """Chama o LLM do provider ativo e retorna (content, input_tokens, output_tokens, cost_usd).
+
+    O nome é histórico; o provider real é definido por `settings.AI_PROVIDER`
+    (anthropic | gemini). Temperatura baixa por padrão para consistência jurídica.
     """
-    Chama Claude e retorna (content, input_tokens, output_tokens, cost_usd).
-    Temperatura baixa (0.3) para consistência jurídica.
-    """
-    model = model or settings.DEFAULT_CLAUDE_MODEL
-    client = get_anthropic_client()
-
-    kwargs = {
-        "model": model,
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-        "messages": messages,
-    }
-    if system:
-        kwargs["system"] = system
-
-    response = await client.messages.create(**kwargs)
-
-    content = response.content[0].text if response.content else ""
-    input_tokens = response.usage.input_tokens
-    output_tokens = response.usage.output_tokens
-    cost = calculate_cost(model, input_tokens, output_tokens)
-
-    return content, input_tokens, output_tokens, cost
+    return await call_llm(
+        messages=messages,
+        system=system,
+        model=model,
+        max_tokens=max_tokens,
+        temperature=temperature,
+    )
 
 
 # System prompt base para todos os agentes jurídicos
