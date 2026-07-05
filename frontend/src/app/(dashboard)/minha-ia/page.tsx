@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
-import { Bot, KeyRound, CheckCircle2, XCircle, Loader2, Sparkles } from "lucide-react";
+import { Bot, KeyRound, CheckCircle2, XCircle, Loader2, Sparkles, Eye, EyeOff } from "lucide-react";
 
 type Settings = { provider: string; model: string; enabled: boolean; has_key: boolean };
 
@@ -22,6 +22,7 @@ export default function MinhaIAPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [showKey, setShowKey] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   useEffect(() => {
@@ -82,6 +83,13 @@ export default function MinhaIAPage() {
       </div>
 
       <div className="afj-card p-6 space-y-5">
+        {/* Campos-isca ocultos: absorvem o autofill do navegador (email/senha de login)
+            para que ele não preencha os campos reais de modelo/chave. */}
+        <input type="text" name="username" autoComplete="username" tabIndex={-1} aria-hidden="true"
+          style={{ position: "absolute", opacity: 0, height: 0, width: 0, pointerEvents: "none" }} />
+        <input type="password" name="password" autoComplete="current-password" tabIndex={-1} aria-hidden="true"
+          style={{ position: "absolute", opacity: 0, height: 0, width: 0, pointerEvents: "none" }} />
+
         <div className="flex items-start gap-2 text-xs text-afj-black/55 bg-afj-cream/60 border border-afj-cream-dark rounded-sm p-3">
           <Sparkles size={14} className="text-afj-gold flex-shrink-0 mt-0.5" />
           <span>Quando ativado, seus agentes usam a chave configurada aqui. Se desativar, o sistema usa a IA padrão do escritório.</span>
@@ -99,6 +107,7 @@ export default function MinhaIAPage() {
         <div>
           <label className="text-[10px] font-semibold text-afj-black/55 uppercase tracking-widest block mb-1.5">Modelo (opcional)</label>
           <input value={model} onChange={(e) => setModel(e.target.value)} placeholder={MODEL_HINTS[provider]}
+            name="afj-ai-model" autoComplete="off" data-lpignore="true" data-1p-ignore data-form-type="other"
             className="w-full bg-afj-cream border border-afj-cream-dark rounded-sm px-3 py-2.5 text-sm placeholder:text-afj-black/25 focus:outline-none focus:border-afj-gold" />
         </div>
 
@@ -106,10 +115,18 @@ export default function MinhaIAPage() {
           <label className="text-[10px] font-semibold text-afj-black/55 uppercase tracking-widest flex items-center gap-1.5 mb-1.5">
             <KeyRound size={12} /> Chave de API {hasKey && <span className="text-green-600 normal-case tracking-normal font-normal">· chave configurada</span>}
           </label>
-          <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)}
-            placeholder={hasKey ? "•••••••••• (deixe em branco para manter)" : "cole sua chave de API aqui"}
-            autoComplete="off"
-            className="w-full bg-afj-cream border border-afj-cream-dark rounded-sm px-3 py-2.5 text-sm placeholder:text-afj-black/25 focus:outline-none focus:border-afj-gold" />
+          <div className="relative">
+            <input type={showKey ? "text" : "password"} value={apiKey} onChange={(e) => setApiKey(e.target.value)}
+              placeholder={hasKey ? "•••••••••• (deixe em branco para manter)" : "cole sua chave de API aqui"}
+              name="afj-ai-secret" autoComplete="new-password" data-lpignore="true" data-1p-ignore data-form-type="other"
+              spellCheck={false}
+              className="w-full bg-afj-cream border border-afj-cream-dark rounded-sm px-3 py-2.5 pr-11 text-sm placeholder:text-afj-black/25 focus:outline-none focus:border-afj-gold" />
+            <button type="button" onClick={() => setShowKey((v) => !v)}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-afj-black/30 hover:text-afj-black/60"
+              aria-label={showKey ? "Ocultar chave" : "Mostrar chave"}>
+              {showKey ? <EyeOff size={15} /> : <Eye size={15} />}
+            </button>
+          </div>
           {help && (
             <p className="text-[11px] text-afj-black/40 mt-1.5">
               Obtenha a chave em{" "}
