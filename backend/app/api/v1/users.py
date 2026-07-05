@@ -11,6 +11,11 @@ import string
 
 router = APIRouter(prefix="/users", tags=["users"])
 
+VALID_MODELS = {
+    "gemini": ["gemini-2.0-flash", "gemini-1.5-pro", "gemini-1.5-flash"],
+    "anthropic": ["claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5"],
+}
+
 
 def _require_admin(current_user: User) -> None:
     if current_user.role not in ("ADMIN", "SUPERADMIN"):
@@ -67,7 +72,17 @@ async def update_my_ai_settings(
             raise HTTPException(status_code=422, detail="Provider inválido (anthropic | gemini)")
         current_user.ai_provider = prov
     if body.model is not None:
-        current_user.ai_model = body.model.strip() or None
+        model = body.model.strip() or None
+        if model:
+            prov = (body.provider or current_user.ai_provider or "gemini").lower()
+            valid = VALID_MODELS.get(prov, [])
+            if valid and model not in valid:
+                examples = ", ".join(valid[:2])
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Modelo inválido para {prov}. Use um destes: {examples}"
+                )
+        current_user.ai_model = model
     if body.api_key:  # só atualiza a chave se enviada
         enc = encrypt(body.api_key.strip())
         if not enc:
@@ -106,10 +121,21 @@ async def test_my_ai_settings(current_user: User = Depends(get_current_user)):
             detail="Sua chave precisa ser salva novamente (a configuração de segurança do servidor mudou).",
         )
 
+    prov = current_user.ai_provider or "gemini"
+    model = current_user.ai_model or None
+
+    if model and model not in VALID_MODELS.get(prov, []):
+        valid = VALID_MODELS.get(prov, [])
+        examples = ", ".join(valid[:2]) if valid else "nenhum configurado"
+        raise HTTPException(
+            status_code=422,
+            detail=f"Modelo '{model}' inválido para {prov}. Tente: {examples}"
+        )
+
     token = ai_creds_ctx.set({
-        "provider": current_user.ai_provider or None,
+        "provider": prov,
         "api_key": key,
-        "model": current_user.ai_model or None,
+        "model": model,
     })
     try:
         content, _in, _out, _cost = await call_llm(
@@ -118,9 +144,20 @@ async def test_my_ai_settings(current_user: User = Depends(get_current_user)):
             max_tokens=10,
             temperature=0,
         )
-        return {"ok": True, "provider": current_user.ai_provider, "sample": (content or "").strip()[:40]}
+        return {"ok": True, "provider": prov, "sample": (content or "").strip()[:40]}
     except Exception as exc:
-        return {"ok": False, "error": str(exc)[:300]}
+        err_str = str(exc).lower()
+        if "invalid" in err_str and "model" in err_str:
+            valid = VALID_MODELS.get(prov, [])
+            examples = ", ".join(valid[:2]) if valid else "ver documentação"
+            return {
+                "ok": False,
+                "error": f"Modelo '{model}' inválido para {prov}. Use um destes: {examples}"
+            }
+        elif "api" in err_str or "key" in err_str or "authentication" in err_str:
+            return {"ok": False, "error": "Chave de API inválida ou expirada. Verifique em Google AI Studio."}
+        else:
+            return {"ok": False, "error": str(exc)[:200]}
     finally:
         ai_creds_ctx.reset(token)
 
