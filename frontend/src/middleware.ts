@@ -4,7 +4,14 @@ import type { NextRequest } from "next/server";
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  if (pathname.startsWith("/_next") || pathname.startsWith("/api") || pathname === "/favicon.ico") {
+  // Deixa passar assets do Next, a API e qualquer arquivo estático (com extensão:
+  // .png/.svg/.json/.js/.woff...). Sem isto, o guard abaixo redireciona o request
+  // de /logo-afj-mark.png (e outros estáticos) para /login e a imagem quebra.
+  if (
+    pathname.startsWith("/_next") ||
+    pathname.startsWith("/api") ||
+    /\.[a-zA-Z0-9]+$/.test(pathname)
+  ) {
     return NextResponse.next();
   }
 
