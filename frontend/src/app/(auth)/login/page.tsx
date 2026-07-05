@@ -65,7 +65,7 @@ export default function LoginPage() {
 
         <div className="relative z-10 flex flex-col items-center text-center">
           <img
-            src="/logo-afj-mark.png"
+            src="/logo-afj-mark.svg"
             alt="Almeida, Freire & Jucá Advogados"
             className="h-28 w-auto mb-8"
           />
@@ -99,7 +99,7 @@ export default function LoginPage() {
           {/* Logo mobile */}
           <div className="lg:hidden flex flex-col items-center mb-8">
             <img
-              src="/logo-afj-mark.png"
+              src="/logo-afj-mark.svg"
               alt="Almeida, Freire & Jucá Advogados"
               className="h-16 w-auto mb-4"
             />

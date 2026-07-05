@@ -54,7 +54,7 @@ export default function HomePage() {
         <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3 text-afj-gold">
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/logo-afj-mark.png" alt="AFJ Advogados" className="h-8 w-auto" />
+            <img src="/logo-afj-mark.svg" alt="AFJ Advogados" className="h-8 w-auto" />
             <div>
               <p className="text-afj-cream text-[11px] font-bold tracking-[0.18em] uppercase font-display">
                 AFJ CORE
@@ -82,7 +82,7 @@ export default function HomePage() {
         <div className="max-w-4xl mx-auto px-6 py-28 text-center">
           <div className="mb-10 flex justify-center animate-fade-in">
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/logo-afj-mark.png" alt="Almeida, Freire & Jucá Advogados" className="h-28 w-auto" />
+            <img src="/logo-afj-mark.svg" alt="Almeida, Freire & Jucá Advogados" className="h-28 w-auto" />
           </div>
 
           <p className="text-afj-gold text-[10px] tracking-[0.45em] uppercase mb-5 font-display animate-fade-in">
@@ -260,7 +260,7 @@ export default function HomePage() {
         <div className="max-w-6xl mx-auto px-6 flex flex-col md:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-3 text-afj-gold">
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/logo-afj-mark.png" alt="AFJ Advogados" className="h-6 w-auto" />
+            <img src="/logo-afj-mark.svg" alt="AFJ Advogados" className="h-6 w-auto" />
             <div>
               <p className="text-afj-cream text-xs font-semibold tracking-wider uppercase font-display">
                 AFJ CORE
