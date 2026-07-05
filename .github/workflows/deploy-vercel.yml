@@ -39,7 +39,7 @@ jobs:
         env:
           VERCEL_TOKEN: ${{ github.event.inputs.vercel_token }}
         run: |
-          RAILWAY_URL="${{ github.event.inputs.railway_url || 'https://afj-core-backend.onrender.com' }}"
+          RAILWAY_URL="${{ github.event.inputs.railway_url || 'https://su-production-5a83.up.railway.app' }}"
           echo "Configurando NEXT_PUBLIC_API_URL=$RAILWAY_URL antes do deploy..."
           cd frontend
 

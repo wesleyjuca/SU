@@ -40,7 +40,7 @@ jobs:
       - name: Frontend build
         run: cd frontend && npm run build
         env:
-          NEXT_PUBLIC_API_URL: ${{ vars.RAILWAY_URL || 'https://afj-core-backend.onrender.com' }}
+          NEXT_PUBLIC_API_URL: ${{ vars.RAILWAY_URL || 'https://su-production-5a83.up.railway.app' }}
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -262,7 +262,7 @@ jobs:
 
           npm install -g vercel
           # Rodar da raiz — vercel.json tem rootDirectory: "frontend"
-          BACKEND_URL="${RAILWAY_URL:-https://afj-core-backend.onrender.com}"
+          BACKEND_URL="${RAILWAY_URL:-https://su-production-5a83.up.railway.app}"
           echo "Iniciando deploy no Vercel..."
           DEPLOY_OUTPUT=$(vercel --yes --prod --token "$VERCEL_TOKEN" \
             --build-env NEXT_PUBLIC_API_URL="$BACKEND_URL" 2>&1) || true
