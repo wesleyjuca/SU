@@ -6,24 +6,6 @@ import {
   ChevronRight, Zap, Lock, Globe, Award, Shield, BarChart2,
 } from "lucide-react";
 
-function AfjMonogram({ size = 80 }: { size?: number }) {
-  return (
-    <svg viewBox="0 0 80 80" width={size} height={size} fill="currentColor" aria-hidden="true">
-      <path d="M 4,4 L 76,4 L 76,56 Q 76,78 40,78 Q 4,78 4,56 Z"
-            fill="none" stroke="currentColor" strokeWidth="3.5" />
-      <rect x="10" y="11" width="7" height="57" />
-      <rect x="29" y="11" width="7" height="57" />
-      <rect x="10" y="38" width="26" height="6" />
-      <rect x="43" y="11" width="7" height="41" />
-      <rect x="43" y="11" width="25" height="6" />
-      <rect x="43" y="27" width="18" height="6" />
-      <rect x="62" y="11" width="7" height="44" />
-      <path d="M 69,55 Q 69,68 55,68 Q 49,68 49,62"
-            fill="none" stroke="currentColor" strokeWidth="7" strokeLinecap="round" />
-    </svg>
-  );
-}
-
 const FEATURES = [
   { icon: Scale, title: "Gestão de Processos", desc: "Acompanhe todos os processos com monitoramento automático de movimentações e prazos processuais." },
   { icon: Bot, title: "19 Agentes IA", desc: "Agentes especializados em petições, pesquisa jurídica, análise contratual, OCR e muito mais." },
@@ -71,7 +53,8 @@ export default function HomePage() {
       >
         <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3 text-afj-gold">
-            <AfjMonogram size={32} />
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/logo-afj-mark.png" alt="AFJ Advogados" className="h-8 w-auto" />
             <div>
               <p className="text-afj-cream text-[11px] font-bold tracking-[0.18em] uppercase font-display">
                 AFJ CORE
@@ -97,8 +80,9 @@ export default function HomePage() {
         style={{ background: "linear-gradient(135deg, #1A1F2E 0%, #2C3547 50%, #3D4557 100%)" }}
       >
         <div className="max-w-4xl mx-auto px-6 py-28 text-center">
-          <div className="text-afj-gold mb-10 flex justify-center animate-fade-in">
-            <AfjMonogram size={110} />
+          <div className="mb-10 flex justify-center animate-fade-in">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/logo-afj-mark.png" alt="Almeida, Freire & Jucá Advogados" className="h-28 w-auto" />
           </div>
 
           <p className="text-afj-gold text-[10px] tracking-[0.45em] uppercase mb-5 font-display animate-fade-in">
@@ -275,7 +259,8 @@ export default function HomePage() {
       <footer className="py-8 border-t border-white/10" style={{ background: "#141821" }}>
         <div className="max-w-6xl mx-auto px-6 flex flex-col md:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-3 text-afj-gold">
-            <AfjMonogram size={24} />
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/logo-afj-mark.png" alt="AFJ Advogados" className="h-6 w-auto" />
             <div>
               <p className="text-afj-cream text-xs font-semibold tracking-wider uppercase font-display">
                 AFJ CORE

@@ -136,21 +136,12 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               />
             ) : (
               <>
-                <div className="w-9 h-9 flex-shrink-0 text-afj-gold">
-                  <svg viewBox="0 0 80 80" className="w-9 h-9" fill="currentColor" aria-hidden="true">
-                    <path d="M 4,4 L 76,4 L 76,56 Q 76,78 40,78 Q 4,78 4,56 Z"
-                          fill="none" stroke="currentColor" strokeWidth="3.5"/>
-                    <rect x="10" y="11" width="6" height="57"/>
-                    <rect x="29" y="11" width="6" height="57"/>
-                    <rect x="10" y="38" width="25" height="5"/>
-                    <rect x="43" y="11" width="6" height="41"/>
-                    <rect x="43" y="11" width="25" height="5"/>
-                    <rect x="43" y="27" width="18" height="5"/>
-                    <rect x="62" y="11" width="6" height="44"/>
-                    <path d="M 68,55 Q 68,68 55,68 Q 49,68 49,62"
-                          fill="none" stroke="currentColor" strokeWidth="6" strokeLinecap="round"/>
-                  </svg>
-                </div>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src="/logo-afj-mark.png"
+                  alt="AFJ Advogados"
+                  className="h-9 w-auto flex-shrink-0 object-contain"
+                />
                 <div>
                   <p className="text-afj-cream text-[11px] font-bold tracking-[0.18em] uppercase font-display">
                     {theme.appName || "AFJ CORE"}

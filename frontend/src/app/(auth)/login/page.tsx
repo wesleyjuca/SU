@@ -6,27 +6,6 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL
   ? `${process.env.NEXT_PUBLIC_API_URL}/api/v1`
   : "/api/v1";
 
-function AfjMonogram({ size = 80 }: { size?: number }) {
-  return (
-    <svg viewBox="0 0 80 80" width={size} height={size} fill="currentColor" aria-hidden="true">
-      <path d="M 4,4 L 76,4 L 76,56 Q 76,78 40,78 Q 4,78 4,56 Z"
-            fill="none" stroke="currentColor" strokeWidth="3.5" />
-      {/* A */}
-      <rect x="10" y="11" width="7" height="57" />
-      <rect x="29" y="11" width="7" height="57" />
-      <rect x="10" y="38" width="26" height="6" />
-      {/* F */}
-      <rect x="43" y="11" width="7" height="41" />
-      <rect x="43" y="11" width="25" height="6" />
-      <rect x="43" y="27" width="18" height="6" />
-      {/* J */}
-      <rect x="62" y="11" width="7" height="44" />
-      <path d="M 69,55 Q 69,68 55,68 Q 49,68 49,62"
-            fill="none" stroke="currentColor" strokeWidth="7" strokeLinecap="round" />
-    </svg>
-  );
-}
-
 export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -85,9 +64,11 @@ export default function LoginPage() {
         <div className="absolute right-0 top-0 bottom-0 w-px bg-gradient-to-b from-transparent via-afj-gold/40 to-transparent" />
 
         <div className="relative z-10 flex flex-col items-center text-center">
-          <div className="text-afj-gold mb-8">
-            <AfjMonogram size={96} />
-          </div>
+          <img
+            src="/logo-afj-mark.png"
+            alt="Almeida, Freire & Jucá Advogados"
+            className="h-28 w-auto mb-8"
+          />
 
           <p className="font-display text-afj-cream/30 text-[9px] tracking-[0.4em] uppercase mb-3">
             Escritório de Advocacia
@@ -117,9 +98,11 @@ export default function LoginPage() {
         <div className="w-full max-w-sm">
           {/* Logo mobile */}
           <div className="lg:hidden flex flex-col items-center mb-8">
-            <div className="text-afj-gold mb-4">
-              <AfjMonogram size={56} />
-            </div>
+            <img
+              src="/logo-afj-mark.png"
+              alt="Almeida, Freire & Jucá Advogados"
+              className="h-16 w-auto mb-4"
+            />
             <p className="font-display text-afj-black font-semibold tracking-[0.1em] uppercase text-lg">
               Almeida, Freire &amp; Jucá
             </p>
