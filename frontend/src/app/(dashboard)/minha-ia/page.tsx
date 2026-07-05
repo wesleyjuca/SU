@@ -5,8 +5,8 @@ import { Bot, KeyRound, CheckCircle2, XCircle, Loader2, Sparkles, Eye, EyeOff } 
 type Settings = { provider: string; model: string; enabled: boolean; has_key: boolean };
 
 const MODEL_HINTS: Record<string, string> = {
-  gemini: "ex.: gemini-2.0-flash (grátis) · gemini-1.5-pro",
-  anthropic: "ex.: claude-sonnet-4-6 · claude-opus-4-7",
+  gemini: "ex.: gemini-2.5-flash (recomendado) · gemini-2.5-pro",
+  anthropic: "ex.: claude-sonnet-5 · claude-opus-4-8",
 };
 const KEY_HELP: Record<string, { label: string; url: string }> = {
   gemini: { label: "Google AI Studio", url: "https://aistudio.google.com/apikey" },

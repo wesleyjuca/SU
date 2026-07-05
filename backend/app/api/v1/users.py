@@ -9,12 +9,33 @@ import uuid
 import secrets
 import string
 
+import re
+
 router = APIRouter(prefix="/users", tags=["users"])
 
-VALID_MODELS = {
-    "gemini": ["gemini-2.0-flash", "gemini-1.5-pro", "gemini-1.5-flash"],
+# Modelos sugeridos (para hints/UX). NÃO é uma allowlist rígida: o Google e a
+# Anthropic adicionam/aposentam modelos com frequência, então a validação real
+# é por FORMATO (regex abaixo) e a API é a fonte de verdade sobre disponibilidade.
+SUGGESTED_MODELS = {
+    "gemini": ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"],
     "anthropic": ["claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5"],
 }
+
+# Formato esperado: prefixo do provider + versão. Rejeita entradas genéricas
+# como "Gemini" ou "Claude" (que causam 400 "unexpected model name format").
+_MODEL_FORMAT = {
+    "gemini": re.compile(r"^gemini-[\d.]+-[a-z0-9-]+$", re.IGNORECASE),
+    "anthropic": re.compile(r"^claude-[a-z0-9.-]+$", re.IGNORECASE),
+}
+
+
+def _validate_model_format(provider: str, model: str) -> str | None:
+    """Retorna mensagem de erro se o modelo tiver formato inválido, senão None."""
+    pattern = _MODEL_FORMAT.get(provider)
+    if pattern and not pattern.match(model):
+        examples = ", ".join(SUGGESTED_MODELS.get(provider, [])[:2])
+        return f"Modelo '{model}' tem formato inválido para {provider}. Use algo como: {examples}"
+    return None
 
 
 def _require_admin(current_user: User) -> None:
@@ -75,13 +96,9 @@ async def update_my_ai_settings(
         model = body.model.strip() or None
         if model:
             prov = (body.provider or current_user.ai_provider or "gemini").lower()
-            valid = VALID_MODELS.get(prov, [])
-            if valid and model not in valid:
-                examples = ", ".join(valid[:2])
-                raise HTTPException(
-                    status_code=422,
-                    detail=f"Modelo inválido para {prov}. Use um destes: {examples}"
-                )
+            err = _validate_model_format(prov, model)
+            if err:
+                raise HTTPException(status_code=422, detail=err)
         current_user.ai_model = model
     if body.api_key:  # só atualiza a chave se enviada
         enc = encrypt(body.api_key.strip())
@@ -124,13 +141,12 @@ async def test_my_ai_settings(current_user: User = Depends(get_current_user)):
     prov = current_user.ai_provider or "gemini"
     model = current_user.ai_model or None
 
-    if model and model not in VALID_MODELS.get(prov, []):
-        valid = VALID_MODELS.get(prov, [])
-        examples = ", ".join(valid[:2]) if valid else "nenhum configurado"
-        raise HTTPException(
-            status_code=422,
-            detail=f"Modelo '{model}' inválido para {prov}. Tente: {examples}"
-        )
+    if model:
+        err = _validate_model_format(prov, model)
+        if err:
+            raise HTTPException(status_code=422, detail=err)
+
+    suggested = ", ".join(SUGGESTED_MODELS.get(prov, [])[:2]) or "ver documentação"
 
     token = ai_creds_ctx.set({
         "provider": prov,
@@ -138,28 +154,47 @@ async def test_my_ai_settings(current_user: User = Depends(get_current_user)):
         "model": model,
     })
     try:
+        # max_tokens generoso: os modelos "thinking" (ex.: Gemini 2.5, Claude com
+        # reasoning) gastam tokens no raciocínio interno antes de emitir texto.
+        # Com um teto baixo (ex.: 10) a resposta volta VAZIA (finish=length).
         content, _in, _out, _cost = await call_llm(
             messages=[{"role": "user", "content": "Responda apenas: OK"}],
-            system="Você é um teste de conexão.",
-            max_tokens=10,
+            system="Você é um teste de conexão. Responda em uma palavra.",
+            max_tokens=256,
             temperature=0,
         )
-        return {"ok": True, "provider": prov, "sample": (content or "").strip()[:40]}
-    except Exception as exc:
-        err_str = str(exc).lower()
-        if "invalid" in err_str and "model" in err_str:
-            valid = VALID_MODELS.get(prov, [])
-            examples = ", ".join(valid[:2]) if valid else "ver documentação"
+        sample = (content or "").strip()
+        if not sample:
             return {
                 "ok": False,
-                "error": f"Modelo '{model}' inválido para {prov}. Use um destes: {examples}"
+                "error": "Conexão feita, mas o modelo retornou vazio. Tente um modelo estável como "
+                         f"'{SUGGESTED_MODELS.get(prov, ['gemini-2.5-flash'])[0]}'.",
             }
-        elif "api" in err_str or "key" in err_str or "authentication" in err_str:
-            return {"ok": False, "error": "Chave de API inválida ou expirada. Verifique em Google AI Studio."}
-        else:
-            return {"ok": False, "error": str(exc)[:200]}
+        return {"ok": True, "provider": prov, "model": model, "sample": sample[:40]}
+    except Exception as exc:
+        return {"ok": False, "error": _friendly_ai_error(exc, prov, model, suggested)}
     finally:
         ai_creds_ctx.reset(token)
+
+
+def _friendly_ai_error(exc: Exception, provider: str, model: str | None, suggested: str) -> str:
+    """Traduz erros do SDK/API (Gemini/Anthropic) em mensagens acionáveis em PT."""
+    err_str = str(exc).lower()
+    # 404 → modelo inexistente/aposentado (ex.: gemini-1.5-* fora de circulação)
+    if "404" in err_str or "not_found" in err_str or "not found" in err_str:
+        return (f"Modelo '{model}' não está disponível (pode ter sido aposentado). "
+                f"Use um modelo atual: {suggested}.")
+    # 429 → quota/free-tier zerada ou rate limit
+    if "429" in err_str or "resource_exhausted" in err_str or "quota" in err_str or "rate limit" in err_str:
+        return ("Cota da sua chave esgotada ou indisponível para este modelo. "
+                "Ative faturamento no Google AI Studio ou troque de modelo/chave.")
+    # 400 formato de modelo
+    if "unexpected model name format" in err_str or ("invalid" in err_str and "model" in err_str):
+        return f"Modelo '{model}' com formato inválido. Tente: {suggested}."
+    # Auth
+    if any(k in err_str for k in ("401", "403", "api key", "api_key", "authentication", "permission", "unauthorized")):
+        return "Chave de API inválida, expirada ou sem permissão. Verifique a chave no provedor."
+    return str(exc)[:200]
 
 
 @router.get("/me")
