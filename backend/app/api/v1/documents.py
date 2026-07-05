@@ -54,6 +54,9 @@ async def list_documents(
         query = query.where(Document.tipo == tipo)
     if status:
         query = query.where(Document.status == status)
+    else:
+        # Por padrão, documentos arquivados somem da lista (comportamento de "excluir")
+        query = query.where(Document.status != "ARQUIVADO")
     if process_id:
         query = query.where(Document.process_id == uuid.UUID(process_id))
 
@@ -136,6 +139,7 @@ async def update_document(
 @router.delete("/{doc_id}", status_code=204)
 async def archive_document(
     doc_id: str,
+    hard: bool = Query(default=False, description="true = exclusão permanente (remove do banco)"),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -148,7 +152,17 @@ async def archive_document(
     doc = result.scalar_one_or_none()
     if not doc:
         raise NotFoundError("Documento", doc_id)
-    doc.status = "ARQUIVADO"
+    if hard:
+        # Exclusão permanente: remove o Contract associado (se houver) e o Document.
+        # As demais relações (versions/petition) têm ondelete=CASCADE.
+        contract = (await db.execute(
+            select(Contract).where(Contract.document_id == doc.id)
+        )).scalar_one_or_none()
+        if contract:
+            await db.delete(contract)
+        await db.delete(doc)
+    else:
+        doc.status = "ARQUIVADO"
     await db.flush()
 
 
@@ -224,6 +238,7 @@ class ContractCreate(BaseModel):
     tipo: str = "HONORARIOS"
     titulo: str
     descricao: str | None = None
+    conteudo: str | None = None          # corpo/minuta do contrato (texto)
     valor_total: float | None = None
     data_inicio: str | None = None
     data_fim: str | None = None
@@ -238,9 +253,12 @@ async def create_contract(
 ):
     """Cria um contrato (Document tipo=CONTRATO + Contract associado)."""
     from datetime import datetime
+    # Persiste o conteúdo informado (ou a descrição) para o contrato não nascer vazio
+    conteudo = (body.conteudo or body.descricao or "").strip() or None
     doc = Document(
         tipo="CONTRATO",
         titulo=body.titulo,
+        conteudo_texto=conteudo,
         status="RASCUNHO",
         gerado_por_ia=False,
         created_by=current_user.id,
@@ -260,6 +278,81 @@ async def create_contract(
     db.add(contract)
     await db.flush()
     return {"id": str(doc.id), "titulo": doc.titulo, "status": doc.status, "tipo": doc.tipo}
+
+
+class ContractGenerateRequest(BaseModel):
+    instrucoes: str | None = None
+
+
+@router.post("/contracts/{doc_id}/generate")
+async def generate_contract_content(
+    doc_id: str,
+    body: ContractGenerateRequest | None = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Gera a minuta do contrato com IA e grava no documento (usa BYOK do usuário,
+    se configurado). Retorna o conteúdo para edição — não cria aprovação."""
+    from app.integrations.anthropic_client import call_claude, AFJ_LEGAL_SYSTEM_PROMPT
+    from app.integrations.byok import user_ai_creds
+
+    result = await db.execute(
+        select(Document).where(
+            Document.id == uuid.UUID(doc_id),
+            Document.tenant_id == current_user.tenant_id,
+        )
+    )
+    doc = result.scalar_one_or_none()
+    if not doc:
+        raise NotFoundError("Documento", doc_id)
+
+    contract = (await db.execute(
+        select(Contract).where(Contract.document_id == doc.id)
+    )).scalar_one_or_none()
+
+    tipo = (contract.tipo if contract else None) or "HONORARIOS"
+    valor = (contract.valor_total if contract else None)
+    dados = [
+        f"Título: {doc.titulo}",
+        f"Tipo: {tipo.replace('_', ' ').title()}",
+    ]
+    if valor:
+        dados.append(f"Valor total: R$ {valor}")
+    if body and body.instrucoes:
+        dados.append(f"Instruções: {body.instrucoes}")
+    if doc.conteudo_texto:
+        dados.append(f"Rascunho/observações atuais: {doc.conteudo_texto[:1000]}")
+
+    system = AFJ_LEGAL_SYSTEM_PROMPT + (
+        "\nTAREFA: Geração de contratos jurídicos.\n"
+        "- Linguagem clara e tecnicamente precisa\n"
+        "- Inclua: objeto, qualificação das partes, honorários e pagamento, prazo, "
+        "obrigações das partes, rescisão, confidencialidade, foro (Fortaleza/CE)\n"
+        "- Nunca omita cláusulas de proteção ao escritório\n"
+        "- Estrutura numerada com títulos em maiúsculas"
+    )
+    prompt = (
+        "Gere um contrato completo para o escritório AFJ Advogados com base nos dados:\n\n"
+        + "\n".join(dados)
+    )
+
+    async with user_ai_creds(db, current_user.id):
+        content, input_t, output_t, cost = await call_claude(
+            messages=[{"role": "user", "content": prompt}],
+            system=system,
+            max_tokens=4000,
+            temperature=0.1,
+        )
+
+    doc.conteudo_texto = content
+    doc.gerado_por_ia = True
+    await db.flush()
+    return {
+        "id": str(doc.id),
+        "conteudo": content,
+        "tokens_used": input_t + output_t,
+        "cost_usd": cost,
+    }
 
 
 @router.post("/petitions/generate", status_code=202)
@@ -301,8 +394,11 @@ async def generate_petition(
     db.add(agent_run)
     await db.flush()
 
+    from app.integrations.byok import user_ai_creds
+
     agent = PetitionAgent(db=db)
-    result = await agent.run(ctx)
+    async with user_ai_creds(db, current_user.id):
+        result = await agent.run(ctx)
 
     # Atualizar AgentRun com resultado (commit via get_db dependency ao final)
     agent_run.status = result.status.value
@@ -350,8 +446,11 @@ async def review_document(
         },
         document_id=uuid.UUID(doc_id),
     )
+    from app.integrations.byok import user_ai_creds
+
     agent = ReviewAgent(db=db)
-    review_result = await agent.run(ctx)
+    async with user_ai_creds(db, current_user.id):
+        review_result = await agent.run(ctx)
 
     return {
         "run_id": str(ctx.run_id),

@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import { Play, Loader2 } from "lucide-react";
+import { Play, Loader2, XCircle } from "lucide-react";
 import { AgentStatusCard } from "@/components/agents/AgentStatusCard";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
@@ -43,9 +43,12 @@ export default function AgentesPage() {
   const [taskDesc, setTaskDesc] = useState("");
   const [result, setResult] = useState<string | null>(null);
   const [triggering, setTriggering] = useState<string | null>(null);
+  const [lastRunId, setLastRunId] = useState<string | null>(null);
+  const [cancelling, setCancelling] = useState(false);
 
   async function triggerAgent(agentName: string) {
     setResult(null);
+    setLastRunId(null);
     setTriggering(agentName);
     try {
       const token = localStorage.getItem("afj_access_token");
@@ -62,6 +65,7 @@ export default function AgentesPage() {
       });
       if (res.ok) {
         const data = await res.json();
+        setLastRunId(data.run_id);
         setResult(`Run iniciado: ${data.run_id}`);
       } else {
         toast.error(`Erro ao iniciar agente: ${res.status}`);
@@ -70,6 +74,29 @@ export default function AgentesPage() {
       toast.error("Erro de conexão ao iniciar agente.");
     } finally {
       setTriggering(null);
+    }
+  }
+
+  async function cancelarRun() {
+    if (!lastRunId) return;
+    setCancelling(true);
+    try {
+      const token = localStorage.getItem("afj_access_token");
+      const res = await fetch(`/api/v1/agents/runs/${lastRunId}/cancel`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        setResult(`Execução ${lastRunId} cancelada.`);
+        setLastRunId(null);
+      } else {
+        const data = await res.json().catch(() => ({}));
+        toast.error(data.detail || "Não foi possível cancelar a execução.");
+      }
+    } catch {
+      toast.error("Erro de conexão ao cancelar.");
+    } finally {
+      setCancelling(false);
     }
   }
 
@@ -84,8 +111,18 @@ export default function AgentesPage() {
       </div>
 
       {result && (
-        <div className="bg-green-50 border border-green-200 text-green-800 rounded-lg px-4 py-3 text-sm">
-          {result}
+        <div className="bg-green-50 border border-green-200 text-green-800 rounded-lg px-4 py-3 text-sm flex items-center justify-between gap-3">
+          <span>{result}</span>
+          {lastRunId && (
+            <button
+              onClick={cancelarRun}
+              disabled={cancelling}
+              className="flex items-center gap-1.5 text-red-600 hover:text-red-700 font-medium disabled:opacity-40 whitespace-nowrap"
+            >
+              {cancelling ? <Loader2 size={14} className="animate-spin" /> : <XCircle size={14} />}
+              Cancelar execução
+            </button>
+          )}
         </div>
       )}
 

@@ -99,7 +99,12 @@ async def test_my_ai_settings(current_user: User = Depends(get_current_user)):
         raise HTTPException(status_code=422, detail="Nenhuma chave configurada")
     key = decrypt(current_user.ai_api_key_enc)
     if not key:
-        raise HTTPException(status_code=422, detail="Chave inválida — salve novamente")
+        # Token existe mas não decifra: a ENCRYPTION_KEY do servidor mudou
+        # (ex.: reinício com chave efêmera). O usuário precisa re-salvar.
+        raise HTTPException(
+            status_code=422,
+            detail="Sua chave precisa ser salva novamente (a configuração de segurança do servidor mudou).",
+        )
 
     token = ai_creds_ctx.set({
         "provider": current_user.ai_provider or None,

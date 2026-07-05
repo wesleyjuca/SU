@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect } from "react";
-import { DollarSign, TrendingUp, TrendingDown, Plus, CheckCircle, Clock, Trash2, FileDown, BarChart3 } from "lucide-react";
+import { DollarSign, TrendingUp, TrendingDown, Plus, CheckCircle, Clock, Trash2, FileDown, BarChart3, Pencil } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
@@ -53,6 +53,7 @@ export default function FinanceiroPage() {
   const [filtroTipo, setFiltroTipo] = useState("");
   const [filtroStatus, setFiltroStatus] = useState("");
   const [showModal, setShowModal] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const {
@@ -108,20 +109,53 @@ export default function FinanceiroPage() {
     } catch {}
   }
 
+  function abrirNovo() {
+    setEditingId(null);
+    resetFin({ tipo: "RECEITA", status: "PENDENTE", descricao: "", categoria: "", valor: undefined as unknown as number, vencimento: "" });
+    setShowModal(true);
+  }
+
+  function abrirEdicao(e: Entry) {
+    setEditingId(e.id);
+    resetFin({
+      tipo: (e.tipo as "RECEITA" | "DESPESA") || "RECEITA",
+      status: e.status || "PENDENTE",
+      descricao: e.descricao || "",
+      categoria: e.categoria || "",
+      valor: e.valor,
+      vencimento: e.data_vencimento ? e.data_vencimento.slice(0, 10) : "",
+    });
+    setShowModal(true);
+  }
+
+  function fecharModal() {
+    setShowModal(false);
+    setEditingId(null);
+    resetFin();
+  }
+
   async function salvar(data: FinanceiroInput) {
     try {
       const token = localStorage.getItem("afj_access_token");
-      const res = await fetch("/api/v1/financial", {
-        method: "POST",
+      const url = editingId ? `/api/v1/financial/${editingId}` : "/api/v1/financial";
+      const method = editingId ? "PUT" : "POST";
+      // No PUT o backend aceita descricao/valor/categoria/status/data_vencimento
+      const payload = editingId
+        ? {
+            descricao: data.descricao,
+            valor: data.valor,
+            categoria: data.categoria || null,
+            status: data.status || null,
+            data_vencimento: data.vencimento || null,
+          }
+        : { ...data, data_vencimento: data.vencimento || null };
+      const res = await fetch(url, {
+        method,
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({
-          ...data,
-          data_vencimento: data.vencimento || null,
-        }),
+        body: JSON.stringify(payload),
       });
       if (res.ok) {
-        setShowModal(false);
-        resetFin();
+        fecharModal();
         fetchEntries();
         fetchSummary();
       } else {
@@ -182,7 +216,7 @@ export default function FinanceiroPage() {
             <FileDown size={14} />
             Exportar
           </button>
-          <button onClick={() => setShowModal(true)} className="btn-afj-primary rounded-md flex items-center gap-2">
+          <button onClick={abrirNovo} className="btn-afj-primary rounded-md flex items-center gap-2">
             <Plus size={15} />
             Novo Lançamento
           </button>
@@ -327,6 +361,13 @@ export default function FinanceiroPage() {
                         </button>
                       )}
                       <button
+                        onClick={() => abrirEdicao(e)}
+                        className="text-afj-black/30 hover:text-afj-gold transition-colors"
+                        aria-label="Editar lançamento"
+                      >
+                        <Pencil size={13} />
+                      </button>
+                      <button
                         onClick={() => setDeletingId(e.id)}
                         className="text-afj-black/30 hover:text-red-500 transition-colors"
                         aria-label="Excluir lançamento"
@@ -361,7 +402,7 @@ export default function FinanceiroPage() {
       {showModal && (
         <div className="fixed inset-0 bg-afj-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-sm p-6 w-full max-w-md shadow-2xl">
-            <h2 className="font-display text-xl font-semibold text-afj-black mb-5">Novo Lançamento</h2>
+            <h2 className="font-display text-xl font-semibold text-afj-black mb-5">{editingId ? "Editar Lançamento" : "Novo Lançamento"}</h2>
             <form onSubmit={handleSubmitFin(salvar)} className="space-y-4">
               <div className="grid grid-cols-2 gap-3">
                 <div>
@@ -425,7 +466,7 @@ export default function FinanceiroPage() {
                 />
               </div>
               <div className="flex gap-3 pt-2">
-                <button type="button" onClick={() => { setShowModal(false); resetFin(); }} className="flex-1 btn-afj-outline rounded-sm">
+                <button type="button" onClick={fecharModal} className="flex-1 btn-afj-outline rounded-sm">
                   Cancelar
                 </button>
                 <button type="submit" disabled={finSubmitting} className="flex-1 btn-afj-primary rounded-sm disabled:opacity-50">

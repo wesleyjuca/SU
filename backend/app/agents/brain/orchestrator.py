@@ -43,40 +43,6 @@ async def node_retrieve_memory(state: OrchestratorState) -> OrchestratorState:
     return state
 
 
-async def _apply_user_ai_creds(session, triggered_by):
-    """Se o usuário disparador tem IA própria (BYOK) ativa, seta o contextvar
-    com as credenciais dele. Retorna o token do contextvar (ou None)."""
-    if not triggered_by:
-        return None
-    try:
-        from sqlalchemy import select
-        from app.models.user import User
-        from app.core.crypto import decrypt
-        from app.integrations.llm_client import ai_creds_ctx
-
-        user = (await session.execute(select(User).where(User.id == triggered_by))).scalar_one_or_none()
-        if user and getattr(user, "ai_enabled", False) and user.ai_api_key_enc:
-            key = decrypt(user.ai_api_key_enc)
-            if key:
-                return ai_creds_ctx.set({
-                    "provider": user.ai_provider or None,
-                    "api_key": key,
-                    "model": user.ai_model or None,
-                })
-    except Exception as exc:
-        log.warning("byok_load_failed", error=str(exc))
-    return None
-
-
-def _reset_ai_creds(token):
-    if token is not None:
-        try:
-            from app.integrations.llm_client import ai_creds_ctx
-            ai_creds_ctx.reset(token)
-        except Exception:
-            pass
-
-
 async def node_execute_agent(state: OrchestratorState) -> OrchestratorState:
     ctx = state["context"]
     route = state["route"]
@@ -93,15 +59,14 @@ async def node_execute_agent(state: OrchestratorState) -> OrchestratorState:
     redis = await get_redis()
     qdrant = await _get_qdrant_if_configured()
 
+    from app.integrations.byok import user_ai_creds
+
     async with AsyncSessionLocal() as session:
         # BYOK: se o usuário disparador tem IA própria ativa, usa a chave dele
         # (economiza tokens do sistema). O contextvar propaga até o call_llm.
-        creds_token = await _apply_user_ai_creds(session, ctx.triggered_by)
         agent = agent_class(db=session, redis=redis, qdrant=qdrant)
-        try:
+        async with user_ai_creds(session, ctx.triggered_by):
             result = await agent.run(ctx)
-        finally:
-            _reset_ai_creds(creds_token)
         try:
             if result.status == AgentStatus.FAILED:
                 await session.rollback()

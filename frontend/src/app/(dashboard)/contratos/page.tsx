@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect } from "react";
-import { FileSignature, Plus, Search, Calendar, Pencil, Trash2, X, Loader2, RefreshCw } from "lucide-react";
+import { FileSignature, Plus, Search, Calendar, Pencil, Trash2, X, Loader2, RefreshCw, Sparkles, Archive } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
 
@@ -35,6 +35,7 @@ type FormState = {
   tipo: string;
   titulo: string;
   descricao: string;
+  conteudo: string;
   valor_total: string;
   data_inicio: string;
   data_fim: string;
@@ -42,7 +43,7 @@ type FormState = {
 };
 
 const EMPTY_FORM: FormState = {
-  client_id: "", tipo: "HONORARIOS", titulo: "", descricao: "",
+  client_id: "", tipo: "HONORARIOS", titulo: "", descricao: "", conteudo: "",
   valor_total: "", data_inicio: "", data_fim: "", renovacao_auto: false,
 };
 
@@ -56,6 +57,7 @@ export default function ContratosPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [generating, setGenerating] = useState(false);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [editStatus, setEditStatus] = useState("RASCUNHO");
 
@@ -96,6 +98,7 @@ export default function ContratosPage() {
           tipo: form.tipo,
           titulo: form.titulo,
           descricao: form.descricao || undefined,
+          conteudo: form.conteudo || undefined,
           valor_total: form.valor_total ? parseFloat(form.valor_total) : undefined,
           data_inicio: form.data_inicio || undefined,
           data_fim: form.data_fim || undefined,
@@ -112,6 +115,23 @@ export default function ContratosPage() {
     } finally { setSaving(false); }
   }
 
+  async function abrirEdicao(c: Contrato) {
+    setEditingId(c.id);
+    setForm({ ...EMPTY_FORM, titulo: c.titulo });
+    setEditStatus(c.status);
+    // Carrega o conteúdo atual do documento para edição
+    try {
+      const token = localStorage.getItem("afj_access_token");
+      const res = await fetch(`/api/v1/documents/${c.id}/content`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const d = await res.json();
+        setForm((f) => ({ ...f, conteudo: d.conteudo_texto || d.conteudo_html || "" }));
+      }
+    } catch { /* mantém vazio */ }
+  }
+
   async function editarContrato(id: string) {
     setSaving(true);
     try {
@@ -122,6 +142,7 @@ export default function ContratosPage() {
         body: JSON.stringify({
           titulo: form.titulo,
           status: editStatus,
+          conteudo_texto: form.conteudo,
         }),
       });
       if (res.ok) {
@@ -135,10 +156,32 @@ export default function ContratosPage() {
     } finally { setSaving(false); }
   }
 
-  async function excluirContrato(id: string) {
+  // Gera a minuta com IA. No create (sem id) exige salvar antes, então cria e gera.
+  async function gerarConteudoIA(id: string) {
+    setGenerating(true);
     try {
       const token = localStorage.getItem("afj_access_token");
-      const res = await fetch(`/api/v1/documents/${id}`, {
+      const res = await fetch(`/api/v1/documents/contracts/${id}/generate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ instrucoes: form.descricao || undefined }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setForm((f) => ({ ...f, conteudo: data.conteudo || "" }));
+        toast.success("Minuta gerada pela IA. Revise antes de salvar.");
+      } else {
+        toast.error(data.detail || "Erro ao gerar minuta com IA.");
+      }
+    } catch {
+      toast.error("Erro de conexão ao gerar minuta.");
+    } finally { setGenerating(false); }
+  }
+
+  async function excluirContrato(id: string, hard: boolean) {
+    try {
+      const token = localStorage.getItem("afj_access_token");
+      const res = await fetch(`/api/v1/documents/${id}${hard ? "?hard=true" : ""}`, {
         method: "DELETE",
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -146,7 +189,7 @@ export default function ContratosPage() {
         setDeletingId(null);
         fetchContratos();
       } else {
-        toast.error("Erro ao arquivar contrato. Tente novamente.");
+        toast.error(`Erro ao ${hard ? "excluir" : "arquivar"} contrato. Tente novamente.`);
       }
     } catch {
       toast.error("Erro de conexão. Tente novamente.");
@@ -239,11 +282,7 @@ export default function ContratosPage() {
               )}
               <div className="mt-3 pt-2 border-t border-afj-cream-dark flex items-center justify-end gap-2">
                 <button
-                  onClick={() => {
-                    setEditingId(c.id);
-                    setForm({ ...EMPTY_FORM, titulo: c.titulo });
-                    setEditStatus(c.status);
-                  }}
+                  onClick={() => abrirEdicao(c)}
                   className="text-afj-black/30 hover:text-afj-gold transition-colors"
                   aria-label="Editar contrato"
                 >
@@ -347,6 +386,19 @@ export default function ContratosPage() {
                 />
                 <span className="text-sm text-afj-black/70">Renovação automática</span>
               </label>
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-xs text-afj-black/60">Conteúdo / Minuta</label>
+                  <span className="text-[11px] text-afj-black/40">Salve para gerar com IA</span>
+                </div>
+                <textarea
+                  value={form.conteudo}
+                  onChange={(e) => setForm({ ...form, conteudo: e.target.value })}
+                  rows={6}
+                  placeholder="Escreva o corpo do contrato aqui, ou salve e depois use 'Gerar com IA'..."
+                  className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold font-mono leading-relaxed"
+                />
+              </div>
               <div className="flex gap-3 pt-1">
                 <button type="button" onClick={() => setShowModal(false)} className="flex-1 btn-afj-outline rounded-sm">Cancelar</button>
                 <button
@@ -390,6 +442,27 @@ export default function ContratosPage() {
                   {STATUS_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
                 </select>
               </div>
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-xs text-afj-black/60">Conteúdo / Minuta</label>
+                  <button
+                    type="button"
+                    onClick={() => editingId && gerarConteudoIA(editingId)}
+                    disabled={generating}
+                    className="text-[11px] text-afj-gold hover:underline flex items-center gap-1 disabled:opacity-40"
+                  >
+                    {generating ? <Loader2 size={11} className="animate-spin" /> : <Sparkles size={11} />}
+                    Gerar com IA
+                  </button>
+                </div>
+                <textarea
+                  value={form.conteudo}
+                  onChange={(e) => setForm({ ...form, conteudo: e.target.value })}
+                  rows={8}
+                  placeholder="Corpo do contrato..."
+                  className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold font-mono leading-relaxed"
+                />
+              </div>
               <div className="flex gap-3">
                 <button onClick={() => setEditingId(null)} className="flex-1 btn-afj-outline rounded-sm">Cancelar</button>
                 <button
@@ -406,17 +479,28 @@ export default function ContratosPage() {
         </div>
       )}
 
-      {/* Confirmação exclusão */}
+      {/* Confirmação exclusão / arquivamento */}
       {deletingId && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-sm shadow-xl w-full max-w-sm p-6 text-center">
-            <p className="font-semibold text-afj-black mb-2">Arquivar contrato?</p>
-            <p className="text-afj-black/50 text-sm mb-5">O contrato será arquivado e não aparecerá na lista.</p>
-            <div className="flex gap-3">
-              <button onClick={() => setDeletingId(null)} className="flex-1 btn-afj-outline rounded-sm">Cancelar</button>
-              <button onClick={() => excluirContrato(deletingId)} className="flex-1 bg-red-500 text-white rounded-sm py-2 text-sm font-medium uppercase tracking-wide hover:bg-red-600">
-                Arquivar
+          <div className="bg-white rounded-sm shadow-xl w-full max-w-sm p-6">
+            <p className="font-semibold text-afj-black mb-2 text-center">Remover contrato</p>
+            <p className="text-afj-black/50 text-sm mb-5 text-center">
+              <strong>Arquivar</strong> mantém o registro (some da lista). <strong>Excluir</strong> apaga permanentemente.
+            </p>
+            <div className="flex flex-col gap-2">
+              <button
+                onClick={() => excluirContrato(deletingId, false)}
+                className="w-full btn-afj-outline rounded-sm flex items-center justify-center gap-2"
+              >
+                <Archive size={13} /> Arquivar
               </button>
+              <button
+                onClick={() => excluirContrato(deletingId, true)}
+                className="w-full bg-red-500 text-white rounded-sm py-2 text-sm font-medium uppercase tracking-wide hover:bg-red-600 flex items-center justify-center gap-2"
+              >
+                <Trash2 size={13} /> Excluir permanentemente
+              </button>
+              <button onClick={() => setDeletingId(null)} className="w-full text-afj-black/50 text-sm py-1 hover:text-afj-black">Cancelar</button>
             </div>
           </div>
         </div>

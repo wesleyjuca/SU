@@ -27,7 +27,18 @@ export default function MinhaIAPage() {
 
   useEffect(() => {
     fetch("/api/v1/users/me/ai-settings", { headers: authH() })
-      .then((r) => (r.ok ? r.json() : null))
+      .then((r) => {
+        // Sessão expirada (SECRET_KEY do servidor mudou / token vencido):
+        // volta ao login em vez de mostrar tela vazia.
+        if (r.status === 401) {
+          if (typeof window !== "undefined") {
+            localStorage.removeItem("afj_access_token");
+            window.location.href = "/login";
+          }
+          return null;
+        }
+        return r.ok ? r.json() : null;
+      })
       .then((d: Settings | null) => {
         if (d) {
           setProvider(d.provider || "gemini");
