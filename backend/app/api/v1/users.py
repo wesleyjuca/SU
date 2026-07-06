@@ -293,10 +293,20 @@ async def invite_user(
     if _cfg.EMAIL_ENABLED:
         try:
             from app.services.email import send_email
+            texto = (
+                f"Bem-vindo(a), {body.full_name}!\n\n"
+                f"Senha temporária: {temp_password}\n\n"
+                "Altere-a no primeiro acesso."
+            )
             await send_email(
                 to=body.email,
                 subject="Seu acesso ao AFJ CORE SYSTEM",
-                body=f"Bem-vindo(a), {body.full_name}!\n\nSenha temporária: {temp_password}\n\nAlterá-la no primeiro acesso.",
+                html_body=(
+                    f"<p>Bem-vindo(a), {body.full_name}!</p>"
+                    f"<p>Senha temporária: <strong>{temp_password}</strong></p>"
+                    "<p>Altere-a no primeiro acesso.</p>"
+                ),
+                text_body=texto,
             )
         except Exception:
             pass

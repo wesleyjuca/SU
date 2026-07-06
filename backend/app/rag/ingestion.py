@@ -6,7 +6,7 @@ import structlog
 
 from app.rag.embeddings import embed_batch
 from app.rag.chunker import chunk_document
-from app.db.qdrant import get_qdrant_client
+from app.db.qdrant import get_qdrant
 from qdrant_client.models import PointStruct
 
 log = structlog.get_logger()
@@ -42,7 +42,7 @@ async def ingest_document(
             payload["document_id"] = document_id
         points.append(PointStruct(id=point_id, vector=embedding, payload=payload))
 
-    client = await get_qdrant_client()
+    client = await get_qdrant()
     await client.upsert(collection_name=collection, points=points)
 
     log.info("rag_ingested", collection=collection, chunks=len(points), document_id=document_id)
@@ -52,7 +52,7 @@ async def ingest_document(
 async def delete_document_chunks(collection: str, document_id: str) -> None:
     """Remove todos os chunks de um documento da collection."""
     from qdrant_client.models import Filter, FieldCondition, MatchValue
-    client = await get_qdrant_client()
+    client = await get_qdrant()
     await client.delete(
         collection_name=collection,
         points_selector=Filter(

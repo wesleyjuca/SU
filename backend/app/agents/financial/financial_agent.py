@@ -40,7 +40,9 @@ class FinancialAgent(BaseAgent):
                 FinancialEntry.status,
                 func.sum(FinancialEntry.valor).label("total"),
                 func.count().label("quantidade"),
-            ).group_by(FinancialEntry.tipo, FinancialEntry.status)
+            )
+            .where(FinancialEntry.tenant_id == ctx.tenant_id)  # isolamento multi-tenant
+            .group_by(FinancialEntry.tipo, FinancialEntry.status)
         )
         rows = result.all()
 
@@ -68,6 +70,7 @@ class FinancialAgent(BaseAgent):
         today = date.today()
         result = await self.db.execute(
             select(FinancialEntry).where(
+                FinancialEntry.tenant_id == ctx.tenant_id,  # isolamento multi-tenant
                 FinancialEntry.tipo == "RECEITA",
                 FinancialEntry.status == "PENDENTE",
                 FinancialEntry.data_vencimento < today,
