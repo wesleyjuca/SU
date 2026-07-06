@@ -7,11 +7,13 @@ import {
 } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 
-type ModuleStatus = "funcionando" | "atencao" | "erro" | "em_desenvolvimento" | "planejado";
+type ModuleStatus = "funcionando" | "atencao" | "erro" | "nao_configurado" | "em_desenvolvimento" | "planejado";
 
 interface ServiceStatus {
   ok: boolean;
   latency_ms: number;
+  configured?: boolean;   // IA central: há chave de sistema? (BYOK dispensa)
+  provider?: string;      // provider de IA ativo: "anthropic" | "gemini"
 }
 
 interface AgentRun {
@@ -75,9 +77,15 @@ const MODULES: Module[] = [
   {
     key: "anthropic",
     label: "IA Generativa",
-    desc: "Anthropic Claude — geração de petições",
+    desc: "IA central do escritório — usuários podem usar chave própria (BYOK)",
     icon: Bot,
-    getStatus: (d) => d.services.anthropic.ok ? (d.services.anthropic.latency_ms > 1000 ? "atencao" : "funcionando") : "erro",
+    // BYOK-first: sem chave central não é erro, é "não configurado" (neutro).
+    getStatus: (d) =>
+      d.services.anthropic.configured === false
+        ? "nao_configurado"
+        : d.services.anthropic.ok
+          ? (d.services.anthropic.latency_ms > 1000 ? "atencao" : "funcionando")
+          : "erro",
     getLatency: (d) => d.services.anthropic.latency_ms,
   },
   {
@@ -150,6 +158,7 @@ const STATUS_CONFIG: Record<ModuleStatus, { label: string; bg: string; text: str
   funcionando:       { label: "Funcionando",       bg: "bg-green-50",   text: "text-green-700",  border: "border-green-200", icon: CheckCircle },
   atencao:           { label: "Atenção",            bg: "bg-amber-50",   text: "text-amber-700",  border: "border-amber-200", icon: AlertTriangle },
   erro:              { label: "Erro",               bg: "bg-red-50",     text: "text-red-700",    border: "border-red-200",   icon: XCircle },
+  nao_configurado:   { label: "Não Configurado",    bg: "bg-gray-50",    text: "text-gray-500",   border: "border-gray-200",  icon: Clock },
   em_desenvolvimento:{ label: "Em Desenvolvimento", bg: "bg-blue-50",    text: "text-blue-700",   border: "border-blue-200",  icon: Wrench },
   planejado:         { label: "Planejado",          bg: "bg-gray-50",    text: "text-gray-500",   border: "border-gray-200",  icon: Clock },
 };
@@ -187,6 +196,7 @@ function RunStatusBadge({ status }: { status: string }) {
     RUNNING: "bg-afj-gold/20 text-afj-gold",
     FAILED: "bg-red-100 text-red-700",
     AWAITING_APPROVAL: "bg-amber-100 text-amber-700",
+    CANCELADO: "bg-gray-200 text-gray-600",
   };
   return (
     <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${map[status] ?? "bg-afj-cream text-afj-black/50"}`}>
@@ -267,7 +277,10 @@ export default function HealthPage() {
     ? [
         !data.services.postgresql.ok ? "PostgreSQL offline — verifique a URL do banco de dados." : null,
         !data.services.redis.ok ? "Redis offline — verifique REDIS_URL nas variáveis de ambiente." : null,
-        !data.services.anthropic.ok ? "Anthropic inacessível — verifique ANTHROPIC_API_KEY." : null,
+        // IA central: só alerta se configurada e falhando. Sem chave central o
+        // sistema opera em BYOK (cada usuário usa a própria chave) — não é erro.
+        (data.services.anthropic.configured !== false && !data.services.anthropic.ok)
+          ? `IA central (${data.services.anthropic.provider ?? "provider"}) inacessível — verifique a chave de API do sistema.` : null,
         data.services.postgresql.ok && data.services.postgresql.latency_ms > 200
           ? "Latência alta no banco de dados (>200ms) — considere otimizar queries ou verificar carga." : null,
         !data.email_enabled ? "E-mail não configurado — configure SMTP_HOST, SMTP_USER e SMTP_PASSWORD." : null,

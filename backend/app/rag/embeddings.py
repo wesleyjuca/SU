@@ -8,6 +8,13 @@ _client: AsyncOpenAI | None = None
 def get_openai_client() -> AsyncOpenAI:
     global _client
     if _client is None:
+        if not settings.OPENAI_API_KEY:
+            # A busca vetorial depende de embeddings da OpenAI. Sem chave de
+            # sistema, falha com mensagem clara (em vez de um 401 genérico).
+            raise RuntimeError(
+                "Busca vetorial indisponível: OPENAI_API_KEY não configurada. "
+                "Configure a chave OpenAI do sistema para habilitar embeddings."
+            )
         _client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
     return _client
 

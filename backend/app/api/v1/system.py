@@ -458,17 +458,25 @@ async def health_detailed(current_user: User = Depends(get_current_user)):
         return False, -1
 
     async def probe_anthropic() -> tuple[bool, int]:
-        """Verifica conectividade com o provider de IA ATIVO (Anthropic ou Gemini),
-        listando modelos (sem gerar tokens)."""
+        """Verifica conectividade com o provider de IA de SISTEMA ativo (Anthropic
+        ou Gemini), listando modelos (sem gerar tokens).
+
+        Observação: este é o provider CENTRAL do escritório. Como o sistema é
+        BYOK-first (cada usuário pode trazer a própria chave em "Minha IA"), a
+        ausência de chave central NÃO é um erro — é apenas "não configurado".
+        Nesse caso não fazemos a chamada de rede (evita um 401 inútil)."""
         t0 = time.monotonic()
         try:
             from app.config import settings as _cfg
             from app.integrations.llm_client import resolve_provider
             import httpx
             provider = resolve_provider(None)
+            key = (_cfg.GEMINI_API_KEY or _cfg.OPENAI_API_KEY) if provider == "gemini" else _cfg.ANTHROPIC_API_KEY
+            if not key:
+                # Sem chave central: BYOK cobre o uso. Não é falha.
+                return False, -1
             async with httpx.AsyncClient(timeout=5) as c:
                 if provider == "gemini":
-                    key = _cfg.GEMINI_API_KEY or _cfg.OPENAI_API_KEY
                     r = await c.get(
                         "https://generativelanguage.googleapis.com/v1beta/models",
                         params={"key": key},
@@ -476,7 +484,7 @@ async def health_detailed(current_user: User = Depends(get_current_user)):
                 else:
                     r = await c.get(
                         "https://api.anthropic.com/v1/models",
-                        headers={"x-api-key": _cfg.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01"},
+                        headers={"x-api-key": key, "anthropic-version": "2023-06-01"},
                     )
                 return r.status_code == 200, int((time.monotonic() - t0) * 1000)
         except Exception:
@@ -519,11 +527,24 @@ async def health_detailed(current_user: User = Depends(get_current_user)):
 
     from app.config import settings as cfg
     from app.core.events import APP_START_TIME
+    from app.integrations.llm_client import resolve_provider as _resolve_provider
+
+    # IA central: qual provider está ativo e se há chave de sistema configurada.
+    # BYOK-first: sem chave central não é erro (usuários trazem a própria chave).
+    _ai_provider = _resolve_provider(None)
+    _ai_configured = bool(
+        (cfg.GEMINI_API_KEY or cfg.OPENAI_API_KEY) if _ai_provider == "gemini" else cfg.ANTHROPIC_API_KEY
+    )
     services = {
         "postgresql": {"ok": pg_ok, "latency_ms": pg_ms},
         "redis": {"ok": redis_ok, "latency_ms": redis_ms},
         "qdrant": {"ok": qdrant_ok, "latency_ms": qdrant_ms},
-        "anthropic": {"ok": anthropic_ok, "latency_ms": anthropic_ms},
+        "anthropic": {
+            "ok": anthropic_ok,
+            "latency_ms": anthropic_ms,
+            "configured": _ai_configured,
+            "provider": _ai_provider,
+        },
         "datajud": {"ok": datajud_ok, "latency_ms": datajud_ms},
     }
     core_ok = all(services[k]["ok"] for k in ("postgresql", "redis"))
