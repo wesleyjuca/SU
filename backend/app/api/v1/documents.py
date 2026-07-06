@@ -1,5 +1,5 @@
 """Endpoints para gestão de documentos e petições."""
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, UploadFile, File, Form, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
 from pydantic import BaseModel
@@ -63,6 +63,57 @@ async def list_documents(
     result = await db.execute(query)
     docs = result.scalars().all()
     return [_to_response(d) for d in docs]
+
+
+@router.post("/upload", status_code=201, response_model=DocumentResponse)
+async def upload_document(
+    file: UploadFile = File(...),
+    titulo: str = Form(...),
+    tipo: str = Form("OUTROS"),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Recebe um arquivo e cria um Document (tenant-scoped). O binário é
+    guardado como data URL base64 em `arquivo_url`; texto simples é extraído
+    para `conteudo_texto`. PDFs/imagens ficam para o fluxo de OCR."""
+    import base64
+    import hashlib
+
+    contents = await file.read()
+    MAX_BYTES = 10 * 1024 * 1024  # 10MB
+    if len(contents) > MAX_BYTES:
+        raise HTTPException(status_code=400, detail="Arquivo muito grande. Máximo 10MB.")
+    if not contents:
+        raise HTTPException(status_code=400, detail="Arquivo vazio.")
+
+    content_type = file.content_type or "application/octet-stream"
+    sha256 = hashlib.sha256(contents).hexdigest()
+    data_url = f"data:{content_type};base64," + base64.b64encode(contents).decode()
+
+    # Extrai texto apenas para tipos textuais simples; o resto vai para OCR.
+    conteudo_texto = None
+    if content_type.startswith("text/") or content_type in ("application/json", "application/xml"):
+        conteudo_texto = contents.decode("utf-8", errors="ignore") or None
+
+    doc = Document(
+        tipo=tipo,
+        titulo=titulo,
+        conteudo_texto=conteudo_texto,
+        arquivo_url=data_url,
+        arquivo_hash=sha256,
+        status="RASCUNHO",
+        gerado_por_ia=False,
+        created_by=current_user.id,
+        tenant_id=current_user.tenant_id,
+        metadata_json={
+            "filename": file.filename,
+            "content_type": content_type,
+            "size_bytes": len(contents),
+        },
+    )
+    db.add(doc)
+    await db.flush()
+    return _to_response(doc)
 
 
 @router.get("/{doc_id}", response_model=DocumentResponse)

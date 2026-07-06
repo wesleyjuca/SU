@@ -252,7 +252,13 @@ async def financial_summary(
     from app.agents.financial.financial_agent import FinancialAgent
     from app.agents.brain.context import AgentContext
     agent = FinancialAgent(db=db)
-    ctx = AgentContext(task_type="financial_report", task_input={"action": "summary"})
+    # tenant_id é obrigatório: sem ele as agregações somam dados de TODOS os
+    # tenants (vazamento entre escritórios — viola o invariante multi-tenant).
+    ctx = AgentContext(
+        task_type="financial_report",
+        task_input={"action": "summary"},
+        tenant_id=current_user.tenant_id,
+    )
     result = await agent.run(ctx)
     return result.output
 

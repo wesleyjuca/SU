@@ -51,10 +51,10 @@ async def rag_search(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Query não pode ser vazia")
 
     try:
-        from app.db.qdrant import get_qdrant_client
+        from app.db.qdrant import get_qdrant
         from app.rag.retrieval import retrieve
 
-        qdrant = get_qdrant_client()
+        qdrant = await get_qdrant()
         results = await retrieve(
             qdrant_client=qdrant,
             query=req.query,
