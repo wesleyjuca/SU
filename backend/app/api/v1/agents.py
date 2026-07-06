@@ -131,6 +131,40 @@ async def get_run(
     return _run_to_response(run)
 
 
+# Estados finais — uma run nesses status não pode mais ser cancelada
+_TERMINAL_STATES = {"SUCCESS", "FAILED", "CANCELADO"}
+
+
+@router.post("/runs/{run_id}/cancel", response_model=AgentRunResponse)
+async def cancel_run(
+    run_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Cancela uma execução em andamento (marca CANCELADO).
+
+    Cooperativo: encerra o registro e para o polling do frontend. Não aborta uma
+    chamada de IA já em voo — o resultado, se chegar, é ignorado pela run cancelada.
+    """
+    from fastapi import HTTPException
+    from datetime import datetime
+
+    result = await db.execute(select(AgentRun).where(AgentRun.id == uuid.UUID(run_id)))
+    run = result.scalar_one_or_none()
+    if not run or run.tenant_id != current_user.tenant_id:
+        raise NotFoundError("AgentRun", run_id)
+    if run.status in _TERMINAL_STATES:
+        raise HTTPException(status_code=409, detail=f"Execução já finalizada ({run.status}).")
+
+    run.status = "CANCELADO"
+    run.completed_at = datetime.utcnow()
+    if not run.error_message:
+        run.error_message = "Cancelado pelo usuário"
+    await db.commit()
+    await db.refresh(run)
+    return _run_to_response(run)
+
+
 async def _run_agent_task(ctx: AgentContext, run_id: str):
     """Executa o grafo LangGraph em background e atualiza o AgentRun."""
     from app.db.base import AsyncSessionLocal

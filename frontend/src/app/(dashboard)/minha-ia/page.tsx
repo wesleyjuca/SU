@@ -5,8 +5,8 @@ import { Bot, KeyRound, CheckCircle2, XCircle, Loader2, Sparkles, Eye, EyeOff } 
 type Settings = { provider: string; model: string; enabled: boolean; has_key: boolean };
 
 const MODEL_HINTS: Record<string, string> = {
-  gemini: "ex.: gemini-2.0-flash (grátis) · gemini-1.5-pro",
-  anthropic: "ex.: claude-sonnet-4-6 · claude-opus-4-7",
+  gemini: "ex.: gemini-2.5-flash (recomendado) · gemini-2.5-pro",
+  anthropic: "ex.: claude-sonnet-5 · claude-opus-4-8",
 };
 const KEY_HELP: Record<string, { label: string; url: string }> = {
   gemini: { label: "Google AI Studio", url: "https://aistudio.google.com/apikey" },
@@ -27,7 +27,18 @@ export default function MinhaIAPage() {
 
   useEffect(() => {
     fetch("/api/v1/users/me/ai-settings", { headers: authH() })
-      .then((r) => (r.ok ? r.json() : null))
+      .then((r) => {
+        // Sessão expirada (SECRET_KEY do servidor mudou / token vencido):
+        // volta ao login em vez de mostrar tela vazia.
+        if (r.status === 401) {
+          if (typeof window !== "undefined") {
+            localStorage.removeItem("afj_access_token");
+            window.location.href = "/login";
+          }
+          return null;
+        }
+        return r.ok ? r.json() : null;
+      })
       .then((d: Settings | null) => {
         if (d) {
           setProvider(d.provider || "gemini");

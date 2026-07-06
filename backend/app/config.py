@@ -61,7 +61,7 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = ""                # chave do Google AI Studio / Vertex (aceita GOOGLE_API_KEY)
     GOOGLE_API_KEY: str = ""                # alias — copiado para GEMINI_API_KEY se este estiver vazio
     DEFAULT_CLAUDE_MODEL: str = "claude-opus-4-7"
-    DEFAULT_GEMINI_MODEL: str = "gemini-2.0-flash"
+    DEFAULT_GEMINI_MODEL: str = "gemini-2.5-flash"
     DEFAULT_EMBEDDING_MODEL: str = "text-embedding-3-large"
     EMBEDDING_DIMENSIONS: int = 3072
 
