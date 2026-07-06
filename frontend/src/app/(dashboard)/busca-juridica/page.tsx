@@ -70,7 +70,8 @@ export default function BuscaJuridicaPage() {
         signal: controller.signal,
       });
       if (!res.ok) {
-        setError("Erro ao buscar. Verifique se a base vetorial está disponível.");
+        const data = await res.json().catch(() => ({}));
+        setError(data.detail || "Erro ao buscar. Verifique se a base vetorial está disponível.");
         return;
       }
       const data = await res.json();

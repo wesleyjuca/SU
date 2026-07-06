@@ -15,6 +15,7 @@ async def retrieve(
     collections: list[str] | None = None,
     filters: dict | None = None,
     k: int = 5,
+    score_threshold: float = 0.35,  # threshold permissivo p/ documentos jurídicos
 ) -> list[dict]:
     """
     Busca semântica multi-collection.
@@ -40,7 +41,7 @@ async def retrieve(
                 limit=k,
                 query_filter=qdrant_filter,
                 with_payload=True,
-                score_threshold=0.35,  # threshold permissivo para documentos jurídicos
+                score_threshold=score_threshold,
             )
             for hit in hits:
                 all_results.append({
