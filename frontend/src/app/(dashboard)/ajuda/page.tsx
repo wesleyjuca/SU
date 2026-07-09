@@ -93,6 +93,7 @@ const GUIAS: Guia[] = [
       "Informe o modelo recomendado (ex.: gemini-2.5-flash) e cole sua chave de API.",
       "Marque “Usar minha IA nas execuções” e clique em Salvar. Depois, “Testar conexão”.",
       "Com isso ativo, seus agentes passam a usar sua chave. Se desativar, volta a IA padrão do escritório.",
+      "Opcional: em “Ajuste por área”, defina um modelo diferente por tarefa (ex.: premium para petições, rápido para relatórios) — em branco, vale o modelo global.",
     ],
     dica: "Se aparecer “modelo inválido”, use um modelo atual como gemini-2.5-flash. Obtenha a chave no Google AI Studio.",
   },

@@ -31,7 +31,7 @@ const AREAS: { titulo: string; recursos: Recurso[] }[] = [
     titulo: "Inteligência Artificial",
     recursos: [
       { icon: Bot, nome: "19 Agentes + Orquestrador", desc: "Agentes especializados coordenados via LangGraph, com cancelamento de execução.", estado: "operacional" },
-      { icon: KeyRound, nome: "BYOK (Minha IA)", desc: "Traga sua própria chave (Gemini/Claude); economiza o crédito do escritório.", estado: "operacional" },
+      { icon: KeyRound, nome: "BYOK (Minha IA)", desc: "Traga sua própria chave (Gemini/Claude), com modelo ajustável por área de trabalho.", estado: "operacional" },
       { icon: CheckSquare, nome: "Aprovações (HITL)", desc: "Ações críticas exigem decisão humana antes de executar.", estado: "operacional" },
     ],
   },

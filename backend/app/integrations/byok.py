@@ -21,13 +21,17 @@ log = structlog.get_logger()
 
 
 @asynccontextmanager
-async def user_ai_creds(session, user_id):
-    """Context manager que ativa a IA própria (BYOK) do usuário, se houver."""
+async def user_ai_creds(session, user_id, task_type=None):
+    """Context manager que ativa a IA própria (BYOK) do usuário, se houver.
+
+    Se `task_type` tiver um override de modelo configurado (AITaskOverride),
+    usa esse modelo para a tarefa — reusando o mesmo provedor/chave global.
+    """
     token = None
     if user_id is not None:
         try:
             from sqlalchemy import select
-            from app.models.user import User
+            from app.models.user import User, AITaskOverride
             from app.core.crypto import decrypt
             from app.integrations.llm_client import ai_creds_ctx
 
@@ -37,10 +41,20 @@ async def user_ai_creds(session, user_id):
             if user and getattr(user, "ai_enabled", False) and user.ai_api_key_enc:
                 key = decrypt(user.ai_api_key_enc)
                 if key:
+                    model = user.ai_model or None
+                    if task_type:
+                        override = (await session.execute(
+                            select(AITaskOverride).where(
+                                AITaskOverride.user_id == user_id,
+                                AITaskOverride.task_type == task_type,
+                            )
+                        )).scalar_one_or_none()
+                        if override and override.model:
+                            model = override.model
                     token = ai_creds_ctx.set({
                         "provider": user.ai_provider or None,
                         "api_key": key,
-                        "model": user.ai_model or None,
+                        "model": model,
                     })
                 else:
                     # Chave salva mas indecifrável — normalmente a ENCRYPTION_KEY

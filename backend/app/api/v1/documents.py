@@ -399,7 +399,7 @@ async def generate_contract_content(
         + "\n".join(dados)
     )
 
-    async with user_ai_creds(db, current_user.id):
+    async with user_ai_creds(db, current_user.id, "manage_contract"):
         content, input_t, output_t, cost = await call_claude(
             messages=[{"role": "user", "content": prompt}],
             system=system,
@@ -478,7 +478,7 @@ async def generate_petition(
     from app.integrations.byok import user_ai_creds
 
     agent = PetitionAgent(db=db)
-    async with user_ai_creds(db, current_user.id):
+    async with user_ai_creds(db, current_user.id, "generate_petition"):
         result = await agent.run(ctx)
 
     # Atualizar AgentRun com resultado (commit via get_db dependency ao final)
@@ -530,7 +530,7 @@ async def review_document(
     from app.integrations.byok import user_ai_creds
 
     agent = ReviewAgent(db=db)
-    async with user_ai_creds(db, current_user.id):
+    async with user_ai_creds(db, current_user.id, "review_document"):
         review_result = await agent.run(ctx)
 
     return {

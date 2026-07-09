@@ -197,6 +197,85 @@ def _friendly_ai_error(exc: Exception, provider: str, model: str | None, suggest
     return str(exc)[:200]
 
 
+# ─── Overrides de modelo por tipo de tarefa (IA por área) ────────────────────
+# Tipos de tarefa expostos na UI. Devem casar com o router de agentes
+# (app/agents/brain/router.py) e com os task_type passados a user_ai_creds.
+OVERRIDABLE_TASKS = [
+    "generate_petition",
+    "review_document",
+    "manage_contract",
+    "search_jurisprudence",
+    "generate_strategy",
+    "analytics_report",
+]
+
+
+class AIOverrideItem(BaseModel):
+    task_type: str
+    model: str
+
+
+class AIOverridesUpdate(BaseModel):
+    overrides: list[AIOverrideItem]
+
+
+@router.get("/me/ai-settings/overrides")
+async def get_my_ai_overrides(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Overrides de modelo por tipo de tarefa. Sem override → modelo global."""
+    from app.models.user import AITaskOverride
+
+    result = await db.execute(
+        select(AITaskOverride).where(AITaskOverride.user_id == current_user.id)
+    )
+    rows = result.scalars().all()
+    return {
+        "tasks": OVERRIDABLE_TASKS,
+        "overrides": [{"task_type": r.task_type, "model": r.model} for r in rows],
+    }
+
+
+@router.put("/me/ai-settings/overrides")
+async def update_my_ai_overrides(
+    body: AIOverridesUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Substitui o conjunto de overrides do usuário (lista vazia limpa tudo)."""
+    from app.models.user import AITaskOverride
+
+    prov = (current_user.ai_provider or "gemini").lower()
+    seen: set[str] = set()
+    for item in body.overrides:
+        if item.task_type not in OVERRIDABLE_TASKS:
+            raise HTTPException(status_code=422, detail=f"Tipo de tarefa inválido: {item.task_type}")
+        if item.task_type in seen:
+            raise HTTPException(status_code=422, detail=f"Tipo de tarefa duplicado: {item.task_type}")
+        seen.add(item.task_type)
+        err = _validate_model_format(prov, item.model.strip())
+        if err:
+            raise HTTPException(status_code=422, detail=err)
+
+    # Substituição integral: remove os atuais e insere os enviados.
+    existing = (await db.execute(
+        select(AITaskOverride).where(AITaskOverride.user_id == current_user.id)
+    )).scalars().all()
+    for row in existing:
+        await db.delete(row)
+    for item in body.overrides:
+        db.add(AITaskOverride(
+            user_id=current_user.id,
+            tenant_id=current_user.tenant_id,
+            task_type=item.task_type,
+            model=item.model.strip(),
+        ))
+    await db.flush()
+    return {"overrides": [{"task_type": i.task_type, "model": i.model.strip()} for i in body.overrides],
+            "message": "Ajustes por área salvos"}
+
+
 @router.get("/me")
 async def get_me(current_user: User = Depends(get_current_user)):
     return {
