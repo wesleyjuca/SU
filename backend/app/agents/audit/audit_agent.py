@@ -30,7 +30,7 @@ class AuditAgent(BaseAgent):
                 AuditLog.success,
                 func.count().label("total"),
             )
-            .where(AuditLog.timestamp >= desde)
+            .where(AuditLog.tenant_id == ctx.tenant_id, AuditLog.timestamp >= desde)  # isolamento multi-tenant
             .group_by(AuditLog.action, AuditLog.success)
         )
         rows = result.all()
