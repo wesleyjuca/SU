@@ -59,3 +59,21 @@ class Session(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     user: Mapped["User"] = relationship(back_populates="sessions")
+
+
+class AITaskOverride(Base):
+    """Override de modelo de IA por tipo de tarefa (BYOK por área).
+
+    Reusa o provedor/chave global do usuário (Minha IA); apenas troca o MODELO
+    para uma tarefa específica (ex.: um modelo premium para petições e um mais
+    barato para tarefas simples). Sem override → usa o modelo global."""
+    __tablename__ = "ai_task_overrides"
+    __table_args__ = (UniqueConstraint("user_id", "task_type", name="uq_ai_override_user_task"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    tenant_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("tenants.id"), nullable=True, index=True)
+    task_type: Mapped[str] = mapped_column(String(60), nullable=False)
+    model: Mapped[str] = mapped_column(String(80), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

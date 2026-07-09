@@ -65,7 +65,7 @@ async def node_execute_agent(state: OrchestratorState) -> OrchestratorState:
         # BYOK: se o usuário disparador tem IA própria ativa, usa a chave dele
         # (economiza tokens do sistema). O contextvar propaga até o call_llm.
         agent = agent_class(db=session, redis=redis, qdrant=qdrant)
-        async with user_ai_creds(session, ctx.triggered_by):
+        async with user_ai_creds(session, ctx.triggered_by, ctx.task_type):
             result = await agent.run(ctx)
         try:
             if result.status == AgentStatus.FAILED:

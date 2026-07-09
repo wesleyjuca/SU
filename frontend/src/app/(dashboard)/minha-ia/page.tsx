@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
-import { Bot, KeyRound, CheckCircle2, XCircle, Loader2, Sparkles, Eye, EyeOff } from "lucide-react";
+import { Bot, KeyRound, CheckCircle2, XCircle, Loader2, Sparkles, Eye, EyeOff, SlidersHorizontal, ChevronDown } from "lucide-react";
 
 type Settings = { provider: string; model: string; enabled: boolean; has_key: boolean };
 
@@ -13,6 +13,16 @@ const KEY_HELP: Record<string, { label: string; url: string }> = {
   anthropic: { label: "Anthropic Console", url: "https://console.anthropic.com" },
 };
 
+// Áreas com override de modelo (devem casar com OVERRIDABLE_TASKS do backend)
+const TASK_LABELS: { task: string; label: string }[] = [
+  { task: "generate_petition", label: "Gerar Petições" },
+  { task: "review_document", label: "Revisão de Documentos" },
+  { task: "manage_contract", label: "Contratos" },
+  { task: "search_jurisprudence", label: "Pesquisa de Jurisprudência" },
+  { task: "generate_strategy", label: "Estratégia" },
+  { task: "analytics_report", label: "Relatórios / Analytics" },
+];
+
 export default function MinhaIAPage() {
   const [provider, setProvider] = useState("gemini");
   const [model, setModel] = useState("");
@@ -24,8 +34,21 @@ export default function MinhaIAPage() {
   const [testing, setTesting] = useState(false);
   const [showKey, setShowKey] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [overrides, setOverrides] = useState<Record<string, string>>({});
+  const [showOverrides, setShowOverrides] = useState(false);
 
   useEffect(() => {
+    fetch("/api/v1/users/me/ai-settings/overrides", { headers: authH() })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { overrides: { task_type: string; model: string }[] } | null) => {
+        if (d?.overrides) {
+          const map: Record<string, string> = {};
+          d.overrides.forEach((o) => { map[o.task_type] = o.model; });
+          setOverrides(map);
+          if (d.overrides.length > 0) setShowOverrides(true);
+        }
+      })
+      .catch(() => {});
     fetch("/api/v1/users/me/ai-settings", { headers: authH() })
       .then((r) => {
         // Sessão expirada (SECRET_KEY do servidor mudou / token vencido):
@@ -64,6 +87,19 @@ export default function MinhaIAPage() {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { setMsg({ ok: false, text: data.detail || "Erro ao salvar" }); return; }
       setHasKey(data.has_key); setApiKey("");
+
+      // Salva os ajustes por área (campos vazios = usa o modelo global)
+      const list = Object.entries(overrides)
+        .map(([task_type, m]) => ({ task_type, model: m.trim() }))
+        .filter((o) => o.model);
+      const resOv = await fetch("/api/v1/users/me/ai-settings/overrides", {
+        method: "PUT", headers: authH(), body: JSON.stringify({ overrides: list }),
+      });
+      if (!resOv.ok) {
+        const dOv = await resOv.json().catch(() => ({}));
+        setMsg({ ok: false, text: dOv.detail || "Configuração salva, mas houve erro nos ajustes por área." });
+        return;
+      }
       setMsg({ ok: true, text: "Configuração salva com sucesso." });
     } catch { setMsg({ ok: false, text: "Falha de conexão." }); }
     finally { setSaving(false); }
@@ -150,6 +186,38 @@ export default function MinhaIAPage() {
           <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} className="accent-afj-gold w-4 h-4" />
           <span className="text-sm text-afj-black/75">Usar minha IA nas execuções dos agentes</span>
         </label>
+
+        {/* Ajuste por área: modelo diferente por tipo de tarefa (opcional) */}
+        <div className="border border-afj-cream-dark rounded-sm">
+          <button type="button" onClick={() => setShowOverrides((v) => !v)}
+            className="w-full flex items-center justify-between px-3 py-2.5 text-left hover:bg-afj-cream/40 transition-colors">
+            <span className="flex items-center gap-2 text-sm text-afj-black/75">
+              <SlidersHorizontal size={14} className="text-afj-gold" />
+              Ajuste por área <span className="text-afj-black/35 text-xs">(opcional — modelo diferente por tarefa)</span>
+            </span>
+            <ChevronDown size={15} className={`text-afj-black/30 transition-transform ${showOverrides ? "rotate-180" : ""}`} />
+          </button>
+          {showOverrides && (
+            <div className="px-3 pb-3 pt-1 border-t border-afj-cream-dark space-y-2.5">
+              <p className="text-[11px] text-afj-black/45 leading-relaxed">
+                Use um modelo específico em cada área (ex.: um premium para petições, um rápido para relatórios).
+                Em branco = usa o modelo global acima. Mesmo provedor e chave.
+              </p>
+              {TASK_LABELS.map(({ task, label }) => (
+                <div key={task} className="flex items-center gap-3">
+                  <span className="text-xs text-afj-black/60 w-44 flex-shrink-0">{label}</span>
+                  <input
+                    value={overrides[task] || ""}
+                    onChange={(e) => setOverrides((o) => ({ ...o, [task]: e.target.value }))}
+                    placeholder={model || "modelo global"}
+                    name={`afj-ai-override-${task}`} autoComplete="off" data-lpignore="true" data-1p-ignore
+                    className="flex-1 bg-afj-cream border border-afj-cream-dark rounded-sm px-3 py-1.5 text-xs placeholder:text-afj-black/25 focus:outline-none focus:border-afj-gold"
+                  />
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
 
         {msg && (
           <div className={`flex items-start gap-2 text-xs rounded-sm px-3 py-2.5 ${msg.ok ? "text-green-700 bg-green-50 border border-green-200" : "text-red-700 bg-red-50 border border-red-200"}`}>
