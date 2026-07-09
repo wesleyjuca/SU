@@ -27,16 +27,22 @@ class AnalyticsAgent(BaseAgent):
         from app.models.agent_run import AgentRun
         from app.models.agent_run import Approval
 
+        # tenant_id é obrigatório: sem filtro, as agregações somam dados de
+        # TODOS os tenants (vazamento entre escritórios — invariante multi-tenant).
+        tid = ctx.tenant_id
+
         # Processos por situação
         proc_result = await self.db.execute(
-            select(LegalProcess.situacao, func.count().label("total")).group_by(LegalProcess.situacao)
+            select(LegalProcess.situacao, func.count().label("total"))
+            .where(LegalProcess.tenant_id == tid)
+            .group_by(LegalProcess.situacao)
         )
         processos_por_situacao = {r.situacao: r.total for r in proc_result.all()}
 
         # Processos por área
         area_result = await self.db.execute(
             select(LegalProcess.area_direito, func.count().label("total"))
-            .where(LegalProcess.area_direito.isnot(None))
+            .where(LegalProcess.tenant_id == tid, LegalProcess.area_direito.isnot(None))
             .group_by(LegalProcess.area_direito)
         )
         processos_por_area = {r.area_direito: r.total for r in area_result.all()}
@@ -47,13 +53,15 @@ class AnalyticsAgent(BaseAgent):
                 func.sum(AgentRun.cost_usd).label("custo_total"),
                 func.sum(AgentRun.tokens_used).label("tokens_total"),
                 func.count().label("execucoes"),
-            )
+            ).where(AgentRun.tenant_id == tid)
         )
         custo_row = custo_result.one()
 
         # Taxa de aprovação HITL
         approval_result = await self.db.execute(
-            select(Approval.status, func.count().label("total")).group_by(Approval.status)
+            select(Approval.status, func.count().label("total"))
+            .where(Approval.tenant_id == tid)
+            .group_by(Approval.status)
         )
         approvals = {r.status: r.total for r in approval_result.all()}
         total_approvals = sum(approvals.values()) or 1

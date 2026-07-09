@@ -33,7 +33,11 @@ class ComplianceAgent(BaseAgent):
         from app.models.client import Client
 
         sem_lgpd = await self.db.execute(
-            select(func.count()).where(Client.lgpd_consent == False, Client.status == "ATIVO")
+            select(func.count()).where(
+                Client.tenant_id == ctx.tenant_id,  # isolamento multi-tenant
+                Client.lgpd_consent == False,
+                Client.status == "ATIVO",
+            )
         )
         count_sem_lgpd = sem_lgpd.scalar()
 
