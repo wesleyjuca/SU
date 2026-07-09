@@ -8,7 +8,7 @@ import {
   LayoutDashboard, Scale, FileText, Users, FolderOpen,
   Bot, CheckSquare, DollarSign, Shield, Shapes, Settings,
   Bell, Search, ChevronRight, FileEdit, Menu, X, LogOut, BarChart2, CalendarClock, BookOpen,
-  Moon, Sun, Activity, Users2, Palette, KeyRound
+  Moon, Sun, Activity, Users2, Palette, KeyRound, GraduationCap, Compass
 } from "lucide-react";
 import { useApprovalCount } from "@/hooks/useApprovals";
 import { useNotifications } from "@/hooks/useNotifications";
@@ -55,6 +55,8 @@ const navSections = [
   {
     title: "SISTEMA",
     items: [
+      { href: "/ajuda", label: "Ajuda & Treinamento", icon: GraduationCap, roles: null },
+      { href: "/sobre", label: "Visão Geral", icon: Compass, roles: null },
       { href: "/auditoria", label: "Auditoria", icon: Shield, roles: ["ADMIN", "SOCIO"] },
       { href: "/admin/health", label: "Saúde do Sistema", icon: Activity, roles: ["ADMIN"] },
       { href: "/admin/usuarios", label: "Usuários", icon: Users2, roles: ["ADMIN"] },
