@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import { FileText, Plus, Search, Clock, CheckCircle, XCircle, AlertCircle } from "lucide-react";
+import { FileText, Plus, Search, Clock, CheckCircle, XCircle, AlertCircle, FileStack } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 
 interface Peticao {
@@ -70,10 +70,16 @@ export default function PeticoesPage() {
           <h1 className="font-display text-2xl font-semibold text-afj-black">Petições</h1>
           <p className="text-afj-black/50 text-sm">{filtrados.length} petição(ões)</p>
         </div>
-        <Link href="/peticoes/nova" className="btn-afj-primary rounded-sm flex items-center gap-2">
-          <Plus size={15} />
-          Nova Petição com IA
-        </Link>
+        <div className="flex gap-2">
+          <Link href="/peticoes/modelos" className="btn-afj-outline rounded-sm flex items-center gap-2">
+            <FileStack size={15} />
+            Modelos
+          </Link>
+          <Link href="/peticoes/nova" className="btn-afj-primary rounded-sm flex items-center gap-2">
+            <Plus size={15} />
+            Nova Petição com IA
+          </Link>
+        </div>
       </div>
 
       {/* KPIs rápidos */}

@@ -33,6 +33,7 @@ class GeneratePetitionRequest(BaseModel):
     client_id: str | None = None
     instrucoes: str | None = None
     processo: dict[str, Any] | None = None
+    template_id: str | None = None   # modelo do escritório a usar como base
 
 
 @router.get("", response_model=list[DocumentResponse])
@@ -416,15 +417,33 @@ async def generate_petition(
     from app.agents.petition.petition_agent import PetitionAgent
     from app.agents.brain.context import AgentContext
     from app.models.agent_run import AgentRun
+    from app.models.document import PetitionTemplate
     from datetime import datetime
     from decimal import Decimal
+
+    instrucoes = body.instrucoes or ""
+    # Se um modelo do escritório foi escolhido, usa seu conteúdo como base para a IA.
+    if body.template_id:
+        tpl = (await db.execute(
+            select(PetitionTemplate).where(
+                PetitionTemplate.id == uuid.UUID(body.template_id),
+                PetitionTemplate.tenant_id == current_user.tenant_id,
+            )
+        )).scalar_one_or_none()
+        if tpl:
+            instrucoes = (
+                "Use o MODELO DE PETIÇÃO do escritório abaixo como base "
+                "(mantenha estrutura, cláusulas-padrão e substitua os marcadores):\n\n"
+                f"===== MODELO: {tpl.nome} =====\n{tpl.conteudo}\n===== FIM DO MODELO =====\n\n"
+                + (f"Instruções específicas do caso: {instrucoes}" if instrucoes else "")
+            )
 
     ctx = AgentContext(
         triggered_by=current_user.id,
         task_type="generate_petition",
         task_input={
             "tipo_peticao": body.tipo_peticao,
-            "instrucoes": body.instrucoes or "",
+            "instrucoes": instrucoes,
             "processo": body.processo or {},
         },
         process_id=uuid.UUID(body.process_id) if body.process_id else None,
