@@ -44,7 +44,9 @@ export default function NovaPeticaoPage() {
     process_id: "",
     tipo_peticao: "PETICAO_INICIAL",
     instrucoes: "",
+    template_id: "",
   });
+  const [templates, setTemplates] = useState<{ id: string; nome: string; tipo_peticao: string | null }[]>([]);
   const [runId, setRunId] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -60,6 +62,7 @@ export default function NovaPeticaoPage() {
 
   useEffect(() => {
     fetchProcessos();
+    fetchTemplates();
   }, []);
 
   async function fetchProcessos() {
@@ -68,6 +71,14 @@ export default function NovaPeticaoPage() {
       headers: { Authorization: `Bearer ${token}` },
     });
     if (res.ok) setProcessos(await res.json());
+  }
+
+  async function fetchTemplates() {
+    const token = localStorage.getItem("afj_access_token");
+    const res = await fetch("/api/v1/petition-templates?ativo=true", {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (res.ok) setTemplates(await res.json());
   }
 
   async function gerarPeticao() {
@@ -85,6 +96,7 @@ export default function NovaPeticaoPage() {
           process_id: form.process_id || null,
           tipo_peticao: form.tipo_peticao,
           instrucoes: form.instrucoes,
+          template_id: form.template_id || null,
         }),
       });
       if (!res.ok) {
@@ -235,6 +247,26 @@ export default function NovaPeticaoPage() {
             <p className="text-sm text-afj-black/50">
               Descreva o que você precisa. Quanto mais contexto, melhor a petição gerada.
             </p>
+            {templates.length > 0 && (
+              <div>
+                <label className="text-xs text-afj-black/60 block mb-1">Modelo do escritório (opcional)</label>
+                <select
+                  value={form.template_id}
+                  onChange={(e) => setForm({ ...form, template_id: e.target.value })}
+                  className="w-full border border-afj-cream-dark rounded-md px-3 py-2 text-sm focus:outline-none focus:border-afj-gold bg-white"
+                >
+                  <option value="">Sem modelo — gerar do zero</option>
+                  {templates.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.nome}{t.tipo_peticao ? ` (${t.tipo_peticao.replace(/_/g, " ")})` : ""}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-[11px] text-afj-black/40 mt-1">
+                  A IA usa o modelo como base (estrutura e cláusulas-padrão). Gerencie em Petições → Modelos.
+                </p>
+              </div>
+            )}
             <div>
               <label className="text-xs text-afj-black/60 block mb-1">Instruções específicas</label>
               <textarea

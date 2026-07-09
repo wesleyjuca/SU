@@ -69,6 +69,25 @@ class Petition(Base):
     document: Mapped["Document"] = relationship(back_populates="petition")
 
 
+class PetitionTemplate(Base):
+    """Modelo de petição reutilizável do escritório (tenant-scoped).
+
+    O `conteudo` serve de base/guia para a IA ao gerar petições — pode conter
+    estrutura, cláusulas-padrão e marcadores como [AUTOR], [RÉU], [FATOS]."""
+    __tablename__ = "petition_templates"
+
+    id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("tenants.id"), nullable=True, index=True)
+    nome: Mapped[str] = mapped_column(String(200), nullable=False)
+    tipo_peticao: Mapped[str | None] = mapped_column(String(100))  # INICIAL, CONTESTACAO, RECURSO...
+    descricao: Mapped[str | None] = mapped_column(Text)
+    conteudo: Mapped[str] = mapped_column(Text, nullable=False)
+    ativo: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 class Contract(Base):
     __tablename__ = "contracts"
 
