@@ -142,6 +142,34 @@ const GUIAS: Guia[] = [
     ],
   },
   {
+    icon: DollarSign, categoria: "Gestão", titulo: "Custos de IA",
+    resumo: "Acompanhe o consumo de tokens e o custo de IA por advogado (ADMIN/SÓCIO).",
+    passos: [
+      "Menu → Custos de IA. Escolha o período (7, 30 ou 90 dias).",
+      "Veja os totais do escritório e a tabela por usuário (execuções, tokens, custo, % do total).",
+      "Custos de chaves próprias (BYOK) são pagos pelo usuário ao provedor — aqui aparecem como estimativa.",
+    ],
+    dica: "Limites de consumo e alertas de orçamento estão no roadmap — veja a Visão Geral.",
+  },
+  {
+    icon: Sparkles, categoria: "Sistema", titulo: "Ética & Integridade",
+    resumo: "O plano de ética, controle e integridade do escritório.",
+    passos: [
+      "Menu → Ética & Integridade. A página mostra os controles já ativos (HITL, auditoria imutável, LGPD, isolamento entre escritórios).",
+      "Abaixo, o Programa de Integridade planejado: código de conduta, canal de denúncias, matriz de riscos, treinamentos, comitê e revisão de acessos.",
+      "Sugestões de novos controles podem ser encaminhadas ao administrador.",
+    ],
+  },
+  {
+    icon: Sparkles, categoria: "Sistema", titulo: "Integrações (WhatsApp, Assinatura, PWA)",
+    resumo: "Conexões com serviços externos — o que já está pronto e o que falta para ativar.",
+    passos: [
+      "Menu → Integrações (ADMIN). Cada cartão mostra o recurso, o que o sistema já tem pronto e o que falta (credenciais/provedor).",
+      "Para instalar o app (PWA): abra o sistema no navegador do celular e use “Adicionar à tela inicial”.",
+      "Para ativar WhatsApp ou assinatura eletrônica, providencie as credenciais do provedor e solicite a conexão.",
+    ],
+  },
+  {
     icon: UserCircle, categoria: "Relacionamento", titulo: "Portal do Cliente",
     resumo: "Acesso externo e seguro para o cliente acompanhar seus processos.",
     passos: [
@@ -152,7 +180,7 @@ const GUIAS: Guia[] = [
   },
 ];
 
-const CATEGORIAS = ["Todas", "Jurídico", "Inteligência IA", "Gestão", "Relacionamento"];
+const CATEGORIAS = ["Todas", "Jurídico", "Inteligência IA", "Gestão", "Relacionamento", "Sistema"];
 
 export default function AjudaPage() {
   const [busca, setBusca] = useState("");
