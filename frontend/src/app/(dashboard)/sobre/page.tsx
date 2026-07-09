@@ -22,7 +22,7 @@ const AREAS: { titulo: string; recursos: Recurso[] }[] = [
     recursos: [
       { icon: Scale, nome: "Processos & Prazos", desc: "Cadastro, captura por OAB, monitoramento de andamentos e alertas de prazo.", estado: "operacional" },
       { icon: FileText, nome: "Petições & Contratos", desc: "Geração com IA, editor, versionamento, PDF e ciclo de vida (arquivar/excluir).", estado: "operacional" },
-      { icon: BookOpen, nome: "Pesquisa Jurídica (RAG)", desc: "Busca semântica em jurisprudência, legislação, doutrina e memórias.", estado: "parcial" },
+      { icon: BookOpen, nome: "Pesquisa Jurídica (RAG)", desc: "Busca semântica em jurisprudência, legislação, doutrina e memórias — documentos aprovados são indexados automaticamente.", estado: "parcial" },
       { icon: FileText, nome: "Modelos de Petição", desc: "Biblioteca de modelos do escritório reutilizados pela IA na geração de petições.", estado: "operacional" },
       { icon: Shapes, nome: "Visual Law", desc: "Fluxogramas e linhas do tempo jurídicas geradas por IA.", estado: "operacional" },
     ],
@@ -64,7 +64,6 @@ const ROADMAP: { fase: string; itens: string; estado: Estado }[] = [
 
 const SUGESTOES: { titulo: string; desc: string }[] = [
   { titulo: "Assinatura eletrônica de contratos", desc: "Integrar provedor (ICP-Brasil/DocuSign) para assinar direto no fluxo de contratos." },
-  { titulo: "Ingestão automática para a Pesquisa Jurídica", desc: "Indexar automaticamente petições aprovadas e documentos no Qdrant, alimentando o RAG." },
   { titulo: "Notificações por WhatsApp", desc: "Alertar clientes e advogados sobre prazos e andamentos por WhatsApp." },
   { titulo: "Painel de custos de IA por usuário", desc: "Acompanhar consumo de tokens/custo por advogado, com limites configuráveis." },
   { titulo: "App mobile (PWA)", desc: "Consulta de prazos e aprovações em campo, offline-first." },

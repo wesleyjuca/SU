@@ -113,7 +113,7 @@ const GUIAS: Guia[] = [
       "Selecione as bases de conhecimento (jurisprudência, legislação, doutrina, petições, memórias, docs de clientes).",
       "Pressione Enter ou “Buscar”. Os resultados trazem a fonte para rastreabilidade.",
     ],
-    dica: "A busca usa embeddings — requer a chave OpenAI do sistema configurada e as bases com documentos indexados.",
+    dica: "Documentos aprovados/protocolados são indexados automaticamente nas bases do escritório. A busca usa embeddings — requer a chave OpenAI do sistema configurada.",
   },
   {
     icon: Shapes, categoria: "Inteligência IA", titulo: "Visual Law",
