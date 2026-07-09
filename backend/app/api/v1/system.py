@@ -562,3 +562,58 @@ async def health_detailed(current_user: User = Depends(get_current_user)):
         "sentry_enabled": bool(cfg.SENTRY_DSN),
         "recent_agent_runs": recent_runs,
     }
+
+
+@router.get("/ai-costs")
+async def ai_costs_por_usuario(
+    dias: int = Query(default=30, ge=1, le=365),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Custos de IA por usuário do escritório (tenant-scoped).
+
+    Base do Painel de Custos de IA: agrega tokens/custo/execuções dos
+    AgentRuns por usuário disparador nos últimos N dias. ADMIN/SOCIO."""
+    from app.core.exceptions import ForbiddenError
+    from app.models.agent_run import AgentRun
+
+    if current_user.role not in ("ADMIN", "SUPERADMIN", "SOCIO"):
+        raise ForbiddenError("Acesso restrito a administradores e sócios")
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=dias)
+    result = await db.execute(
+        select(
+            User.id,
+            User.full_name,
+            User.email,
+            func.count(AgentRun.id).label("execucoes"),
+            func.coalesce(func.sum(AgentRun.tokens_used), 0).label("tokens"),
+            func.coalesce(func.sum(AgentRun.cost_usd), 0).label("custo_usd"),
+        )
+        .join(AgentRun, AgentRun.triggered_by == User.id)
+        .where(
+            AgentRun.tenant_id == current_user.tenant_id,  # isolamento multi-tenant
+            AgentRun.started_at >= cutoff,
+        )
+        .group_by(User.id, User.full_name, User.email)
+        .order_by(func.coalesce(func.sum(AgentRun.cost_usd), 0).desc())
+    )
+    rows = result.all()
+    usuarios = [
+        {
+            "user_id": str(r.id),
+            "nome": r.full_name,
+            "email": r.email,
+            "execucoes": int(r.execucoes),
+            "tokens": int(r.tokens),
+            "custo_usd": float(r.custo_usd),
+        }
+        for r in rows
+    ]
+    return {
+        "periodo_dias": dias,
+        "total_execucoes": sum(u["execucoes"] for u in usuarios),
+        "total_tokens": sum(u["tokens"] for u in usuarios),
+        "total_custo_usd": round(sum(u["custo_usd"] for u in usuarios), 4),
+        "usuarios": usuarios,
+    }

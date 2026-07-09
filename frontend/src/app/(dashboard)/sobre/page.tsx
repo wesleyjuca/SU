@@ -41,6 +41,7 @@ const AREAS: { titulo: string; recursos: Recurso[] }[] = [
       { icon: DollarSign, nome: "Financeiro", desc: "Receitas, despesas, honorários e inadimplência — isolado por escritório.", estado: "operacional" },
       { icon: Users, nome: "Clientes (CRM) & LGPD", desc: "Gestão de clientes/leads com controle de consentimento.", estado: "operacional" },
       { icon: BarChart2, nome: "Relatórios", desc: "Gráficos de processos, financeiro e uso dos agentes.", estado: "operacional" },
+      { icon: DollarSign, nome: "Custos de IA por Usuário", desc: "Consumo de tokens e custo por advogado; limites configuráveis em evolução.", estado: "parcial" },
       { icon: UserCircle, nome: "Portal do Cliente", desc: "Acesso externo com isolamento duplo (cliente + escritório).", estado: "parcial" },
     ],
   },
@@ -49,6 +50,9 @@ const AREAS: { titulo: string; recursos: Recurso[] }[] = [
     recursos: [
       { icon: Shield, nome: "Multi-tenant & Auditoria", desc: "Isolamento total entre escritórios e log imutável de ações.", estado: "operacional" },
       { icon: KeyRound, nome: "Autenticação JWT", desc: "Tokens de acesso/refresh com sessões estáveis.", estado: "operacional" },
+      { icon: Shield, nome: "Ética, Controle & Integridade", desc: "Controles ativos (HITL, auditoria, LGPD) e programa de integridade em construção — veja Ética & Integridade.", estado: "parcial" },
+      { icon: Sparkles, nome: "App Instalável (PWA)", desc: "Manifest e service worker publicados; offline ampliado e push em evolução.", estado: "parcial" },
+      { icon: Clock, nome: "Integrações Externas", desc: "WhatsApp e assinatura eletrônica mapeadas em Integrações — aguardando credenciais de provedor.", estado: "planejado" },
     ],
   },
 ];
@@ -59,14 +63,16 @@ const ROADMAP: { fase: string; itens: string; estado: Estado }[] = [
   { fase: "Financeiro", itens: "Dashboard, gráficos, contratos", estado: "operacional" },
   { fase: "Admin SaaS", itens: "Saúde do sistema, personalização, usuários", estado: "parcial" },
   { fase: "Portal do Cliente", itens: "Acesso externo, notificações WhatsApp", estado: "parcial" },
-  { fase: "Mobile / PWA", itens: "App para advogados em campo", estado: "planejado" },
+  { fase: "Ética, Controle & Integridade", itens: "Controles ativos + código de conduta, canal de denúncias, treinamentos", estado: "parcial" },
+  { fase: "Integrações Externas", itens: "WhatsApp, assinatura eletrônica (aguardam credenciais)", estado: "planejado" },
+  { fase: "Mobile / PWA", itens: "App instalável hoje; offline ampliado e push em evolução", estado: "parcial" },
 ];
 
 const SUGESTOES: { titulo: string; desc: string }[] = [
-  { titulo: "Assinatura eletrônica de contratos", desc: "Integrar provedor (ICP-Brasil/DocuSign) para assinar direto no fluxo de contratos." },
-  { titulo: "Notificações por WhatsApp", desc: "Alertar clientes e advogados sobre prazos e andamentos por WhatsApp." },
-  { titulo: "Painel de custos de IA por usuário", desc: "Acompanhar consumo de tokens/custo por advogado, com limites configuráveis." },
-  { titulo: "App mobile (PWA)", desc: "Consulta de prazos e aprovações em campo, offline-first." },
+  { titulo: "Protocolo automático nos tribunais (PJe)", desc: "Protocolar petições aprovadas diretamente nos sistemas dos tribunais, com comprovante anexado ao processo." },
+  { titulo: "Transcrição de audiências com IA", desc: "Upload do áudio da audiência com transcrição, resumo e extração de compromissos/prazos." },
+  { titulo: "Chat jurídico interno (RAG)", desc: "Assistente conversacional que responde com base nas petições, memórias e documentos do escritório." },
+  { titulo: "Limites e alertas de orçamento de IA", desc: "Teto de consumo por usuário no Painel de Custos, com bloqueio suave e alertas." },
 ];
 
 function EstadoBadge({ estado }: { estado: Estado }) {
