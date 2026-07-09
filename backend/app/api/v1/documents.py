@@ -399,6 +399,9 @@ async def generate_contract_content(
         + "\n".join(dados)
     )
 
+    from app.services.ai_budget import enforce_budget
+    await enforce_budget(db, current_user.id, current_user.tenant_id)
+
     async with user_ai_creds(db, current_user.id, "manage_contract"):
         content, input_t, output_t, cost = await call_claude(
             messages=[{"role": "user", "content": prompt}],
@@ -477,6 +480,9 @@ async def generate_petition(
 
     from app.integrations.byok import user_ai_creds
 
+    from app.services.ai_budget import enforce_budget
+    await enforce_budget(db, current_user.id, current_user.tenant_id)
+
     agent = PetitionAgent(db=db)
     async with user_ai_creds(db, current_user.id, "generate_petition"):
         result = await agent.run(ctx)
@@ -528,6 +534,9 @@ async def review_document(
         document_id=uuid.UUID(doc_id),
     )
     from app.integrations.byok import user_ai_creds
+
+    from app.services.ai_budget import enforce_budget
+    await enforce_budget(db, current_user.id, current_user.tenant_id)
 
     agent = ReviewAgent(db=db)
     async with user_ai_creds(db, current_user.id, "review_document"):

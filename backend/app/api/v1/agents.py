@@ -49,6 +49,10 @@ async def trigger_agent(
     Dispara uma tarefa para o orquestrador. A execução é assíncrona.
     Retorna imediatamente com o run_id para acompanhamento.
     """
+    # Bloqueio suave: se o usuário atingiu o teto mensal de IA, rejeita (429).
+    from app.services.ai_budget import enforce_budget
+    await enforce_budget(db, current_user.id, current_user.tenant_id)
+
     run_id = uuid.uuid4()
     # Inject tenant_id so agents can scope DB writes correctly
     task_input = {**body.task_input, "_tenant_id": str(current_user.tenant_id)} if current_user.tenant_id else body.task_input
