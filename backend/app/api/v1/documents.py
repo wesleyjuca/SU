@@ -1,5 +1,5 @@
 """Endpoints para gestão de documentos e petições."""
-from fastapi import APIRouter, Depends, Query, UploadFile, File, Form, HTTPException
+from fastapi import APIRouter, Depends, Query, UploadFile, File, Form, HTTPException, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
 from pydantic import BaseModel
@@ -170,6 +170,7 @@ class DocumentUpdate(BaseModel):
 async def update_document(
     doc_id: str,
     body: DocumentUpdate,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -185,6 +186,16 @@ async def update_document(
     for field, value in body.model_dump(exclude_none=True).items():
         setattr(doc, field, value)
     await db.flush()
+
+    # Documento aprovado/protocolado → indexa (em background) no RAG do escritório,
+    # alimentando a Pesquisa Jurídica. Idempotente e isolado por tenant.
+    if doc.status in ("APROVADO", "PROTOCOLADO"):
+        texto = doc.conteudo_texto or doc.conteudo_html or ""
+        if texto.strip():
+            from app.rag.auto_ingest import auto_ingest_document
+            background_tasks.add_task(
+                auto_ingest_document, doc.id, doc.tenant_id, doc.titulo, doc.tipo, texto, doc.client_id,
+            )
     return _to_response(doc)
 
 

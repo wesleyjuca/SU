@@ -8,6 +8,11 @@ log = structlog.get_logger()
 
 DEFAULT_COLLECTIONS = ["jurisprudencia", "peticoes_afj", "legislacao"]
 
+# Coleções privadas do escritório: os chunks carregam tenant_id no payload e a
+# busca DEVE filtrar por ele (senão um escritório enxerga dados de outro).
+# As demais (jurisprudencia, legislacao, doutrina) são bases públicas/compartilhadas.
+PRIVATE_COLLECTIONS = {"peticoes_afj", "memorias_afj", "documentos_clientes"}
+
 
 async def retrieve(
     qdrant_client,
@@ -16,11 +21,15 @@ async def retrieve(
     filters: dict | None = None,
     k: int = 5,
     score_threshold: float = 0.35,  # threshold permissivo p/ documentos jurídicos
+    tenant_id=None,
 ) -> list[dict]:
     """
     Busca semântica multi-collection.
     Retorna lista de chunks com text, score e payload.
     Todos os resultados incluem metadados de fonte para rastreabilidade.
+
+    Isolamento multi-tenant: nas coleções privadas do escritório o filtro por
+    tenant_id é aplicado automaticamente; nas públicas, não.
     """
     if not query.strip():
         return []
@@ -28,12 +37,13 @@ async def retrieve(
     collections = collections or DEFAULT_COLLECTIONS
     query_vector = await embed_text(query)
 
-    qdrant_filter = _build_filter(filters) if filters else None
-
     all_results = []
     for collection in collections:
         if collection not in COLLECTIONS:
             continue
+        # Filtro por coleção: condições do usuário + tenant_id se for privada.
+        extra = {"tenant_id": str(tenant_id)} if (collection in PRIVATE_COLLECTIONS and tenant_id) else None
+        qdrant_filter = _build_filter(filters, extra)
         try:
             hits = await qdrant_client.search(
                 collection_name=collection,
@@ -59,9 +69,9 @@ async def retrieve(
     return all_results[:k]
 
 
-def _build_filter(filters: dict) -> Filter | None:
+def _build_filter(filters: dict | None, extra: dict | None = None) -> Filter | None:
     conditions = []
-    for field, value in filters.items():
+    for field, value in {**(filters or {}), **(extra or {})}.items():
         conditions.append(FieldCondition(key=field, match=MatchValue(value=value)))
     if not conditions:
         return None

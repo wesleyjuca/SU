@@ -62,6 +62,7 @@ async def rag_search(
             filters=req.filters,
             k=req.k,
             score_threshold=req.score_threshold,
+            tenant_id=current_user.tenant_id,  # isola coleções privadas por escritório
         )
         return {"query": req.query, "collections": req.collections, "results": results, "count": len(results)}
     except Exception as exc:
