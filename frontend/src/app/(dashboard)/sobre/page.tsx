@@ -61,7 +61,7 @@ const ROADMAP: { fase: string; itens: string; estado: Estado }[] = [
   { fase: "Fundação", itens: "Auth, Processos, Clientes, Agenda", estado: "operacional" },
   { fase: "IA Core", itens: "Agentes, Petições, RAG, Aprovações", estado: "operacional" },
   { fase: "Financeiro", itens: "Dashboard, gráficos, contratos", estado: "operacional" },
-  { fase: "Admin SaaS", itens: "Saúde do sistema, personalização, usuários", estado: "parcial" },
+  { fase: "Admin SaaS", itens: "Saúde, personalização, usuários, plano & uso, revisão de acessos", estado: "operacional" },
   { fase: "Portal do Cliente", itens: "Acesso externo, notificações WhatsApp", estado: "parcial" },
   { fase: "Ética, Controle & Integridade", itens: "Controles ativos + código de conduta, canal de denúncias, treinamentos", estado: "parcial" },
   { fase: "Integrações Externas", itens: "WhatsApp, assinatura eletrônica (aguardam credenciais)", estado: "planejado" },

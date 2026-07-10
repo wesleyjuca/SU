@@ -165,6 +165,17 @@ const GUIAS: Guia[] = [
     ],
   },
   {
+    icon: Sparkles, categoria: "Sistema", titulo: "Administração (Usuários, Plano & Uso)",
+    resumo: "Gestão de usuários, limites do plano e revisão de acessos (ADMIN).",
+    passos: [
+      "Menu → Usuários: convide membros (senha temporária por email), edite papel/status, redefina senhas e veja a atividade.",
+      "Botão “Revisão de Acessos”: usuários ativos ordenados pelo acesso mais antigo — desative contas ociosas (30/60+ dias destacados).",
+      "Menu → Plano & Uso: plano atual e barras de consumo (usuários vs limite, armazenamento, custo de IA do mês).",
+      "Menu → Saúde do Sistema: status dos serviços em tempo real e roadmap do produto.",
+    ],
+    dica: "A Revisão de Acessos também atende ao Programa de Integridade (recertificação periódica).",
+  },
+  {
     icon: Sparkles, categoria: "Sistema", titulo: "Integrações (WhatsApp, Assinatura, PWA)",
     resumo: "Conexões com serviços externos — o que já está pronto e o que falta para ativar.",
     passos: [

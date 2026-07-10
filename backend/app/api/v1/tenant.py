@@ -272,3 +272,64 @@ async def update_letterhead(
     await db.flush()
     await invalidate_tenant_cache(DEFAULT_TENANT_SLUG)
     return {"message": "Timbrado salvo", **templates["letterhead"]}
+
+
+@router.get("/usage")
+async def get_tenant_usage(
+    current_user: User = Depends(require_role("ADMIN", "SOCIO")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Plano & Uso do escritório: limites do plano vs consumo real (Admin SaaS)."""
+    from sqlalchemy import func
+    from datetime import datetime, timezone
+    from app.models.document import Document
+    from app.models.agent_run import AgentRun
+
+    # Tenant do usuário; fallback para o tenant padrão (mesma lógica do config)
+    tenant = None
+    if current_user.tenant_id:
+        tenant = (await db.execute(
+            select(Tenant).where(Tenant.id == current_user.tenant_id)
+        )).scalar_one_or_none()
+    if not tenant:
+        tenant = (await db.execute(
+            select(Tenant).where(Tenant.slug == DEFAULT_TENANT_SLUG)
+        )).scalar_one_or_none()
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant não encontrado")
+
+    tid = tenant.id
+
+    usuarios_ativos = (await db.execute(
+        select(func.count(User.id)).where(User.tenant_id == tid, User.is_active == True)  # noqa: E712
+    )).scalar_one() or 0
+
+    # Estimativa de armazenamento: bytes dos arquivos (base64) + textos no banco
+    storage_bytes = (await db.execute(
+        select(
+            func.coalesce(func.sum(func.length(Document.arquivo_url)), 0)
+            + func.coalesce(func.sum(func.length(Document.conteudo_texto)), 0)
+            + func.coalesce(func.sum(func.length(Document.conteudo_html)), 0)
+        ).where(Document.tenant_id == tid)
+    )).scalar_one() or 0
+
+    inicio_mes = datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    row = (await db.execute(
+        select(
+            func.coalesce(func.sum(AgentRun.cost_usd), 0).label("custo"),
+            func.coalesce(func.sum(AgentRun.tokens_used), 0).label("tokens"),
+            func.count(AgentRun.id).label("execucoes"),
+        ).where(AgentRun.tenant_id == tid, AgentRun.started_at >= inicio_mes)
+    )).one()
+
+    return {
+        "plan": tenant.plan,
+        "tenant_name": tenant.name,
+        "max_users": tenant.max_users,
+        "usuarios_ativos": int(usuarios_ativos),
+        "max_storage_gb": tenant.max_storage_gb,
+        "storage_mb_estimado": round(storage_bytes / (1024 * 1024), 2),
+        "custo_ia_mes_usd": float(row.custo),
+        "tokens_mes": int(row.tokens),
+        "execucoes_mes": int(row.execucoes),
+    }

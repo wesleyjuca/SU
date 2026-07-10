@@ -2,7 +2,7 @@
 import { useState, useEffect } from "react";
 import {
   Users, Plus, Pencil, UserCheck, UserX, Copy, Check, Search,
-  KeyRound, History, ChevronRight, X, Filter,
+  KeyRound, History, ChevronRight, X, Filter, ClipboardCheck, AlertTriangle,
 } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useUserStore } from "@/store";
@@ -40,6 +40,19 @@ interface ActivityItem {
   ip_address: string | null;
 }
 
+// Revisão de Acessos: dias desde o último login (null = nunca acessou)
+function diasInativo(iso: string | null): number | null {
+  if (!iso) return null;
+  return Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
+}
+
+function faixaInatividade(dias: number | null): "nunca" | "critico" | "atencao" | "ok" {
+  if (dias === null) return "nunca";
+  if (dias > 60) return "critico";
+  if (dias >= 30) return "atencao";
+  return "ok";
+}
+
 function timeAgo(iso: string | null): string {
   if (!iso) return "Nunca";
   const diff = Date.now() - new Date(iso).getTime();
@@ -58,6 +71,7 @@ const PAGE_SIZE = 50;
 export default function UsuariosPage() {
   const { user: me } = useUserStore();
   const [users, setUsers] = useState<UserItem[]>([]);
+  const [showRevisao, setShowRevisao] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(false);
@@ -202,14 +216,81 @@ export default function UsuariosPage() {
           <h1 className="font-display text-2xl font-semibold text-afj-black">Usuários</h1>
           <p className="text-afj-black/50 text-sm">{users.length} membro(s) do escritório</p>
         </div>
-        <button
-          onClick={() => { setShowInvite(true); setTempPwd(""); setApiError(""); }}
-          className="btn-afj-primary rounded-sm flex items-center gap-2"
-        >
-          <Plus size={14} />
-          Convidar Usuário
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={() => setShowRevisao((v) => !v)}
+            className={`rounded-sm flex items-center gap-2 text-sm px-4 py-2 border transition-colors ${
+              showRevisao ? "bg-afj-gold text-white border-afj-gold" : "btn-afj-outline"
+            }`}
+          >
+            <ClipboardCheck size={14} />
+            Revisão de Acessos
+          </button>
+          <button
+            onClick={() => { setShowInvite(true); setTempPwd(""); setApiError(""); }}
+            className="btn-afj-primary rounded-sm flex items-center gap-2"
+          >
+            <Plus size={14} />
+            Convidar Usuário
+          </button>
+        </div>
       </div>
+
+      {/* Revisão de Acessos (recertificação — Programa de Integridade) */}
+      {showRevisao && (
+        <div className="afj-card p-5 space-y-3 border-l-4 border-afj-gold">
+          <div>
+            <p className="font-semibold text-sm text-afj-black flex items-center gap-2">
+              <ClipboardCheck size={15} className="text-afj-gold" /> Revisão de Acessos
+            </p>
+            <p className="text-xs text-afj-black/45 mt-0.5">
+              Usuários ativos ordenados pelo acesso mais antigo. Desative contas ociosas — inativos há mais de
+              60 dias aparecem em vermelho; 30–60 dias em âmbar.
+            </p>
+          </div>
+          <div className="space-y-1.5">
+            {users
+              .filter((u) => u.is_active)
+              .sort((a, b) => {
+                const da = a.last_login_at ? new Date(a.last_login_at).getTime() : 0;
+                const db = b.last_login_at ? new Date(b.last_login_at).getTime() : 0;
+                return da - db;
+              })
+              .map((u) => {
+                const dias = diasInativo(u.last_login_at);
+                const faixa = faixaInatividade(dias);
+                const rotulo = faixa === "nunca" ? "Nunca acessou"
+                  : `Último acesso ${timeAgo(u.last_login_at)}${dias !== null ? ` (${dias}d)` : ""}`;
+                const cor = faixa === "nunca" || faixa === "critico"
+                  ? "text-red-600" : faixa === "atencao" ? "text-amber-600" : "text-afj-black/45";
+                return (
+                  <div key={u.id} className="flex items-center justify-between gap-3 border border-afj-cream-dark rounded-sm px-3 py-2">
+                    <div className="min-w-0 flex items-center gap-2">
+                      {(faixa === "critico" || faixa === "nunca") && <AlertTriangle size={13} className="text-red-500 flex-shrink-0" />}
+                      <div className="min-w-0">
+                        <p className="text-sm text-afj-black font-medium truncate">{u.full_name}
+                          <span className="ml-2 text-[10px] uppercase text-afj-black/35">{u.role}</span>
+                        </p>
+                        <p className={`text-xs ${cor}`}>{rotulo}</p>
+                      </div>
+                    </div>
+                    {u.id !== me?.id && (
+                      <button
+                        onClick={() => handleUpdate(u.id, { is_active: false })}
+                        className="text-xs text-red-600 hover:text-red-700 font-medium flex items-center gap-1 flex-shrink-0"
+                      >
+                        <UserX size={12} /> Desativar
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            {users.filter((u) => u.is_active).length === 0 && (
+              <p className="text-xs text-afj-black/40 text-center py-3">Nenhum usuário ativo para revisar.</p>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Filtros */}
       <div className="flex gap-3 flex-wrap">
