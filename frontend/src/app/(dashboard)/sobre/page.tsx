@@ -42,7 +42,7 @@ const AREAS: { titulo: string; recursos: Recurso[] }[] = [
       { icon: Users, nome: "Clientes (CRM) & LGPD", desc: "Gestão de clientes/leads com controle de consentimento.", estado: "operacional" },
       { icon: BarChart2, nome: "Relatórios", desc: "Gráficos de processos, financeiro e uso dos agentes.", estado: "operacional" },
       { icon: DollarSign, nome: "Custos de IA por Usuário", desc: "Consumo por advogado com teto mensal configurável, alertas e bloqueio suave.", estado: "operacional" },
-      { icon: UserCircle, nome: "Portal do Cliente", desc: "Acesso externo com isolamento duplo (cliente + escritório).", estado: "parcial" },
+      { icon: UserCircle, nome: "Portal do Cliente", desc: "Acesso externo com mensagens ao escritório, download de PDFs timbrados e isolamento duplo.", estado: "operacional" },
     ],
   },
   {
@@ -62,7 +62,7 @@ const ROADMAP: { fase: string; itens: string; estado: Estado }[] = [
   { fase: "IA Core", itens: "Agentes, Petições, RAG, Aprovações", estado: "operacional" },
   { fase: "Financeiro", itens: "Dashboard, gráficos, contratos", estado: "operacional" },
   { fase: "Admin SaaS", itens: "Saúde, personalização, usuários, plano & uso, revisão de acessos", estado: "operacional" },
-  { fase: "Portal do Cliente", itens: "Acesso externo, notificações WhatsApp", estado: "parcial" },
+  { fase: "Portal do Cliente", itens: "Acesso externo, mensagens, documentos PDF (WhatsApp aguarda credenciais)", estado: "operacional" },
   { fase: "Ética, Controle & Integridade", itens: "Controles ativos + código de conduta, canal de denúncias, treinamentos", estado: "parcial" },
   { fase: "Integrações Externas", itens: "WhatsApp, assinatura eletrônica (aguardam credenciais)", estado: "planejado" },
   { fase: "Mobile / PWA", itens: "App instalável hoje; offline ampliado e push em evolução", estado: "parcial" },

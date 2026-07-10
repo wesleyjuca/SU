@@ -294,3 +294,148 @@ async def portal_financial(
         }
         for e in entries
     ]
+
+
+# ─── Mensagens cliente ↔ escritório (Fase 6 — Portal Cliente) ─────────────────
+from pydantic import BaseModel
+from app.models.client import ClientInteraction
+
+
+class PortalMessageCreate(BaseModel):
+    descricao: str
+
+
+@router.get("/messages")
+async def portal_messages(
+    limit: int = Query(default=50, le=100),
+    ctx: tuple[User, uuid.UUID] = Depends(get_portal_client),
+    db: AsyncSession = Depends(get_db),
+):
+    """Thread de mensagens do cliente com o escritório (tipo=PORTAL)."""
+    user, client_id = ctx
+    rows = (await db.execute(
+        select(ClientInteraction)
+        .where(
+            ClientInteraction.client_id == client_id,
+            ClientInteraction.tipo == "PORTAL",
+        )
+        .order_by(ClientInteraction.created_at)
+        .limit(limit)
+    )).scalars().all()
+    return [
+        {
+            "id": str(m.id),
+            "descricao": m.descricao,
+            "autor": (m.metadata_json or {}).get("origem", "escritorio"),
+            "created_at": m.created_at.isoformat(),
+        }
+        for m in rows
+    ]
+
+
+@router.post("/messages", status_code=201)
+async def portal_send_message(
+    body: PortalMessageCreate,
+    ctx: tuple[User, uuid.UUID] = Depends(get_portal_client),
+    db: AsyncSession = Depends(get_db),
+):
+    """Cliente envia mensagem ao escritório; o responsável (ou ADMINs) é notificado."""
+    user, client_id = ctx
+    texto = body.descricao.strip()
+    if not texto:
+        raise HTTPException(status_code=422, detail="Escreva a mensagem.")
+
+    msg = ClientInteraction(
+        client_id=client_id,
+        user_id=user.id,
+        tipo="PORTAL",
+        descricao=texto,
+        metadata_json={"origem": "cliente"},
+    )
+    db.add(msg)
+    await db.flush()
+
+    # Notifica o advogado responsável; sem responsável, todos os ADMINs ativos.
+    # Falha aqui não derruba o envio da mensagem.
+    try:
+        from app.services.notification_service import create_notification
+        client = (await db.execute(select(Client).where(Client.id == client_id))).scalar_one_or_none()
+        nome_cliente = (client.razao_social or client.nome_completo) if client else "Cliente"
+        destinatarios: list[uuid.UUID] = []
+        if client and client.responsavel_id:
+            destinatarios = [client.responsavel_id]
+        else:
+            admins = (await db.execute(
+                select(User.id).where(
+                    User.tenant_id == user.tenant_id,
+                    User.role.in_(["ADMIN", "SUPERADMIN"]),
+                    User.is_active == True,  # noqa: E712
+                )
+            )).scalars().all()
+            destinatarios = list(admins)
+        for dest in destinatarios:
+            await create_notification(
+                db,
+                user_id=dest,
+                titulo=f"Nova mensagem do cliente {nome_cliente}",
+                tipo="SISTEMA",
+                corpo=texto[:300],
+                priority="HIGH",
+                link=f"/clientes/{client_id}",
+                metadata={"portal_message": True, "client_id": str(client_id)},
+            )
+    except Exception:
+        import structlog
+        structlog.get_logger().warning("portal_message_notify_failed", client_id=str(client_id))
+
+    return {"id": str(msg.id), "message": "Mensagem enviada ao escritório."}
+
+
+@router.get("/documents/{doc_id}/download")
+async def portal_document_download(
+    doc_id: str,
+    ctx: tuple[User, uuid.UUID] = Depends(get_portal_client),
+    db: AsyncSession = Depends(get_db),
+):
+    """Baixa o documento em PDF com o timbrado do escritório (mesmo gate do /content)."""
+    from fastapi.responses import Response as FastAPIResponse
+    from app.utils.pdf_builder import build_petition_pdf
+
+    user, client_id = ctx
+    result = await db.execute(
+        select(Document).where(
+            Document.id == uuid.UUID(doc_id),
+            Document.client_id == client_id,
+            Document.status.in_(["APROVADO", "PROTOCOLADO"]),
+            Document.tenant_id == user.tenant_id,
+        )
+    )
+    doc = result.scalar_one_or_none()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Documento não encontrado")
+
+    letterhead = None
+    try:
+        from app.models.tenant import TenantConfig
+        cfg = (await db.execute(
+            select(TenantConfig).where(TenantConfig.tenant_id == user.tenant_id)
+        )).scalar_one_or_none()
+        if cfg:
+            letterhead = dict((cfg.document_templates or {}).get("letterhead", {}))
+            if cfg.logo_url:
+                letterhead["logo_data_url"] = cfg.logo_url
+    except Exception:
+        letterhead = None
+
+    content = doc.conteudo_html or doc.conteudo_texto or ""
+    pdf_bytes = build_petition_pdf(
+        title=doc.titulo,
+        content_html=content,
+        metadata={"status": doc.status, "versao": doc.versao},
+        letterhead=letterhead,
+    )
+    return FastAPIResponse(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{doc.titulo[:50]}.pdf"'},
+    )

@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect } from "react";
-import { Scale, FileText, DollarSign, Clock, ArrowRight } from "lucide-react";
+import { Scale, FileText, DollarSign, MessageSquare, ArrowRight } from "lucide-react";
 import Link from "next/link";
 import { portalApi } from "@/lib/portalApi";
 import { useToast } from "@/components/ui/Toast";
@@ -124,7 +124,7 @@ export default function PortalDashboardPage() {
             { href: "/portal/processos", label: "Meus Processos", icon: Scale, color: "text-blue-600 bg-blue-50" },
             { href: "/portal/documentos", label: "Documentos", icon: FileText, color: "text-green-600 bg-green-50" },
             { href: "/portal/financeiro", label: "Financeiro", icon: DollarSign, color: "text-amber-600 bg-amber-50" },
-            { href: "/portal/processos", label: "Próximos Prazos", icon: Clock, color: "text-purple-600 bg-purple-50" },
+            { href: "/portal/mensagens", label: "Falar com o Escritório", icon: MessageSquare, color: "text-purple-600 bg-purple-50" },
           ].map(({ href, label, icon: Icon, color }) => (
             <Link
               key={label}

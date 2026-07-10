@@ -186,10 +186,12 @@ const GUIAS: Guia[] = [
   },
   {
     icon: UserCircle, categoria: "Relacionamento", titulo: "Portal do Cliente",
-    resumo: "Acesso externo e seguro para o cliente acompanhar seus processos.",
+    resumo: "Acesso externo com processos, documentos, financeiro e mensagens ao escritório.",
     passos: [
       "Em Clientes, convide o cliente para o portal (gera acesso vinculado).",
-      "O cliente vê apenas os próprios processos, documentos aprovados e financeiro.",
+      "O cliente vê apenas os próprios processos, documentos aprovados e financeiro, e baixa documentos em PDF com o timbrado do escritório.",
+      "Em “Mensagens”, o cliente fala com o escritório — o advogado responsável (ou os ADMINs) é notificado na hora.",
+      "Para responder: abra o cliente no CRM → aba Interações → nova interação com tipo “PORTAL” — a resposta aparece no portal do cliente.",
       "O isolamento é duplo (cliente + escritório) — nenhum dado vaza entre contas.",
     ],
   },

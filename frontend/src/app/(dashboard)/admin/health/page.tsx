@@ -169,11 +169,11 @@ const PHASES = [
   { name: "Fase 3 — Financeiro",     items: "Dashboard, Gráficos, Contratos", done: true },
   { name: "Fase 4 — Admin SaaS",     items: "Saúde, Personalização, Usuários, Plano & Uso, Revisão de Acessos", done: true },
   { name: "Fase 5 — Analytics",      items: "Relatórios, Auditoria, Busca Jurídica", done: true },
-  { name: "Fase 6 — Portal Cliente", items: "Acesso externo, notificações WhatsApp", done: false, active: true },
-  { name: "Fase 7 — Mobile/PWA",     items: "App para advogados em campo", done: false },
+  { name: "Fase 6 — Portal Cliente", items: "Acesso externo, mensagens, documentos PDF (WhatsApp aguarda credenciais)", done: true },
+  { name: "Fase 7 — Mobile/PWA",     items: "App para advogados em campo", done: false, active: true },
 ];
 
-const COMPLETION_PERCENT = 85;
+const COMPLETION_PERCENT = 92;
 
 function formatUptime(seconds: number): string {
   const d = Math.floor(seconds / 86400);

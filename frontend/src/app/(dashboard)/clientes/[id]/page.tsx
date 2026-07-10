@@ -55,9 +55,11 @@ const TIPO_ICONS: Record<string, React.ReactNode> = {
   REUNIAO: <Users size={12} className="text-purple-500" />,
   WHATSAPP: <MessageSquare size={12} className="text-emerald-500" />,
   SISTEMA: <Settings2 size={12} className="text-afj-black/40" />,
+  PORTAL: <MessageSquare size={12} className="text-afj-gold" />,
 };
 
-const TIPO_INTERACAO = ["EMAIL", "LIGACAO", "REUNIAO", "WHATSAPP", "SISTEMA"];
+// PORTAL = mensagem visível ao cliente no portal (respostas do escritório)
+const TIPO_INTERACAO = ["EMAIL", "LIGACAO", "REUNIAO", "WHATSAPP", "SISTEMA", "PORTAL"];
 
 const STATUS_STYLE: Record<string, string> = {
   PROSPECTO: "badge-pendente",
