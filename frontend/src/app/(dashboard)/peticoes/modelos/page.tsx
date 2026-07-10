@@ -1,6 +1,6 @@
 "use client";
-import { useState, useEffect } from "react";
-import { FileStack, Plus, Pencil, Trash2, X, Loader2, Search } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
+import { FileStack, Plus, Pencil, Trash2, X, Loader2, Search, Upload, Download } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
 
@@ -33,7 +33,9 @@ export default function ModelosPeticaoPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [importing, setImporting] = useState(false);
   const [form, setForm] = useState<FormState>(EMPTY);
+  const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { fetchTemplates(); }, []);
 
@@ -77,6 +79,52 @@ export default function ModelosPeticaoPage() {
     finally { setSaving(false); }
   }
 
+  async function importarArquivo(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setImporting(true);
+    try {
+      const t = localStorage.getItem("afj_access_token");
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch("/api/v1/petition-templates/upload", {
+        method: "POST",
+        headers: { ...(t ? { Authorization: `Bearer ${t}` } : {}) },
+        body: fd,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        toast.success(`Modelo "${data.nome}" importado. Revise e ajuste os marcadores.`);
+        fetchTemplates();
+        // Abre direto para revisão
+        abrirEdicao(data as Template);
+      } else {
+        toast.error(data.detail || "Erro ao importar o arquivo.");
+      }
+    } catch { toast.error("Falha de conexão."); }
+    finally {
+      setImporting(false);
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  }
+
+  async function baixarDocx(t: Template) {
+    try {
+      const tk = localStorage.getItem("afj_access_token");
+      const res = await fetch(`/api/v1/petition-templates/${t.id}/docx`, {
+        headers: { ...(tk ? { Authorization: `Bearer ${tk}` } : {}) },
+      });
+      if (!res.ok) { toast.error("Erro ao gerar o .docx."); return; }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${t.nome}.docx`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch { toast.error("Falha de conexão."); }
+  }
+
   async function excluir(id: string) {
     try {
       const res = await fetch(`/api/v1/petition-templates/${id}`, { method: "DELETE", headers: authH() });
@@ -103,9 +151,16 @@ export default function ModelosPeticaoPage() {
             Biblioteca de modelos do escritório reutilizados pela IA na geração de petições.
           </p>
         </div>
-        <button onClick={abrirNovo} className="btn-afj-primary rounded-sm flex items-center gap-2">
-          <Plus size={15} /> Novo Modelo
-        </button>
+        <div className="flex gap-2">
+          <input ref={fileRef} type="file" accept=".docx,.txt" onChange={importarArquivo} className="hidden" />
+          <button onClick={() => fileRef.current?.click()} disabled={importing}
+            className="btn-afj-outline rounded-sm flex items-center gap-2 disabled:opacity-50">
+            {importing ? <Loader2 size={15} className="animate-spin" /> : <Upload size={15} />} Importar do Word
+          </button>
+          <button onClick={abrirNovo} className="btn-afj-primary rounded-sm flex items-center gap-2">
+            <Plus size={15} /> Novo Modelo
+          </button>
+        </div>
       </div>
 
       <div className="relative">
@@ -138,6 +193,7 @@ export default function ModelosPeticaoPage() {
                   </div>
                 </div>
                 <div className="flex items-center gap-1.5 flex-shrink-0">
+                  <button onClick={() => baixarDocx(t)} className="text-afj-black/30 hover:text-afj-gold" aria-label="Baixar .docx (editar no Word)" title="Baixar .docx — edite no Word e reimporte"><Download size={13} /></button>
                   <button onClick={() => abrirEdicao(t)} className="text-afj-black/30 hover:text-afj-gold" aria-label="Editar"><Pencil size={13} /></button>
                   <button onClick={() => setDeletingId(t.id)} className="text-afj-black/30 hover:text-red-500" aria-label="Excluir"><Trash2 size={13} /></button>
                 </div>

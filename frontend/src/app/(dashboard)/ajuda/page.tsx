@@ -42,8 +42,9 @@ const GUIAS: Guia[] = [
     resumo: "Gere petições com IA e edite antes de protocolar.",
     passos: [
       "Menu → Petições → Nova. Escolha o tipo (inicial, contestação, recurso…) e vincule ao processo/cliente.",
+      "Opcional: selecione um Modelo do escritório — importe modelos prontos do Word (.docx) em Petições → Modelos, ou baixe um modelo em .docx, edite no Word e reimporte.",
       "Descreva as instruções e dispare a geração — a IA redige usando a chave do escritório ou a sua (BYOK).",
-      "Revise e edite o conteúdo. Baixe em PDF ou crie novas versões conforme ajustar.",
+      "Revise e edite o conteúdo. Baixe em PDF — o cabeçalho/rodapé usa o Timbrado do escritório (Personalização → Escritório).",
     ],
     dica: "Ações críticas (protocolar) passam por aprovação humana antes de executar.",
   },

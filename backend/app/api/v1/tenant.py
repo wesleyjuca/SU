@@ -220,3 +220,55 @@ async def _get_or_create_config(db: AsyncSession) -> TenantConfig:
         await db.flush()
 
     return config
+
+
+# ─── Timbrado dos documentos (padrão do escritório) ──────────────────────────
+class LetterheadUpdate(BaseModel):
+    office_name: str | None = None
+    address: str | None = None
+    contact: str | None = None
+    oab: str | None = None
+    footer: str | None = None
+    use_logo: bool = True
+
+
+@router.get("/letterhead")
+async def get_letterhead(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Timbrado configurado do escritório (usado nos PDFs gerados)."""
+    config = await _get_or_create_config(db)
+    lh = (config.document_templates or {}).get("letterhead", {})
+    return {
+        "office_name": lh.get("office_name"),
+        "address": lh.get("address"),
+        "contact": lh.get("contact"),
+        "oab": lh.get("oab"),
+        "footer": lh.get("footer"),
+        "use_logo": lh.get("use_logo", True),
+        "has_logo": bool(config.logo_url),
+    }
+
+
+@router.put("/letterhead")
+async def update_letterhead(
+    body: LetterheadUpdate,
+    current_user: User = Depends(require_role("ADMIN")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Salva o timbrado do escritório em TenantConfig.document_templates (JSONB)."""
+    config = await _get_or_create_config(db)
+    templates = dict(config.document_templates or {})
+    templates["letterhead"] = {
+        "office_name": (body.office_name or "").strip() or None,
+        "address": (body.address or "").strip() or None,
+        "contact": (body.contact or "").strip() or None,
+        "oab": (body.oab or "").strip() or None,
+        "footer": (body.footer or "").strip() or None,
+        "use_logo": body.use_logo,
+    }
+    config.document_templates = templates
+    await db.flush()
+    await invalidate_tenant_cache(DEFAULT_TENANT_SLUG)
+    return {"message": "Timbrado salvo", **templates["letterhead"]}

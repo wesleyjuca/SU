@@ -248,10 +248,26 @@ async def download_document(
     if not doc:
         raise NotFoundError("Documento", doc_id)
     content = doc.conteudo_html or doc.conteudo_texto or ""
+
+    # Timbrado do escritório (Personalização → Timbrado); sem config, padrão AFJ.
+    letterhead = None
+    try:
+        from app.models.tenant import TenantConfig
+        cfg = (await db.execute(
+            select(TenantConfig).where(TenantConfig.tenant_id == current_user.tenant_id)
+        )).scalar_one_or_none()
+        if cfg:
+            letterhead = dict((cfg.document_templates or {}).get("letterhead", {}))
+            if cfg.logo_url:
+                letterhead["logo_data_url"] = cfg.logo_url
+    except Exception:
+        letterhead = None
+
     pdf_bytes = build_petition_pdf(
         title=doc.titulo,
         content_html=content,
         metadata={"status": doc.status, "versao": doc.versao},
+        letterhead=letterhead,
     )
     return FastAPIResponse(
         content=pdf_bytes,
