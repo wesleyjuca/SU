@@ -34,13 +34,16 @@ const PILARES_ATIVOS = [
     icon: BookOpenCheck, titulo: "Citações Verificáveis",
     desc: "Citações não confirmadas nas bases são marcadas e bloqueiam aprovação automática.",
   },
+  {
+    icon: ClipboardCheck, titulo: "Revisão de Acessos",
+    desc: "Painel em Admin → Usuários destaca contas ociosas (30/60+ dias sem acesso) para desativação rápida.",
+  },
 ];
 
 const PROGRAMA_PLANEJADO = [
   { icon: AlertTriangle, titulo: "Matriz de Riscos de Integridade", desc: "Mapeamento periódico de riscos com controles e responsáveis." },
   { icon: GraduationCap, titulo: "Treinamentos Obrigatórios", desc: "Trilhas de ética, LGPD e uso responsável de IA com registro de conclusão." },
   { icon: Users2, titulo: "Comitê de Integridade", desc: "Instância que avalia casos, aprova políticas e reporta à sociedade." },
-  { icon: ClipboardCheck, titulo: "Revisão Periódica de Acessos", desc: "Recertificação trimestral de permissões e papéis." },
 ];
 
 const CATEGORIAS = [
