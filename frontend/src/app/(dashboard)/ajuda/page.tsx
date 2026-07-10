@@ -155,11 +155,13 @@ const GUIAS: Guia[] = [
   },
   {
     icon: Sparkles, categoria: "Sistema", titulo: "Ética & Integridade",
-    resumo: "O plano de ética, controle e integridade do escritório.",
+    resumo: "Código de Conduta com aceite registrado e Canal de Denúncias confidencial.",
     passos: [
-      "Menu → Ética & Integridade. A página mostra os controles já ativos (HITL, auditoria imutável, LGPD, isolamento entre escritórios).",
-      "Abaixo, o Programa de Integridade planejado: código de conduta, canal de denúncias, matriz de riscos, treinamentos, comitê e revisão de acessos.",
-      "Sugestões de novos controles podem ser encaminhadas ao administrador.",
+      "Menu → Ética & Integridade. O ADMIN publica o Código de Conduta (cada publicação gera nova versão).",
+      "Cada usuário lê e clica em “Li e aceito” — o aceite fica registrado por versão; o gestor vê quantos já aceitaram.",
+      "Canal de Denúncias: escolha a categoria, descreva o relato e envie — no modo anônimo sua identidade não é gravada. Guarde o protocolo.",
+      "ADMIN/SÓCIO acompanham os relatos e atualizam o status (aberto → em análise → resolvido).",
+      "Abaixo, os controles técnicos ativos (HITL, auditoria, LGPD) e os próximos passos do programa.",
     ],
   },
   {
