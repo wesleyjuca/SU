@@ -59,8 +59,25 @@ async def send_email(
     subject: str,
     html_body: str,
     text_body: Optional[str] = None,
+    db=None,
+    sender_user_id=None,
 ) -> bool:
     from app.config import settings
+
+    # Google Workspace: se o remetente tem conta Google conectada, envia pela
+    # Gmail API (sai da caixa do próprio usuário); falha cai no SMTP abaixo.
+    if db is not None and sender_user_id is not None:
+        try:
+            from app.services.google_workspace import get_valid_token, gmail_send, GoogleNotConnected
+            token = await get_valid_token(db, sender_user_id)
+            await gmail_send(token, to, subject, html_body)
+            log.info("email_sent_via_gmail", to=to)
+            return True
+        except GoogleNotConnected:
+            pass  # sem Google conectado — segue para SMTP
+        except Exception as exc:
+            log.warning("gmail_send_failed_fallback_smtp", error=str(exc))
+
     if not settings.EMAIL_ENABLED or not settings.SMTP_USER or not settings.SMTP_PASSWORD:
         log.debug("email_skipped", reason="email not configured", to=to, subject=subject)
         return False

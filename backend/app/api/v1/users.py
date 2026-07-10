@@ -386,6 +386,8 @@ async def invite_user(
                     "<p>Altere-a no primeiro acesso.</p>"
                 ),
                 text_body=texto,
+                db=db,
+                sender_user_id=current_user.id,  # envia pela conta Google conectada, se houver
             )
         except Exception:
             pass
