@@ -177,11 +177,13 @@ const GUIAS: Guia[] = [
   },
   {
     icon: Sparkles, categoria: "Sistema", titulo: "Integrações (WhatsApp, Assinatura, PWA)",
-    resumo: "Conexões com serviços externos — o que já está pronto e o que falta para ativar.",
+    resumo: "Google Workspace, WhatsApp, assinatura eletrônica e PWA — o que já funciona e como ativar.",
     passos: [
-      "Menu → Integrações (ADMIN). Cada cartão mostra o recurso, o que o sistema já tem pronto e o que falta (credenciais/provedor).",
+      "Google Workspace: em Integrações, clique “Conectar com Google” — depois disso, salve PDFs no seu Drive (botão em Documentos) e os e-mails do sistema saem pela sua conta Gmail.",
+      "Google Agenda: cada prazo na Agenda tem o botão de calendário — abre o evento pré-preenchido (funciona sem conectar).",
+      "ADMIN: para habilitar a conexão Google, crie as credenciais OAuth no Google Cloud e cole GOOGLE_CLIENT_ID/SECRET/REDIRECT_URI no Railway (instruções no card).",
       "Para instalar o app (PWA): abra o sistema no navegador do celular e use “Adicionar à tela inicial”.",
-      "Para ativar WhatsApp ou assinatura eletrônica, providencie as credenciais do provedor e solicite a conexão.",
+      "WhatsApp e assinatura eletrônica: providencie as credenciais do provedor e solicite a conexão.",
     ],
   },
   {

@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect, useRef } from "react";
-import { FolderOpen, Search, FileText, Download, Upload, ScanLine, X } from "lucide-react";
+import { FolderOpen, Search, FileText, Download, Upload, ScanLine, X, CloudUpload } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
 
@@ -42,9 +42,35 @@ export default function DocumentosPage() {
   const [filtroStatus, setFiltroStatus] = useState("");
   const [uploading, setUploading] = useState(false);
   const [ocrRunning, setOcrRunning] = useState<string | null>(null);
+  const [googleConnected, setGoogleConnected] = useState(false);
+  const [savingDrive, setSavingDrive] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { fetchDocs(); }, [filtroTipo, filtroStatus]);
+
+  // Google Workspace: mostra "Salvar no Drive" apenas para quem conectou a conta
+  useEffect(() => {
+    const token = localStorage.getItem("afj_access_token");
+    fetch("/api/v1/integrations/google/status", { headers: { Authorization: `Bearer ${token}` } })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => setGoogleConnected(Boolean(d?.connected)))
+      .catch(() => {});
+  }, []);
+
+  async function salvarNoDrive(docId: string, titulo: string) {
+    setSavingDrive(docId);
+    try {
+      const token = localStorage.getItem("afj_access_token");
+      const res = await fetch(`/api/v1/integrations/google/drive-save/${docId}`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const d = await res.json().catch(() => ({}));
+      if (res.ok) toast.success(`"${titulo}" salvo no seu Google Drive.`);
+      else toast.error(d.detail || "Erro ao salvar no Drive.");
+    } catch { toast.error("Erro de conexão."); }
+    finally { setSavingDrive(null); }
+  }
 
   async function fetchDocs() {
     setLoading(true);
@@ -273,6 +299,17 @@ export default function DocumentosPage() {
                       >
                         <Download size={14} />
                       </button>
+                      {googleConnected && (
+                        <button
+                          onClick={() => salvarNoDrive(d.id, d.titulo)}
+                          disabled={savingDrive === d.id}
+                          className="text-afj-black/30 hover:text-afj-gold transition-colors disabled:opacity-40"
+                          title="Salvar no Google Drive (PDF timbrado)"
+                          aria-label="Salvar no Google Drive"
+                        >
+                          <CloudUpload size={14} />
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>

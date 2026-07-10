@@ -42,6 +42,22 @@ function urgencyLabel(dias: number | null) {
 
 const FILTRO_DIAS = [7, 15, 30, 60];
 
+// Link pré-preenchido do Google Agenda (funciona sem conexão OAuth)
+function googleCalendarUrl(item: AgendaItem): string {
+  const d = item.data_prazo ? new Date(item.data_prazo) : new Date();
+  const ymd = (dt: Date) => dt.toISOString().slice(0, 10).replace(/-/g, "");
+  const fim = new Date(d.getTime() + 86400000);
+  const titulo = `Prazo: ${item.descricao}`;
+  const detalhes = `Processo ${item.numero_cnj || "s/ CNJ"} — ${item.tribunal}${item.data_fatal ? ` | Data fatal: ${new Date(item.data_fatal).toLocaleDateString("pt-BR")}` : ""} (AFJ CORE)`;
+  const params = new URLSearchParams({
+    action: "TEMPLATE",
+    text: titulo,
+    details: detalhes,
+    dates: `${ymd(d)}/${ymd(fim)}`,
+  });
+  return `https://calendar.google.com/calendar/render?${params.toString()}`;
+}
+
 export default function AgendaPage() {
   const toast = useToast();
   const [items, setItems] = useState<AgendaItem[]>([]);
@@ -138,6 +154,16 @@ export default function AgendaPage() {
                     </p>
                     {urgency && <p className={`text-xs ${urgency.cls}`}>{urgency.text}</p>}
                   </div>
+                  <a
+                    href={googleCalendarUrl(item)}
+                    target="_blank"
+                    rel="noreferrer"
+                    title="Adicionar ao Google Agenda"
+                    aria-label="Adicionar prazo ao Google Agenda"
+                    className="text-afj-black/30 hover:text-afj-gold p-1 rounded hover:bg-afj-cream"
+                  >
+                    <Calendar size={16} />
+                  </a>
                   <button
                     onClick={() => marcarCumprido(item)}
                     disabled={completing === item.id}

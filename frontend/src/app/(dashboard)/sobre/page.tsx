@@ -52,6 +52,7 @@ const AREAS: { titulo: string; recursos: Recurso[] }[] = [
       { icon: KeyRound, nome: "Autenticação JWT", desc: "Tokens de acesso/refresh com sessões estáveis.", estado: "operacional" },
       { icon: Shield, nome: "Ética, Controle & Integridade", desc: "Código de Conduta com aceite registrado, Canal de Denúncias anônimo e controles técnicos ativos (HITL, auditoria, LGPD).", estado: "operacional" },
       { icon: Sparkles, nome: "App Instalável (PWA)", desc: "Manifest e service worker publicados; offline ampliado e push em evolução.", estado: "parcial" },
+      { icon: Sparkles, nome: "Google Workspace", desc: "Agenda (link já funciona), Drive e Gmail integrados via OAuth — conecte sua conta em Integrações.", estado: "parcial" },
       { icon: Clock, nome: "Integrações Externas", desc: "WhatsApp e assinatura eletrônica mapeadas em Integrações — aguardando credenciais de provedor.", estado: "planejado" },
     ],
   },
