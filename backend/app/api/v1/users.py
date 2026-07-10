@@ -411,7 +411,29 @@ async def update_user(
     if not user:
         raise HTTPException(status_code=404, detail="Usuário não encontrado")
 
-    for field, value in body.model_dump(exclude_none=True).items():
+    updates = body.model_dump(exclude_none=True)
+
+    # Proteção contra lockout: não permitir desativar ou rebaixar o ÚLTIMO
+    # ADMIN ativo do escritório (senão ninguém mais administra o sistema).
+    vai_desativar = updates.get("is_active") is False
+    vai_rebaixar = "role" in updates and updates["role"] not in ("ADMIN", "SUPERADMIN")
+    if (vai_desativar or vai_rebaixar) and user.role in ("ADMIN", "SUPERADMIN") and user.is_active:
+        from sqlalchemy import func as _func
+        outros_admins = (await db.execute(
+            select(_func.count(User.id)).where(
+                User.tenant_id == current_user.tenant_id,
+                User.role.in_(["ADMIN", "SUPERADMIN"]),
+                User.is_active == True,  # noqa: E712
+                User.id != user.id,
+            )
+        )).scalar_one() or 0
+        if outros_admins == 0:
+            raise HTTPException(
+                status_code=422,
+                detail="Este é o último administrador ativo do escritório — promova outro usuário a ADMIN antes de desativá-lo ou rebaixá-lo.",
+            )
+
+    for field, value in updates.items():
         setattr(user, field, value)
 
     await db.commit()

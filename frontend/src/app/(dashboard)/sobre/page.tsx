@@ -67,6 +67,7 @@ const ROADMAP: { fase: string; itens: string; estado: Estado }[] = [
   { fase: "Ética, Controle & Integridade", itens: "Controles ativos + código de conduta, canal de denúncias, treinamentos", estado: "parcial" },
   { fase: "Integrações Externas", itens: "WhatsApp, assinatura eletrônica (aguardam credenciais)", estado: "planejado" },
   { fase: "Mobile / PWA", itens: "App instalável hoje; offline ampliado e push em evolução", estado: "parcial" },
+  { fase: "Multi-unidade & SaaS", itens: "P1: fundação multi-tenant e provisionamento de unidades/escritórios · P2: cobrança mensal (manual) · P3: gateway de pagamento e subdomínios", estado: "planejado" },
 ];
 
 const SUGESTOES: { titulo: string; desc: string }[] = [

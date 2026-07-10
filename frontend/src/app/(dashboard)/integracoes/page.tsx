@@ -61,12 +61,13 @@ function authH(): HeadersInit {
   return { "Content-Type": "application/json", ...(t ? { Authorization: `Bearer ${t}` } : {}) };
 }
 
-interface GoogleStatus { configured: boolean; connected: boolean; google_email: string | null }
+interface GoogleStatus { enabled: boolean; configured: boolean; connected: boolean; google_email: string | null }
 
 function GoogleWorkspaceCard() {
   const toast = useToast();
   const [status, setStatus] = useState<GoogleStatus | null>(null);
   const [working, setWorking] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
 
   async function fetchStatus() {
     try {
@@ -77,6 +78,10 @@ function GoogleWorkspaceCard() {
 
   useEffect(() => {
     fetchStatus();
+    fetch("/api/v1/users/me", { headers: authH() })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => setIsAdmin(d?.role === "ADMIN" || d?.role === "SUPERADMIN"))
+      .catch(() => {});
     // Feedback do retorno OAuth (?google=ok|erro)
     const p = new URLSearchParams(window.location.search);
     if (p.get("google") === "ok") toast.success("Conta Google conectada com sucesso!");
@@ -105,6 +110,23 @@ function GoogleWorkspaceCard() {
     finally { setWorking(false); }
   }
 
+  // Opt-in por escritório: o ADMIN decide se o módulo Google fica disponível
+  async function alternarModulo(habilitar: boolean) {
+    setWorking(true);
+    try {
+      const res = await fetch("/api/v1/tenant/modules", {
+        method: "PUT", headers: authH(),
+        body: JSON.stringify({ google_workspace: habilitar }),
+      });
+      if (res.ok) {
+        toast.success(habilitar ? "Google Workspace habilitado para o escritório." : "Google Workspace desabilitado para o escritório.");
+        fetchStatus();
+      } else toast.error("Erro ao atualizar o módulo.");
+    } catch { toast.error("Falha de conexão."); }
+    finally { setWorking(false); }
+  }
+
+  const enabled = Boolean(status?.enabled);
   const connected = Boolean(status?.connected);
   const configured = Boolean(status?.configured);
 
@@ -124,12 +146,13 @@ function GoogleWorkspaceCard() {
           </div>
         </div>
         <span className={`inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-sm border flex-shrink-0 ${
-          connected ? "bg-green-50 text-green-700 border-green-200"
+          !enabled ? "bg-gray-50 text-gray-500 border-gray-200"
+          : connected ? "bg-green-50 text-green-700 border-green-200"
           : configured ? "bg-amber-50 text-amber-700 border-amber-200"
           : "bg-gray-50 text-gray-500 border-gray-200"
         }`}>
           {connected ? <CheckCircle2 size={11} /> : <Clock size={11} />}
-          {connected ? "Conectado" : configured ? "Pronto p/ conectar" : "Aguarda credenciais"}
+          {!enabled ? "Desabilitado" : connected ? "Conectado" : configured ? "Pronto p/ conectar" : "Aguarda credenciais"}
         </span>
       </div>
 
@@ -152,8 +175,26 @@ function GoogleWorkspaceCard() {
         </div>
       </div>
 
-      <div className="flex items-center gap-3 mt-4 flex-wrap">
-        {connected ? (
+      {/* Opt-in do escritório: só o ADMIN habilita/desabilita o módulo */}
+      {isAdmin && (
+        <label className="flex items-center gap-2.5 cursor-pointer mt-4">
+          <input type="checkbox" checked={enabled} disabled={working}
+            onChange={(e) => alternarModulo(e.target.checked)} className="accent-afj-gold w-4 h-4" />
+          <span className="text-sm text-afj-black/75">
+            Habilitar Google Workspace para este escritório
+            <span className="text-afj-black/40"> — escritórios sem o serviço podem manter desligado</span>
+          </span>
+        </label>
+      )}
+
+      <div className="flex items-center gap-3 mt-3 flex-wrap">
+        {!enabled ? (
+          <p className="text-xs text-afj-black/45">
+            {isAdmin
+              ? "Módulo desligado — marque a opção acima para disponibilizar aos usuários deste escritório."
+              : "Integração não habilitada pelo administrador deste escritório."}
+          </p>
+        ) : connected ? (
           <>
             <span className="text-xs text-afj-black/55">Conectado como <strong>{status?.google_email || "—"}</strong></span>
             <button onClick={desconectar} disabled={working}
@@ -170,7 +211,7 @@ function GoogleWorkspaceCard() {
         )}
       </div>
 
-      {!configured && (
+      {enabled && !configured && (
         <div className="mt-4 text-[11px] text-afj-black/50 bg-afj-cream/60 border border-afj-cream-dark rounded-sm p-3 leading-relaxed">
           <strong className="text-afj-black/70">Para ativar (ADMIN):</strong> Google Cloud Console → criar projeto →
           ativar as APIs <em>Calendar, Drive e Gmail</em> → tela de consentimento OAuth (tipo interno) → credencial

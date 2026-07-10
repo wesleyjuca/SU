@@ -57,6 +57,7 @@ class ModulesUpdate(BaseModel):
     financeiro: bool | None = None
     agentes: bool | None = None
     visual_law: bool | None = None
+    google_workspace: bool | None = None   # integração opcional por escritório (opt-in do ADMIN)
 
 
 class NavUpdate(BaseModel):

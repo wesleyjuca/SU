@@ -64,8 +64,18 @@ export default function AgendaPage() {
   const [loading, setLoading] = useState(true);
   const [dias, setDias] = useState(30);
   const [completing, setCompleting] = useState<string | null>(null);
+  const [googleEnabled, setGoogleEnabled] = useState(false);
 
   useEffect(() => { fetchAgenda(); }, [dias]);
+
+  // O atalho do Google Agenda só aparece se o escritório habilitou o módulo
+  useEffect(() => {
+    const token = localStorage.getItem("afj_access_token");
+    fetch("/api/v1/integrations/google/status", { headers: { Authorization: `Bearer ${token}` } })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => setGoogleEnabled(Boolean(d?.enabled)))
+      .catch(() => {});
+  }, []);
 
   async function fetchAgenda() {
     setLoading(true);
@@ -154,16 +164,18 @@ export default function AgendaPage() {
                     </p>
                     {urgency && <p className={`text-xs ${urgency.cls}`}>{urgency.text}</p>}
                   </div>
-                  <a
-                    href={googleCalendarUrl(item)}
-                    target="_blank"
-                    rel="noreferrer"
-                    title="Adicionar ao Google Agenda"
-                    aria-label="Adicionar prazo ao Google Agenda"
-                    className="text-afj-black/30 hover:text-afj-gold p-1 rounded hover:bg-afj-cream"
-                  >
-                    <Calendar size={16} />
-                  </a>
+                  {googleEnabled && (
+                    <a
+                      href={googleCalendarUrl(item)}
+                      target="_blank"
+                      rel="noreferrer"
+                      title="Adicionar ao Google Agenda"
+                      aria-label="Adicionar prazo ao Google Agenda"
+                      className="text-afj-black/30 hover:text-afj-gold p-1 rounded hover:bg-afj-cream"
+                    >
+                      <Calendar size={16} />
+                    </a>
+                  )}
                   <button
                     onClick={() => marcarCumprido(item)}
                     disabled={completing === item.id}

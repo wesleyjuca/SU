@@ -32,11 +32,20 @@ async def _seed_default_data(engine) -> None:
             session.add(TenantConfig(id=uuid.uuid4(), tenant_id=tenant.id))
             await session.flush()
 
+        # Inclui os e-mails DOCUMENTADOS (CLAUDE.md e /ajuda usam @afj.com.br) —
+        # a divergência @afjadvogados.com vs @afj.com.br causava
+        # "E-mail ou senha incorretos" no login do admin.
         SEED = [
+            ("admin@afj.com.br",          "Admin@123",    "Administrador", "ADMIN"),
+            ("advogado@afj.com.br",       "Adv@123",      "Advogado",      "ADVOGADO"),
             ("admin@afjadvogados.com",    "Admin@123",    "Administrador", "ADMIN"),
             ("socio@afjadvogados.com",    "Socio@123",    "Sócio",         "SOCIO"),
             ("advogado@afjadvogados.com", "Advogado@123", "Advogado",      "ADVOGADO"),
         ]
+        import os
+        # Resetar senha/reativar conta a cada boot é destrutivo (desfaz trocas
+        # de senha e reativa contas desativadas). Só com opt-in explícito.
+        reset_passwords = os.environ.get("SEED_RESET_PASSWORDS", "").lower() == "true"
         for email, password, full_name, role in SEED:
             exists = (await session.execute(select(User).where(User.email == email))).scalar_one_or_none()
             if not exists:
@@ -46,11 +55,11 @@ async def _seed_default_data(engine) -> None:
                     full_name=full_name, role=role,
                     is_active=True, tenant_id=tenant.id,
                 ))
-            else:
+            elif reset_passwords:
                 exists.hashed_password = hash_password(password)
                 exists.is_active = True
         await session.commit()
-    log.info("seed_complete")
+    log.info("seed_complete", reset_passwords=reset_passwords)
 
 
 async def _background_warmup() -> None:

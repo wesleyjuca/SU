@@ -22,6 +22,22 @@ _NOT_CONFIGURED = (
     "GOOGLE_CLIENT_SECRET e GOOGLE_REDIRECT_URI no Railway (instruções em Integrações)."
 )
 
+_MODULE_DISABLED = (
+    "A integração Google Workspace está desabilitada para este escritório. "
+    "O administrador pode habilitá-la em Integrações."
+)
+
+
+async def _google_enabled(db: AsyncSession, tenant_id) -> bool:
+    """O módulo Google é opcional por escritório (opt-in do ADMIN do tenant)."""
+    from app.models.tenant import TenantConfig
+    if not tenant_id:
+        return False
+    cfg = (await db.execute(
+        select(TenantConfig).where(TenantConfig.tenant_id == tenant_id)
+    )).scalar_one_or_none()
+    return bool(cfg and (cfg.modules_enabled or {}).get("google_workspace", False))
+
 
 def _sign_state(user_id: str) -> str:
     from jose import jwt
@@ -48,20 +64,27 @@ async def google_status(
     db: AsyncSession = Depends(get_db),
 ):
     from app.services.google_workspace import is_configured
+    enabled = await _google_enabled(db, current_user.tenant_id)
     integ = (await db.execute(
         select(GoogleIntegration).where(GoogleIntegration.user_id == current_user.id)
     )).scalar_one_or_none()
     return {
+        "enabled": enabled,   # opt-in do escritório (decisão do ADMIN do tenant)
         "configured": is_configured(),
-        "connected": bool(integ and integ.refresh_token_enc),
+        "connected": bool(enabled and integ and integ.refresh_token_enc),
         "google_email": integ.google_email if integ else None,
     }
 
 
 @router.post("/connect")
-async def google_connect(current_user: User = Depends(get_current_user)):
+async def google_connect(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     """Gera a URL de autorização OAuth para o usuário conectar sua conta."""
     from app.services.google_workspace import is_configured, build_auth_url
+    if not await _google_enabled(db, current_user.tenant_id):
+        raise HTTPException(status_code=422, detail=_MODULE_DISABLED)
     if not is_configured():
         raise HTTPException(status_code=422, detail=_NOT_CONFIGURED)
     return {"auth_url": build_auth_url(_sign_state(str(current_user.id)))}
@@ -141,6 +164,8 @@ async def create_calendar_event(
 ):
     """Cria o prazo/compromisso direto no Google Agenda do usuário conectado."""
     from app.services.google_workspace import get_valid_token, calendar_create_event, GoogleNotConnected
+    if not await _google_enabled(db, current_user.tenant_id):
+        raise HTTPException(status_code=422, detail=_MODULE_DISABLED)
     try:
         token = await get_valid_token(db, current_user.id)
         inicio = f"{body.data}T{body.hora}:00-05:00"  # fuso do Acre (UTC-5)
@@ -166,6 +191,9 @@ async def save_document_to_drive(
     from app.models.tenant import TenantConfig
     from app.utils.pdf_builder import build_petition_pdf
     from app.core.exceptions import NotFoundError
+
+    if not await _google_enabled(db, current_user.tenant_id):
+        raise HTTPException(status_code=422, detail=_MODULE_DISABLED)
 
     doc = (await db.execute(
         select(Document).where(
