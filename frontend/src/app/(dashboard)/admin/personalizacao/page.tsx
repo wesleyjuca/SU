@@ -162,6 +162,10 @@ export default function PersonalizacaoPage() {
   const [useLogoAsFavicon, setUseLogoAsFavicon] = useState(false);
   const [officeName, setOfficeName] = useState("");
   const [slogan, setSlogan] = useState("");
+  // Timbrado dos documentos (PDFs gerados)
+  const [lh, setLh] = useState({ office_name: "", address: "", contact: "", oab: "", footer: "", use_logo: true });
+  const [lhSaving, setLhSaving] = useState(false);
+  const [lhSaved, setLhSaved] = useState(false);
   const [modules, setModules] = useState<Record<string, boolean>>({});
   const [modulesLoading, setModulesLoading] = useState(false);
   const [widgets, setWidgets] = useState<string[]>(AVAILABLE_WIDGETS.map((w) => w.key));
@@ -174,9 +178,43 @@ export default function PersonalizacaoPage() {
 
   useEffect(() => {
     fetchConfig();
+    fetchLetterhead();
     const stored = localStorage.getItem("afj_theme_history");
     if (stored) { try { setThemeHistory(JSON.parse(stored)); } catch {} }
   }, []);
+
+  async function fetchLetterhead() {
+    try {
+      const token = localStorage.getItem("afj_access_token");
+      const res = await fetch("/api/v1/tenant/letterhead", { headers: { Authorization: `Bearer ${token}` } });
+      if (res.ok) {
+        const d = await res.json();
+        setLh({
+          office_name: d.office_name || "",
+          address: d.address || "",
+          contact: d.contact || "",
+          oab: d.oab || "",
+          footer: d.footer || "",
+          use_logo: d.use_logo !== false,
+        });
+      }
+    } catch { /* mantém defaults */ }
+  }
+
+  async function saveLetterhead() {
+    setLhSaving(true);
+    try {
+      const token = localStorage.getItem("afj_access_token");
+      const res = await fetch("/api/v1/tenant/letterhead", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify(lh),
+      });
+      if (res.ok) { setLhSaved(true); setTimeout(() => setLhSaved(false), 2000); }
+      else toast.error("Erro ao salvar o timbrado.");
+    } catch { toast.error("Erro de conexão."); }
+    finally { setLhSaving(false); }
+  }
 
   async function fetchConfig() {
     try {
@@ -423,6 +461,7 @@ export default function PersonalizacaoPage() {
 
           {/* ── Tab: Escritório ── */}
           {tab === "escritorio" && (
+            <>
             <div className="afj-card p-6 space-y-5">
               <div className="afj-section-header">
                 <p className="afj-section-title">Informações do Escritório</p>
@@ -475,6 +514,62 @@ export default function PersonalizacaoPage() {
                 {saving ? "Salvando..." : saved ? "Salvo!" : "Salvar Escritório"}
               </button>
             </div>
+
+            {/* ── Timbrado dos Documentos ── */}
+            <div className="afj-card p-6 space-y-5">
+              <div className="afj-section-header">
+                <p className="afj-section-title">Timbrado dos Documentos</p>
+              </div>
+              <p className="text-xs text-afj-black/45 -mt-2">
+                Cabeçalho e rodapé dos PDFs gerados (petições, contratos). Campos vazios não aparecem;
+                sem nenhum campo preenchido, vale o padrão do sistema.
+              </p>
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-[10px] font-semibold text-afj-black/55 mb-1.5 uppercase tracking-widest">Nome no cabeçalho</label>
+                  <input type="text" value={lh.office_name} onChange={(e) => setLh({ ...lh, office_name: e.target.value })}
+                    placeholder="Almeida, Freire & Jucá Advogados"
+                    className="w-full bg-afj-cream border border-afj-cream-dark rounded-sm px-4 py-2.5 text-sm focus:outline-none focus:border-afj-gold focus:bg-white transition-colors" />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-semibold text-afj-black/55 mb-1.5 uppercase tracking-widest">Endereço</label>
+                  <input type="text" value={lh.address} onChange={(e) => setLh({ ...lh, address: e.target.value })}
+                    placeholder="Rua, número — Bairro — Cidade/UF — CEP"
+                    className="w-full bg-afj-cream border border-afj-cream-dark rounded-sm px-4 py-2.5 text-sm focus:outline-none focus:border-afj-gold focus:bg-white transition-colors" />
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[10px] font-semibold text-afj-black/55 mb-1.5 uppercase tracking-widest">Contato</label>
+                    <input type="text" value={lh.contact} onChange={(e) => setLh({ ...lh, contact: e.target.value })}
+                      placeholder="Tel: (85) 3333-4444 | contato@..."
+                      className="w-full bg-afj-cream border border-afj-cream-dark rounded-sm px-4 py-2.5 text-sm focus:outline-none focus:border-afj-gold focus:bg-white transition-colors" />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-semibold text-afj-black/55 mb-1.5 uppercase tracking-widest">OAB</label>
+                    <input type="text" value={lh.oab} onChange={(e) => setLh({ ...lh, oab: e.target.value })}
+                      placeholder="OAB/CE 00.000"
+                      className="w-full bg-afj-cream border border-afj-cream-dark rounded-sm px-4 py-2.5 text-sm focus:outline-none focus:border-afj-gold focus:bg-white transition-colors" />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-[10px] font-semibold text-afj-black/55 mb-1.5 uppercase tracking-widest">Rodapé (opcional)</label>
+                  <input type="text" value={lh.footer} onChange={(e) => setLh({ ...lh, footer: e.target.value })}
+                    placeholder="Ex.: Este documento é confidencial."
+                    className="w-full bg-afj-cream border border-afj-cream-dark rounded-sm px-4 py-2.5 text-sm focus:outline-none focus:border-afj-gold focus:bg-white transition-colors" />
+                </div>
+                <label className="flex items-center gap-2.5 cursor-pointer">
+                  <input type="checkbox" checked={lh.use_logo} onChange={(e) => setLh({ ...lh, use_logo: e.target.checked })} className="accent-afj-gold w-4 h-4" />
+                  <span className="text-sm text-afj-black/75">Incluir o logo do escritório no topo dos PDFs</span>
+                </label>
+                <p className="text-[10px] text-afj-black/35">O logo usado é o da aba Marca (upload de logo).</p>
+              </div>
+              <button onClick={saveLetterhead} disabled={lhSaving}
+                className="btn-afj-primary py-2.5 rounded-sm flex items-center gap-2">
+                {lhSaved ? <Check size={14} /> : null}
+                {lhSaving ? "Salvando..." : lhSaved ? "Salvo!" : "Salvar Timbrado"}
+              </button>
+            </div>
+            </>
           )}
 
           {/* ── Tab: Marca ── */}

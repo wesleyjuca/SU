@@ -11,7 +11,33 @@ AFJ_CONTACT = "Tel: (85) 3333-4444 | contato@afjadvogados.com.br"
 AFJ_OAB = "OAB/CE 00.000"
 
 
-def _try_reportlab(title: str, body_lines: list[str], metadata: dict) -> bytes | None:
+def _resolve_letterhead(letterhead: dict | None) -> dict:
+    """Normaliza o timbrado: se o escritório configurou QUALQUER campo, usa só
+    o que foi configurado (linhas vazias somem); senão, padrão AFJ (fallback)."""
+    lh = letterhead or {}
+    campos = ("office_name", "address", "contact", "oab", "footer")
+    custom = any(lh.get(k) for k in campos)
+    if custom:
+        contato = lh.get("contact") or ""
+        oab = lh.get("oab") or ""
+        linha_contato = " | ".join(x for x in (contato, oab) if x) or None
+        return {
+            "office": lh.get("office_name"),
+            "address": lh.get("address"),
+            "contact_line": linha_contato,
+            "footer": lh.get("footer"),
+            "logo_data_url": lh.get("logo_data_url") if lh.get("use_logo", True) else None,
+        }
+    return {
+        "office": AFJ_OFFICE,
+        "address": AFJ_ADDRESS,
+        "contact_line": f"{AFJ_CONTACT} | {AFJ_OAB}",
+        "footer": None,
+        "logo_data_url": lh.get("logo_data_url") if lh.get("use_logo", True) else None,
+    }
+
+
+def _try_reportlab(title: str, body_lines: list[str], metadata: dict, letterhead: dict | None = None) -> bytes | None:
     try:
         from reportlab.lib.pagesizes import A4
         from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -66,9 +92,34 @@ def _try_reportlab(title: str, body_lines: list[str], metadata: dict) -> bytes |
 
         story = []
 
-        story.append(Paragraph(AFJ_OFFICE, gold_style))
-        story.append(Paragraph(AFJ_ADDRESS, header_style))
-        story.append(Paragraph(f"{AFJ_CONTACT} | {AFJ_OAB}", header_style))
+        lh = _resolve_letterhead(letterhead)
+
+        # Logo do escritório no topo (opcional; falha de decodificação não quebra o PDF)
+        if lh.get("logo_data_url"):
+            try:
+                import base64 as _b64
+                from reportlab.platypus import Image as RLImage
+                from reportlab.lib.utils import ImageReader
+
+                data_url = lh["logo_data_url"]
+                raw = _b64.b64decode(data_url.split(",", 1)[1])
+                img_reader = ImageReader(io.BytesIO(raw))
+                iw, ih = img_reader.getSize()
+                h = 1.5 * cm
+                w = iw * (h / ih) if ih else h
+                logo = RLImage(io.BytesIO(raw), width=w, height=h)
+                logo.hAlign = "CENTER"
+                story.append(logo)
+                story.append(Spacer(1, 0.2 * cm))
+            except Exception:
+                pass
+
+        if lh.get("office"):
+            story.append(Paragraph(lh["office"], gold_style))
+        if lh.get("address"):
+            story.append(Paragraph(lh["address"], header_style))
+        if lh.get("contact_line"):
+            story.append(Paragraph(lh["contact_line"], header_style))
         story.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#C9A84C"), spaceAfter=12))
 
         story.append(Paragraph(title.upper(), title_style))
@@ -85,6 +136,8 @@ def _try_reportlab(title: str, body_lines: list[str], metadata: dict) -> bytes |
         story.append(Spacer(1, 0.3 * cm))
 
         gen_at = datetime.utcnow().strftime("%d/%m/%Y às %H:%M UTC")
+        if lh.get("footer"):
+            story.append(Paragraph(lh["footer"], header_style))
         story.append(Paragraph(f"Documento gerado em {gen_at} — Sistema AFJ CORE", header_style))
 
         doc.build(story)
@@ -93,13 +146,14 @@ def _try_reportlab(title: str, body_lines: list[str], metadata: dict) -> bytes |
         return None
 
 
-def _fallback_pdf(title: str, body_lines: list[str], metadata: dict) -> bytes:
+def _fallback_pdf(title: str, body_lines: list[str], metadata: dict, letterhead: dict | None = None) -> bytes:
     """Minimal PDF without external dependencies."""
+    lh = _resolve_letterhead(letterhead)
     now = datetime.utcnow().strftime("%d/%m/%Y %H:%M UTC")
     text_lines = [
-        f"% {AFJ_OFFICE}",
-        f"% {AFJ_ADDRESS}",
-        f"% {AFJ_CONTACT}",
+        f"% {lh.get('office') or AFJ_OFFICE}",
+        f"% {lh.get('address') or ''}",
+        f"% {lh.get('contact_line') or ''}",
         "",
         title.upper(),
         "=" * 60,
@@ -134,21 +188,26 @@ def _fallback_pdf(title: str, body_lines: list[str], metadata: dict) -> bytes:
     return body + xref + trailer
 
 
-def build_petition_pdf(title: str, content_html: str, metadata: dict[str, Any] | None = None) -> bytes:
-    """Gera PDF de petição a partir de conteúdo HTML."""
+def build_petition_pdf(
+    title: str,
+    content_html: str,
+    metadata: dict[str, Any] | None = None,
+    letterhead: dict | None = None,
+) -> bytes:
+    """Gera PDF de petição a partir de conteúdo HTML, com timbrado do escritório."""
     import re
     metadata = metadata or {}
     clean = re.sub(r"<[^>]+>", "\n", content_html)
     clean = re.sub(r"\n{3,}", "\n\n", clean).strip()
     lines = clean.split("\n")
 
-    result = _try_reportlab(title, lines, metadata)
+    result = _try_reportlab(title, lines, metadata, letterhead)
     if result:
         return result
-    return _fallback_pdf(title, lines, metadata)
+    return _fallback_pdf(title, lines, metadata, letterhead)
 
 
-def build_report_pdf(title: str, sections: list[dict[str, str]]) -> bytes:
+def build_report_pdf(title: str, sections: list[dict[str, str]], letterhead: dict | None = None) -> bytes:
     """Gera PDF de relatório com seções nomeadas."""
     lines = []
     for sec in sections:
@@ -158,7 +217,7 @@ def build_report_pdf(title: str, sections: list[dict[str, str]]) -> bytes:
             lines.append(f"\n{heading.upper()}\n{'—' * len(heading)}")
         lines.extend(body.split("\n"))
 
-    result = _try_reportlab(title, lines, {})
+    result = _try_reportlab(title, lines, {}, letterhead)
     if result:
         return result
-    return _fallback_pdf(title, lines, {})
+    return _fallback_pdf(title, lines, {}, letterhead)

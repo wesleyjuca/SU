@@ -1,5 +1,6 @@
 """CRUD de modelos de petição reutilizáveis (tenant-scoped)."""
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, UploadFile, File, Form, HTTPException
+from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
 from pydantic import BaseModel
@@ -130,3 +131,92 @@ async def delete_template(
     tpl = await _get_owned(db, template_id, current_user)
     await db.delete(tpl)
     await db.flush()
+
+
+def _extract_docx_text(raw: bytes) -> str:
+    """Extrai o texto de um .docx (parágrafos + tabelas), preservando quebras."""
+    import io
+    from docx import Document as DocxDocument
+
+    docx = DocxDocument(io.BytesIO(raw))
+    lines: list[str] = []
+    for p in docx.paragraphs:
+        lines.append(p.text)
+    for table in docx.tables:
+        for row in table.rows:
+            cells = [c.text.strip() for c in row.cells if c.text.strip()]
+            if cells:
+                lines.append(" | ".join(cells))
+    return "\n".join(lines).strip()
+
+
+@router.post("/upload", status_code=201, response_model=TemplateResponse)
+async def upload_template(
+    file: UploadFile = File(...),
+    nome: str | None = Form(None),
+    tipo_peticao: str | None = Form(None),
+    descricao: str | None = Form(None),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Importa um modelo pronto do Word (.docx) ou texto (.txt).
+
+    O conteúdo extraído fica editável no app e pode ser baixado de volta em
+    .docx para edição no Word e reimportação."""
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="Arquivo vazio.")
+    if len(raw) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Arquivo muito grande. Máximo 5MB.")
+
+    filename = file.filename or "modelo"
+    lower = filename.lower()
+    if lower.endswith(".docx"):
+        try:
+            conteudo = _extract_docx_text(raw)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Não foi possível ler o .docx. Verifique o arquivo.")
+    elif lower.endswith(".txt"):
+        conteudo = raw.decode("utf-8", errors="ignore").strip()
+    else:
+        raise HTTPException(status_code=400, detail="Formato não suportado. Envie .docx ou .txt.")
+
+    if not conteudo:
+        raise HTTPException(status_code=400, detail="O arquivo não contém texto extraível.")
+
+    tpl = PetitionTemplate(
+        nome=(nome or filename.rsplit(".", 1)[0])[:200],
+        tipo_peticao=tipo_peticao,
+        descricao=descricao,
+        conteudo=conteudo,
+        ativo=True,
+        created_by=current_user.id,
+        tenant_id=current_user.tenant_id,
+    )
+    db.add(tpl)
+    await db.flush()
+    return _to_response(tpl)
+
+
+@router.get("/{template_id}/docx")
+async def download_template_docx(
+    template_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Baixa o modelo como .docx para edição no Word (depois reimporte)."""
+    import io
+    from docx import Document as DocxDocument
+
+    tpl = await _get_owned(db, template_id, current_user)
+    docx = DocxDocument()
+    for line in tpl.conteudo.split("\n"):
+        docx.add_paragraph(line)
+    buf = io.BytesIO()
+    docx.save(buf)
+    safe_name = "".join(c for c in tpl.nome if c.isalnum() or c in " _-")[:50] or "modelo"
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="{safe_name}.docx"'},
+    )
