@@ -6,7 +6,7 @@ from pydantic import BaseModel
 import uuid
 
 from app.db.base import get_db
-from app.dependencies import get_current_user
+from app.dependencies import get_current_user, require_role
 from app.models.user import User
 from app.models.process import LegalProcess, ProcessMovement, ProcessDeadline
 from app.core.exceptions import NotFoundError
@@ -253,7 +253,8 @@ async def update_process(
 @router.delete("/{process_id}", status_code=204)
 async def archive_process(
     process_id: str,
-    current_user: User = Depends(get_current_user),
+    # Arquivar tira o processo da operação — restrito a advogados e gestão
+    current_user: User = Depends(require_role("ADMIN", "SOCIO", "ADVOGADO", "GESTOR")),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(

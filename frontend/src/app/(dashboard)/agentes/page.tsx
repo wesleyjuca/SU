@@ -176,12 +176,14 @@ export default function AgentesPage() {
         <div key={cat}>
           <h2 className="text-xs font-semibold text-afj-black/40 uppercase tracking-wider mb-3">{cat}</h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+            {/* Sem onTrigger: o botão dos cartões disparava o task_type do
+                seletor global (clicar em OCR gerava petição). O disparo agora
+                é feito apenas pelo painel "Disparar Tarefa". */}
             {AGENTS.filter((a) => a.category === cat).map((agent) => (
               <AgentStatusCard
                 key={agent.name}
                 agent={agent}
                 categoryColor={CATEGORY_COLORS[agent.category]}
-                onTrigger={triggerAgent}
               />
             ))}
           </div>
