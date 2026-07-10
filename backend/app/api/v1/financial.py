@@ -8,7 +8,7 @@ from datetime import date
 import uuid
 
 from app.db.base import get_db
-from app.dependencies import get_current_user
+from app.dependencies import get_current_user, require_role
 from app.models.user import User
 from app.models.financial import FinancialEntry
 
@@ -45,7 +45,7 @@ async def list_entries(
     tipo: str | None = None,
     status: str | None = None,
     limit: int = Query(default=50, le=200),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role("ADMIN", "SOCIO", "GESTOR")),
     db: AsyncSession = Depends(get_db),
 ):
     query = (
@@ -66,7 +66,7 @@ async def list_entries(
 @router.post("", response_model=FinancialEntryResponse, status_code=201)
 async def create_entry(
     body: FinancialEntryCreate,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role("ADMIN", "SOCIO", "GESTOR")),
     db: AsyncSession = Depends(get_db),
 ):
     entry = FinancialEntry(
@@ -98,7 +98,7 @@ class FinancialEntryUpdate(BaseModel):
 async def update_entry(
     entry_id: str,
     body: FinancialEntryUpdate,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role("ADMIN", "SOCIO", "GESTOR")),
     db: AsyncSession = Depends(get_db),
 ):
     from app.core.exceptions import NotFoundError
@@ -123,7 +123,7 @@ async def update_entry(
 @router.delete("/{entry_id}", status_code=204)
 async def delete_entry(
     entry_id: str,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role("ADMIN", "SOCIO", "GESTOR")),
     db: AsyncSession = Depends(get_db),
 ):
     from app.core.exceptions import NotFoundError
@@ -144,7 +144,7 @@ async def delete_entry(
 async def export_financial(
     tipo: str | None = None,
     status: str | None = None,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role("ADMIN", "SOCIO", "GESTOR")),
     db: AsyncSession = Depends(get_db),
 ):
     """Exporta lançamentos como CSV."""
@@ -185,7 +185,7 @@ async def export_financial(
 @router.post("/{entry_id}/mark-paid")
 async def mark_paid(
     entry_id: str,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role("ADMIN", "SOCIO", "GESTOR")),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
@@ -205,7 +205,7 @@ async def mark_paid(
 
 @router.get("/monthly")
 async def monthly_summary(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role("ADMIN", "SOCIO", "GESTOR")),
     db: AsyncSession = Depends(get_db),
 ):
     """Retorna receitas e despesas pagas agrupadas por mês (últimos 6 meses)."""
@@ -245,7 +245,7 @@ async def monthly_summary(
 
 @router.get("/summary")
 async def financial_summary(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role("ADMIN", "SOCIO", "GESTOR")),
     db: AsyncSession = Depends(get_db),
 ):
     """Resumo financeiro via analytics_agent."""

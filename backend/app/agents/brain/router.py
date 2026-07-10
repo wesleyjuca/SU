@@ -17,6 +17,7 @@ TASK_ROUTE_MAP: dict[str, str | list[str]] = {
     "marketing_campaign": "marketing_agent",
     "analytics_report": "analytics_agent",
     "visual_law_diagram": "visual_law_agent",
+    "visual_law": "visual_law_agent",       # alias (defesa p/ chamadas antigas)
     "audit_review": "audit_agent",
     "compliance_check": "compliance_agent",
     "monitor_court": "court_monitor_agent",

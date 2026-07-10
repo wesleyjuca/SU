@@ -216,6 +216,12 @@ async def archive_document(
     if not doc:
         raise NotFoundError("Documento", doc_id)
     if hard:
+        # Exclusão PERMANENTE é restrita a ADMIN/SÓCIO (arquivar continua livre).
+        if current_user.role not in ("ADMIN", "SUPERADMIN", "SOCIO"):
+            raise HTTPException(
+                status_code=403,
+                detail="Exclusão permanente é restrita a administradores e sócios. Use Arquivar.",
+            )
         # Exclusão permanente: remove o Contract associado (se houver) e o Document.
         # As demais relações (versions/petition) têm ondelete=CASCADE.
         contract = (await db.execute(

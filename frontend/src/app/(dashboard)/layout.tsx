@@ -17,6 +17,11 @@ import { SearchModal } from "@/components/layout/SearchModal";
 import { BottomNav } from "@/components/layout/BottomNav";
 import { ToastProvider } from "@/components/ui/Toast";
 
+// Menu por papel: `roles: null` = todos; senão, lista de papéis que veem o item.
+// Estagiários (PARALEGAL/ASSISTENTE) veem apenas o essencial do dia a dia.
+const ADV = ["ADMIN", "SUPERADMIN", "SOCIO", "ADVOGADO"];
+const GESTAO = ["ADMIN", "SUPERADMIN", "SOCIO", "GESTOR"];
+
 const navSections = [
   {
     title: null,
@@ -29,43 +34,48 @@ const navSections = [
     items: [
       { href: "/processos", label: "Processos", icon: Scale, roles: null },
       { href: "/agenda", label: "Agenda", icon: CalendarClock, roles: null },
-      { href: "/peticoes", label: "Petições", icon: FileEdit, roles: null },
+      { href: "/peticoes", label: "Petições", icon: FileEdit, roles: ADV },
       { href: "/clientes", label: "Clientes", icon: Users, roles: null },
       { href: "/documentos", label: "Documentos", icon: FolderOpen, roles: null },
-      { href: "/contratos", label: "Contratos", icon: FileText, roles: null },
+      { href: "/contratos", label: "Contratos", icon: FileText, roles: ADV },
     ],
   },
   {
     title: "INTELIGÊNCIA IA",
     items: [
-      { href: "/agentes", label: "Agentes IA", icon: Bot, roles: null },
-      { href: "/minha-ia", label: "Minha IA", icon: KeyRound, roles: null },
-      { href: "/aprovacoes", label: "Aprovações", icon: CheckSquare, roles: null },
+      { href: "/agentes", label: "Agentes IA", icon: Bot, roles: ADV },
+      { href: "/minha-ia", label: "Minha IA", icon: KeyRound, roles: ADV },
+      { href: "/aprovacoes", label: "Aprovações", icon: CheckSquare, roles: ADV },
       { href: "/busca-juridica", label: "Pesquisa Jurídica", icon: BookOpen, roles: null },
-      { href: "/visual-law", label: "Visual Law", icon: Shapes, roles: null },
+      { href: "/visual-law", label: "Visual Law", icon: Shapes, roles: ADV },
     ],
   },
   {
     title: "GESTÃO",
     items: [
-      { href: "/financeiro", label: "Financeiro", icon: DollarSign, roles: null },
-      { href: "/relatorios", label: "Relatórios", icon: BarChart2, roles: null },
+      { href: "/financeiro", label: "Financeiro", icon: DollarSign, roles: GESTAO },
+      { href: "/relatorios", label: "Relatórios", icon: BarChart2, roles: GESTAO },
       { href: "/custos-ia", label: "Custos de IA", icon: Coins, roles: ["ADMIN", "SOCIO"] },
     ],
   },
   {
-    title: "SISTEMA",
+    title: "AJUDA",
     items: [
       { href: "/ajuda", label: "Ajuda & Treinamento", icon: GraduationCap, roles: null },
       { href: "/sobre", label: "Visão Geral", icon: Compass, roles: null },
       { href: "/etica", label: "Ética & Integridade", icon: ShieldCheck, roles: null },
-      { href: "/integracoes", label: "Integrações", icon: Plug, roles: ["ADMIN"] },
-      { href: "/auditoria", label: "Auditoria", icon: Shield, roles: ["ADMIN", "SOCIO"] },
-      { href: "/admin/health", label: "Saúde do Sistema", icon: Activity, roles: ["ADMIN"] },
+      { href: "/configuracoes", label: "Configurações", icon: Settings, roles: null },
+    ],
+  },
+  {
+    title: "ADMINISTRAÇÃO",
+    items: [
       { href: "/admin/usuarios", label: "Usuários", icon: Users2, roles: ["ADMIN"] },
       { href: "/admin/plano", label: "Plano & Uso", icon: Gauge, roles: ["ADMIN"] },
       { href: "/admin/personalizacao", label: "Personalização", icon: Palette, roles: ["ADMIN"] },
-      { href: "/configuracoes", label: "Configurações", icon: Settings, roles: null },
+      { href: "/integracoes", label: "Integrações", icon: Plug, roles: ["ADMIN"] },
+      { href: "/auditoria", label: "Auditoria", icon: Shield, roles: ["ADMIN", "SOCIO"] },
+      { href: "/admin/health", label: "Saúde do Sistema", icon: Activity, roles: ["ADMIN"] },
     ],
   },
 ];

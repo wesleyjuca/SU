@@ -34,8 +34,9 @@ export default function VisualLawPage() {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({
-          task_type: "visual_law",
-          task_input: { tipo_visualizacao: tipo, contexto },
+          // task_type e chaves devem casar com router.py e VisualLawAgent (tipo/conteudo)
+          task_type: "visual_law_diagram",
+          task_input: { tipo, conteudo: contexto },
         }),
       });
       if (!res.ok) {
