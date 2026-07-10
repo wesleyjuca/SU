@@ -6,6 +6,7 @@ from app.models.agent_run import AgentRun, AgentStep, Approval, AgentMemory
 from app.models.audit_log import AuditLog, LGPDConsentRecord
 from app.models.financial import FinancialEntry, BillingInvoice
 from app.models.notification import Notification
+from app.models.integrity import ConductAcceptance, IntegrityReport
 
 __all__ = [
     "User", "UserPermission", "Session",

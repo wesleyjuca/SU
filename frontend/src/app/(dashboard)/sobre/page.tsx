@@ -50,7 +50,7 @@ const AREAS: { titulo: string; recursos: Recurso[] }[] = [
     recursos: [
       { icon: Shield, nome: "Multi-tenant & Auditoria", desc: "Isolamento total entre escritórios e log imutável de ações.", estado: "operacional" },
       { icon: KeyRound, nome: "Autenticação JWT", desc: "Tokens de acesso/refresh com sessões estáveis.", estado: "operacional" },
-      { icon: Shield, nome: "Ética, Controle & Integridade", desc: "Controles ativos (HITL, auditoria, LGPD) e programa de integridade em construção — veja Ética & Integridade.", estado: "parcial" },
+      { icon: Shield, nome: "Ética, Controle & Integridade", desc: "Código de Conduta com aceite registrado, Canal de Denúncias anônimo e controles técnicos ativos (HITL, auditoria, LGPD).", estado: "operacional" },
       { icon: Sparkles, nome: "App Instalável (PWA)", desc: "Manifest e service worker publicados; offline ampliado e push em evolução.", estado: "parcial" },
       { icon: Clock, nome: "Integrações Externas", desc: "WhatsApp e assinatura eletrônica mapeadas em Integrações — aguardando credenciais de provedor.", estado: "planejado" },
     ],
