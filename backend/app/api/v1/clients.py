@@ -168,12 +168,17 @@ async def add_interaction(
     if not result.scalar_one_or_none():
         raise NotFoundError("Cliente", client_id)
 
+    # Interações tipo PORTAL aparecem no portal do cliente como resposta do escritório
+    metadata = dict(body.metadata_json or {})
+    if body.tipo == "PORTAL":
+        metadata.setdefault("origem", "escritorio")
+
     interaction = ClientInteraction(
         client_id=uuid.UUID(client_id),
         user_id=current_user.id,
         tipo=body.tipo,
         descricao=body.descricao,
-        metadata_json=body.metadata_json,
+        metadata_json=metadata or None,
     )
     db.add(interaction)
     await db.flush()

@@ -54,18 +54,16 @@ export default function PortalDocumentosPage() {
       const apiBase = process.env.NEXT_PUBLIC_API_URL
         ? `${process.env.NEXT_PUBLIC_API_URL}/api/v1`
         : "/api/v1";
-      const res = await fetch(`${apiBase}/portal/documents/${docId}/content`, {
+      // PDF com o timbrado do escritório
+      const res = await fetch(`${apiBase}/portal/documents/${docId}/download`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!res.ok) { toast.error("Erro ao baixar documento."); return; }
-      const data = await res.json();
-      const content = data.conteudo_html ?? data.conteudo_texto ?? "";
-      if (!content) { toast.error("Documento sem conteúdo disponível."); return; }
-      const blob = new Blob([content], { type: "text/html;charset=utf-8" });
+      const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = Object.assign(document.createElement("a"), {
         href: url,
-        download: `${titulo}.html`,
+        download: `${titulo}.pdf`,
       });
       a.click();
       URL.revokeObjectURL(url);

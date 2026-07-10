@@ -2,7 +2,7 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { LogOut, Scale, LayoutDashboard, FolderOpen, DollarSign, Menu, X } from "lucide-react";
+import { LogOut, Scale, LayoutDashboard, FolderOpen, DollarSign, Menu, X, MessageSquare } from "lucide-react";
 import { ToastProvider } from "@/components/ui/Toast";
 
 const NAV = [
@@ -10,6 +10,7 @@ const NAV = [
   { href: "/portal/processos", label: "Meus Processos", icon: Scale },
   { href: "/portal/documentos", label: "Documentos", icon: FolderOpen },
   { href: "/portal/financeiro", label: "Financeiro", icon: DollarSign },
+  { href: "/portal/mensagens", label: "Mensagens", icon: MessageSquare },
 ];
 
 export default function PortalLayout({ children }: { children: React.ReactNode }) {

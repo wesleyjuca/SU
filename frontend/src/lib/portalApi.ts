@@ -41,6 +41,8 @@ async function portalRequest<T>(path: string, options: RequestInit = {}): Promis
 
 export const portalApi = {
   get: <T>(path: string) => portalRequest<T>(path, { method: "GET" }),
+  post: <T>(path: string, body?: unknown) =>
+    portalRequest<T>(path, { method: "POST", body: body ? JSON.stringify(body) : undefined }),
 };
 
 export { getPortalToken, clearPortalSession };
