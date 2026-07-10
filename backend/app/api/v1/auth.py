@@ -43,6 +43,13 @@ async def login(body: LoginRequest, request: Request, db: AsyncSession = Depends
         except Exception:
             ok = False
     if not user or not ok:
+        # Motivo detalhado só no log (mensagem ao usuário permanece genérica).
+        import structlog
+        structlog.get_logger().warning(
+            "login_failed",
+            email=body.email,
+            reason="user_not_found_or_inactive" if not user else "wrong_password",
+        )
         raise UnauthorizedError("E-mail ou senha incorretos")
 
     user.last_login_at = datetime.now(timezone.utc)
