@@ -41,7 +41,7 @@ const AREAS: { titulo: string; recursos: Recurso[] }[] = [
       { icon: DollarSign, nome: "Financeiro", desc: "Receitas, despesas, honorários e inadimplência — isolado por escritório.", estado: "operacional" },
       { icon: Users, nome: "Clientes (CRM) & LGPD", desc: "Gestão de clientes/leads com controle de consentimento.", estado: "operacional" },
       { icon: BarChart2, nome: "Relatórios", desc: "Gráficos de processos, financeiro e uso dos agentes.", estado: "operacional" },
-      { icon: DollarSign, nome: "Custos de IA por Usuário", desc: "Consumo de tokens e custo por advogado; limites configuráveis em evolução.", estado: "parcial" },
+      { icon: DollarSign, nome: "Custos de IA por Usuário", desc: "Consumo por advogado com teto mensal configurável, alertas e bloqueio suave.", estado: "operacional" },
       { icon: UserCircle, nome: "Portal do Cliente", desc: "Acesso externo com isolamento duplo (cliente + escritório).", estado: "parcial" },
     ],
   },
@@ -72,7 +72,6 @@ const SUGESTOES: { titulo: string; desc: string }[] = [
   { titulo: "Protocolo automático nos tribunais (PJe)", desc: "Protocolar petições aprovadas diretamente nos sistemas dos tribunais, com comprovante anexado ao processo." },
   { titulo: "Transcrição de audiências com IA", desc: "Upload do áudio da audiência com transcrição, resumo e extração de compromissos/prazos." },
   { titulo: "Chat jurídico interno (RAG)", desc: "Assistente conversacional que responde com base nas petições, memórias e documentos do escritório." },
-  { titulo: "Limites e alertas de orçamento de IA", desc: "Teto de consumo por usuário no Painel de Custos, com bloqueio suave e alertas." },
 ];
 
 function EstadoBadge({ estado }: { estado: Estado }) {

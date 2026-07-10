@@ -1,5 +1,6 @@
 """Endpoints de sistema — métricas reais, navegação dinâmica, analytics."""
 from fastapi import APIRouter, Depends, Query
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_, text
 from datetime import datetime, timezone, timedelta
@@ -599,17 +600,31 @@ async def ai_costs_por_usuario(
         .order_by(func.coalesce(func.sum(AgentRun.cost_usd), 0).desc())
     )
     rows = result.all()
-    usuarios = [
-        {
-            "user_id": str(r.id),
+
+    # Limites de orçamento cadastrados (para exibir teto e % usado por usuário)
+    from app.models.user import AIBudgetLimit
+    limites = {
+        str(b.user_id): float(b.monthly_limit_usd)
+        for b in (await db.execute(
+            select(AIBudgetLimit).where(AIBudgetLimit.tenant_id == current_user.tenant_id)
+        )).scalars().all()
+    }
+
+    usuarios = []
+    for r in rows:
+        uid = str(r.id)
+        custo = float(r.custo_usd)
+        limite = limites.get(uid)
+        usuarios.append({
+            "user_id": uid,
             "nome": r.full_name,
             "email": r.email,
             "execucoes": int(r.execucoes),
             "tokens": int(r.tokens),
-            "custo_usd": float(r.custo_usd),
-        }
-        for r in rows
-    ]
+            "custo_usd": custo,
+            "limite_usd": limite,
+            "pct_limite": round(custo / limite * 100, 1) if limite else None,
+        })
     return {
         "periodo_dias": dias,
         "total_execucoes": sum(u["execucoes"] for u in usuarios),
@@ -617,3 +632,58 @@ async def ai_costs_por_usuario(
         "total_custo_usd": round(sum(u["custo_usd"] for u in usuarios), 4),
         "usuarios": usuarios,
     }
+
+
+class AIBudgetUpdate(BaseModel):
+    user_id: str
+    monthly_limit_usd: float | None = None   # None/0 remove o limite
+    alert_pct: int = 80
+
+
+@router.put("/ai-budgets")
+async def set_ai_budget(
+    body: AIBudgetUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Define/remove o teto mensal de IA de um usuário do escritório (ADMIN/SÓCIO)."""
+    import uuid as _uuid
+    from app.core.exceptions import ForbiddenError, NotFoundError
+    from app.models.user import AIBudgetLimit
+
+    if current_user.role not in ("ADMIN", "SUPERADMIN", "SOCIO"):
+        raise ForbiddenError("Acesso restrito a administradores e sócios")
+    if not (0 <= body.alert_pct <= 100):
+        body.alert_pct = 80
+
+    target_id = _uuid.UUID(body.user_id)
+    # Só permite gerir usuários do MESMO escritório (isolamento multi-tenant)
+    target = (await db.execute(
+        select(User).where(User.id == target_id, User.tenant_id == current_user.tenant_id)
+    )).scalar_one_or_none()
+    if not target:
+        raise NotFoundError("Usuário", body.user_id)
+
+    existing = (await db.execute(
+        select(AIBudgetLimit).where(AIBudgetLimit.user_id == target_id)
+    )).scalar_one_or_none()
+
+    if not body.monthly_limit_usd or body.monthly_limit_usd <= 0:
+        if existing:
+            await db.delete(existing)
+            await db.flush()
+        return {"user_id": body.user_id, "monthly_limit_usd": None, "message": "Limite removido"}
+
+    if existing:
+        existing.monthly_limit_usd = body.monthly_limit_usd
+        existing.alert_pct = body.alert_pct
+    else:
+        db.add(AIBudgetLimit(
+            user_id=target_id,
+            tenant_id=current_user.tenant_id,
+            monthly_limit_usd=body.monthly_limit_usd,
+            alert_pct=body.alert_pct,
+        ))
+    await db.flush()
+    return {"user_id": body.user_id, "monthly_limit_usd": body.monthly_limit_usd,
+            "alert_pct": body.alert_pct, "message": "Limite salvo"}

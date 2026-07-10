@@ -1,4 +1,4 @@
-from sqlalchemy import String, Boolean, ForeignKey, UniqueConstraint, Text
+from sqlalchemy import String, Boolean, ForeignKey, UniqueConstraint, Text, Numeric, Integer
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 import uuid
@@ -75,5 +75,23 @@ class AITaskOverride(Base):
     tenant_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("tenants.id"), nullable=True, index=True)
     task_type: Mapped[str] = mapped_column(String(60), nullable=False)
     model: Mapped[str] = mapped_column(String(80), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class AIBudgetLimit(Base):
+    """Teto mensal de gasto de IA por usuário (USD), definido por ADMIN/SÓCIO.
+
+    Ao atingir `alert_pct` do teto, o usuário recebe um alerta; ao estourar o
+    teto, novas execuções de agentes são bloqueadas (bloqueio suave — o admin
+    pode elevar/remover o limite a qualquer momento)."""
+    __tablename__ = "ai_budget_limits"
+    __table_args__ = (UniqueConstraint("user_id", name="uq_ai_budget_user"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    tenant_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("tenants.id"), nullable=True, index=True)
+    monthly_limit_usd: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
+    alert_pct: Mapped[int] = mapped_column(Integer, default=80)  # % do teto que dispara alerta
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

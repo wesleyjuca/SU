@@ -146,10 +146,11 @@ const GUIAS: Guia[] = [
     resumo: "Acompanhe o consumo de tokens e o custo de IA por advogado (ADMIN/SÓCIO).",
     passos: [
       "Menu → Custos de IA. Escolha o período (7, 30 ou 90 dias).",
-      "Veja os totais do escritório e a tabela por usuário (execuções, tokens, custo, % do total).",
-      "Custos de chaves próprias (BYOK) são pagos pelo usuário ao provedor — aqui aparecem como estimativa.",
+      "Veja os totais do escritório e a tabela por usuário (execuções, tokens, custo).",
+      "Clique no valor da coluna “Limite mensal” para definir o teto de cada usuário (vazio remove).",
+      "Ao atingir 80% do teto o usuário é alertado; a 100%, novas execuções são bloqueadas até ajuste do limite ou virada do mês.",
     ],
-    dica: "Limites de consumo e alertas de orçamento estão no roadmap — veja a Visão Geral.",
+    dica: "Custos de chaves próprias (BYOK) são pagos pelo usuário ao provedor — aqui aparecem como estimativa.",
   },
   {
     icon: Sparkles, categoria: "Sistema", titulo: "Ética & Integridade",
