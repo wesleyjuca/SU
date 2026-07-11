@@ -67,7 +67,7 @@ const ROADMAP: { fase: string; itens: string; estado: Estado }[] = [
   { fase: "Ética, Controle & Integridade", itens: "Controles ativos + código de conduta, canal de denúncias, treinamentos", estado: "parcial" },
   { fase: "Integrações Externas", itens: "WhatsApp, assinatura eletrônica (aguardam credenciais)", estado: "planejado" },
   { fase: "Mobile / PWA", itens: "App instalável hoje; offline ampliado e push em evolução", estado: "parcial" },
-  { fase: "Multi-unidade & SaaS", itens: "P1+P2 entregues (isolamento, provisionamento, cobrança manual) · P3 em curso: relatórios consolidados da banca (matriz de unidades) entregues; gateway de pagamento e subdomínios seguem", estado: "parcial" },
+  { fase: "Multi-unidade & SaaS", itens: "P1+P2 entregues (isolamento, provisionamento, cobrança manual) · P3 em curso: relatórios consolidados da banca com exportação PDF/Excel/CSV entregues; gateway de pagamento e subdomínios seguem", estado: "parcial" },
 ];
 
 const SUGESTOES: { titulo: string; desc: string }[] = [

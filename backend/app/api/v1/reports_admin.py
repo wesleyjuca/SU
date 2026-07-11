@@ -255,10 +255,10 @@ async def export_consolidated(
     current_user: User = Depends(require_role("ADMIN", "SOCIO")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Exporta o consolidado da banca em PDF (timbrado) ou CSV (abre no Excel)."""
+    """Exporta o consolidado da banca em PDF (timbrado), XLSX ou CSV."""
     fmt = (format or "").lower()
-    if fmt not in ("pdf", "csv"):
-        raise HTTPException(status_code=422, detail="Formato inválido. Use 'pdf' ou 'csv'.")
+    if fmt not in ("pdf", "csv", "xlsx"):
+        raise HTTPException(status_code=422, detail="Formato inválido. Use 'pdf', 'xlsx' ou 'csv'.")
 
     banca, unidades = await _resolve_banca(db, current_user, banca_id)
     report = await _compute_consolidated(db, banca, unidades)
@@ -286,6 +286,14 @@ async def export_consolidated(
             headers={"Content-Disposition": f'attachment; filename="{fname}.csv"'},
         )
 
+    if fmt == "xlsx":
+        xlsx = _build_xlsx(banca.name, periodo_label, linhas, totais)
+        return Response(
+            content=xlsx,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="{fname}.xlsx"'},
+        )
+
     # PDF
     from app.utils.pdf_builder import build_consolidated_pdf
     letterhead = await _banca_letterhead(db, banca)
@@ -295,3 +303,75 @@ async def export_consolidated(
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{fname}.pdf"'},
     )
+
+
+def _build_xlsx(banca_name: str, periodo_label: str, linhas: list[dict], totais: dict) -> bytes:
+    """Planilha .xlsx real (openpyxl) da matriz consolidada, com estilos e total em negrito."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Consolidado"
+
+    navy = PatternFill("solid", fgColor="1E2229")
+    gold = PatternFill("solid", fgColor="C9A84C")
+    white_bold = Font(color="FFFFFF", bold=True)
+    thin = Side(style="thin", color="D9D2C4")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    right = Alignment(horizontal="right")
+
+    ws["A1"] = f"Relatório Consolidado — {banca_name}"
+    ws["A1"].font = Font(bold=True, size=13, color="1E2229")
+    ws["A2"] = periodo_label
+    ws["A2"].font = Font(size=10, color="6B6B6B")
+
+    header = ["Unidade", "Proc. ativos", "Proc. total", "Receita mês", "Despesa mês",
+              "Saldo mês", "Custo IA (USD)", "Execuções", "Usuários"]
+    hrow = 4
+    for c, titulo in enumerate(header, start=1):
+        cell = ws.cell(row=hrow, column=c, value=titulo)
+        cell.fill = navy
+        cell.font = white_bold
+        cell.border = border
+        cell.alignment = right if c > 1 else Alignment(horizontal="left")
+
+    def _num(v) -> float:
+        return round(float(v), 2)
+
+    r = hrow + 1
+    for l in linhas:
+        vals = [l["unidade"], l["processos_ativos"], l["processos_total"],
+                _num(l["receita_mes"]), _num(l["despesa_mes"]), _num(l["saldo_mes"]),
+                _num(l["custo_ia_mes"]), l["execucoes_mes"], l["usuarios_ativos"]]
+        for c, v in enumerate(vals, start=1):
+            cell = ws.cell(row=r, column=c, value=v)
+            cell.border = border
+            if c in (4, 5, 6):
+                cell.number_format = 'R$ #,##0.00'
+            elif c == 7:
+                cell.number_format = '"$" #,##0.00'
+        r += 1
+
+    total_vals = ["TOTAL DA BANCA", totais["processos_ativos"], totais["processos_total"],
+                  _num(totais["receita_mes"]), _num(totais["despesa_mes"]), _num(totais["saldo_mes"]),
+                  _num(totais["custo_ia_mes"]), totais["execucoes_mes"], totais["usuarios_ativos"]]
+    for c, v in enumerate(total_vals, start=1):
+        cell = ws.cell(row=r, column=c, value=v)
+        cell.fill = gold
+        cell.font = white_bold
+        cell.border = border
+        if c in (4, 5, 6):
+            cell.number_format = 'R$ #,##0.00'
+        elif c == 7:
+            cell.number_format = '"$" #,##0.00'
+
+    widths = [34, 12, 12, 15, 15, 15, 14, 12, 10]
+    for i, wdt in enumerate(widths, start=1):
+        ws.column_dimensions[get_column_letter(i)].width = wdt
+    ws.freeze_panes = "A5"
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()

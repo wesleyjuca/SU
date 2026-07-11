@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect, useCallback } from "react";
 import dynamic from "next/dynamic";
-import { BarChart2, Building2, Scale, DollarSign, Bot, FileText, FileDown, Loader2 } from "lucide-react";
+import { BarChart2, Building2, Scale, DollarSign, Bot, FileText, FileDown, FileSpreadsheet, Loader2 } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
 
@@ -49,7 +49,7 @@ export default function RelatoriosBancaPage() {
   const [bancaId, setBancaId] = useState<string>("");
   const [report, setReport] = useState<Report | null>(null);
   const [loading, setLoading] = useState(true);
-  const [exporting, setExporting] = useState<"pdf" | "csv" | null>(null);
+  const [exporting, setExporting] = useState<"pdf" | "xlsx" | "csv" | null>(null);
 
   useEffect(() => {
     fetch("/api/v1/reports/scope", { headers: authH() })
@@ -75,7 +75,7 @@ export default function RelatoriosBancaPage() {
 
   useEffect(() => { if (bancaId) fetchReport(bancaId); }, [bancaId, fetchReport]);
 
-  async function exportar(format: "pdf" | "csv") {
+  async function exportar(format: "pdf" | "xlsx" | "csv") {
     setExporting(format);
     try {
       const qs = bancaId ? `&banca_id=${bancaId}` : "";
@@ -118,9 +118,14 @@ export default function RelatoriosBancaPage() {
                 title="Exportar em PDF (timbrado)" aria-label="Exportar em PDF">
                 {exporting === "pdf" ? <Loader2 size={14} className="animate-spin" /> : <FileText size={14} />} PDF
               </button>
+              <button onClick={() => exportar("xlsx")} disabled={exporting !== null}
+                className="btn-afj-outline rounded-sm text-sm py-2 px-3 flex items-center gap-2 disabled:opacity-50"
+                title="Exportar em Excel (.xlsx)" aria-label="Exportar em Excel">
+                {exporting === "xlsx" ? <Loader2 size={14} className="animate-spin" /> : <FileSpreadsheet size={14} />} Excel
+              </button>
               <button onClick={() => exportar("csv")} disabled={exporting !== null}
                 className="btn-afj-outline rounded-sm text-sm py-2 px-3 flex items-center gap-2 disabled:opacity-50"
-                title="Exportar em CSV (abre no Excel)" aria-label="Exportar em CSV">
+                title="Exportar em CSV" aria-label="Exportar em CSV">
                 {exporting === "csv" ? <Loader2 size={14} className="animate-spin" /> : <FileDown size={14} />} CSV
               </button>
             </>
