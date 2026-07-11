@@ -7,7 +7,7 @@ export interface User {
   email: string;
   full_name: string;
   oab_number: string | null;
-  role: "ADMIN" | "SOCIO" | "ADVOGADO" | "PARALEGAL" | "ASSISTENTE";
+  role: "SUPERADMIN" | "ADMIN" | "SOCIO" | "ADVOGADO" | "PARALEGAL" | "ASSISTENTE" | "GESTOR" | "CLIENT";
   is_active: boolean;
   created_at: string;
 }

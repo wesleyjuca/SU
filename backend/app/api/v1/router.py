@@ -5,6 +5,7 @@ from app.api.v1 import (
     auth, approvals, processes, clients, documents,
     financial, ws, audit, rag, notifications, tenant, system, lgpd, push, portal,
     petition_templates, integrity, google_integration, tenants_admin, billing,
+    reports_admin,
 )
 from app.dependencies import require_active_tenant
 
@@ -37,6 +38,7 @@ api_router.include_router(integrity.router, dependencies=_BLOCK)
 api_router.include_router(google_integration.router, dependencies=_BLOCK)
 api_router.include_router(tenants_admin.router)
 api_router.include_router(billing.router)
+api_router.include_router(reports_admin.router)
 
 # Agents router depends on LangGraph — load with guard so a build failure
 # degrades only /agents/* without bringing down the entire app

@@ -74,6 +74,7 @@ const navSections = [
     items: [
       { href: "/admin/escritorios", label: "Escritórios", icon: Building2, roles: ["SUPERADMIN"] },
       { href: "/admin/faturamento", label: "Faturamento", icon: Receipt, roles: ["SUPERADMIN"] },
+      { href: "/admin/relatorios-banca", label: "Relatórios da Banca", icon: BarChart2, roles: ["SUPERADMIN", "ADMIN", "SOCIO"] },
       { href: "/admin/usuarios", label: "Usuários", icon: Users2, roles: ["ADMIN", "SUPERADMIN"] },
       { href: "/admin/plano", label: "Plano & Uso", icon: Gauge, roles: ["ADMIN", "SUPERADMIN"] },
       { href: "/admin/personalizacao", label: "Personalização", icon: Palette, roles: ["ADMIN", "SUPERADMIN"] },

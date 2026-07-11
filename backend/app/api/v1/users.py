@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, or_
+from sqlalchemy import select, or_, func
 from pydantic import BaseModel, EmailStr
 from app.dependencies import get_current_user, get_db
 from app.models.user import User
@@ -277,7 +277,24 @@ async def update_my_ai_overrides(
 
 
 @router.get("/me")
-async def get_me(current_user: User = Depends(get_current_user)):
+async def get_me(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    # Flags de banca (Fase 29): destravam o menu de Relatórios Consolidados.
+    from app.models.tenant import Tenant
+    from app.core.tenant import DEFAULT_TENANT_SLUG
+    is_root = is_unit = has_units = False
+    if current_user.tenant_id:
+        tenant = (await db.execute(
+            select(Tenant).where(Tenant.id == current_user.tenant_id)
+        )).scalar_one_or_none()
+        if tenant:
+            is_root = tenant.slug == DEFAULT_TENANT_SLUG
+            is_unit = tenant.parent_tenant_id is not None
+            has_units = (await db.execute(
+                select(func.count(Tenant.id)).where(Tenant.parent_tenant_id == tenant.id)
+            )).scalar_one() > 0
     return {
         "id": str(current_user.id),
         "full_name": current_user.full_name,
@@ -287,6 +304,9 @@ async def get_me(current_user: User = Depends(get_current_user)):
         "tenant_id": str(current_user.tenant_id) if current_user.tenant_id else None,
         "oab_number": current_user.oab_number,
         "oab_uf": current_user.oab_uf,
+        "is_root": is_root,
+        "is_unit": is_unit,
+        "has_units": has_units,
     }
 
 
