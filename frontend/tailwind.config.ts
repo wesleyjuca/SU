@@ -11,16 +11,19 @@ const config: Config = {
     extend: {
       colors: {
         // ─── Identidade Visual AFJ (Almeida, Freire & Jucá) ─────────────────
+        // gold/cream/navy vêm das variáveis --brand-* (canais RGB), então a
+        // Personalização por escritório repinta o sistema em runtime. Os tons
+        // neutros de texto (black/charcoal) permanecem fixos.
         afj: {
-          gold: "#B8954A",         // dourado acobreado — cor oficial da marca
-          "gold-light": "#D4AC64",
-          "gold-dark": "#8A6D2A",
-          black: "#1A1A1A",        // preto para texto
+          gold: "rgb(var(--brand-primary) / <alpha-value>)",         // cor oficial da marca (customizável)
+          "gold-light": "rgb(var(--brand-primary-light) / <alpha-value>)",
+          "gold-dark": "rgb(var(--brand-primary-dark) / <alpha-value>)",
+          black: "#1A1A1A",        // preto para texto (fixo)
           "black-soft": "#252B35",
-          cream: "#F4F0EA",        // creme claro — fundo principal
-          "cream-dark": "#EAE5D8",
+          cream: "rgb(var(--brand-accent) / <alpha-value>)",         // fundo principal (customizável)
+          "cream-dark": "rgb(var(--brand-accent-dark) / <alpha-value>)",
           charcoal: "#353D4A",
-          navy: "#1E2229",         // charcoal-navy — fundo da sidebar (marca)
+          navy: "rgb(var(--brand-secondary) / <alpha-value>)",       // sidebar/dark (customizável)
         },
         border: "hsl(var(--border))",
         input: "hsl(var(--input))",
@@ -28,11 +31,11 @@ const config: Config = {
         background: "hsl(var(--background))",
         foreground: "hsl(var(--foreground))",
         primary: {
-          DEFAULT: "#B8954A",
+          DEFAULT: "rgb(var(--brand-primary) / <alpha-value>)",
           foreground: "#FFFFFF",
         },
         secondary: {
-          DEFAULT: "#F4F0EA",
+          DEFAULT: "rgb(var(--brand-accent) / <alpha-value>)",
           foreground: "#1A1A1A",
         },
         destructive: {
@@ -40,11 +43,11 @@ const config: Config = {
           foreground: "hsl(var(--destructive-foreground))",
         },
         muted: {
-          DEFAULT: "#F4F0EA",
+          DEFAULT: "rgb(var(--brand-accent) / <alpha-value>)",
           foreground: "#6B6B6B",
         },
         accent: {
-          DEFAULT: "#EAE5D8",
+          DEFAULT: "rgb(var(--brand-accent-dark) / <alpha-value>)",
           foreground: "#1A1A1A",
         },
         // Status badges

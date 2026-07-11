@@ -371,10 +371,8 @@ export default function PersonalizacaoPage() {
     setPreviewColor(t.primary);
     const f = FONTS.find((f) => f.id === t.font.toLowerCase()) ?? FONTS[0];
     setPreviewFont(f.css);
-    document.documentElement.style.setProperty("--brand-primary", t.primary);
-    document.documentElement.style.setProperty("--brand-secondary", t.secondary);
-    document.documentElement.style.setProperty("--brand-accent", t.accent);
     document.documentElement.style.setProperty("--font-display", f.css);
+    // applyTheme converte hex→canais e seta --brand-* (inclui secondary/accent).
     applyTheme({ ...theme, primaryColor: t.primary, secondaryColor: t.secondary, accentColor: t.accent });
     setTheme({ ...theme, primaryColor: t.primary, secondaryColor: t.secondary, accentColor: t.accent });
     saveBranding({ primary_color: t.primary, secondary_color: t.secondary, accent_color: t.accent });
