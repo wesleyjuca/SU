@@ -50,13 +50,15 @@
     --destructive: 0 84% 60%;
     --destructive-foreground: 0 0% 98%;
 
-    /* ── Tema customizável (sobrescrito via JS em runtime) ─── */
-    --brand-primary: #B8954A;
-    --brand-primary-light: #D4AC64;
-    --brand-primary-dark: #8A6D2A;
-    --brand-secondary: #1E2229;
-    --brand-accent: #F4F0EA;
-    --brand-accent-dark: #EAE5D8;
+    /* ── Tema customizável (canais RGB "r g b"; sobrescrito via JS em runtime) ──
+       O Tailwind mapeia afj-gold/navy/cream para rgb(var(--brand-*) / <alpha>),
+       então trocar estes valores repinta todo o sistema mantendo opacidades. */
+    --brand-primary: 184 149 74;        /* #B8954A */
+    --brand-primary-light: 212 172 100; /* #D4AC64 */
+    --brand-primary-dark: 138 109 42;   /* #8A6D2A */
+    --brand-secondary: 30 34 41;        /* #1E2229 */
+    --brand-accent: 244 240 234;        /* #F4F0EA */
+    --brand-accent-dark: 234 229 216;   /* #EAE5D8 */
     --sidebar-bg: #1E2229;
     --sidebar-text: #F4F0EA;
     --font-display: 'Optima', 'Optima Nova', Georgia, serif;
@@ -246,11 +248,11 @@
   }
 
   /* ─── Classes de tema dinâmico ────────────────────────────────────────── */
-  .brand-primary        { color: var(--brand-primary); }
-  .bg-brand-primary     { background-color: var(--brand-primary); }
-  .border-brand-primary { border-color: var(--brand-primary); }
-  .brand-accent         { color: var(--brand-accent); }
-  .bg-brand-accent      { background-color: var(--brand-accent); }
+  .brand-primary        { color: rgb(var(--brand-primary)); }
+  .bg-brand-primary     { background-color: rgb(var(--brand-primary)); }
+  .border-brand-primary { border-color: rgb(var(--brand-primary)); }
+  .brand-accent         { color: rgb(var(--brand-accent)); }
+  .bg-brand-accent      { background-color: rgb(var(--brand-accent)); }
 
   /* ─── Tabelas responsivas ─────────────────────────────────────────────── */
   .table-responsive { @apply overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0; }
@@ -274,7 +276,7 @@
   /* ─── KPI / Stat card premium ─────────────────────────────────────────── */
   .afj-stat-card {
     @apply bg-white border border-afj-cream-dark rounded-sm p-5 flex flex-col gap-1;
-    border-left: 3px solid var(--brand-primary);
+    border-left: 3px solid rgb(var(--brand-primary));
     box-shadow: 0 1px 3px rgba(30,34,41,0.06);
     transition: box-shadow 0.2s ease;
   }

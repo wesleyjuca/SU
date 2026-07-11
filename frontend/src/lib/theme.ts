@@ -22,13 +22,17 @@ const DEFAULT_THEME: TenantTheme = {
 
 export function applyTheme(theme: TenantTheme): void {
   const root = document.documentElement;
-  root.style.setProperty("--brand-primary", theme.primaryColor);
-  root.style.setProperty("--brand-secondary", theme.secondaryColor);
-  root.style.setProperty("--brand-accent", theme.accentColor);
+  // As variáveis guardam CANAIS RGB ("r g b") — o Tailwind mapeia afj-gold/navy/cream
+  // para rgb(var(--brand-*) / <alpha-value>), então os modificadores de opacidade
+  // (afj-gold/10, afj-navy/50) continuam funcionando ao trocar o tema.
+  root.style.setProperty("--brand-primary", _channels(theme.primaryColor));
+  root.style.setProperty("--brand-secondary", _channels(theme.secondaryColor));
+  root.style.setProperty("--brand-accent", _channels(theme.accentColor));
 
   // Derived shades (lighten/darken approximation)
-  root.style.setProperty("--brand-primary-light", _lighten(theme.primaryColor, 20));
-  root.style.setProperty("--brand-primary-dark", _darken(theme.primaryColor, 20));
+  root.style.setProperty("--brand-primary-light", _channels(_lighten(theme.primaryColor, 20)));
+  root.style.setProperty("--brand-primary-dark", _channels(_darken(theme.primaryColor, 20)));
+  root.style.setProperty("--brand-accent-dark", _channels(_darken(theme.accentColor, 10)));
 
   if (theme.faviconUrl) {
     try {
@@ -83,6 +87,14 @@ export async function fetchAndApplyTheme(): Promise<TenantTheme> {
 function applyAndReturn(theme: TenantTheme): TenantTheme {
   applyTheme(theme);
   return theme;
+}
+
+// "#B8954A" → "184 149 74" (canais para rgb(var(--x) / <alpha>)). Passa adiante
+// valores que já sejam canais ("184 149 74") sem alterar.
+function _channels(color: string): string {
+  const rgb = _hexToRgb(color);
+  if (rgb) return `${rgb[0]} ${rgb[1]} ${rgb[2]}`;
+  return color;
 }
 
 function _hexToRgb(hex: string): [number, number, number] | null {
