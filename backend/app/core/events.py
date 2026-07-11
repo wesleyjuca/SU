@@ -41,6 +41,8 @@ async def _seed_default_data(engine) -> None:
             ("admin@afjadvogados.com",    "Admin@123",    "Administrador", "ADMIN"),
             ("socio@afjadvogados.com",    "Socio@123",    "Sócio",         "SOCIO"),
             ("advogado@afjadvogados.com", "Advogado@123", "Advogado",      "ADVOGADO"),
+            # SUPERADMIN — dono da plataforma SaaS (gerencia todos os escritórios).
+            ("super@afj.com.br",          "Super@123",    "Super Admin",   "SUPERADMIN"),
         ]
         import os
         # Resetar senha/reativar conta a cada boot é destrutivo (desfaz trocas
@@ -116,6 +118,9 @@ async def lifespan(app: FastAPI):
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS ai_api_key_enc TEXT",
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS ai_model VARCHAR(80)",
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS ai_enabled BOOLEAN DEFAULT FALSE",
+            # Fase 27 — unidades da mesma banca (create_all não adiciona colunas novas)
+            "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS parent_tenant_id UUID REFERENCES tenants(id) ON DELETE SET NULL",
+            "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS unit_label VARCHAR(120)",
         ]:
             try:
                 async with engine.begin() as conn:

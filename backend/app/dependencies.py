@@ -50,14 +50,16 @@ async def get_current_staff(current_user: User = Depends(get_current_user)) -> U
 
 
 async def require_admin(current_user: User = Depends(get_current_user)) -> User:
-    if current_user.role not in ("ADMIN", "SOCIO"):
+    # SUPERADMIN (dono da plataforma) é superconjunto de ADMIN.
+    if current_user.role not in ("ADMIN", "SOCIO", "SUPERADMIN"):
         raise ForbiddenError("Permissão de administrador necessária")
     return current_user
 
 
 def require_role(*roles: str):
     async def _check(current_user: User = Depends(get_current_user)) -> User:
-        if current_user.role not in roles:
+        # SUPERADMIN sempre passa — é superconjunto de qualquer papel do escritório.
+        if current_user.role != "SUPERADMIN" and current_user.role not in roles:
             raise ForbiddenError(f"Perfil necessário: {', '.join(roles)}")
         return current_user
     return _check

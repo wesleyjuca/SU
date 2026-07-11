@@ -4,7 +4,7 @@ from app.api.v1 import (
     users,
     auth, approvals, processes, clients, documents,
     financial, ws, audit, rag, notifications, tenant, system, lgpd, push, portal,
-    petition_templates, integrity, google_integration,
+    petition_templates, integrity, google_integration, tenants_admin,
 )
 
 log = structlog.get_logger()
@@ -30,6 +30,7 @@ api_router.include_router(portal.router)
 api_router.include_router(petition_templates.router)
 api_router.include_router(integrity.router)
 api_router.include_router(google_integration.router)
+api_router.include_router(tenants_admin.router)
 
 # Agents router depends on LangGraph — load with guard so a build failure
 # degrades only /agents/* without bringing down the entire app
