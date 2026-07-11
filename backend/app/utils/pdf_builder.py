@@ -207,6 +207,126 @@ def build_petition_pdf(
     return _fallback_pdf(title, lines, metadata, letterhead)
 
 
+def build_consolidated_pdf(
+    banca_name: str,
+    periodo_label: str,
+    linhas: list[dict[str, Any]],
+    totais: dict[str, Any],
+    letterhead: dict | None = None,
+) -> bytes:
+    """Gera o PDF do relatório consolidado da banca com tabela real (matriz por unidade).
+
+    Fallback para texto (build_report_pdf) se reportlab não estiver disponível.
+    """
+    def _brl(v: float) -> str:
+        return "R$ " + f"{float(v):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+    try:
+        from reportlab.lib.pagesizes import A4, landscape
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.units import cm
+        from reportlab.lib import colors
+        from reportlab.lib.enums import TA_CENTER
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable, Table, TableStyle
+
+        buf = io.BytesIO()
+        doc = SimpleDocTemplate(
+            buf, pagesize=landscape(A4),
+            leftMargin=1.5 * cm, rightMargin=1.5 * cm, topMargin=1.8 * cm, bottomMargin=1.8 * cm,
+        )
+        styles = getSampleStyleSheet()
+        gold = ParagraphStyle("g", parent=styles["Normal"], fontSize=13, alignment=TA_CENTER,
+                              textColor=colors.HexColor("#C9A84C"), fontName="Times-Bold")
+        header_style = ParagraphStyle("h", parent=styles["Normal"], fontSize=9, alignment=TA_CENTER,
+                                      textColor=colors.HexColor("#1A1A1A"))
+        title_style = ParagraphStyle("t", parent=styles["Normal"], fontSize=13, fontName="Times-Bold",
+                                     alignment=TA_CENTER, spaceAfter=4)
+
+        story = []
+        lh = _resolve_letterhead(letterhead)
+        if lh.get("logo_data_url"):
+            try:
+                import base64 as _b64
+                from reportlab.platypus import Image as RLImage
+                from reportlab.lib.utils import ImageReader
+                raw = _b64.b64decode(lh["logo_data_url"].split(",", 1)[1])
+                iw, ih = ImageReader(io.BytesIO(raw)).getSize()
+                h = 1.3 * cm
+                logo = RLImage(io.BytesIO(raw), width=(iw * (h / ih) if ih else h), height=h)
+                logo.hAlign = "CENTER"
+                story.append(logo)
+                story.append(Spacer(1, 0.15 * cm))
+            except Exception:
+                pass
+        if lh.get("office"):
+            story.append(Paragraph(lh["office"], gold))
+        if lh.get("contact_line"):
+            story.append(Paragraph(lh["contact_line"], header_style))
+        story.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#C9A84C"), spaceAfter=10))
+
+        story.append(Paragraph(f"Relatório Consolidado — {banca_name}", title_style))
+        story.append(Paragraph(periodo_label, header_style))
+        story.append(Spacer(1, 0.5 * cm))
+
+        header = ["Unidade", "Proc. ativos", "Proc. total", "Receita mês", "Despesa mês",
+                  "Saldo mês", "Custo IA", "Execuções", "Usuários"]
+        data = [header]
+        for l in linhas:
+            data.append([
+                l["unidade"], str(l["processos_ativos"]), str(l["processos_total"]),
+                _brl(l["receita_mes"]), _brl(l["despesa_mes"]), _brl(l["saldo_mes"]),
+                f"$ {l['custo_ia_mes']:.2f}", str(l["execucoes_mes"]), str(l["usuarios_ativos"]),
+            ])
+        data.append([
+            "TOTAL DA BANCA", str(totais["processos_ativos"]), str(totais["processos_total"]),
+            _brl(totais["receita_mes"]), _brl(totais["despesa_mes"]), _brl(totais["saldo_mes"]),
+            f"$ {totais['custo_ia_mes']:.2f}", str(totais["execucoes_mes"]), str(totais["usuarios_ativos"]),
+        ])
+
+        table = Table(data, repeatRows=1)
+        table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1E2229")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, -1), 8),
+            ("ALIGN", (1, 0), (-1, -1), "RIGHT"),
+            ("ALIGN", (0, 0), (0, -1), "LEFT"),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -2), [colors.white, colors.HexColor("#F7F3EC")]),
+            ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#C9A84C")),
+            ("TEXTCOLOR", (0, -1), (-1, -1), colors.white),
+            ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
+            ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#D9D2C4")),
+            ("TOPPADDING", (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ]))
+        story.append(table)
+
+        story.append(Spacer(1, 0.8 * cm))
+        gen_at = datetime.utcnow().strftime("%d/%m/%Y às %H:%M UTC")
+        story.append(Paragraph(f"Documento gerado em {gen_at} — Sistema AFJ CORE", header_style))
+        doc.build(story)
+        return buf.getvalue()
+    except ImportError:
+        # Fallback textual (sem reportlab)
+        linhas_txt = []
+        for l in linhas:
+            linhas_txt.append(
+                f"{l['unidade']}: ativos={l['processos_ativos']} total={l['processos_total']} "
+                f"receita={_brl(l['receita_mes'])} despesa={_brl(l['despesa_mes'])} "
+                f"saldo={_brl(l['saldo_mes'])} IA=${l['custo_ia_mes']:.2f} usuarios={l['usuarios_ativos']}"
+            )
+        linhas_txt.append(
+            f"TOTAL: ativos={totais['processos_ativos']} receita={_brl(totais['receita_mes'])} "
+            f"despesa={_brl(totais['despesa_mes'])} saldo={_brl(totais['saldo_mes'])}"
+        )
+        return build_report_pdf(
+            f"Relatório Consolidado — {banca_name}",
+            [{"heading": periodo_label, "body": "\n".join(linhas_txt)}],
+            letterhead,
+        )
+
+
 def build_report_pdf(title: str, sections: list[dict[str, str]], letterhead: dict | None = None) -> bytes:
     """Gera PDF de relatório com seções nomeadas."""
     lines = []

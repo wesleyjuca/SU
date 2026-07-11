@@ -7,9 +7,12 @@ tenant_id é preservado — só quem tem direito à matriz enxerga o consolidado
 - ADMIN/SÓCIO: apenas a própria banca, se ela tiver unidades.
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from datetime import datetime, timezone
+import csv
+import io
 import uuid
 
 from app.db.base import get_db
@@ -109,6 +112,11 @@ async def consolidated_report(
 ):
     """Matriz consolidada da banca — uma linha por unidade + totais + série mensal."""
     banca, unidades = await _resolve_banca(db, current_user, banca_id)
+    return await _compute_consolidated(db, banca, unidades)
+
+
+async def _compute_consolidated(db: AsyncSession, banca: Tenant, unidades: list[Tenant]) -> dict:
+    """Computa a matriz consolidada (reusada pelo JSON e pela exportação)."""
     tenants = [banca, *unidades]
     tenant_ids = [t.id for t in tenants]
     nomes = {banca.id: f"{banca.name} (matriz)"}
@@ -220,3 +228,70 @@ async def consolidated_report(
         "series": series,
         "gerado_em": datetime.now(timezone.utc).isoformat(),
     }
+
+
+def _brl(v) -> str:
+    return "R$ " + f"{float(v):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+async def _banca_letterhead(db: AsyncSession, banca: Tenant) -> dict | None:
+    """Timbrado da banca-mãe (mesmo padrão de documents.py, com banca.id)."""
+    from app.models.tenant import TenantConfig
+    cfg = (await db.execute(
+        select(TenantConfig).where(TenantConfig.tenant_id == banca.id)
+    )).scalar_one_or_none()
+    if not cfg:
+        return None
+    lh = dict((cfg.document_templates or {}).get("letterhead", {}))
+    if cfg.logo_url:
+        lh["logo_data_url"] = cfg.logo_url
+    return lh
+
+
+@router.get("/consolidated/export")
+async def export_consolidated(
+    format: str = Query(...),
+    banca_id: str | None = Query(default=None),
+    current_user: User = Depends(require_role("ADMIN", "SOCIO")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Exporta o consolidado da banca em PDF (timbrado) ou CSV (abre no Excel)."""
+    fmt = (format or "").lower()
+    if fmt not in ("pdf", "csv"):
+        raise HTTPException(status_code=422, detail="Formato inválido. Use 'pdf' ou 'csv'.")
+
+    banca, unidades = await _resolve_banca(db, current_user, banca_id)
+    report = await _compute_consolidated(db, banca, unidades)
+    linhas, totais = report["linhas"], report["totais"]
+    competencia = inicio_mes().strftime("%Y-%m")
+    periodo_label = "Competência: " + inicio_mes().strftime("%m/%Y")
+    fname = f"consolidado-{banca.slug}-{competencia}"
+
+    if fmt == "csv":
+        buf = io.StringIO()
+        buf.write("﻿")  # BOM p/ o Excel pt-BR reconhecer UTF-8
+        w = csv.writer(buf, delimiter=";")
+        w.writerow(["Unidade", "Proc. ativos", "Proc. total", "Receita mes",
+                    "Despesa mes", "Saldo mes", "Custo IA (USD)", "Execucoes", "Usuarios"])
+        for l in linhas:
+            w.writerow([l["unidade"], l["processos_ativos"], l["processos_total"],
+                        _brl(l["receita_mes"]), _brl(l["despesa_mes"]), _brl(l["saldo_mes"]),
+                        f"{l['custo_ia_mes']:.2f}", l["execucoes_mes"], l["usuarios_ativos"]])
+        w.writerow(["TOTAL DA BANCA", totais["processos_ativos"], totais["processos_total"],
+                    _brl(totais["receita_mes"]), _brl(totais["despesa_mes"]), _brl(totais["saldo_mes"]),
+                    f"{totais['custo_ia_mes']:.2f}", totais["execucoes_mes"], totais["usuarios_ativos"]])
+        return StreamingResponse(
+            iter([buf.getvalue()]),
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{fname}.csv"'},
+        )
+
+    # PDF
+    from app.utils.pdf_builder import build_consolidated_pdf
+    letterhead = await _banca_letterhead(db, banca)
+    pdf = build_consolidated_pdf(banca.name, periodo_label, linhas, totais, letterhead)
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{fname}.pdf"'},
+    )
