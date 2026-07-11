@@ -1,8 +1,15 @@
 "use client";
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import { Gauge, Users2, HardDrive, Coins, Bot, RefreshCw, Crown } from "lucide-react";
+import { Gauge, Users2, HardDrive, Coins, Bot, RefreshCw, Crown, Receipt } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
+
+interface BillingInfo {
+  status: string;
+  valor_mensal: number | null;
+  proximo_vencimento: string | null;
+  dias_para_vencimento: number | null;
+}
 
 interface Usage {
   plan: string;
@@ -14,7 +21,16 @@ interface Usage {
   custo_ia_mes_usd: number;
   tokens_mes: number;
   execucoes_mes: number;
+  billing?: BillingInfo;
 }
+
+const BILLING_STYLE: Record<string, { cls: string; label: string }> = {
+  ATIVO: { cls: "border-green-500", label: "Em dia" },
+  INADIMPLENTE: { cls: "border-amber-500", label: "Mensalidade vencida" },
+  SUSPENSO: { cls: "border-red-500", label: "Suspenso — escrita bloqueada" },
+  ISENTO: { cls: "border-afj-gold", label: "Isento" },
+  NAO_CONFIGURADO: { cls: "border-afj-cream-dark", label: "Sem cobrança configurada" },
+};
 
 function barColor(pct: number): string {
   if (pct >= 90) return "bg-red-500";
@@ -106,6 +122,40 @@ export default function PlanoUsoPage() {
               <p>contate o suporte da plataforma.</p>
             </div>
           </div>
+
+          {/* Assinatura & Cobrança */}
+          {data.billing && (() => {
+            const st = BILLING_STYLE[data.billing.status] || BILLING_STYLE.NAO_CONFIGURADO;
+            const venc = data.billing.proximo_vencimento
+              ? new Date(data.billing.proximo_vencimento + "T00:00:00").toLocaleDateString("pt-BR")
+              : "—";
+            return (
+              <div className={`afj-card p-5 border-l-4 ${st.cls}`}>
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <p className="text-sm font-semibold text-afj-black flex items-center gap-2">
+                    <Receipt size={15} className="text-afj-gold" /> Assinatura & Cobrança
+                  </p>
+                  <span className="text-xs font-medium text-afj-black/70">{st.label}</span>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mt-3 text-sm">
+                  <div>
+                    <p className="text-[11px] text-afj-black/40">Mensalidade</p>
+                    <p className="font-semibold text-afj-black">
+                      {data.billing.valor_mensal != null ? `R$ ${data.billing.valor_mensal.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}` : "—"}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-[11px] text-afj-black/40">Próximo vencimento</p>
+                    <p className="font-semibold text-afj-black">{venc}</p>
+                  </div>
+                  <div>
+                    <p className="text-[11px] text-afj-black/40">Situação</p>
+                    <p className="font-semibold text-afj-black">{st.label}</p>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Barras de uso */}
           <div className="grid grid-cols-1 gap-4">
