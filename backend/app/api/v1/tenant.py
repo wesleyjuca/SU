@@ -354,4 +354,53 @@ async def get_tenant_usage(
         "custo_ia_mes_usd": float(row.custo),
         "tokens_mes": int(row.tokens),
         "execucoes_mes": int(row.execucoes),
+        "billing": await _billing_summary(db, tenant),
     }
+
+
+async def _billing_summary(db: AsyncSession, tenant: Tenant) -> dict:
+    """Resumo de cobrança do escritório (alimenta banner e Plano & Uso)."""
+    from datetime import date
+    from app.models.billing import BillingAccount
+
+    # Tenant raiz da plataforma é isento de cobrança.
+    if tenant.slug == DEFAULT_TENANT_SLUG:
+        return {"status": "ISENTO", "valor_mensal": None, "proximo_vencimento": None, "dias_para_vencimento": None}
+
+    acc = (await db.execute(
+        select(BillingAccount).where(BillingAccount.tenant_id == tenant.id)
+    )).scalar_one_or_none()
+    if not acc:
+        return {"status": "NAO_CONFIGURADO", "valor_mensal": None, "proximo_vencimento": None, "dias_para_vencimento": None}
+
+    dias = (acc.proximo_vencimento - date.today()).days if acc.proximo_vencimento else None
+    status = acc.status
+    # INADIMPLENTE é derivado: vencido e ainda não suspenso (só aviso, não bloqueia).
+    if status == "ATIVO" and dias is not None and dias < 0:
+        status = "INADIMPLENTE"
+    return {
+        "status": status,
+        "valor_mensal": float(acc.valor_mensal),
+        "proximo_vencimento": acc.proximo_vencimento.isoformat() if acc.proximo_vencimento else None,
+        "dias_para_vencimento": dias,
+    }
+
+
+@router.get("/billing")
+async def get_my_billing(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Situação de cobrança do escritório do usuário (para banner e assinatura).
+
+    Acessível a qualquer usuário staff do tenant — o banner de bloqueio precisa
+    aparecer para todos, não só ADMIN.
+    """
+    tenant = None
+    if current_user.tenant_id:
+        tenant = (await db.execute(
+            select(Tenant).where(Tenant.id == current_user.tenant_id)
+        )).scalar_one_or_none()
+    if not tenant:
+        return {"status": "NAO_CONFIGURADO", "valor_mensal": None, "proximo_vencimento": None, "dias_para_vencimento": None}
+    return await _billing_summary(db, tenant)

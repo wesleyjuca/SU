@@ -8,6 +8,7 @@ from app.models.financial import FinancialEntry, BillingInvoice
 from app.models.notification import Notification
 from app.models.integrity import ConductAcceptance, IntegrityReport
 from app.models.integrations import GoogleIntegration
+from app.models.billing import BillingAccount, TenantPayment
 
 __all__ = [
     "User", "UserPermission", "Session",
@@ -18,4 +19,7 @@ __all__ = [
     "AuditLog", "LGPDConsentRecord",
     "FinancialEntry", "BillingInvoice",
     "Notification",
+    "ConductAcceptance", "IntegrityReport",
+    "GoogleIntegration",
+    "BillingAccount", "TenantPayment",
 ]

@@ -63,3 +63,34 @@ def require_role(*roles: str):
             raise ForbiddenError(f"Perfil necessário: {', '.join(roles)}")
         return current_user
     return _check
+
+
+_WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+
+async def require_active_tenant(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> User:
+    """Bloqueio suave: escritório SUSPENSO por pendência financeira não escreve.
+
+    Leitura (GET/HEAD/OPTIONS) sempre passa; só métodos de escrita são barrados.
+    SUPERADMIN (dono da plataforma) nunca é bloqueado. Ausência de conta de
+    cobrança ou qualquer status != SUSPENSO também passa.
+    """
+    if current_user.role == "SUPERADMIN" or request.method not in _WRITE_METHODS:
+        return current_user
+    if not current_user.tenant_id:
+        return current_user
+
+    from app.models.billing import BillingAccount
+    status = (await db.execute(
+        select(BillingAccount.status).where(BillingAccount.tenant_id == current_user.tenant_id)
+    )).scalar_one_or_none()
+    if status == "SUSPENSO":
+        raise ForbiddenError(
+            "Escritório suspenso por pendência financeira. As alterações estão "
+            "bloqueadas até a regularização — contate o administrador da plataforma."
+        )
+    return current_user

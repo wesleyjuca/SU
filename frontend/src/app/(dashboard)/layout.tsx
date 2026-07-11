@@ -8,10 +8,12 @@ import {
   LayoutDashboard, Scale, FileText, Users, FolderOpen,
   Bot, CheckSquare, DollarSign, Shield, Shapes, Settings,
   Bell, Search, ChevronRight, FileEdit, Menu, X, LogOut, BarChart2, CalendarClock, BookOpen,
-  Moon, Sun, Activity, Users2, Palette, KeyRound, GraduationCap, Compass, Coins, ShieldCheck, Plug, Gauge, Building2
+  Moon, Sun, Activity, Users2, Palette, KeyRound, GraduationCap, Compass, Coins, ShieldCheck, Plug, Gauge, Building2, Receipt
 } from "lucide-react";
 import { useApprovalCount } from "@/hooks/useApprovals";
 import { useNotifications } from "@/hooks/useNotifications";
+import { useBilling } from "@/hooks/useBilling";
+import { AlertBanner } from "@/components/ui/AlertBanner";
 import { NotificationDropdown } from "@/components/layout/NotificationDropdown";
 import { SearchModal } from "@/components/layout/SearchModal";
 import { BottomNav } from "@/components/layout/BottomNav";
@@ -71,6 +73,7 @@ const navSections = [
     title: "ADMINISTRAÇÃO",
     items: [
       { href: "/admin/escritorios", label: "Escritórios", icon: Building2, roles: ["SUPERADMIN"] },
+      { href: "/admin/faturamento", label: "Faturamento", icon: Receipt, roles: ["SUPERADMIN"] },
       { href: "/admin/usuarios", label: "Usuários", icon: Users2, roles: ["ADMIN", "SUPERADMIN"] },
       { href: "/admin/plano", label: "Plano & Uso", icon: Gauge, roles: ["ADMIN", "SUPERADMIN"] },
       { href: "/admin/personalizacao", label: "Personalização", icon: Palette, roles: ["ADMIN", "SUPERADMIN"] },
@@ -85,6 +88,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const pathname = usePathname();
   const { count: approvalCount } = useApprovalCount();
   const { unreadCount } = useNotifications();
+  const { billing } = useBilling();
   const [notifOpen, setNotifOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -309,6 +313,18 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             </div>
           </div>
         </header>
+
+        {/* Banner global de cobrança — inadimplência (aviso) / suspensão (bloqueio) */}
+        {billing?.status === "SUSPENSO" && (
+          <AlertBanner variant="danger">
+            Escritório suspenso por pendência financeira — as alterações estão bloqueadas até a regularização. Entre em contato com o administrador da plataforma.
+          </AlertBanner>
+        )}
+        {billing?.status === "INADIMPLENTE" && (
+          <AlertBanner variant="warning">
+            Mensalidade vencida{typeof billing.dias_para_vencimento === "number" ? ` há ${Math.abs(billing.dias_para_vencimento)} dia(s)` : ""}. Regularize o pagamento para evitar a suspensão do acesso.
+          </AlertBanner>
+        )}
 
         {/* Área de conteúdo com scroll — pb-16 evita sobreposição da bottom nav no mobile */}
         <main className="flex-1 overflow-y-auto p-6 pb-20 md:pb-6 bg-afj-cream">
