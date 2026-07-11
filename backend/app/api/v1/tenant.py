@@ -69,7 +69,7 @@ async def get_theme(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    config = await get_tenant_config(db)
+    config = await get_tenant_config(db, tenant_slug=await _resolve_tenant_slug(db, current_user))
     meta = config.get("metadata") or {}
     return ThemeResponse(
         primary_color=config["primary_color"],
@@ -89,7 +89,7 @@ async def get_config(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    config = await get_tenant_config(db)
+    config = await get_tenant_config(db, tenant_slug=await _resolve_tenant_slug(db, current_user))
     return TenantConfigResponse(**config)
 
 
@@ -99,7 +99,7 @@ async def update_branding(
     current_user: User = Depends(require_role("ADMIN")),
     db: AsyncSession = Depends(get_db),
 ):
-    config = await _get_or_create_config(db)
+    tenant, config = await _get_or_create_config(db, current_user)
     updates = body.model_dump(exclude_none=True)
     meta_updates = {}
     for field in ("office_name", "slogan"):
@@ -111,7 +111,7 @@ async def update_branding(
         current_meta = config.extra_data or {}
         config.extra_data = {**current_meta, **meta_updates}
     await db.flush()
-    await invalidate_tenant_cache(DEFAULT_TENANT_SLUG)
+    await invalidate_tenant_cache(tenant.slug)
     meta = config.extra_data or {}
     return ThemeResponse(
         primary_color=config.primary_color,
@@ -132,12 +132,12 @@ async def update_modules(
     current_user: User = Depends(require_role("ADMIN")),
     db: AsyncSession = Depends(get_db),
 ):
-    config = await _get_or_create_config(db)
+    tenant, config = await _get_or_create_config(db, current_user)
     current = config.modules_enabled or {}
     updates = body.model_dump(exclude_none=True)
     config.modules_enabled = {**current, **updates}
     await db.flush()
-    await invalidate_tenant_cache(DEFAULT_TENANT_SLUG)
+    await invalidate_tenant_cache(tenant.slug)
     return {"modules_enabled": config.modules_enabled}
 
 
@@ -157,10 +157,10 @@ async def upload_logo(
         raise HTTPException(status_code=400, detail="Arquivo muito grande. Máximo 2MB.")
     b64 = base64.b64encode(contents).decode()
     data_url = f"data:{file.content_type};base64,{b64}"
-    config = await _get_or_create_config(db)
+    tenant, config = await _get_or_create_config(db, current_user)
     config.logo_url = data_url
     await db.flush()
-    await invalidate_tenant_cache(DEFAULT_TENANT_SLUG)
+    await invalidate_tenant_cache(tenant.slug)
     return {"logo_url": data_url}
 
 
@@ -181,10 +181,10 @@ async def upload_favicon(
     b64 = base64.b64encode(contents).decode()
     ct = file.content_type if file.content_type != "image/x-icon" else "image/vnd.microsoft.icon"
     data_url = f"data:{ct};base64,{b64}"
-    config = await _get_or_create_config(db)
+    tenant, config = await _get_or_create_config(db, current_user)
     config.favicon_url = data_url
     await db.flush()
-    await invalidate_tenant_cache(DEFAULT_TENANT_SLUG)
+    await invalidate_tenant_cache(tenant.slug)
     return {"favicon_url": data_url}
 
 
@@ -194,33 +194,54 @@ async def update_nav(
     current_user: User = Depends(require_role("ADMIN")),
     db: AsyncSession = Depends(get_db),
 ):
-    config = await _get_or_create_config(db)
+    tenant, config = await _get_or_create_config(db, current_user)
     config.nav_config = body.nav_config
     await db.flush()
-    await invalidate_tenant_cache(DEFAULT_TENANT_SLUG)
+    await invalidate_tenant_cache(tenant.slug)
     return {"nav_config": config.nav_config}
 
 
-async def _get_or_create_config(db: AsyncSession) -> TenantConfig:
-    result = await db.execute(
-        select(Tenant).where(Tenant.slug == DEFAULT_TENANT_SLUG, Tenant.is_active == True)
-    )
-    tenant = result.scalar_one_or_none()
+async def _resolve_tenant_slug(db: AsyncSession, current_user: User) -> str:
+    """Slug do tenant do usuário logado (somente leitura, sem efeitos colaterais)."""
+    if current_user.tenant_id:
+        slug = (await db.execute(
+            select(Tenant.slug).where(Tenant.id == current_user.tenant_id)
+        )).scalar_one_or_none()
+        if slug:
+            return slug
+    return DEFAULT_TENANT_SLUG
 
+
+async def _get_or_create_config(db: AsyncSession, current_user: User) -> tuple[Tenant, TenantConfig]:
+    """Resolve (Tenant, TenantConfig) do escritório do usuário logado.
+
+    Resolve pelo `current_user.tenant_id` — cada escritório escreve o SEU próprio
+    branding/módulos/timbrado. Só recai no tenant AFJ raiz (bootstrap) quando o
+    usuário não tem tenant e o tenant padrão ainda não existe (primeira execução).
+    """
+    tenant = None
+    if current_user.tenant_id:
+        tenant = (await db.execute(
+            select(Tenant).where(Tenant.id == current_user.tenant_id)
+        )).scalar_one_or_none()
+    if not tenant:
+        tenant = (await db.execute(
+            select(Tenant).where(Tenant.slug == DEFAULT_TENANT_SLUG, Tenant.is_active == True)
+        )).scalar_one_or_none()
     if not tenant:
         tenant = Tenant(name="Almeida, Freire & Jucá Advogados", slug=DEFAULT_TENANT_SLUG, plan="ENTERPRISE")
         db.add(tenant)
         await db.flush()
 
-    result2 = await db.execute(select(TenantConfig).where(TenantConfig.tenant_id == tenant.id))
-    config = result2.scalar_one_or_none()
-
+    config = (await db.execute(
+        select(TenantConfig).where(TenantConfig.tenant_id == tenant.id)
+    )).scalar_one_or_none()
     if not config:
         config = TenantConfig(tenant_id=tenant.id)
         db.add(config)
         await db.flush()
 
-    return config
+    return tenant, config
 
 
 # ─── Timbrado dos documentos (padrão do escritório) ──────────────────────────
@@ -239,7 +260,7 @@ async def get_letterhead(
     db: AsyncSession = Depends(get_db),
 ):
     """Timbrado configurado do escritório (usado nos PDFs gerados)."""
-    config = await _get_or_create_config(db)
+    _, config = await _get_or_create_config(db, current_user)
     lh = (config.document_templates or {}).get("letterhead", {})
     return {
         "office_name": lh.get("office_name"),
@@ -259,7 +280,7 @@ async def update_letterhead(
     db: AsyncSession = Depends(get_db),
 ):
     """Salva o timbrado do escritório em TenantConfig.document_templates (JSONB)."""
-    config = await _get_or_create_config(db)
+    tenant, config = await _get_or_create_config(db, current_user)
     templates = dict(config.document_templates or {})
     templates["letterhead"] = {
         "office_name": (body.office_name or "").strip() or None,
@@ -271,7 +292,7 @@ async def update_letterhead(
     }
     config.document_templates = templates
     await db.flush()
-    await invalidate_tenant_cache(DEFAULT_TENANT_SLUG)
+    await invalidate_tenant_cache(tenant.slug)
     return {"message": "Timbrado salvo", **templates["letterhead"]}
 
 

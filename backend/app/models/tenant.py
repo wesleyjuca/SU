@@ -16,6 +16,13 @@ class Tenant(Base):
     subdomain: Mapped[str | None] = mapped_column(String(100), unique=True, nullable=True)
     plan: Mapped[str] = mapped_column(String(50), default="STANDARD")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Unidades da mesma banca: unidade (child) aponta para a banca-mãe (parent).
+    # Isolamento de dados preservado (cada tenant filtra por tenant_id); o vínculo
+    # serve só para agrupamento e relatórios consolidados futuros (P3).
+    parent_tenant_id: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("tenants.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    unit_label: Mapped[str | None] = mapped_column(String(120), nullable=True)
     max_users: Mapped[int] = mapped_column(Integer, default=10)
     max_storage_gb: Mapped[int] = mapped_column(Integer, default=50)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
