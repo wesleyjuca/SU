@@ -47,6 +47,11 @@ async def subscribe(
     existing = result.scalar_one_or_none()
 
     if existing:
+        # Re-vincula o endpoint ao usuário autenticado (o browser é de quem está
+        # logado agora). Evita que alguém sobrescreva a inscrição de outro usuário
+        # deixando o registro atribuído a ele.
+        existing.user_id = current_user.id
+        existing.tenant_id = current_user.tenant_id
         existing.p256dh = body.p256dh
         existing.auth = body.auth
         existing.user_agent = body.user_agent

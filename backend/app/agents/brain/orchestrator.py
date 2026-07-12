@@ -191,6 +191,9 @@ async def _get_qdrant_if_configured():
 def _resolve_agent_class(route: str):
     """Resolve a classe do agente pela rota (sem instanciar)."""
     agent_map = {
+        # Rota-padrão de tarefas ambíguas (classify_task cai aqui) — precisa
+        # resolver, senão qualquer tarefa não mapeada quebra ("Agente não encontrado").
+        "orchestration_agent": "app.agents.orchestration.orchestration_agent.OrchestrationAgent",
         "process_agent": "app.agents.process.process_agent.ProcessAgent",
         "petition_agent": "app.agents.petition.petition_agent.PetitionAgent",
         "review_agent": "app.agents.review.review_agent.ReviewAgent",
