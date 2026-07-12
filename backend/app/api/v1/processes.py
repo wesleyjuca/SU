@@ -315,12 +315,62 @@ async def create_movement(
     }
 
 
+async def _tenant_feriados(db: AsyncSession, tenant_id) -> list[str]:
+    """Feriados forenses locais do escritório (TenantConfig.extra_data)."""
+    from app.models.tenant import TenantConfig
+    if not tenant_id:
+        return []
+    cfg = (await db.execute(
+        select(TenantConfig).where(TenantConfig.tenant_id == tenant_id)
+    )).scalar_one_or_none()
+    fer = (cfg.extra_data or {}).get("feriados_forenses", []) if cfg else []
+    return fer if isinstance(fer, list) else []
+
+
+class PrazoCalcRequest(BaseModel):
+    data_intimacao: str
+    dias: int
+    dias_uteis: bool = True
+
+
+@router.post("/deadlines/calcular")
+async def calcular_prazo_preview(
+    body: PrazoCalcRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Prévia do cálculo de prazo (não salva) — dias úteis + feriados forenses."""
+    from datetime import date as date_type
+    from app.utils.prazo import calcular_prazo
+    try:
+        r = calcular_prazo(
+            date_type.fromisoformat(body.data_intimacao),
+            body.dias,
+            body.dias_uteis,
+            await _tenant_feriados(db, current_user.tenant_id),
+        )
+    except ValueError as exc:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=422, detail=str(exc))
+    return {
+        "termo_inicial": r["termo_inicial"].isoformat(),
+        "data_prazo": r["data_prazo"].isoformat(),
+        "feriados_no_periodo": r["feriados_no_periodo"],
+        "dias": r["dias"],
+        "dias_uteis": r["dias_uteis"],
+    }
+
+
 class DeadlineCreate(BaseModel):
     descricao: str
     tipo: str | None = None
-    data_prazo: str
+    data_prazo: str | None = None          # opcional se calcular por intimação
     data_fatal: str | None = None
     observacoes: str | None = None
+    # Cálculo automático (opcional): se data_prazo não vier, deriva de intimação.
+    data_intimacao: str | None = None
+    dias: int | None = None
+    dias_uteis: bool = True
 
 
 @router.post("/{process_id}/deadlines", status_code=201)
@@ -331,6 +381,7 @@ async def create_deadline(
     db: AsyncSession = Depends(get_db),
 ):
     from datetime import date as date_type
+    from fastapi import HTTPException
     result = await db.execute(
         select(LegalProcess).where(
             LegalProcess.id == uuid.UUID(process_id),
@@ -340,12 +391,32 @@ async def create_deadline(
     if not result.scalar_one_or_none():
         raise NotFoundError("Processo", process_id)
 
+    # Fonte da verdade: se veio data_prazo, usa; senão calcula por intimação+dias.
+    if body.data_prazo:
+        data_prazo = date_type.fromisoformat(body.data_prazo)
+        data_fatal = date_type.fromisoformat(body.data_fatal) if body.data_fatal else None
+    elif body.data_intimacao and body.dias:
+        from app.utils.prazo import calcular_prazo
+        try:
+            r = calcular_prazo(
+                date_type.fromisoformat(body.data_intimacao),
+                body.dias,
+                body.dias_uteis,
+                await _tenant_feriados(db, current_user.tenant_id),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+        data_prazo = r["data_prazo"]
+        data_fatal = r["data_prazo"]
+    else:
+        raise HTTPException(status_code=422, detail="Informe data_prazo ou (data_intimacao + dias).")
+
     deadline = ProcessDeadline(
         process_id=uuid.UUID(process_id),
         descricao=body.descricao,
         tipo=body.tipo,
-        data_prazo=date_type.fromisoformat(body.data_prazo),
-        data_fatal=date_type.fromisoformat(body.data_fatal) if body.data_fatal else None,
+        data_prazo=data_prazo,
+        data_fatal=data_fatal,
         status="PENDENTE",
         responsavel_id=current_user.id,
     )
