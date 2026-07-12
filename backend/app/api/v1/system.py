@@ -5,10 +5,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_, text
 from datetime import datetime, timezone, timedelta
 import json
+import uuid
 from typing import Any, Callable, Awaitable
 
 from app.db.base import get_db
-from app.dependencies import get_current_user
+from app.dependencies import get_current_user, require_role
 from app.models.user import User
 
 router = APIRouter(prefix="/system", tags=["system"])
@@ -415,6 +416,134 @@ async def analytics_agentes(
         }
 
     return await _cached(cache_key, 120, compute)
+
+
+@router.get("/analytics/gestao")
+async def analytics_gestao(
+    current_user: User = Depends(require_role("ADMIN", "SOCIO", "GESTOR")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Relatórios de gestão do sócio: rentabilidade, produtividade e taxa de êxito (cache 5 min)."""
+    from app.models.financial import FinancialEntry
+    from app.models.client import Client
+    from app.models.process import LegalProcess, ProcessDeadline
+    from app.models.document import Document
+
+    tid = current_user.tenant_id
+
+    async def compute():
+        # ── Rentabilidade por cliente (receita − despesa, pagos) ─────────────
+        fin_rows = (await db.execute(
+            select(FinancialEntry.client_id, FinancialEntry.tipo, func.coalesce(func.sum(FinancialEntry.valor), 0))
+            .where(FinancialEntry.tenant_id == tid, FinancialEntry.status == "PAGO")
+            .group_by(FinancialEntry.client_id, FinancialEntry.tipo)
+        )).all()
+        por_cliente: dict = {}
+        for cid, tipo, val in fin_rows:
+            key = str(cid) if cid else None
+            e = por_cliente.setdefault(key, {"receita": 0.0, "despesa": 0.0})
+            e["receita" if tipo == "RECEITA" else "despesa"] += float(val or 0)
+        nomes = {}
+        cids = [uuid.UUID(k) for k in por_cliente if k]
+        if cids:
+            for c in (await db.execute(select(Client).where(Client.id.in_(cids)))).scalars().all():
+                nomes[str(c.id)] = c.nome_completo
+        rentab_clientes = sorted(
+            [{"cliente": nomes.get(k, "Sem cliente") if k else "Sem cliente",
+              "receita": v["receita"], "despesa": v["despesa"], "resultado": v["receita"] - v["despesa"]}
+             for k, v in por_cliente.items()],
+            key=lambda x: x["resultado"], reverse=True,
+        )[:12]
+
+        # ── Rentabilidade por processo ────────────────────────────────────────
+        proc_rows = (await db.execute(
+            select(FinancialEntry.process_id, FinancialEntry.tipo, func.coalesce(func.sum(FinancialEntry.valor), 0))
+            .where(FinancialEntry.tenant_id == tid, FinancialEntry.status == "PAGO", FinancialEntry.process_id.is_not(None))
+            .group_by(FinancialEntry.process_id, FinancialEntry.tipo)
+        )).all()
+        por_proc: dict = {}
+        for pid, tipo, val in proc_rows:
+            e = por_proc.setdefault(str(pid), {"receita": 0.0, "despesa": 0.0})
+            e["receita" if tipo == "RECEITA" else "despesa"] += float(val or 0)
+        proc_nomes = {}
+        pids = [uuid.UUID(k) for k in por_proc]
+        if pids:
+            for p in (await db.execute(select(LegalProcess).where(LegalProcess.id.in_(pids)))).scalars().all():
+                proc_nomes[str(p.id)] = p.numero_cnj or "Sem CNJ"
+        rentab_processos = sorted(
+            [{"processo": proc_nomes.get(k, "—"), "resultado": v["receita"] - v["despesa"]}
+             for k, v in por_proc.items()],
+            key=lambda x: x["resultado"], reverse=True,
+        )[:12]
+
+        # ── Produtividade por advogado ────────────────────────────────────────
+        proc_por_resp = dict((await db.execute(
+            select(LegalProcess.responsavel_id, func.count(LegalProcess.id))
+            .where(LegalProcess.tenant_id == tid, LegalProcess.responsavel_id.is_not(None))
+            .group_by(LegalProcess.responsavel_id)
+        )).all())
+        docs_por_autor = dict((await db.execute(
+            select(Document.created_by, func.count(Document.id))
+            .where(Document.tenant_id == tid, Document.created_by.is_not(None))
+            .group_by(Document.created_by)
+        )).all())
+        prazos_cumpridos = dict((await db.execute(
+            select(ProcessDeadline.responsavel_id, func.count(ProcessDeadline.id))
+            .join(LegalProcess, ProcessDeadline.process_id == LegalProcess.id)
+            .where(LegalProcess.tenant_id == tid, ProcessDeadline.status == "CUMPRIDO",
+                   ProcessDeadline.responsavel_id.is_not(None))
+            .group_by(ProcessDeadline.responsavel_id)
+        )).all())
+        usuarios = (await db.execute(
+            select(User).where(User.tenant_id == tid, User.is_active == True, User.role != "CLIENT")  # noqa: E712
+        )).scalars().all()
+        produtividade = sorted(
+            [{"advogado": u.full_name,
+              "processos": int(proc_por_resp.get(u.id, 0)),
+              "documentos": int(docs_por_autor.get(u.id, 0)),
+              "prazos_cumpridos": int(prazos_cumpridos.get(u.id, 0))}
+             for u in usuarios],
+            key=lambda x: x["processos"], reverse=True,
+        )
+
+        # ── Taxa de êxito (processos com desfecho) ────────────────────────────
+        desf_rows = dict((await db.execute(
+            select(LegalProcess.desfecho, func.count(LegalProcess.id))
+            .where(LegalProcess.tenant_id == tid, LegalProcess.desfecho.is_not(None))
+            .group_by(LegalProcess.desfecho)
+        )).all())
+        total_desf = sum(desf_rows.values())
+        ganhos = desf_rows.get("EXITO", 0) + desf_rows.get("ACORDO", 0)
+        win_rate = round(100 * ganhos / total_desf, 1) if total_desf else 0.0
+        por_area_rows = (await db.execute(
+            select(LegalProcess.area_direito, LegalProcess.desfecho, func.count(LegalProcess.id))
+            .where(LegalProcess.tenant_id == tid, LegalProcess.desfecho.is_not(None))
+            .group_by(LegalProcess.area_direito, LegalProcess.desfecho)
+        )).all()
+        area_map: dict = {}
+        for area, desf, n in por_area_rows:
+            a = area_map.setdefault(area or "Sem área", {"ganhos": 0, "total": 0})
+            a["total"] += int(n)
+            if desf in ("EXITO", "ACORDO"):
+                a["ganhos"] += int(n)
+        exito_por_area = [
+            {"area": k, "win_rate": round(100 * v["ganhos"] / v["total"], 1) if v["total"] else 0.0, "total": v["total"]}
+            for k, v in sorted(area_map.items(), key=lambda kv: kv[1]["total"], reverse=True)
+        ]
+
+        return {
+            "rentabilidade_clientes": rentab_clientes,
+            "rentabilidade_processos": rentab_processos,
+            "produtividade_advogados": produtividade,
+            "taxa_exito": {
+                "por_desfecho": {k: int(v) for k, v in desf_rows.items()},
+                "total_com_desfecho": int(total_desf),
+                "win_rate": win_rate,
+                "por_area": exito_por_area,
+            },
+        }
+
+    return await _cached(f"gestao:{tid}", 300, compute)
 
 
 @router.get("/health/detailed")

@@ -121,6 +121,8 @@ async def lifespan(app: FastAPI):
             # Fase 27 — unidades da mesma banca (create_all não adiciona colunas novas)
             "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS parent_tenant_id UUID REFERENCES tenants(id) ON DELETE SET NULL",
             "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS unit_label VARCHAR(120)",
+            # Fase 34 — desfecho do processo (taxa de êxito nos relatórios de gestão)
+            "ALTER TABLE legal_processes ADD COLUMN IF NOT EXISTS desfecho VARCHAR(20)",
         ]:
             try:
                 async with engine.begin() as conn:

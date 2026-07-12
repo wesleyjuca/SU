@@ -29,6 +29,7 @@ class ProcessCreate(BaseModel):
     polo: str | None = None
     oab_responsavel: str | None = None
     monitoring_active: bool = True
+    desfecho: str | None = None  # EXITO, PARCIAL, ACORDO, DERROTA
 
 
 class ProcessResponse(BaseModel):
@@ -38,6 +39,7 @@ class ProcessResponse(BaseModel):
     vara: str | None
     area_direito: str | None
     situacao: str
+    desfecho: str | None
     valor_causa: float | None
     client_id: str | None
     responsavel_id: str | None
@@ -253,6 +255,7 @@ async def update_process(
 @router.delete("/{process_id}", status_code=204)
 async def archive_process(
     process_id: str,
+    desfecho: str | None = Query(default=None),  # EXITO/PARCIAL/ACORDO/DERROTA (taxa de êxito)
     # Arquivar tira o processo da operação — restrito a advogados e gestão
     current_user: User = Depends(require_role("ADMIN", "SOCIO", "ADVOGADO", "GESTOR")),
     db: AsyncSession = Depends(get_db),
@@ -268,6 +271,8 @@ async def archive_process(
         raise NotFoundError("Processo", process_id)
     process.situacao = "ARQUIVADO"
     process.monitoring_active = False
+    if desfecho in ("EXITO", "PARCIAL", "ACORDO", "DERROTA"):
+        process.desfecho = desfecho
     await db.flush()
 
 
@@ -480,6 +485,7 @@ def _to_response(p: LegalProcess) -> ProcessResponse:
         vara=p.vara,
         area_direito=p.area_direito,
         situacao=p.situacao,
+        desfecho=p.desfecho,
         valor_causa=float(p.valor_causa) if p.valor_causa else None,
         client_id=str(p.client_id) if p.client_id else None,
         responsavel_id=str(p.responsavel_id) if p.responsavel_id else None,
