@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect, useRef } from "react";
-import { FolderOpen, Search, FileText, Download, Upload, ScanLine, X, CloudUpload } from "lucide-react";
+import { FolderOpen, Search, FileText, Download, Upload, ScanLine, X, CloudUpload, Eye } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
 
@@ -14,6 +14,22 @@ interface Documento {
   process_id: string | null;
   client_id: string | null;
   created_at: string;
+  tem_texto: boolean;
+  ocr_status: string | null;
+}
+
+// Chip que sinaliza o estado do texto/OCR do documento.
+function OcrBadge({ d }: { d: Documento }) {
+  if (d.ocr_status === "PENDENTE") {
+    return <span className="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded-sm bg-amber-50 text-amber-700 border border-amber-200">OCR…</span>;
+  }
+  if (d.tem_texto) {
+    return <span className="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded-sm bg-green-50 text-green-700 border border-green-200" title="Texto pesquisável disponível">Texto</span>;
+  }
+  if (d.ocr_status && ["FALHOU", "VAZIO", "INDISPONIVEL"].includes(d.ocr_status)) {
+    return <span className="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded-sm bg-gray-50 text-gray-500 border border-gray-200" title="OCR sem texto — tente reprocessar">Sem texto</span>;
+  }
+  return null;
 }
 
 const STATUS_STYLE: Record<string, string> = {
@@ -44,6 +60,8 @@ export default function DocumentosPage() {
   const [ocrRunning, setOcrRunning] = useState<string | null>(null);
   const [googleConnected, setGoogleConnected] = useState(false);
   const [savingDrive, setSavingDrive] = useState<string | null>(null);
+  const [loadingTexto, setLoadingTexto] = useState<string | null>(null);
+  const [textoModal, setTextoModal] = useState<{ titulo: string; texto: string } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { fetchDocs(); }, [filtroTipo, filtroStatus]);
@@ -122,13 +140,9 @@ export default function DocumentosPage() {
     setOcrRunning(docId);
     try {
       const token = localStorage.getItem("afj_access_token");
-      const res = await fetch("/api/v1/agents/trigger", {
+      const res = await fetch(`/api/v1/documents/${docId}/ocr`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({
-          task_type: "ocr_document",
-          task_input: { document_id: docId },
-        }),
+        headers: { Authorization: `Bearer ${token}` },
       });
       if (res.ok) {
         toast.success("OCR iniciado. O texto extraído aparecerá em instantes.");
@@ -140,6 +154,26 @@ export default function DocumentosPage() {
       toast.error("Erro de conexão.");
     } finally {
       setOcrRunning(null);
+    }
+  }
+
+  async function verTexto(docId: string, titulo: string) {
+    setLoadingTexto(docId);
+    try {
+      const token = localStorage.getItem("afj_access_token");
+      const res = await fetch(`/api/v1/documents/${docId}/content`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const d = await res.json();
+        setTextoModal({ titulo, texto: d.conteudo_texto || d.conteudo_html || "(sem texto extraído)" });
+      } else {
+        toast.error("Erro ao carregar o texto do documento.");
+      }
+    } catch {
+      toast.error("Erro de conexão.");
+    } finally {
+      setLoadingTexto(null);
     }
   }
 
@@ -259,6 +293,7 @@ export default function DocumentosPage() {
                     <div className="flex items-center gap-2">
                       <FileText size={14} className="text-afj-black/30 flex-shrink-0" />
                       <span className="font-medium text-afj-black">{d.titulo}</span>
+                      <OcrBadge d={d} />
                     </div>
                   </td>
                   <td className="px-4 py-3">
@@ -282,14 +317,25 @@ export default function DocumentosPage() {
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-3">
+                      {d.tem_texto && (
+                        <button
+                          onClick={() => verTexto(d.id, d.titulo)}
+                          disabled={loadingTexto === d.id}
+                          className="text-afj-black/30 hover:text-afj-gold transition-colors disabled:opacity-40"
+                          title="Ver texto extraído"
+                          aria-label="Ver texto extraído do documento"
+                        >
+                          <Eye size={14} />
+                        </button>
+                      )}
                       <button
                         onClick={() => processarOcr(d.id)}
                         disabled={ocrRunning === d.id}
                         className="text-afj-black/30 hover:text-afj-gold transition-colors disabled:opacity-40"
-                        title="Processar OCR"
+                        title="Processar OCR (extrair texto)"
                         aria-label="Processar OCR do documento"
                       >
-                        <ScanLine size={14} />
+                        <ScanLine size={14} className={ocrRunning === d.id ? "animate-pulse" : ""} />
                       </button>
                       <button
                         onClick={() => downloadDoc(d.id, d.titulo)}
@@ -316,6 +362,36 @@ export default function DocumentosPage() {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* Modal: texto extraído (OCR ou conteúdo do documento) */}
+      {textoModal && (
+        <div
+          className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4"
+          onClick={() => setTextoModal(null)}
+        >
+          <div
+            className="afj-card w-full max-w-2xl max-h-[80vh] flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-5 py-3 border-b border-afj-cream-dark">
+              <div className="flex items-center gap-2 min-w-0">
+                <FileText size={16} className="text-afj-gold flex-shrink-0" />
+                <span className="font-semibold text-afj-black truncate">{textoModal.titulo}</span>
+              </div>
+              <button
+                onClick={() => setTextoModal(null)}
+                className="text-afj-black/40 hover:text-afj-black transition-colors"
+                aria-label="Fechar"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <pre className="flex-1 overflow-auto px-5 py-4 text-sm text-afj-black/80 whitespace-pre-wrap font-sans leading-relaxed">
+              {textoModal.texto}
+            </pre>
+          </div>
         </div>
       )}
     </div>

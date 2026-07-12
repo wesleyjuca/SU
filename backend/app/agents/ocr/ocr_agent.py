@@ -14,16 +14,21 @@ class OCRAgent(BaseAgent):
     description: ClassVar[str] = "OCR de documentos PDF escaneados via pytesseract"
     requires_human_approval: ClassVar[bool] = False
 
+    # Placeholder devolvido quando as libs de OCR não estão instaladas — quem
+    # persiste o resultado deve tratá-lo como "indisponível", nunca como texto real.
+    UNAVAILABLE: ClassVar[str] = "[OCR não disponível — instale pdfplumber e pytesseract]"
+
     async def execute(self, ctx: AgentContext) -> AgentResult:
         task = ctx.task_input
         file_path = task.get("file_path")
         file_bytes_b64 = task.get("file_bytes_b64")
+        content_type = task.get("content_type")
 
         if not file_path and not file_bytes_b64:
             return AgentResult(status=AgentStatus.FAILED, agent_name=self.name, error="file_path ou file_bytes_b64 obrigatório")
 
         try:
-            texto = await self._extrair_texto(file_path, file_bytes_b64)
+            texto = await self._extrair_texto(file_path, file_bytes_b64, content_type)
             return AgentResult(
                 status=AgentStatus.SUCCESS,
                 agent_name=self.name,
@@ -36,8 +41,18 @@ class OCRAgent(BaseAgent):
         except Exception as exc:
             return AgentResult(status=AgentStatus.FAILED, agent_name=self.name, error=str(exc))
 
-    async def _extrair_texto(self, file_path: str | None, file_bytes_b64: str | None) -> str:
+    async def _extrair_texto(
+        self,
+        file_path: str | None,
+        file_bytes_b64: str | None,
+        content_type: str | None = None,
+    ) -> str:
         import asyncio
+
+        is_pdf = bool(
+            (content_type and "pdf" in content_type.lower())
+            or (file_path and file_path.lower().endswith(".pdf"))
+        )
 
         def _sync_ocr():
             try:
@@ -46,8 +61,8 @@ class OCRAgent(BaseAgent):
                 from PIL import Image
                 import io
 
-                if file_path:
-                    with pdfplumber.open(file_path) as pdf:
+                def _ocr_pdf(source):
+                    with pdfplumber.open(source) as pdf:
                         textos = []
                         for page in pdf.pages:
                             txt = page.extract_text()
@@ -55,17 +70,27 @@ class OCRAgent(BaseAgent):
                                 textos.append(txt)
                             else:
                                 img = page.to_image(resolution=300).original
-                                txt_ocr = pytesseract.image_to_string(img, lang="por")
-                                textos.append(txt_ocr)
+                                textos.append(pytesseract.image_to_string(img, lang="por"))
                         return "\n\n".join(textos)
 
-                elif file_bytes_b64:
+                # Caminho por bytes (usado pelo pipeline de upload, que guarda o
+                # binário como data URL): PDF vai para pdfplumber via BytesIO,
+                # imagem vai direto para o pytesseract.
+                if file_bytes_b64:
                     raw = base64.b64decode(file_bytes_b64)
+                    if is_pdf:
+                        return _ocr_pdf(io.BytesIO(raw))
                     img = Image.open(io.BytesIO(raw))
                     return pytesseract.image_to_string(img, lang="por")
 
+                # Caminho por arquivo em disco (PDF).
+                if file_path:
+                    return _ocr_pdf(file_path)
+
+                return ""
+
             except ImportError:
-                return "[OCR não disponível — instale pdfplumber e pytesseract]"
+                return self.UNAVAILABLE
 
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, _sync_ocr)
