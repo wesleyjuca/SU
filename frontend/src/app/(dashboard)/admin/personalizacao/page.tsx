@@ -38,6 +38,18 @@ const COLOR_PRESETS = [
   { label: "Índigo", value: "#3730A3" },
 ];
 
+// Presets da cor do menu (barra lateral) — tons escuros que combinam com texto claro.
+const MENU_PRESETS = [
+  { label: "Slate AFJ", value: "#3D4557" },
+  { label: "Navy", value: "#1E2229" },
+  { label: "Azul Executivo", value: "#1E3A5F" },
+  { label: "Esmeralda", value: "#064E3B" },
+  { label: "Vinho", value: "#4C1D2E" },
+  { label: "Grafite", value: "#2D2D2D" },
+  { label: "Violeta", value: "#3B2D5E" },
+  { label: "Café", value: "#3B2A20" },
+];
+
 const TEMPLATES = [
   {
     id: "afj",
@@ -153,6 +165,7 @@ export default function PersonalizacaoPage() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [previewColor, setPreviewColor] = useState(theme.primaryColor);
+  const [previewSecondary, setPreviewSecondary] = useState(theme.secondaryColor);
   const [previewFont, setPreviewFont] = useState("Optima, 'Optima Nova', Georgia, serif");
   const [appName, setAppName] = useState(theme.appName);
   const [logoUrl, setLogoUrl] = useState(theme.logoUrl ?? "");
@@ -365,6 +378,13 @@ export default function PersonalizacaoPage() {
     setPreviewColor(color);
     applyTheme({ ...theme, primaryColor: color });
     setTheme({ ...theme, primaryColor: color });
+  }
+
+  function applySecondary(color: string) {
+    setPreviewSecondary(color);
+    // Repinta a barra lateral (menu) em runtime via --brand-secondary.
+    applyTheme({ ...theme, secondaryColor: color });
+    setTheme({ ...theme, secondaryColor: color });
   }
 
   function applyTemplate(t: (typeof TEMPLATES)[number]) {
@@ -714,13 +734,81 @@ export default function PersonalizacaoPage() {
                 </div>
               </div>
 
+              {/* ── Cor do Menu (barra lateral) ── */}
+              <div className="afj-section-header pt-2">
+                <p className="afj-section-title">Cor do Menu (barra lateral)</p>
+              </div>
+              <p className="text-[11px] text-afj-black/45 -mt-2">
+                Define o fundo da barra lateral de navegação. Use tons escuros — o texto do menu é claro.
+              </p>
+
+              <div className="flex items-center gap-4">
+                <input
+                  type="color"
+                  value={previewSecondary}
+                  onChange={(e) => applySecondary(e.target.value)}
+                  className="w-14 h-14 rounded-sm border border-afj-cream-dark cursor-pointer"
+                  aria-label="Selecionar cor do menu"
+                />
+                <div>
+                  <input
+                    type="text"
+                    value={previewSecondary}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      if (/^#[0-9A-Fa-f]{0,6}$/.test(v)) {
+                        setPreviewSecondary(v);
+                        if (v.length === 7) applySecondary(v);
+                      }
+                    }}
+                    className="w-32 bg-afj-cream border border-afj-cream-dark rounded-sm px-3 py-2 text-sm font-mono focus:outline-none focus:border-afj-gold"
+                    maxLength={7}
+                  />
+                  <p className="text-[10px] text-afj-black/40 mt-1">Código hexadecimal</p>
+                </div>
+                {/* Prévia do gradiente do menu */}
+                <div
+                  className="w-10 h-14 rounded-sm border border-afj-cream-dark ml-1"
+                  style={{ background: `linear-gradient(180deg, ${previewSecondary} 0%, ${previewSecondary} 100%)` }}
+                  aria-hidden
+                />
+              </div>
+
+              <div>
+                <p className="text-[10px] font-semibold text-afj-black/40 uppercase tracking-widest mb-3">
+                  Tons de menu
+                </p>
+                <div className="grid grid-cols-4 gap-2">
+                  {MENU_PRESETS.map((p) => (
+                    <button
+                      key={p.value}
+                      onClick={() => applySecondary(p.value)}
+                      title={p.label}
+                      className={`relative h-10 rounded-sm border-2 transition-all ${
+                        previewSecondary === p.value ? "border-afj-black scale-105" : "border-transparent hover:scale-105"
+                      }`}
+                      style={{ backgroundColor: p.value }}
+                    >
+                      {previewSecondary === p.value && (
+                        <Check size={12} className="absolute inset-0 m-auto text-white drop-shadow" />
+                      )}
+                    </button>
+                  ))}
+                </div>
+                <div className="grid grid-cols-4 gap-2 mt-1">
+                  {MENU_PRESETS.map((p) => (
+                    <p key={p.value} className="text-[9px] text-afj-black/30 text-center truncate">{p.label}</p>
+                  ))}
+                </div>
+              </div>
+
               <button
-                onClick={() => saveBranding({ primary_color: previewColor })}
+                onClick={() => saveBranding({ primary_color: previewColor, secondary_color: previewSecondary })}
                 disabled={saving}
                 className="btn-afj-primary py-2.5 rounded-sm flex items-center gap-2"
               >
                 {saved ? <Check size={14} /> : null}
-                {saving ? "Salvando..." : saved ? "Salvo!" : "Aplicar Cor"}
+                {saving ? "Salvando..." : saved ? "Salvo!" : "Aplicar Cores"}
               </button>
             </div>
           )}
