@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect } from "react";
-import { Users, Plus, Search, Phone, Mail, Pencil, Trash2, ExternalLink } from "lucide-react";
+import { Users, Plus, Search, Phone, Mail, Pencil, Trash2, ExternalLink, Filter } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
 import { ViewToggle } from "@/components/ui/ViewToggle";
@@ -126,6 +126,9 @@ export default function ClientesPage() {
           <p className="text-afj-black/50 text-sm">{filtrados.length} cliente(s)</p>
         </div>
         <div className="flex items-center gap-3">
+          <Link href="/clientes/funil" className="btn-afj-outline rounded-sm flex items-center gap-2" title="Funil de vendas">
+            <Filter size={15} />Funil
+          </Link>
           <ViewToggle view={view} onChange={setView} />
           <button onClick={() => setShowModal(true)} className="btn-afj-primary rounded-sm flex items-center gap-2">
             <Plus size={15} />Novo Cliente

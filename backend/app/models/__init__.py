@@ -9,6 +9,7 @@ from app.models.notification import Notification
 from app.models.integrity import ConductAcceptance, IntegrityReport
 from app.models.integrations import GoogleIntegration
 from app.models.billing import BillingAccount, TenantPayment
+from app.models.crm import Opportunity
 
 __all__ = [
     "User", "UserPermission", "Session",
@@ -22,4 +23,5 @@ __all__ = [
     "ConductAcceptance", "IntegrityReport",
     "GoogleIntegration",
     "BillingAccount", "TenantPayment",
+    "Opportunity",
 ]
