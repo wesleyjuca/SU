@@ -8,6 +8,14 @@ import {
 import Link from "next/link";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
+import { useUserStore } from "@/store";
+
+interface Financeiro {
+  resumo: { receita_paga: number; receita_pendente: number; despesa: number; saldo: number };
+  lancamentos: { id: string; tipo: string; categoria: string | null; descricao: string; valor: number; status: string; data_vencimento: string | null }[];
+  faturas: { id: string; numero: string; valor_total: number; status: string; data_vencimento: string | null }[];
+}
+const fmtBRL = (v: number) => `R$ ${v.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`;
 
 interface Cliente {
   id: string;
@@ -85,7 +93,21 @@ export default function ClienteDetailPage() {
   const [contatos, setContatos] = useState<Contato[]>([]);
   const [processos, setProcessos] = useState<Processo[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<"interacoes" | "contatos">("interacoes");
+  const [activeTab, setActiveTab] = useState<"interacoes" | "contatos" | "financeiro">("interacoes");
+  const userRole = useUserStore((s) => s.user?.role);
+  const canFinance = ["ADMIN", "SOCIO", "GESTOR", "SUPERADMIN"].includes(userRole ?? "");
+  const [financeiro, setFinanceiro] = useState<Financeiro | null>(null);
+  const [loadingFin, setLoadingFin] = useState(false);
+
+  async function fetchFinanceiro() {
+    if (financeiro) return;
+    setLoadingFin(true);
+    try {
+      const token = localStorage.getItem("afj_access_token");
+      const res = await fetch(`/api/v1/clients/${id}/financeiro`, { headers: { Authorization: `Bearer ${token}` } });
+      if (res.ok) setFinanceiro(await res.json());
+    } finally { setLoadingFin(false); }
+  }
   const [showModal, setShowModal] = useState(false);
   const [showContatoModal, setShowContatoModal] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -392,6 +414,18 @@ export default function ClienteDetailPage() {
             >
               Contatos ({contatos.length})
             </button>
+            {canFinance && (
+              <button
+                onClick={() => { setActiveTab("financeiro"); fetchFinanceiro(); }}
+                className={`px-3 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
+                  activeTab === "financeiro"
+                    ? "border-afj-gold text-afj-gold"
+                    : "border-transparent text-afj-black/50 hover:text-afj-black"
+                }`}
+              >
+                Financeiro
+              </button>
+            )}
             <div className="ml-auto">
               {activeTab === "interacoes" && (
                 <button
@@ -491,6 +525,54 @@ export default function ClienteDetailPage() {
                   </div>
                 ))}
               </div>
+            )
+          )}
+
+          {/* Aba Financeiro */}
+          {activeTab === "financeiro" && (
+            loadingFin && !financeiro ? (
+              <div className="flex-1 flex items-center justify-center py-8"><Loader2 className="animate-spin text-afj-gold" size={22} /></div>
+            ) : financeiro ? (
+              <div className="space-y-4 overflow-y-auto">
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="border border-afj-cream-dark rounded-sm p-2.5"><p className="text-[10px] text-afj-black/50">Recebido</p><p className="text-sm font-bold text-green-600">{fmtBRL(financeiro.resumo.receita_paga)}</p></div>
+                  <div className="border border-afj-cream-dark rounded-sm p-2.5"><p className="text-[10px] text-afj-black/50">A receber</p><p className="text-sm font-bold text-amber-600">{fmtBRL(financeiro.resumo.receita_pendente)}</p></div>
+                  <div className="border border-afj-cream-dark rounded-sm p-2.5"><p className="text-[10px] text-afj-black/50">Despesas</p><p className="text-sm font-bold text-red-500">{fmtBRL(financeiro.resumo.despesa)}</p></div>
+                  <div className="border border-afj-cream-dark rounded-sm p-2.5"><p className="text-[10px] text-afj-black/50">Saldo</p><p className={`text-sm font-bold ${financeiro.resumo.saldo >= 0 ? "text-afj-black" : "text-red-600"}`}>{fmtBRL(financeiro.resumo.saldo)}</p></div>
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <p className="text-xs font-semibold text-afj-black/70">Faturas</p>
+                    <Link href="/financeiro/faturas" className="text-[11px] text-afj-gold hover:underline">Gerenciar</Link>
+                  </div>
+                  {financeiro.faturas.length === 0 ? (
+                    <p className="text-xs text-afj-black/35 py-2">Nenhuma fatura para este cliente.</p>
+                  ) : financeiro.faturas.map((f) => (
+                    <div key={f.id} className="flex items-center justify-between text-xs border-b border-afj-cream-dark py-1.5">
+                      <span className="font-mono text-afj-black/60">{f.numero}</span>
+                      <span className="flex items-center gap-2"><span className="text-afj-black/80">{fmtBRL(f.valor_total)}</span><span className="text-[9px] uppercase text-afj-black/40">{f.status}</span></span>
+                    </div>
+                  ))}
+                </div>
+
+                <div>
+                  <p className="text-xs font-semibold text-afj-black/70 mb-1.5">Lançamentos</p>
+                  {financeiro.lancamentos.length === 0 ? (
+                    <p className="text-xs text-afj-black/35 py-2">Nenhum lançamento vinculado a este cliente.</p>
+                  ) : financeiro.lancamentos.map((l) => (
+                    <div key={l.id} className="flex items-center justify-between text-xs border-b border-afj-cream-dark py-1.5">
+                      <span className="truncate mr-2 text-afj-black/70">{l.descricao}</span>
+                      <span className="flex items-center gap-2 flex-shrink-0">
+                        <span className={l.tipo === "RECEITA" ? "text-green-600" : "text-red-500"}>{l.tipo === "RECEITA" ? "+" : "−"}{fmtBRL(l.valor)}</span>
+                        <span className="text-[9px] uppercase text-afj-black/40">{l.status}</span>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="flex-1 flex items-center justify-center text-center py-8"><p className="text-sm text-afj-black/40">Sem dados financeiros</p></div>
             )
           )}
         </div>

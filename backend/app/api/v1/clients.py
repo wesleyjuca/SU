@@ -1,7 +1,7 @@
 """Endpoints CRUD de clientes / CRM."""
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc, or_
+from sqlalchemy import select, desc, or_, func
 from pydantic import BaseModel
 from typing import Any
 import uuid
@@ -465,3 +465,65 @@ def _to_response(c: Client) -> ClientResponse:
         lgpd_consent=c.lgpd_consent,
         created_at=c.created_at.isoformat(),
     )
+
+
+@router.get("/{client_id}/financeiro")
+async def client_financeiro(
+    client_id: str,
+    current_user: User = Depends(require_role("ADMIN", "SOCIO", "GESTOR")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Visão financeira 360° do cliente: resumo, lançamentos e faturas."""
+    from app.models.financial import FinancialEntry, BillingInvoice
+
+    cliente = (await db.execute(
+        select(Client).where(Client.id == uuid.UUID(client_id), Client.tenant_id == current_user.tenant_id)
+    )).scalar_one_or_none()
+    if not cliente:
+        raise NotFoundError("Cliente", client_id)
+
+    # Resumo por tipo/status (tenant-scoped implícito pelo cliente do tenant)
+    rows = (await db.execute(
+        select(FinancialEntry.tipo, FinancialEntry.status, func.coalesce(func.sum(FinancialEntry.valor), 0))
+        .where(FinancialEntry.client_id == cliente.id, FinancialEntry.tenant_id == current_user.tenant_id)
+        .group_by(FinancialEntry.tipo, FinancialEntry.status)
+    )).all()
+    agg = {(t, s): float(v or 0) for t, s, v in rows}
+    receita_paga = agg.get(("RECEITA", "PAGO"), 0.0)
+    receita_pendente = agg.get(("RECEITA", "PENDENTE"), 0.0)
+    despesa = sum(v for (t, s), v in agg.items() if t == "DESPESA")
+
+    lancamentos = (await db.execute(
+        select(FinancialEntry)
+        .where(FinancialEntry.client_id == cliente.id, FinancialEntry.tenant_id == current_user.tenant_id)
+        .order_by(desc(FinancialEntry.created_at)).limit(50)
+    )).scalars().all()
+
+    faturas = (await db.execute(
+        select(BillingInvoice)
+        .where(BillingInvoice.client_id == cliente.id, BillingInvoice.tenant_id == current_user.tenant_id)
+        .order_by(desc(BillingInvoice.created_at)).limit(50)
+    )).scalars().all()
+
+    return {
+        "resumo": {
+            "receita_paga": receita_paga,
+            "receita_pendente": receita_pendente,
+            "despesa": despesa,
+            "saldo": receita_paga - despesa,
+        },
+        "lancamentos": [
+            {
+                "id": str(e.id), "tipo": e.tipo, "categoria": e.categoria, "descricao": e.descricao,
+                "valor": float(e.valor), "status": e.status,
+                "data_vencimento": e.data_vencimento.isoformat() if e.data_vencimento else None,
+            } for e in lancamentos
+        ],
+        "faturas": [
+            {
+                "id": str(f.id), "numero": f.numero, "valor_total": float(f.valor_total or 0),
+                "status": f.status,
+                "data_vencimento": f.data_vencimento.isoformat() if f.data_vencimento else None,
+            } for f in faturas
+        ],
+    }
