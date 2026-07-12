@@ -105,7 +105,12 @@ async def _run_async(
 
         # Atualizar status no DB
         if agent_run:
-            agent_run.status = status
+            # Se o run foi CANCELADO enquanto executava, não sobrescrever o
+            # status final (senão um cancelamento "revive" como SUCCESS/AWAITING).
+            await db.refresh(agent_run)
+            canceled = agent_run.status == "CANCELADO"
+            if not canceled:
+                agent_run.status = status
             agent_run.output_data = output
             agent_run.error_message = error_msg
             agent_run.completed_at = datetime.utcnow()
@@ -114,11 +119,12 @@ async def _run_async(
             from decimal import Decimal
             agent_run.cost_usd = Decimal(str(ctx.total_cost_usd)) if ctx.total_cost_usd else None
             agent_run.requires_approval = ctx.requires_approval
-            # HITL: cria o Approval PENDENTE na mesma transação
-            if status == "AWAITING_APPROVAL":
+            # HITL: cria o Approval PENDENTE na mesma transação (não p/ run cancelado)
+            if not canceled and status == "AWAITING_APPROVAL":
                 from app.services.approval_service import create_approval_from_state
                 await create_approval_from_state(db, agent_run, final_state)
             await db.commit()
+            status = agent_run.status  # reflete o status realmente persistido
 
         # Publicar evento WebSocket
         try:

@@ -248,19 +248,75 @@ async def financial_summary(
     current_user: User = Depends(require_role("ADMIN", "SOCIO", "GESTOR")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Resumo financeiro via analytics_agent."""
-    from app.agents.financial.financial_agent import FinancialAgent
-    from app.agents.brain.context import AgentContext
-    agent = FinancialAgent(db=db)
-    # tenant_id é obrigatório: sem ele as agregações somam dados de TODOS os
-    # tenants (vazamento entre escritórios — viola o invariante multi-tenant).
-    ctx = AgentContext(
-        task_type="financial_report",
-        task_input={"action": "summary"},
-        tenant_id=current_user.tenant_id,
-    )
-    result = await agent.run(ctx)
-    return result.output
+    """Resumo financeiro do escritório (receitas/despesas pagas e pendentes).
+
+    Retorna exatamente as chaves que a tela de Financeiro consome — antes o
+    endpoint devolvia chaves do FinancialAgent (receita_recebida etc.) que não
+    batiam com a página, deixando os 4 KPIs sempre em R$ 0,00.
+    """
+    from sqlalchemy import func
+
+    rows = (await db.execute(
+        select(
+            FinancialEntry.tipo,
+            FinancialEntry.status,
+            func.coalesce(func.sum(FinancialEntry.valor), 0),
+        )
+        .where(FinancialEntry.tenant_id == current_user.tenant_id)  # isolamento multi-tenant
+        .group_by(FinancialEntry.tipo, FinancialEntry.status)
+    )).all()
+
+    agg: dict[tuple[str, str], float] = {(t, s): float(v or 0) for t, s, v in rows}
+    receitas_pagas = agg.get(("RECEITA", "PAGO"), 0.0)
+    receitas_pendentes = agg.get(("RECEITA", "PENDENTE"), 0.0)
+    despesas_pagas = agg.get(("DESPESA", "PAGO"), 0.0)
+    despesas_pendentes = agg.get(("DESPESA", "PENDENTE"), 0.0)
+
+    return {
+        "receitas_pagas": receitas_pagas,
+        "receitas_pendentes": receitas_pendentes,
+        "despesas_pagas": despesas_pagas,
+        "despesas_pendentes": despesas_pendentes,
+        "saldo_atual": receitas_pagas - despesas_pagas,
+        "a_receber": receitas_pendentes,
+    }
+
+
+@router.get("/overdue")
+async def financial_overdue(
+    current_user: User = Depends(require_role("ADMIN", "SOCIO", "GESTOR")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Inadimplência: receitas PENDENTES já vencidas (data_vencimento < hoje)."""
+    from datetime import date as _date
+
+    vencidos = (await db.execute(
+        select(FinancialEntry).where(
+            FinancialEntry.tenant_id == current_user.tenant_id,  # isolamento multi-tenant
+            FinancialEntry.tipo == "RECEITA",
+            FinancialEntry.status == "PENDENTE",
+            FinancialEntry.data_vencimento.is_not(None),
+            FinancialEntry.data_vencimento < _date.today(),
+        ).order_by(FinancialEntry.data_vencimento)
+    )).scalars().all()
+
+    hoje = _date.today()
+    return {
+        "total": len(vencidos),
+        "valor_total": float(sum(e.valor for e in vencidos)),
+        "registros": [
+            {
+                "id": str(e.id),
+                "descricao": e.descricao,
+                "categoria": e.categoria,
+                "valor": float(e.valor),
+                "vencimento": e.data_vencimento.isoformat() if e.data_vencimento else None,
+                "dias_atraso": (hoje - e.data_vencimento).days if e.data_vencimento else None,
+                "client_id": str(e.client_id) if e.client_id else None,
+            }
+            for e in vencidos
+        ],
+    }
 
 
 def _to_response(e: FinancialEntry) -> FinancialEntryResponse:

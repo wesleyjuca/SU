@@ -13,8 +13,17 @@ def _get_fernet() -> Fernet:
     if _fernet is None:
         # Fernet exige 32 bytes url-safe base64. ENCRYPTION_KEY pode ter qualquer
         # tamanho → derivamos 32 bytes estáveis via SHA-256.
-        raw = (settings.ENCRYPTION_KEY or settings.SECRET_KEY or "afj-fallback-key").encode()
-        key = base64.urlsafe_b64encode(hashlib.sha256(raw).digest())
+        secret = settings.ENCRYPTION_KEY or settings.SECRET_KEY
+        if not secret:
+            # Fail-closed em produção: sem chave, os segredos BYOK ficariam
+            # cifrados com uma chave adivinhável — recusar em vez de degradar.
+            if getattr(settings, "ENVIRONMENT", "development") == "production":
+                raise RuntimeError(
+                    "ENCRYPTION_KEY (ou SECRET_KEY) ausente em produção — "
+                    "configure para cifrar os segredos BYOK em repouso."
+                )
+            secret = "afj-dev-fallback-key"  # apenas ambiente de desenvolvimento
+        key = base64.urlsafe_b64encode(hashlib.sha256(secret.encode()).digest())
         _fernet = Fernet(key)
     return _fernet
 

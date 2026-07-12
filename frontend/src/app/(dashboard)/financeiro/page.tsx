@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect } from "react";
-import { DollarSign, TrendingUp, TrendingDown, Plus, CheckCircle, Clock, Trash2, FileDown, BarChart3, Pencil } from "lucide-react";
+import { DollarSign, TrendingUp, TrendingDown, Plus, CheckCircle, Clock, Trash2, FileDown, BarChart3, Pencil, AlertTriangle } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
@@ -38,6 +38,12 @@ interface MonthlyData {
   despesas: number;
 }
 
+interface Overdue {
+  total: number;
+  valor_total: number;
+  registros: { id: string; descricao: string; valor: number; vencimento: string | null; dias_atraso: number | null }[];
+}
+
 const STATUS_STYLE: Record<string, string> = {
   PENDENTE: "badge-pendente",
   PAGO: "badge-ativo",
@@ -48,6 +54,7 @@ export default function FinanceiroPage() {
   const toast = useToast();
   const [entries, setEntries] = useState<Entry[]>([]);
   const [summary, setSummary] = useState<Summary | null>(null);
+  const [overdue, setOverdue] = useState<Overdue | null>(null);
   const [monthlyData, setMonthlyData] = useState<MonthlyData[]>([]);
   const [loading, setLoading] = useState(true);
   const [filtroTipo, setFiltroTipo] = useState("");
@@ -67,7 +74,15 @@ export default function FinanceiroPage() {
   });
 
   useEffect(() => { fetchEntries(); fetchSummary(); }, [filtroTipo, filtroStatus]);
-  useEffect(() => { fetchMonthly(); }, []);
+  useEffect(() => { fetchMonthly(); fetchOverdue(); }, []);
+
+  async function fetchOverdue() {
+    try {
+      const token = localStorage.getItem("afj_access_token");
+      const res = await fetch("/api/v1/financial/overdue", { headers: { Authorization: `Bearer ${token}` } });
+      if (res.ok) setOverdue(await res.json());
+    } catch {}
+  }
 
   async function fetchEntries() {
     setLoading(true);
@@ -255,6 +270,35 @@ export default function FinanceiroPage() {
             <p className={`text-xl font-bold ${(summary.saldo_atual || 0) >= 0 ? "text-green-600" : "text-red-500"}`}>
               {fmt(summary.saldo_atual || 0)}
             </p>
+          </div>
+        </div>
+      )}
+
+      {/* Inadimplência — receitas vencidas e não pagas */}
+      {overdue && overdue.total > 0 && (
+        <div className="afj-card p-4 border-l-4 border-red-500 bg-red-50/40">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <div className="flex items-center gap-2">
+              <AlertTriangle size={18} className="text-red-500" />
+              <p className="text-sm font-semibold text-afj-black">
+                Inadimplência: {overdue.total} {overdue.total === 1 ? "recebível vencido" : "recebíveis vencidos"}
+              </p>
+            </div>
+            <p className="text-sm font-bold text-red-600">{fmt(overdue.valor_total)} em atraso</p>
+          </div>
+          <div className="mt-3 space-y-1.5 max-h-40 overflow-y-auto">
+            {overdue.registros.slice(0, 8).map((r) => (
+              <div key={r.id} className="flex items-center justify-between text-xs text-afj-black/70 border-b border-red-100 pb-1">
+                <span className="truncate mr-2">{r.descricao}</span>
+                <span className="flex-shrink-0 flex items-center gap-2">
+                  <span className="text-red-600 font-medium">{fmt(r.valor)}</span>
+                  {r.dias_atraso != null && <span className="text-afj-black/40">{r.dias_atraso}d atraso</span>}
+                </span>
+              </div>
+            ))}
+            {overdue.total > 8 && (
+              <p className="text-[11px] text-afj-black/40 pt-1">+ {overdue.total - 8} outros — filtre por status Pendente para ver todos.</p>
+            )}
           </div>
         </div>
       )}
