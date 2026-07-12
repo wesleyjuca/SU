@@ -6,6 +6,7 @@ import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import type { FinancialData } from "@/components/relatorios/FinanceiroCharts";
 import type { ProcessoData } from "@/components/relatorios/ProcessosCharts";
 import type { AgentesData } from "@/components/relatorios/AgentesCharts";
+import type { GestaoData } from "@/components/relatorios/GestaoCharts";
 
 const FinanceiroCharts = dynamic(() => import("@/components/relatorios/FinanceiroCharts"), {
   ssr: false,
@@ -19,15 +20,28 @@ const AgentesCharts = dynamic(() => import("@/components/relatorios/AgentesChart
   ssr: false,
   loading: () => <ChartSkeleton />,
 });
+const GestaoCharts = dynamic(() => import("@/components/relatorios/GestaoCharts"), {
+  ssr: false,
+  loading: () => <ChartSkeleton />,
+});
 
-const TABS = ["Financeiro", "Processos", "Agentes IA"] as const;
+const TABS = ["Gestão", "Financeiro", "Processos", "Agentes IA"] as const;
 
 export default function RelatoriosPage() {
-  const [tab, setTab] = useState<typeof TABS[number]>("Financeiro");
+  const [tab, setTab] = useState<typeof TABS[number]>("Gestão");
+  const [gestao, setGestao] = useState<GestaoData | null>(null);
   const [financial, setFinancial] = useState<FinancialData | null>(null);
   const [processos, setProcessos] = useState<ProcessoData | null>(null);
   const [agentes, setAgentes] = useState<AgentesData | null>(null);
   const [loading, setLoading] = useState(false);
+
+  async function loadGestao() {
+    setLoading(true);
+    try {
+      const res = await fetch("/api/v1/system/analytics/gestao", { headers: headers() });
+      if (res.ok) setGestao(await res.json());
+    } finally { setLoading(false); }
+  }
 
   const headers = () => ({
     Authorization: `Bearer ${typeof window !== "undefined" ? localStorage.getItem("afj_access_token") : ""}`,
@@ -58,12 +72,14 @@ export default function RelatoriosPage() {
   }
 
   useEffect(() => {
+    if (tab === "Gestão" && !gestao) loadGestao();
     if (tab === "Financeiro" && !financial) loadFinancial();
     if (tab === "Processos" && !processos) loadProcessos();
     if (tab === "Agentes IA" && !agentes) loadAgentes();
   }, [tab]);
 
   function refresh() {
+    if (tab === "Gestão") { setGestao(null); loadGestao(); }
     if (tab === "Financeiro") { setFinancial(null); loadFinancial(); }
     if (tab === "Processos") { setProcessos(null); loadProcessos(); }
     if (tab === "Agentes IA") { setAgentes(null); loadAgentes(); }
@@ -99,6 +115,15 @@ export default function RelatoriosPage() {
           </button>
         ))}
       </div>
+
+      {/* ─── Gestão ───────────────────────────────────────────────────────── */}
+      {tab === "Gestão" && (
+        loading && !gestao
+          ? <ChartSkeleton />
+          : gestao
+            ? <GestaoCharts data={gestao} />
+            : <EmptyTab icon={<BarChart2 size={28} className="text-afj-black/20" />} msg="Sem dados de gestão" />
+      )}
 
       {/* ─── Financeiro ───────────────────────────────────────────────────── */}
       {tab === "Financeiro" && (

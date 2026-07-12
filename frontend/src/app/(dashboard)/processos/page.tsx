@@ -60,6 +60,7 @@ export default function ProcessosPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<Partial<Processo>>({});
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [desfecho, setDesfecho] = useState("");
   const [showOabModal, setShowOabModal] = useState(false);
   const [oabForm, setOabForm] = useState({ oab: "", uf: "AC" });
   const [oabLoading, setOabLoading] = useState(false);
@@ -176,13 +177,14 @@ export default function ProcessosPage() {
     } catch {}
   }
 
-  async function excluirProcesso(id: string) {
+  async function excluirProcesso(id: string, desfecho?: string) {
     const token = localStorage.getItem("afj_access_token");
-    const res = await fetch(`/api/v1/processes/${id}`, {
+    const qs = desfecho ? `?desfecho=${desfecho}` : "";
+    const res = await fetch(`/api/v1/processes/${id}${qs}`, {
       method: "DELETE",
       headers: { Authorization: `Bearer ${token}` },
     });
-    if (res.ok) { setDeletingId(null); fetchProcessos(0, false); }
+    if (res.ok) { setDeletingId(null); setDesfecho(""); fetchProcessos(0, false); }
   }
 
   const filtrados = processos.filter((p) =>
@@ -494,10 +496,21 @@ export default function ProcessosPage() {
         <div className="fixed inset-0 bg-afj-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-sm p-6 w-full max-w-sm shadow-2xl text-center">
             <p className="font-semibold text-afj-black mb-2">Arquivar processo?</p>
-            <p className="text-afj-black/50 text-sm mb-5">O processo será marcado como arquivado e removido da lista ativa.</p>
+            <p className="text-afj-black/50 text-sm mb-4">O processo será marcado como arquivado e removido da lista ativa.</p>
+            <div className="text-left mb-5">
+              <label className="text-xs text-afj-black/60 block mb-1">Desfecho (opcional — alimenta a taxa de êxito)</label>
+              <select value={desfecho} onChange={(e) => setDesfecho(e.target.value)}
+                className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm bg-white">
+                <option value="">Não informar</option>
+                <option value="EXITO">Êxito</option>
+                <option value="PARCIAL">Parcial</option>
+                <option value="ACORDO">Acordo</option>
+                <option value="DERROTA">Derrota</option>
+              </select>
+            </div>
             <div className="flex gap-3">
-              <button onClick={() => setDeletingId(null)} className="flex-1 btn-afj-outline rounded-sm">Cancelar</button>
-              <button onClick={() => excluirProcesso(deletingId)} className="flex-1 bg-red-500 text-white rounded-sm py-2 text-sm font-medium hover:bg-red-600">Arquivar</button>
+              <button onClick={() => { setDeletingId(null); setDesfecho(""); }} className="flex-1 btn-afj-outline rounded-sm">Cancelar</button>
+              <button onClick={() => excluirProcesso(deletingId, desfecho || undefined)} className="flex-1 bg-red-500 text-white rounded-sm py-2 text-sm font-medium hover:bg-red-600">Arquivar</button>
             </div>
           </div>
         </div>

@@ -25,6 +25,7 @@ class LegalProcess(Base):
     area_direito: Mapped[str | None] = mapped_column(String(100), index=True)  # CIVIL, TRABALHISTA, PENAL, TRIBUTARIO
     fase: Mapped[str | None] = mapped_column(String(50))   # CONHECIMENTO, EXECUCAO, RECURSAL
     situacao: Mapped[str] = mapped_column(String(50), default="ATIVO", index=True)
+    desfecho: Mapped[str | None] = mapped_column(String(20))  # EXITO, PARCIAL, ACORDO, DERROTA (ao encerrar)
     valor_causa: Mapped[Decimal | None] = mapped_column(Numeric(15, 2))
     client_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("clients.id"), index=True)
     responsavel_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id"))
