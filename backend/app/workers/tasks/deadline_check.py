@@ -69,9 +69,38 @@ def check_upcoming_deadlines(self):
                                 url=f"/processos/{prazo.process_id}",
                             )
 
+            # ── Vencimento de contratos (D-30/15/7) ──────────────────────────
+            from sqlalchemy import func as _func
+            from app.models.document import Contract, Document
+            contratos_notif = 0
+            for dias in (30, 15, 7):
+                alvo = today + timedelta(days=dias)
+                rows = (await db.execute(
+                    select(Contract, Document.created_by, Document.titulo)
+                    .join(Document, Contract.document_id == Document.id)
+                    .where(
+                        _func.date(Contract.data_fim) == alvo,
+                        Contract.status.notin_(["RASCUNHO", "CANCELADO", "ENCERRADO"]),
+                    )
+                )).all()
+                for contrato, created_by, titulo in rows:
+                    if not created_by:
+                        continue
+                    sufixo = " (renovação automática)" if contrato.renovacao_auto else ""
+                    db.add(Notification(
+                        user_id=created_by,
+                        tipo="CONTRATO_VENCENDO",
+                        titulo=f"Contrato vence em {dias} dias: {(titulo or 'Contrato')[:70]}",
+                        corpo=f"Vencimento: {contrato.data_fim.date() if contrato.data_fim else '—'}{sufixo}",
+                        priority="HIGH" if dias <= 7 else "NORMAL",
+                        link="/contratos",
+                    ))
+                    contratos_notif += 1
+            total_notificacoes += contratos_notif
+
             await db.commit()
-            log.info("deadlines_checked", total_notificacoes=total_notificacoes)
-            return {"notificacoes_criadas": total_notificacoes}
+            log.info("deadlines_checked", total_notificacoes=total_notificacoes, contratos=contratos_notif)
+            return {"notificacoes_criadas": total_notificacoes, "contratos": contratos_notif}
 
     return run_worker_coro(_run())
 

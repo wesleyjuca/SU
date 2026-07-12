@@ -20,7 +20,7 @@ const AREAS: { titulo: string; recursos: Recurso[] }[] = [
   {
     titulo: "Jurídico",
     recursos: [
-      { icon: Scale, nome: "Processos & Prazos", desc: "Cadastro, captura por OAB, monitoramento de andamentos e alertas de prazo.", estado: "operacional" },
+      { icon: Scale, nome: "Processos & Prazos", desc: "Cadastro, captura por OAB, andamentos, alertas e cálculo automático de prazo (dias úteis, feriados forenses e recesso).", estado: "operacional" },
       { icon: FileText, nome: "Petições & Contratos", desc: "Geração com IA, editor, versionamento, PDF e ciclo de vida (arquivar/excluir).", estado: "operacional" },
       { icon: BookOpen, nome: "Pesquisa Jurídica (RAG)", desc: "Busca semântica em jurisprudência, legislação, doutrina e memórias — documentos aprovados são indexados automaticamente.", estado: "parcial" },
       { icon: FileText, nome: "Modelos de Petição", desc: "Biblioteca de modelos reutilizados pela IA — importe do Word (.docx), edite no app ou baixe para editar no Word.", estado: "operacional" },
