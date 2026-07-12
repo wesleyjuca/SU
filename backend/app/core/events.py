@@ -123,6 +123,13 @@ async def lifespan(app: FastAPI):
             "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS unit_label VARCHAR(120)",
             # Fase 34 — desfecho do processo (taxa de êxito nos relatórios de gestão)
             "ALTER TABLE legal_processes ADD COLUMN IF NOT EXISTS desfecho VARCHAR(20)",
+            # Fase 35 — faturamento a cliente (BillingInvoice já existia sem estes campos)
+            "ALTER TABLE billing_invoices ADD COLUMN IF NOT EXISTS tenant_id UUID REFERENCES tenants(id)",
+            "ALTER TABLE billing_invoices ADD COLUMN IF NOT EXISTS descricao TEXT",
+            "ALTER TABLE billing_invoices ADD COLUMN IF NOT EXISTS itens JSONB",
+            "ALTER TABLE billing_invoices ADD COLUMN IF NOT EXISTS data_vencimento DATE",
+            "ALTER TABLE billing_invoices ADD COLUMN IF NOT EXISTS created_by UUID REFERENCES users(id)",
+            "ALTER TABLE billing_invoices ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT now()",
         ]:
             try:
                 async with engine.begin() as conn:

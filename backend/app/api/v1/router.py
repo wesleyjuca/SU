@@ -5,7 +5,7 @@ from app.api.v1 import (
     auth, approvals, processes, clients, documents,
     financial, ws, audit, rag, notifications, tenant, system, lgpd, push, portal,
     petition_templates, integrity, google_integration, tenants_admin, billing,
-    reports_admin,
+    reports_admin, invoices,
 )
 from app.dependencies import require_active_tenant
 
@@ -23,6 +23,7 @@ api_router.include_router(processes.router, dependencies=_BLOCK)
 api_router.include_router(clients.router, dependencies=_BLOCK)
 api_router.include_router(documents.router, dependencies=_BLOCK)
 api_router.include_router(financial.router, dependencies=_BLOCK)
+api_router.include_router(invoices.router, dependencies=_BLOCK)
 api_router.include_router(ws.router)
 api_router.include_router(audit.router)
 api_router.include_router(rag.router, dependencies=_BLOCK)

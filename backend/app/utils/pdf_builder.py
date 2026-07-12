@@ -327,6 +327,104 @@ def build_consolidated_pdf(
         )
 
 
+def build_invoice_pdf(
+    numero: str,
+    cliente_nome: str,
+    periodo: str,
+    itens: list[dict[str, Any]],
+    valor_total: float,
+    data_vencimento: str | None = None,
+    letterhead: dict | None = None,
+) -> bytes:
+    """PDF de fatura de honorários com timbrado da banca e tabela de itens."""
+    def _brl(v) -> str:
+        return "R$ " + f"{float(v):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+    try:
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.units import cm
+        from reportlab.lib import colors
+        from reportlab.lib.enums import TA_CENTER
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable, Table, TableStyle
+
+        buf = io.BytesIO()
+        doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=2.5 * cm, rightMargin=2 * cm, topMargin=2 * cm, bottomMargin=2 * cm)
+        styles = getSampleStyleSheet()
+        gold = ParagraphStyle("g", parent=styles["Normal"], fontSize=13, alignment=TA_CENTER, textColor=colors.HexColor("#C9A84C"), fontName="Times-Bold")
+        header_style = ParagraphStyle("h", parent=styles["Normal"], fontSize=9, alignment=TA_CENTER, textColor=colors.HexColor("#1A1A1A"))
+        title_style = ParagraphStyle("t", parent=styles["Normal"], fontSize=14, fontName="Times-Bold", alignment=TA_CENTER, spaceAfter=6)
+        body = ParagraphStyle("b", parent=styles["Normal"], fontSize=10, fontName="Times-Roman", leading=16)
+
+        story = []
+        lh = _resolve_letterhead(letterhead)
+        if lh.get("logo_data_url"):
+            try:
+                import base64 as _b64
+                from reportlab.platypus import Image as RLImage
+                from reportlab.lib.utils import ImageReader
+                raw = _b64.b64decode(lh["logo_data_url"].split(",", 1)[1])
+                iw, ih = ImageReader(io.BytesIO(raw)).getSize()
+                h = 1.4 * cm
+                logo = RLImage(io.BytesIO(raw), width=(iw * (h / ih) if ih else h), height=h)
+                logo.hAlign = "CENTER"
+                story.append(logo)
+                story.append(Spacer(1, 0.15 * cm))
+            except Exception:
+                pass
+        if lh.get("office"):
+            story.append(Paragraph(lh["office"], gold))
+        if lh.get("address"):
+            story.append(Paragraph(lh["address"], header_style))
+        if lh.get("contact_line"):
+            story.append(Paragraph(lh["contact_line"], header_style))
+        story.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#C9A84C"), spaceAfter=12))
+
+        story.append(Paragraph(f"FATURA Nº {numero}", title_style))
+        story.append(Paragraph(f"<b>Cliente:</b> {cliente_nome}", body))
+        if periodo:
+            story.append(Paragraph(f"<b>Período:</b> {periodo}", body))
+        if data_vencimento:
+            story.append(Paragraph(f"<b>Vencimento:</b> {data_vencimento}", body))
+        story.append(Spacer(1, 0.5 * cm))
+
+        data = [["Descrição", "Valor"]]
+        for it in itens:
+            data.append([str(it.get("descricao", "")), _brl(it.get("valor", 0))])
+        data.append(["TOTAL", _brl(valor_total)])
+        table = Table(data, colWidths=[13 * cm, 4 * cm])
+        table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1E2229")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, -1), 9),
+            ("ALIGN", (1, 0), (1, -1), "RIGHT"),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -2), [colors.white, colors.HexColor("#F7F3EC")]),
+            ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#C9A84C")),
+            ("TEXTCOLOR", (0, -1), (-1, -1), colors.white),
+            ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
+            ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#D9D2C4")),
+            ("TOPPADDING", (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ]))
+        story.append(table)
+        story.append(Spacer(1, 1 * cm))
+        gen_at = datetime.utcnow().strftime("%d/%m/%Y às %H:%M UTC")
+        if lh.get("footer"):
+            story.append(Paragraph(lh["footer"], header_style))
+        story.append(Paragraph(f"Fatura gerada em {gen_at} — Sistema AFJ CORE", header_style))
+        doc.build(story)
+        return buf.getvalue()
+    except ImportError:
+        linhas = [f"{it.get('descricao','')}: {_brl(it.get('valor',0))}" for it in itens]
+        linhas.append(f"TOTAL: {_brl(valor_total)}")
+        return build_report_pdf(
+            f"Fatura Nº {numero}",
+            [{"heading": f"Cliente: {cliente_nome}", "body": "\n".join(linhas)}],
+            letterhead,
+        )
+
+
 def build_report_pdf(title: str, sections: list[dict[str, str]], letterhead: dict | None = None) -> bytes:
     """Gera PDF de relatório com seções nomeadas."""
     lines = []

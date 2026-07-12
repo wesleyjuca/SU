@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
-import { DollarSign, TrendingUp, TrendingDown, Plus, CheckCircle, Clock, Trash2, FileDown, BarChart3, Pencil, AlertTriangle } from "lucide-react";
+import Link from "next/link";
+import { DollarSign, TrendingUp, TrendingDown, Plus, CheckCircle, Clock, Trash2, FileDown, BarChart3, Pencil, AlertTriangle, Receipt } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
@@ -227,6 +228,10 @@ export default function FinanceiroPage() {
           <p className="text-afj-black/50 text-sm">Honorários, despesas e fluxo de caixa</p>
         </div>
         <div className="flex gap-2">
+          <Link href="/financeiro/faturas" className="btn-afj-outline rounded-md flex items-center gap-2" title="Faturas a cliente">
+            <Receipt size={14} />
+            Faturas
+          </Link>
           <button onClick={exportarCSV} className="btn-afj-outline rounded-md flex items-center gap-2" title="Exportar CSV" aria-label="Exportar lançamentos como CSV">
             <FileDown size={14} />
             Exportar
