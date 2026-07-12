@@ -8,7 +8,7 @@ import {
   LayoutDashboard, Scale, FileText, Users, FolderOpen,
   Bot, CheckSquare, DollarSign, Shield, Shapes, Settings,
   Bell, Search, ChevronRight, FileEdit, Menu, X, LogOut, BarChart2, CalendarClock, BookOpen,
-  Moon, Sun, Activity, Users2, Palette, KeyRound, GraduationCap, Compass, Coins, ShieldCheck, Plug, Gauge, Building2, Receipt
+  Moon, Sun, Activity, Users2, Palette, KeyRound, GraduationCap, Compass, Coins, ShieldCheck, Plug, Gauge, Building2, Receipt, Gavel
 } from "lucide-react";
 import { useApprovalCount } from "@/hooks/useApprovals";
 import { useNotifications } from "@/hooks/useNotifications";
@@ -78,6 +78,7 @@ const navSections = [
       { href: "/admin/usuarios", label: "Usuários", icon: Users2, roles: ["ADMIN", "SUPERADMIN"] },
       { href: "/admin/plano", label: "Plano & Uso", icon: Gauge, roles: ["ADMIN", "SUPERADMIN"] },
       { href: "/admin/personalizacao", label: "Personalização", icon: Palette, roles: ["ADMIN", "SUPERADMIN"] },
+      { href: "/admin/juridico", label: "Config. Jurídica", icon: Gavel, roles: ["ADMIN", "SUPERADMIN"] },
       { href: "/integracoes", label: "Integrações", icon: Plug, roles: ["ADMIN", "SUPERADMIN"] },
       { href: "/auditoria", label: "Auditoria", icon: Shield, roles: ["ADMIN", "SOCIO", "SUPERADMIN"] },
       { href: "/admin/health", label: "Saúde do Sistema", icon: Activity, roles: ["ADMIN", "SUPERADMIN"] },
