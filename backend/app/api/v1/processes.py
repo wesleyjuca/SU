@@ -329,7 +329,16 @@ async def _tenant_feriados(db: AsyncSession, tenant_id) -> list[str]:
         select(TenantConfig).where(TenantConfig.tenant_id == tenant_id)
     )).scalar_one_or_none()
     fer = (cfg.extra_data or {}).get("feriados_forenses", []) if cfg else []
-    return fer if isinstance(fer, list) else []
+    if not isinstance(fer, list):
+        return []
+    # Aceita itens no formato {"data": "YYYY-MM-DD", ...} ou string ISO (retrocompat).
+    datas = []
+    for f in fer:
+        if isinstance(f, dict) and f.get("data"):
+            datas.append(str(f["data"])[:10])
+        elif isinstance(f, str):
+            datas.append(f[:10])
+    return datas
 
 
 class PrazoCalcRequest(BaseModel):

@@ -296,6 +296,52 @@ async def update_letterhead(
     return {"message": "Timbrado salvo", **templates["letterhead"]}
 
 
+# ─── Feriados forenses locais (complementam o cálculo de prazos) ─────────────
+class FeriadoItem(BaseModel):
+    data: str          # YYYY-MM-DD
+    descricao: str | None = None
+
+
+class FeriadosUpdate(BaseModel):
+    feriados: list[FeriadoItem]
+
+
+@router.get("/feriados")
+async def get_feriados(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Feriados forenses locais do escritório (usados no cálculo de prazos)."""
+    _, config = await _get_or_create_config(db, current_user)
+    fer = (config.extra_data or {}).get("feriados_forenses", [])
+    return {"feriados": fer if isinstance(fer, list) else []}
+
+
+@router.put("/feriados")
+async def update_feriados(
+    body: FeriadosUpdate,
+    current_user: User = Depends(require_role("ADMIN")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Salva os feriados forenses locais em TenantConfig.extra_data (JSONB)."""
+    from datetime import date as _date
+    itens = []
+    for f in body.feriados:
+        try:
+            _date.fromisoformat(f.data[:10])
+        except ValueError:
+            raise HTTPException(status_code=422, detail=f"Data inválida: {f.data} (use AAAA-MM-DD).")
+        itens.append({"data": f.data[:10], "descricao": (f.descricao or "").strip() or None})
+
+    tenant, config = await _get_or_create_config(db, current_user)
+    meta = dict(config.extra_data or {})
+    meta["feriados_forenses"] = itens
+    config.extra_data = meta
+    await db.flush()
+    await invalidate_tenant_cache(tenant.slug)
+    return {"feriados": itens}
+
+
 @router.get("/usage")
 async def get_tenant_usage(
     current_user: User = Depends(require_role("ADMIN", "SOCIO")),
