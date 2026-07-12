@@ -57,6 +57,8 @@
     --brand-primary-light: 212 172 100; /* #D4AC64 */
     --brand-primary-dark: 138 109 42;   /* #8A6D2A */
     --brand-secondary: 30 34 41;        /* #1E2229 */
+    --brand-secondary-light: 52 57 66;  /* #343942 — topo do gradiente do menu */
+    --brand-secondary-dark: 20 24 31;   /* #14181F — base do gradiente do menu */
     --brand-accent: 244 240 234;        /* #F4F0EA */
     --brand-accent-dark: 234 229 216;   /* #EAE5D8 */
     --sidebar-bg: #1E2229;
@@ -161,7 +163,12 @@
 @layer components {
   /* ─── Sidebar AFJ ─────────────────────────────────────────────────────── */
   .afj-sidebar {
-    @apply bg-afj-navy text-afj-cream w-64 h-screen flex flex-col fixed left-0 top-0 z-40;
+    @apply text-afj-cream w-64 h-screen flex flex-col fixed left-0 top-0 z-40;
+    /* Fundo do menu guiado pela cor secundária da Personalização (repinta em
+       runtime). Topo levemente mais claro para dar profundidade. */
+    background: linear-gradient(180deg,
+      rgb(var(--brand-secondary-light)) 0%,
+      rgb(var(--brand-secondary)) 100%);
   }
 
   .afj-sidebar-logo {

@@ -33,6 +33,10 @@ export function applyTheme(theme: TenantTheme): void {
   root.style.setProperty("--brand-primary-light", _channels(_lighten(theme.primaryColor, 20)));
   root.style.setProperty("--brand-primary-dark", _channels(_darken(theme.primaryColor, 20)));
   root.style.setProperty("--brand-accent-dark", _channels(_darken(theme.accentColor, 10)));
+  // Tons da secundária — usados pelo gradiente da barra lateral (menu), que
+  // passa a acompanhar a cor escolhida na Personalização.
+  root.style.setProperty("--brand-secondary-light", _channels(_lighten(theme.secondaryColor, 16)));
+  root.style.setProperty("--brand-secondary-dark", _channels(_darken(theme.secondaryColor, 10)));
 
   if (theme.faviconUrl) {
     try {
