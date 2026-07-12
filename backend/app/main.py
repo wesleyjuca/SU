@@ -110,11 +110,13 @@ async def health_check():
     except Exception:
         pass
 
-    all_ok = all(checks.values())
+    # Só postgres e redis são críticos; qdrant (RAG) é opcional — sua ausência
+    # não deve marcar o sistema inteiro como "degradado" (alinhado a /system/health/detailed).
+    core_ok = checks["postgresql"] and checks["redis"]
     return JSONResponse(
         status_code=200,
         content={
-            "status": "operational" if all_ok else "degraded",
+            "status": "operational" if core_ok else "degraded",
             "system": "AFJ CORE SYSTEM",
             "version": settings.VERSION,
             "environment": settings.ENVIRONMENT,

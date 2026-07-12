@@ -164,16 +164,22 @@ const STATUS_CONFIG: Record<ModuleStatus, { label: string; bg: string; text: str
 };
 
 const PHASES = [
-  { name: "Fase 1 — Fundação",       items: "Auth, Processos, Clientes, Agenda", done: true },
-  { name: "Fase 2 — IA Core",        items: "Agentes, Petições, RAG, Aprovações", done: true },
-  { name: "Fase 3 — Financeiro",     items: "Dashboard, Gráficos, Contratos", done: true },
-  { name: "Fase 4 — Admin SaaS",     items: "Saúde, Personalização, Usuários, Plano & Uso, Revisão de Acessos", done: true },
-  { name: "Fase 5 — Analytics",      items: "Relatórios, Auditoria, Busca Jurídica", done: true },
-  { name: "Fase 6 — Portal Cliente", items: "Acesso externo, mensagens, documentos PDF (WhatsApp aguarda credenciais)", done: true },
-  { name: "Fase 7 — Mobile/PWA",     items: "App para advogados em campo", done: false, active: true },
+  { name: "Fundação",                 items: "Auth, Processos, Clientes, Agenda, Documentos", done: true },
+  { name: "IA + HITL",                items: "19 agentes (LangGraph), Petições/Contratos com aprovação humana, RAG, BYOK", done: true },
+  { name: "Financeiro + Faturamento", items: "Receitas/despesas, inadimplência, faturas a cliente (PDF timbrado)", done: true },
+  { name: "Multi-tenant / SaaS",      items: "Isolamento por escritório, unidades da banca, cobrança mensal + bloqueio suave", done: true },
+  { name: "Relatórios + Gestão",      items: "Financeiro/processos/IA, consolidado da banca (PDF/Excel/CSV), rentabilidade/produtividade/êxito", done: true },
+  { name: "Prazos automáticos",       items: "Dias úteis, feriados forenses (nacionais + locais) e recesso; alertas", done: true },
+  { name: "CRM + Funil de vendas",    items: "Clientes/LGPD, oportunidades com forecast, Portal do Cliente", done: true },
+  { name: "Integrações externas",     items: "Gateway de pagamento, protocolo/assinatura digital, WhatsApp — aguardam credenciais", done: false, active: true },
+  { name: "Mobile / PWA",             items: "App instalável hoje; offline ampliado e push em evolução", done: false },
 ];
 
-const COMPLETION_PERCENT = 92;
+// Conclusão honesta: pilares concluídos + metade dos parciais (integrações
+// externas aguardam credenciais; PWA em evolução).
+const COMPLETION_PERCENT = Math.round(
+  (PHASES.filter((p) => p.done).length + PHASES.filter((p) => !p.done).length * 0.5) / PHASES.length * 100
+);
 
 function formatUptime(seconds: number): string {
   const d = Math.floor(seconds / 86400);
@@ -239,6 +245,7 @@ export default function HealthPage() {
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [showRoadmap, setShowRoadmap] = useState(false);
   const [showDiagnostic, setShowDiagnostic] = useState(false);
+  const [fetchError, setFetchError] = useState<string | null>(null);
 
   const fetchHealth = useCallback(async () => {
     setLoading(true);
@@ -249,8 +256,14 @@ export default function HealthPage() {
       });
       if (res.ok) {
         setData(await res.json());
+        setFetchError(null);
         setLastRefresh(new Date());
+      } else {
+        // Não afirmar "degradado": apenas registramos que não foi possível verificar.
+        setFetchError(`O serviço de verificação respondeu HTTP ${res.status}.`);
       }
+    } catch {
+      setFetchError("Não foi possível contatar o serviço de verificação (rede/servidor).");
     } finally {
       setLoading(false);
     }
@@ -264,7 +277,13 @@ export default function HealthPage() {
     return () => clearInterval(interval);
   }, [autoRefresh, fetchHealth]);
 
-  const isOk = data?.status === "operational";
+  // 3 estados: operacional (verde), degradado (vermelho, só se o backend disse),
+  // e não-verificado (âmbar) quando não há dado por erro de fetch.
+  const bannerState: "ok" | "degraded" | "unknown" =
+    data?.status === "operational" ? "ok"
+      : data?.status === "degraded" ? "degraded"
+        : (!data && (fetchError || (!loading))) ? "unknown"
+          : "unknown";
 
   const warnings = data
     ? MODULES.filter((m) => {
@@ -323,20 +342,29 @@ export default function HealthPage() {
         </div>
       </div>
 
-      {/* Banner de status global */}
-      <div className={`afj-card p-5 flex items-center gap-4 border-l-4 ${isOk ? "border-green-500" : "border-red-500"}`}>
-        <Activity size={28} className={isOk ? "text-green-500" : "text-red-500"} />
+      {/* Banner de status global (3 estados) */}
+      {(() => {
+        const B = {
+          ok:       { border: "border-green-500", text: "text-green-700", icon: "text-green-500", label: "Sistema Operacional" },
+          degraded: { border: "border-red-500",   text: "text-red-700",   icon: "text-red-500",   label: "Sistema Degradado" },
+          unknown:  { border: "border-amber-400", text: "text-amber-700", icon: "text-amber-500", label: "Não foi possível verificar" },
+        }[bannerState];
+        return (
+      <div className={`afj-card p-5 flex items-center gap-4 border-l-4 ${B.border}`}>
+        <Activity size={28} className={B.icon} />
         <div className="flex-1">
-          <p className={`text-lg font-bold ${isOk ? "text-green-700" : "text-red-700"}`}>
-            {loading && !data ? "Verificando…" : isOk ? "Sistema Operacional" : "Sistema Degradado"}
+          <p className={`text-lg font-bold ${B.text}`}>
+            {loading && !data ? "Verificando…" : B.label}
           </p>
-          {data && (
+          {data ? (
             <p className="text-xs text-afj-black/40 mt-0.5">
               v{data.version} · {data.environment}
               {data.uptime_seconds !== null && ` · Uptime: ${formatUptime(data.uptime_seconds)}`}
               {lastRefresh && ` · Atualizado ${lastRefresh.toLocaleTimeString("pt-BR")}`}
             </p>
-          )}
+          ) : (fetchError && !loading) ? (
+            <p className="text-xs text-afj-black/50 mt-0.5">{fetchError} Isso não significa que o sistema está fora do ar — apenas que a verificação não respondeu.</p>
+          ) : null}
         </div>
         {data && (
           <div className="text-right">
@@ -347,6 +375,8 @@ export default function HealthPage() {
           </div>
         )}
       </div>
+        );
+      })()}
 
       {/* Grid de módulos */}
       {loading && !data ? (

@@ -661,7 +661,11 @@ async def health_detailed(current_user: User = Depends(get_current_user)):
 
     # IA central: qual provider está ativo e se há chave de sistema configurada.
     # BYOK-first: sem chave central não é erro (usuários trazem a própria chave).
-    _ai_provider = _resolve_provider(None)
+    # Resiliente: uma exceção aqui NÃO pode derrubar (500) a página de saúde.
+    try:
+        _ai_provider = _resolve_provider(None)
+    except Exception:
+        _ai_provider = "anthropic"
     _ai_configured = bool(
         (cfg.GEMINI_API_KEY or cfg.OPENAI_API_KEY) if _ai_provider == "gemini" else cfg.ANTHROPIC_API_KEY
     )
