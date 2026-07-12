@@ -11,6 +11,7 @@ celery_app = Celery(
         "app.workers.tasks.process_polling",
         "app.workers.tasks.deadline_check",
         "app.workers.tasks.agent_tasks",
+        "app.workers.tasks.ocr_tasks",
     ],
 )
 

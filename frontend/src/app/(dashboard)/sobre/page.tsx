@@ -2,7 +2,7 @@
 import {
   Compass, CheckCircle2, Wrench, Clock, Lightbulb, Scale, Bot, DollarSign,
   Users, BookOpen, Shield, Shapes, FileText, KeyRound, CheckSquare, UserCircle,
-  BarChart2, Sparkles,
+  BarChart2, Sparkles, ScanLine,
 } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 
@@ -24,6 +24,7 @@ const AREAS: { titulo: string; recursos: Recurso[] }[] = [
       { icon: FileText, nome: "Petições & Contratos", desc: "Geração com IA, editor, versionamento, PDF e ciclo de vida (arquivar/excluir).", estado: "operacional" },
       { icon: BookOpen, nome: "Pesquisa Jurídica (RAG)", desc: "Busca semântica em jurisprudência, legislação, doutrina e memórias — documentos aprovados são indexados automaticamente.", estado: "parcial" },
       { icon: FileText, nome: "Modelos de Petição", desc: "Biblioteca de modelos reutilizados pela IA — importe do Word (.docx), edite no app ou baixe para editar no Word.", estado: "operacional" },
+      { icon: ScanLine, nome: "Digitalização & OCR", desc: "PDFs e imagens enviados são digitalizados automaticamente: o texto é extraído em segundo plano, fica pesquisável e pode ser conferido na hora.", estado: "operacional" },
       { icon: Shapes, nome: "Visual Law", desc: "Fluxogramas e linhas do tempo jurídicas geradas por IA.", estado: "operacional" },
     ],
   },

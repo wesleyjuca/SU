@@ -25,6 +25,8 @@ class DocumentResponse(BaseModel):
     process_id: str | None
     client_id: str | None
     created_at: str
+    tem_texto: bool = False
+    ocr_status: str | None = None
 
 
 class GeneratePetitionRequest(BaseModel):
@@ -68,6 +70,7 @@ async def list_documents(
 
 @router.post("/upload", status_code=201, response_model=DocumentResponse)
 async def upload_document(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     titulo: str = Form(...),
     tipo: str = Form("OUTROS"),
@@ -96,6 +99,16 @@ async def upload_document(
     if content_type.startswith("text/") or content_type in ("application/json", "application/xml"):
         conteudo_texto = contents.decode("utf-8", errors="ignore") or None
 
+    metadata_json = {
+        "filename": file.filename,
+        "content_type": content_type,
+        "size_bytes": len(contents),
+    }
+    # PDFs/imagens sem texto extraído inline entram na fila de OCR.
+    ocr_pending = _needs_ocr(content_type) and not conteudo_texto
+    if ocr_pending:
+        metadata_json["ocr"] = {"status": "PENDENTE"}
+
     doc = Document(
         tipo=tipo,
         titulo=titulo,
@@ -106,15 +119,44 @@ async def upload_document(
         gerado_por_ia=False,
         created_by=current_user.id,
         tenant_id=current_user.tenant_id,
-        metadata_json={
-            "filename": file.filename,
-            "content_type": content_type,
-            "size_bytes": len(contents),
-        },
+        metadata_json=metadata_json,
     )
     db.add(doc)
     await db.flush()
+
+    # Dispara o OCR em background (Celery, com fallback in-process). O upload
+    # já retorna 201 — o texto extraído aparece quando o worker conclui.
+    if ocr_pending:
+        _dispatch_ocr(doc.id, current_user.tenant_id, background_tasks)
+
     return _to_response(doc)
+
+
+@router.post("/{doc_id}/ocr", status_code=202)
+async def trigger_ocr(
+    doc_id: str,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """(Re)processa o OCR de um documento sob demanda (tenant-scoped)."""
+    result = await db.execute(
+        select(Document).where(
+            Document.id == uuid.UUID(doc_id),
+            Document.tenant_id == current_user.tenant_id,
+        )
+    )
+    doc = result.scalar_one_or_none()
+    if not doc:
+        raise NotFoundError("Documento", doc_id)
+
+    meta = dict(doc.metadata_json or {})
+    meta["ocr"] = {"status": "PENDENTE"}
+    doc.metadata_json = meta
+    await db.flush()
+
+    _dispatch_ocr(doc.id, current_user.tenant_id, background_tasks)
+    return {"document_id": doc_id, "ocr_status": "PENDENTE"}
 
 
 @router.get("/{doc_id}", response_model=DocumentResponse)
@@ -573,6 +615,7 @@ async def review_document(
 
 
 def _to_response(d: Document) -> DocumentResponse:
+    ocr = (d.metadata_json or {}).get("ocr") if isinstance(d.metadata_json, dict) else None
     return DocumentResponse(
         id=str(d.id),
         tipo=d.tipo,
@@ -583,4 +626,26 @@ def _to_response(d: Document) -> DocumentResponse:
         process_id=str(d.process_id) if d.process_id else None,
         client_id=str(d.client_id) if d.client_id else None,
         created_at=d.created_at.isoformat(),
+        tem_texto=bool((d.conteudo_texto or "").strip()),
+        ocr_status=(ocr or {}).get("status") if isinstance(ocr, dict) else None,
     )
+
+
+# Tipos de arquivo que passam por OCR (o resto ou já é texto, ou não é digitalizável).
+_OCR_CONTENT_TYPES = ("application/pdf",)
+
+
+def _needs_ocr(content_type: str) -> bool:
+    return content_type == "application/pdf" or content_type.startswith("image/")
+
+
+def _dispatch_ocr(doc_id, tenant_id, background_tasks: BackgroundTasks) -> None:
+    """Aciona o OCR via Celery; se o broker estiver fora, cai no BackgroundTasks
+    in-process. O chamador nunca deve falhar por causa disto."""
+    doc_id_s, tenant_s = str(doc_id), str(tenant_id) if tenant_id else None
+    try:
+        from app.workers.tasks.ocr_tasks import ocr_document_task
+        ocr_document_task.delay(doc_id_s, tenant_s)
+    except Exception:
+        from app.workers.tasks.ocr_tasks import run_ocr_inproc
+        background_tasks.add_task(run_ocr_inproc, doc_id_s, tenant_s)
