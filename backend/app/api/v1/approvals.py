@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 import uuid
 
 from app.db.base import get_db
-from app.dependencies import get_current_user
+from app.dependencies import get_current_user, require_role
 from app.models.user import User
 from app.models.agent_run import Approval
 from app.core.exceptions import NotFoundError, ValidationError
@@ -83,7 +83,8 @@ async def get_approval(
 async def resolve_approval(
     approval_id: str,
     body: ResolveApprovalRequest,
-    current_user: User = Depends(get_current_user),
+    # Decisão HITL é ato jurídico: restrita a advogado/sócio/admin (SUPERADMIN passa).
+    current_user: User = Depends(require_role("ADVOGADO", "SOCIO", "ADMIN")),
     db: AsyncSession = Depends(get_db),
 ):
     """
