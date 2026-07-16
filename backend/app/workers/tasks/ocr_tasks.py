@@ -96,6 +96,21 @@ async def _process_ocr(doc_id: str, tenant_id: str | None) -> None:
         await db.commit()
         log.info("ocr_document_done", doc_id=doc_id, status=meta["ocr"]["status"])
 
+        # Encadeia a indexação no RAG: o documento digitalizado vira pesquisável
+        # na Pesquisa Jurídica (coleção privada do escritório, isolada por tenant).
+        # Idempotente e à prova de falha — não afeta o OCR já persistido.
+        if meta.get("ocr", {}).get("status") == "CONCLUIDO":
+            try:
+                from app.rag.auto_ingest import auto_ingest_document
+                await auto_ingest_document(
+                    doc.id, doc.tenant_id, doc.titulo, doc.tipo, doc.conteudo_texto, doc.client_id
+                )
+                meta["ocr"]["rag"] = "indexado"
+                doc.metadata_json = {**meta}
+                await db.commit()
+            except Exception as exc:
+                log.warning("ocr_rag_index_failed", doc_id=doc_id, error=str(exc))
+
         # Notifica o dono do documento (best-effort) para a UI atualizar.
         try:
             from app.api.v1.ws import publish_event
