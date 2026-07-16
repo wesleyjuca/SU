@@ -5,7 +5,7 @@ from app.api.v1 import (
     auth, approvals, processes, clients, documents,
     financial, ws, audit, rag, notifications, tenant, system, lgpd, push, portal,
     petition_templates, integrity, google_integration, tenants_admin, billing,
-    reports_admin, invoices, crm,
+    reports_admin, invoices, crm, publications,
 )
 from app.dependencies import require_active_tenant, get_current_staff
 
@@ -32,6 +32,7 @@ api_router.include_router(documents.router, dependencies=_BLOCK_STAFF)
 api_router.include_router(financial.router, dependencies=_BLOCK_STAFF)
 api_router.include_router(invoices.router, dependencies=_BLOCK_STAFF)
 api_router.include_router(crm.router, dependencies=_BLOCK_STAFF)
+api_router.include_router(publications.router, dependencies=_BLOCK_STAFF)
 api_router.include_router(ws.router)
 api_router.include_router(audit.router, dependencies=_STAFF)
 api_router.include_router(rag.router, dependencies=_BLOCK_STAFF)

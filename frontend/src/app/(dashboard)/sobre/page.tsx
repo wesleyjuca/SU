@@ -21,6 +21,7 @@ const AREAS: { titulo: string; recursos: Recurso[] }[] = [
     titulo: "Jurídico",
     recursos: [
       { icon: Scale, nome: "Processos & Prazos", desc: "Cadastro, captura por OAB, andamentos, alertas e cálculo automático de prazo (dias úteis, recesso e feriados forenses locais configuráveis por comarca); lançamento direto da Agenda.", estado: "operacional" },
+      { icon: BookOpen, nome: "Publicações & Intimações (DJe)", desc: "Monitoramento automático do Diário de Justiça Eletrônico (DJEN/Comunica) pelas OABs do escritório: cada intimação vira andamento no processo e notifica o responsável; a triagem confirma tipo e dias e gera o prazo.", estado: "operacional" },
       { icon: FileText, nome: "Petições & Contratos", desc: "Geração com IA, editor, versionamento, PDF e ciclo de vida (arquivar/excluir).", estado: "operacional" },
       { icon: BookOpen, nome: "Pesquisa Jurídica (RAG)", desc: "Busca semântica em jurisprudência, legislação, doutrina e memórias — documentos aprovados e arquivos digitalizados (OCR) entram automaticamente na busca privada do escritório.", estado: "parcial" },
       { icon: FileText, nome: "Modelos de Petição", desc: "Biblioteca de modelos reutilizados pela IA — importe do Word (.docx), edite no app ou baixe para editar no Word.", estado: "operacional" },
