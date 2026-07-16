@@ -42,6 +42,7 @@ const AREAS: { titulo: string; recursos: Recurso[] }[] = [
       { icon: DollarSign, nome: "Financeiro", desc: "Receitas, despesas, honorários, inadimplência e faturas a cliente (PDF timbrado) — isolado por escritório.", estado: "operacional" },
       { icon: Users, nome: "Clientes (CRM) & LGPD", desc: "Gestão de clientes/leads, funil de vendas (forecast), ficha 360° com financeiro do cliente e controle de consentimento.", estado: "operacional" },
       { icon: BarChart2, nome: "Relatórios", desc: "Gráficos de processos, financeiro, agentes e gestão do sócio (rentabilidade por cliente, produtividade e taxa de êxito).", estado: "operacional" },
+      { icon: BarChart2, nome: "Painel TV (recepção)", desc: "Modo quiosque para Smart TV: KPIs, relógio e prazos próximos em fonte grande, com atualização automática — ideal para a recepção ou a sala da equipe.", estado: "operacional" },
       { icon: DollarSign, nome: "Custos de IA por Usuário", desc: "Consumo por advogado com teto mensal configurável, alertas e bloqueio suave.", estado: "operacional" },
       { icon: UserCircle, nome: "Portal do Cliente", desc: "Acesso externo com mensagens ao escritório, download de PDFs timbrados e isolamento duplo.", estado: "operacional" },
     ],
