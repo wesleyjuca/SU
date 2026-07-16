@@ -43,6 +43,23 @@ def _require_admin(current_user: User) -> None:
         raise HTTPException(status_code=403, detail="Acesso restrito a administradores")
 
 
+# Papéis que um administrador de escritório pode atribuir. SUPERADMIN (dono da
+# plataforma, atravessa todos os tenants) só pode ser atribuído por outro
+# SUPERADMIN; CLIENT nasce apenas pelo fluxo do portal — nunca por convite/edição.
+_OFFICE_ROLES = {"ASSISTENTE", "ADVOGADO", "GESTOR", "SOCIO", "ADMIN"}
+
+
+def _validate_role_assignment(role: str, current_user: User) -> None:
+    if role in _OFFICE_ROLES:
+        return
+    if role == "SUPERADMIN" and current_user.role == "SUPERADMIN":
+        return
+    raise HTTPException(
+        status_code=422,
+        detail=f"Papel inválido. Permitidos: {', '.join(sorted(_OFFICE_ROLES))}.",
+    )
+
+
 class ProfileUpdate(BaseModel):
     full_name: str | None = None
 
@@ -368,6 +385,7 @@ async def invite_user(
     db: AsyncSession = Depends(get_db),
 ):
     _require_admin(current_user)
+    _validate_role_assignment(body.role, current_user)
 
     existing = await db.execute(select(User).where(User.email == body.email))
     if existing.scalar_one_or_none():
@@ -432,6 +450,8 @@ async def update_user(
         raise HTTPException(status_code=404, detail="Usuário não encontrado")
 
     updates = body.model_dump(exclude_none=True)
+    if "role" in updates:
+        _validate_role_assignment(updates["role"], current_user)
 
     # Proteção contra lockout: não permitir desativar ou rebaixar o ÚLTIMO
     # ADMIN ativo do escritório (senão ninguém mais administra o sistema).

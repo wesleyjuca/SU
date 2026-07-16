@@ -21,9 +21,9 @@ CATEGORIAS_DENUNCIA = ["ETICA", "CONFLITO_INTERESSES", "DADOS_LGPD", "USO_DE_IA"
 # (JSONB existente — sem migração). Aceites ficam em conduct_acceptances.
 
 
-async def _get_conduct(db: AsyncSession) -> dict:
+async def _get_conduct(db: AsyncSession, current_user: User) -> dict:
     from app.api.v1.tenant import _get_or_create_config
-    config = await _get_or_create_config(db)
+    _tenant, config = await _get_or_create_config(db, current_user)
     return (config.document_templates or {}).get("code_of_conduct", {})
 
 
@@ -33,7 +33,7 @@ async def get_conduct(
     db: AsyncSession = Depends(get_db),
 ):
     """Código de Conduta vigente + status de aceite do usuário atual."""
-    conduct = await _get_conduct(db)
+    conduct = await _get_conduct(db, current_user)
     version = int(conduct.get("version") or 0)
     accepted_at = None
     if version:
@@ -71,7 +71,7 @@ async def update_conduct(
     if not text:
         raise HTTPException(status_code=422, detail="O texto do código não pode ser vazio.")
 
-    config = await _get_or_create_config(db)
+    tenant, config = await _get_or_create_config(db, current_user)
     templates = dict(config.document_templates or {})
     prev = templates.get("code_of_conduct", {})
     templates["code_of_conduct"] = {
@@ -81,7 +81,7 @@ async def update_conduct(
     }
     config.document_templates = templates
     await db.flush()
-    await invalidate_tenant_cache(DEFAULT_TENANT_SLUG)
+    await invalidate_tenant_cache(getattr(tenant, "slug", None) or DEFAULT_TENANT_SLUG)
     return {"message": "Código de Conduta publicado", "version": templates["code_of_conduct"]["version"]}
 
 
@@ -91,7 +91,7 @@ async def accept_conduct(
     db: AsyncSession = Depends(get_db),
 ):
     """Registra o aceite do usuário à versão vigente do Código de Conduta."""
-    conduct = await _get_conduct(db)
+    conduct = await _get_conduct(db, current_user)
     version = int(conduct.get("version") or 0)
     if not version:
         raise HTTPException(status_code=422, detail="Nenhum Código de Conduta publicado ainda.")
@@ -120,7 +120,7 @@ async def list_acceptances(
     db: AsyncSession = Depends(get_db),
 ):
     """Painel do aceite: quem já aceitou a versão vigente (tenant-scoped)."""
-    conduct = await _get_conduct(db)
+    conduct = await _get_conduct(db, current_user)
     version = int(conduct.get("version") or 0)
 
     total_users = (await db.execute(

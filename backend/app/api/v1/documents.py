@@ -225,7 +225,19 @@ async def update_document(
     doc = result.scalar_one_or_none()
     if not doc:
         raise NotFoundError("Documento", doc_id)
-    for field, value in body.model_dump(exclude_none=True).items():
+
+    updates = body.model_dump(exclude_none=True)
+    # Aprovar/protocolar é ato jurídico (invariante HITL): restrito a papéis
+    # com poder de decisão — impede que qualquer usuário "aprove" via PUT.
+    if updates.get("status") in ("APROVADO", "PROTOCOLADO") and current_user.role not in (
+        "ADVOGADO", "SOCIO", "ADMIN", "SUPERADMIN"
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Aprovar ou protocolar documentos é restrito a advogados, sócios e administradores.",
+        )
+
+    for field, value in updates.items():
         setattr(doc, field, value)
     await db.flush()
 
@@ -559,11 +571,28 @@ async def generate_petition(
     agent_run.cost_usd = Decimal(str(result.cost_usd)) if result.cost_usd else None
     agent_run.requires_approval = result.needs_approval
 
+    # Invariante HITL: este caminho síncrono (o que a UI usa) também alimenta a
+    # fila de aprovações — antes só o caminho do worker criava o Approval, e a
+    # petição gerada aqui nunca aparecia em /aprovacoes.
+    approval_id = None
+    if result.status.value == "AWAITING_APPROVAL" or result.needs_approval:
+        from app.services.approval_service import create_approval_from_state
+        approval_id = await create_approval_from_state(db, agent_run, {
+            "pending_approval": {
+                "tipo": "PETICAO",
+                "titulo": f"Protocolar petição: {body.tipo_peticao}",
+                "descricao": "Petição gerada por IA aguardando revisão e decisão humana.",
+                "prioridade": "NORMAL",
+            },
+            "agent_results": [result],
+        })
+
     return {
         "run_id": str(run_id),
         "status": result.status.value,
         "document_id": result.output.get("document_id"),
         "approval_required": result.approval_required,
+        "approval_id": str(approval_id) if approval_id else None,
         "warnings": result.output.get("warnings", []),
     }
 

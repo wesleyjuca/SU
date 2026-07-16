@@ -150,15 +150,21 @@ class Settings(BaseSettings):
             parsed = urlparse(self.DATABASE_URL)
             if parsed.password:
                 self.POSTGRES_PASSWORD = parsed.password
-        # SECRET_KEY: ephemeral fallback when not configured — sessions invalidated on restart
+        # SECRET_KEY: obrigatório em produção (chave efêmera invalidaria todos os
+        # JWT a cada restart e tornaria indecifráveis as chaves BYOK cifradas).
+        # Em dev/test, mantém o fallback efêmero com aviso.
         if not self.SECRET_KEY:
+            if self.ENVIRONMENT == "production":
+                raise RuntimeError(
+                    "SECRET_KEY é obrigatório em produção — configure SECRET_KEY "
+                    "(e ENCRYPTION_KEY) nas variáveis do Railway antes de subir o serviço."
+                )
             import secrets as _secrets
             self.SECRET_KEY = _secrets.token_urlsafe(48)
-            prefix = "[AFJ][ERROR]" if self.ENVIRONMENT == "production" else "[AFJ][WARN]"
             print(
-                f"{prefix} SECRET_KEY não definido — gerado valor efêmero. "
+                "[AFJ][WARN] SECRET_KEY não definido — gerado valor efêmero. "
                 "Tokens são invalidados a cada restart. "
-                "Configure SECRET_KEY no Railway Variables para sessões estáveis.",
+                "Configure SECRET_KEY para sessões estáveis.",
                 flush=True,
             )
         # Derive ENCRYPTION_KEY from SECRET_KEY if not set
