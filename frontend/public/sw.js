@@ -1,16 +1,29 @@
-/* AFJ CORE — Service Worker v1 */
-const CACHE_NAME = "afj-core-v1";
+/* AFJ CORE — Service Worker v2
+   v1 pré-cacheava /fonts/Optima.ttc (inexistente): cache.addAll é atômico,
+   então NENHUM asset era cacheado e o offline nunca funcionou. v2 usa adds
+   tolerantes a falha, assets reais e fallback offline.html para navegação. */
+const CACHE_NAME = "afj-core-v2";
+const OFFLINE_URL = "/offline.html";
 const STATIC_ASSETS = [
   "/",
   "/login",
-  "/fonts/Optima.ttc",
+  OFFLINE_URL,
   "/logo-afj.svg",
+  "/logo-afj-mark.png",
   "/manifest.json",
+  "/icons/icon-192.png",
+  "/icons/icon-512.png",
+  "/fonts/Optima-Regular.woff2",
+  "/fonts/Optima-Bold.woff2",
+  "/fonts/Optima-Italic.woff2",
 ];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(STATIC_ASSETS)).catch(() => {})
+    caches.open(CACHE_NAME).then((cache) =>
+      // Tolerante a falha: um 404 não derruba o precache inteiro (addAll é atômico).
+      Promise.allSettled(STATIC_ASSETS.map((asset) => cache.add(asset)))
+    )
   );
   self.skipWaiting();
 });
@@ -19,6 +32,11 @@ self.addEventListener("activate", (event) => {
   event.waitUntil(
     caches.keys().then((keys) =>
       Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k)))
+    ).then(() =>
+      // Avisa as janelas abertas que há versão nova (o provider mostra o aviso).
+      self.clients.matchAll({ type: "window" }).then((clients) =>
+        clients.forEach((c) => c.postMessage({ type: "SW_UPDATED" }))
+      )
     )
   );
   self.clients.claim();
@@ -40,7 +58,7 @@ self.addEventListener("fetch", (event) => {
   if (
     url.pathname.startsWith("/fonts/") ||
     url.pathname.startsWith("/icons/") ||
-    url.pathname.endsWith(".ttc") ||
+    url.pathname.endsWith(".woff2") ||
     url.pathname.endsWith(".svg") ||
     url.pathname.endsWith(".png")
   ) {
@@ -56,9 +74,17 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Network-first for everything else (pages, JS chunks)
+  // Network-first para páginas/chunks; offline: cache → shell offline.html
   event.respondWith(
-    fetch(event.request).catch(() => caches.match(event.request))
+    fetch(event.request).catch(async () => {
+      const cached = await caches.match(event.request);
+      if (cached) return cached;
+      if (event.request.mode === "navigate") {
+        const offline = await caches.match(OFFLINE_URL);
+        if (offline) return offline;
+      }
+      return Response.error();
+    })
   );
 });
 

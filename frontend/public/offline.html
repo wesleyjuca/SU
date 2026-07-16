@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>AFJ CORE — Sem conexão</title>
+  <style>
+    :root { color-scheme: light dark; }
+    * { margin: 0; box-sizing: border-box; }
+    body {
+      font-family: Inter, system-ui, sans-serif;
+      background: #F4F0EA; color: #1A1A1A;
+      min-height: 100vh; display: flex; align-items: center; justify-content: center;
+      padding: 24px; text-align: center;
+    }
+    @media (prefers-color-scheme: dark) {
+      body { background: #111520; color: #F4F0EA; }
+      .card { background: #1E2229 !important; border-color: #3D4557 !important; }
+    }
+    .card {
+      background: #fff; border: 1px solid #EAE5D8; border-radius: 4px;
+      padding: 40px 32px; max-width: 420px; width: 100%;
+      box-shadow: 0 2px 12px rgba(0,0,0,.06);
+    }
+    .mark {
+      width: 56px; height: 56px; margin: 0 auto 20px; border-radius: 4px;
+      background: #B8954A; color: #fff; display: flex; align-items: center;
+      justify-content: center; font-weight: 800; font-size: 20px; letter-spacing: 1px;
+    }
+    h1 { font-size: 20px; margin-bottom: 8px; }
+    p { font-size: 14px; opacity: .65; line-height: 1.6; margin-bottom: 24px; }
+    button {
+      background: #B8954A; color: #fff; border: 0; border-radius: 4px;
+      padding: 12px 28px; font-size: 14px; font-weight: 600; cursor: pointer;
+      min-height: 44px;
+    }
+    button:hover { opacity: .9; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="mark">AFJ</div>
+    <h1>Você está sem conexão</h1>
+    <p>Não foi possível carregar esta página. Verifique sua internet e tente novamente — seus dados continuam seguros no servidor.</p>
+    <button onclick="location.reload()">Tentar novamente</button>
+  </div>
+</body>
+</html>

@@ -32,7 +32,10 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#B8954A",
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#B8954A" },
+    { media: "(prefers-color-scheme: dark)", color: "#111520" },
+  ],
   width: "device-width",
   initialScale: 1,
   // Necessário para env(safe-area-inset-*) funcionar em iPhones com notch —
