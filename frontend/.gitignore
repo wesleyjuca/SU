@@ -1,0 +1,4 @@
+# Projetos nativos gerados pelo Capacitor (rode `npx cap add android/ios` localmente).
+# Não versione — são grandes e recriáveis a partir de capacitor.config.ts.
+/android
+/ios
