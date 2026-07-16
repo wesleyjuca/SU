@@ -208,7 +208,7 @@ export default function FaturamentoPage() {
       {/* Modal configurar cobrança */}
       {cfg && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => !saving && setCfg(null)}>
-          <form onSubmit={saveCfg} className="bg-white rounded-sm shadow-xl w-full max-w-sm" onClick={(e) => e.stopPropagation()}>
+          <form onSubmit={saveCfg} className="bg-white rounded-sm shadow-xl w-full max-w-sm max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between px-5 py-4 border-b border-afj-cream-dark">
               <h2 className="font-semibold text-afj-black">Cobrança — {cfg.name}</h2>
               <button type="button" onClick={() => setCfg(null)} className="text-afj-black/40 hover:text-afj-black"><X size={18} /></button>
@@ -237,7 +237,7 @@ export default function FaturamentoPage() {
       {/* Modal registrar pagamento */}
       {pay && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => !saving && setPay(null)}>
-          <form onSubmit={savePay} className="bg-white rounded-sm shadow-xl w-full max-w-sm" onClick={(e) => e.stopPropagation()}>
+          <form onSubmit={savePay} className="bg-white rounded-sm shadow-xl w-full max-w-sm max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between px-5 py-4 border-b border-afj-cream-dark">
               <h2 className="font-semibold text-afj-black">Registrar pagamento — {pay.name}</h2>
               <button type="button" onClick={() => setPay(null)} className="text-afj-black/40 hover:text-afj-black"><X size={18} /></button>

@@ -360,7 +360,7 @@ export default function ProcessoDetailPage() {
       {/* Modal: Adicionar Prazo */}
       {showPrazoModal && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-sm shadow-xl w-full max-w-md">
+          <div className="bg-white rounded-sm shadow-xl w-full max-w-md max-h-[85vh] overflow-y-auto">
             <div className="flex items-center justify-between px-5 py-4 border-b border-afj-cream-dark">
               <h2 className="font-semibold text-afj-black">Adicionar Prazo</h2>
               <button onClick={() => setShowPrazoModal(false)} className="text-afj-black/40 hover:text-afj-black">
@@ -483,7 +483,7 @@ export default function ProcessoDetailPage() {
       {/* Modal: Registrar Movimentação */}
       {showMovModal && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-sm shadow-xl w-full max-w-md">
+          <div className="bg-white rounded-sm shadow-xl w-full max-w-md max-h-[85vh] overflow-y-auto">
             <div className="flex items-center justify-between px-5 py-4 border-b border-afj-cream-dark">
               <h2 className="font-semibold text-afj-black">Registrar Movimentação</h2>
               <button onClick={() => setShowMovModal(false)} className="text-afj-black/40 hover:text-afj-black">

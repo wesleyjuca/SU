@@ -114,7 +114,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         e.preventDefault();
         setSearchOpen((o) => !o);
       }
-      if (e.key === "Escape") setSearchOpen(false);
+      if (e.key === "Escape") {
+        setSearchOpen(false);
+        setSidebarOpen(false); // fecha o menu overlay no mobile/teclado/remoto
+      }
     }
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
@@ -250,7 +253,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                 localStorage.removeItem("afj_user");
                 window.location.href = "/login";
               }}
-              className="text-afj-cream/30 hover:text-red-400 transition-colors"
+              className="tap-target text-afj-cream/30 hover:text-red-400 transition-colors"
               aria-label="Sair do sistema"
               title="Sair"
             >
@@ -284,6 +287,14 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               <Search size={13} />
               <span className="text-xs">Buscar processos, clientes, documentos...</span>
               <kbd className="ml-2 text-[10px] font-mono bg-afj-cream-dark px-1.5 py-0.5 rounded-sm text-afj-black/30">⌘K</kbd>
+            </button>
+            {/* No celular a busca era inacessível (botão hidden + só ⌘K) */}
+            <button
+              onClick={() => setSearchOpen(true)}
+              className="sm:hidden tap-target text-afj-black/50 hover:text-afj-black transition-colors"
+              aria-label="Buscar"
+            >
+              <Search size={18} />
             </button>
           </div>
           <div className="flex items-center gap-3">

@@ -273,7 +273,8 @@ export default function DocumentosPage() {
           <p className="text-afj-black/40 text-sm mt-1">Documentos gerados pelo sistema aparecerão aqui</p>
         </div>
       ) : (
-        <div className="afj-card overflow-hidden">
+        <div className="afj-card">
+          <div className="overflow-x-auto">
           <table className="afj-table">
             <thead>
               <tr>
@@ -321,7 +322,7 @@ export default function DocumentosPage() {
                         <button
                           onClick={() => verTexto(d.id, d.titulo)}
                           disabled={loadingTexto === d.id}
-                          className="text-afj-black/30 hover:text-afj-gold transition-colors disabled:opacity-40"
+                          className="tap-target text-afj-black/30 hover:text-afj-gold transition-colors disabled:opacity-40"
                           title="Ver texto extraído"
                           aria-label="Ver texto extraído do documento"
                         >
@@ -331,7 +332,7 @@ export default function DocumentosPage() {
                       <button
                         onClick={() => processarOcr(d.id)}
                         disabled={ocrRunning === d.id}
-                        className="text-afj-black/30 hover:text-afj-gold transition-colors disabled:opacity-40"
+                        className="tap-target text-afj-black/30 hover:text-afj-gold transition-colors disabled:opacity-40"
                         title="Processar OCR (extrair texto)"
                         aria-label="Processar OCR do documento"
                       >
@@ -339,7 +340,7 @@ export default function DocumentosPage() {
                       </button>
                       <button
                         onClick={() => downloadDoc(d.id, d.titulo)}
-                        className="text-afj-black/30 hover:text-afj-gold transition-colors"
+                        className="tap-target text-afj-black/30 hover:text-afj-gold transition-colors"
                         title="Baixar PDF"
                         aria-label="Baixar documento como PDF"
                       >
@@ -349,7 +350,7 @@ export default function DocumentosPage() {
                         <button
                           onClick={() => salvarNoDrive(d.id, d.titulo)}
                           disabled={savingDrive === d.id}
-                          className="text-afj-black/30 hover:text-afj-gold transition-colors disabled:opacity-40"
+                          className="tap-target text-afj-black/30 hover:text-afj-gold transition-colors disabled:opacity-40"
                           title="Salvar no Google Drive (PDF timbrado)"
                           aria-label="Salvar no Google Drive"
                         >
@@ -362,6 +363,7 @@ export default function DocumentosPage() {
               ))}
             </tbody>
           </table>
+          </div>
         </div>
       )}
 

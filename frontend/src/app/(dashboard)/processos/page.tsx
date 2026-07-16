@@ -409,7 +409,7 @@ export default function ProcessosPage() {
       {/* Modal edição */}
       {editingId && (
         <div className="fixed inset-0 bg-afj-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-sm p-6 w-full max-w-md shadow-2xl">
+          <div className="bg-white rounded-sm p-6 w-full max-w-md shadow-2xl max-h-[85vh] overflow-y-auto">
             <h2 className="font-display text-lg font-semibold text-afj-black mb-4">Editar Processo</h2>
             <div className="space-y-3">
               <div>
@@ -449,7 +449,7 @@ export default function ProcessosPage() {
       {/* Modal captura por OAB */}
       {showOabModal && (
         <div className="fixed inset-0 bg-afj-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-sm p-6 w-full max-w-sm shadow-2xl">
+          <div className="bg-white rounded-sm p-6 w-full max-w-sm shadow-2xl max-h-[85vh] overflow-y-auto">
             <h2 className="font-display text-lg font-semibold text-afj-black mb-1">Capturar por OAB</h2>
             <p className="text-afj-black/50 text-sm mb-4">Importa automaticamente todos os processos vinculados ao número da OAB via CNJ DataJud.</p>
             <div className="space-y-3">
@@ -494,7 +494,7 @@ export default function ProcessosPage() {
       {/* Modal confirmação exclusão */}
       {deletingId && (
         <div className="fixed inset-0 bg-afj-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-sm p-6 w-full max-w-sm shadow-2xl text-center">
+          <div className="bg-white rounded-sm p-6 w-full max-w-sm shadow-2xl text-center max-h-[85vh] overflow-y-auto">
             <p className="font-semibold text-afj-black mb-2">Arquivar processo?</p>
             <p className="text-afj-black/50 text-sm mb-4">O processo será marcado como arquivado e removido da lista ativa.</p>
             <div className="text-left mb-5">

@@ -264,6 +264,19 @@
   /* ─── Tabelas responsivas ─────────────────────────────────────────────── */
   .table-responsive { @apply overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0; }
 
+  /* Respeita o home-indicator/notch do iPhone (exige viewportFit: "cover").
+     A classe era usada pelo BottomNav mas nunca havia sido definida. */
+  .safe-area-inset-bottom { padding-bottom: env(safe-area-inset-bottom, 0px); }
+
+  /* Alvo de toque ≥44px para botões ícone-only: expande a área clicável via
+     margem negativa sem inflar o layout visual (linhas de tabela, header). */
+  .tap-target {
+    @apply relative inline-flex items-center justify-center;
+    min-width: 44px;
+    min-height: 44px;
+    margin: -10px;
+  }
+
   /* ─── Tabela premium ──────────────────────────────────────────────────── */
   .afj-table { @apply w-full text-sm; }
 

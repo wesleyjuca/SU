@@ -1027,7 +1027,7 @@ export default function PersonalizacaoPage() {
       {/* Modal histórico */}
       {showHistory && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setShowHistory(false)}>
-          <div className="bg-white rounded-sm shadow-xl max-w-sm w-full p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-white rounded-sm shadow-xl max-w-sm w-full p-6 space-y-4 max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <h3 className="font-display text-lg font-semibold text-afj-black">Histórico de Temas</h3>
             {themeHistory.length === 0 ? (
               <p className="text-sm text-afj-black/40">Nenhuma alteração registrada ainda.</p>

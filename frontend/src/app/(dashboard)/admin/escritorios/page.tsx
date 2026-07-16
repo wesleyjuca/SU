@@ -214,7 +214,7 @@ export default function EscritoriosPage() {
       {/* Modal criação */}
       {modal && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => !saving && setModal(null)}>
-          <div className="bg-white rounded-sm shadow-xl w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-white rounded-sm shadow-xl w-full max-w-md max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between px-5 py-4 border-b border-afj-cream-dark">
               <h2 className="font-semibold text-afj-black">
                 {modal.mode === "unit" ? `Nova unidade de ${modal.parent?.name}` : "Novo escritório"}
