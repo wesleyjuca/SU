@@ -125,17 +125,10 @@ def scan_daily_publications(self):
 
     async def _run():
         from app.db.base import AsyncSessionLocal
-        from app.agents.publication_monitor.publication_monitor_agent import PublicationMonitorAgent
-        from app.agents.brain.context import AgentContext
-        from datetime import date
+        from app.services.dje_monitor import scan_publicacoes
 
         async with AsyncSessionLocal() as db:
-            agent = PublicationMonitorAgent(db=db)
-            ctx = AgentContext(
-                task_type="monitor_publications",
-                task_input={"data": date.today().isoformat()},
-            )
-            result = await agent.run(ctx)
-            return result.output
+            # Varre a Comunica/DJEN (pública) para todas as OABs monitoradas.
+            return await scan_publicacoes(db, tenant_id=None, dias_retro=1)
 
     return run_worker_coro(_run())

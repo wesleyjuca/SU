@@ -10,6 +10,7 @@ from app.models.integrity import ConductAcceptance, IntegrityReport
 from app.models.integrations import GoogleIntegration
 from app.models.billing import BillingAccount, TenantPayment
 from app.models.crm import Opportunity
+from app.models.intimacao import Intimacao
 
 __all__ = [
     "User", "UserPermission", "Session",
@@ -24,4 +25,5 @@ __all__ = [
     "GoogleIntegration",
     "BillingAccount", "TenantPayment",
     "Opportunity",
+    "Intimacao",
 ]

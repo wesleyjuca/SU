@@ -8,7 +8,7 @@ import {
   LayoutDashboard, Scale, FileText, Users, FolderOpen,
   Bot, CheckSquare, DollarSign, Shield, Shapes, Settings,
   Bell, Search, ChevronRight, FileEdit, Menu, X, LogOut, BarChart2, CalendarClock, BookOpen,
-  Moon, Sun, Activity, Users2, Palette, KeyRound, GraduationCap, Compass, Coins, ShieldCheck, Plug, Gauge, Building2, Receipt, Gavel, MonitorPlay
+  Moon, Sun, Activity, Users2, Palette, KeyRound, GraduationCap, Compass, Coins, ShieldCheck, Plug, Gauge, Building2, Receipt, Gavel, MonitorPlay, Newspaper
 } from "lucide-react";
 import { useApprovalCount } from "@/hooks/useApprovals";
 import { useNotifications } from "@/hooks/useNotifications";
@@ -35,6 +35,7 @@ const navSections = [
     title: "JURÍDICO",
     items: [
       { href: "/processos", label: "Processos", icon: Scale, roles: null },
+      { href: "/publicacoes", label: "Publicações", icon: Newspaper, roles: null },
       { href: "/agenda", label: "Agenda", icon: CalendarClock, roles: null },
       { href: "/peticoes", label: "Petições", icon: FileEdit, roles: ADV },
       { href: "/clientes", label: "Clientes", icon: Users, roles: null },
