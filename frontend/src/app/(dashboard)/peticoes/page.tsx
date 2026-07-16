@@ -138,7 +138,8 @@ export default function PeticoesPage() {
           </Link>
         </div>
       ) : (
-        <div className="afj-card overflow-hidden">
+        <div className="afj-card">
+          <div className="overflow-x-auto">
           <table className="afj-table">
             <thead>
               <tr>
@@ -176,6 +177,7 @@ export default function PeticoesPage() {
               ))}
             </tbody>
           </table>
+          </div>
         </div>
       )}
     </div>

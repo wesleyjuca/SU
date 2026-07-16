@@ -35,6 +35,9 @@ export const viewport: Viewport = {
   themeColor: "#B8954A",
   width: "device-width",
   initialScale: 1,
+  // Necessário para env(safe-area-inset-*) funcionar em iPhones com notch —
+  // sem isto o BottomNav fica sob o indicador de home.
+  viewportFit: "cover",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

@@ -261,7 +261,7 @@ export default function ClientesPage() {
       {/* Modal edição cliente */}
       {editingId && (
         <div className="fixed inset-0 bg-afj-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-sm p-6 w-full max-w-md shadow-2xl">
+          <div className="bg-white rounded-sm p-6 w-full max-w-md shadow-2xl max-h-[85vh] overflow-y-auto">
             <h2 className="font-display text-lg font-semibold text-afj-black mb-4">Editar Cliente</h2>
             <div className="space-y-3">
               {[
@@ -308,7 +308,7 @@ export default function ClientesPage() {
       {/* Modal confirmação exclusão */}
       {deletingId && (
         <div className="fixed inset-0 bg-afj-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-sm p-6 w-full max-w-sm shadow-2xl text-center">
+          <div className="bg-white rounded-sm p-6 w-full max-w-sm shadow-2xl text-center max-h-[85vh] overflow-y-auto">
             <p className="font-semibold text-afj-black mb-2">Remover cliente?</p>
             <p className="text-afj-black/50 text-sm mb-5">Os dados serão anonimizados conforme a LGPD.</p>
             <div className="flex gap-3">
@@ -322,7 +322,7 @@ export default function ClientesPage() {
       {/* Modal novo cliente */}
       {showModal && (
         <div className="fixed inset-0 bg-afj-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-sm p-6 w-full max-w-lg shadow-2xl">
+          <div className="bg-white rounded-sm p-6 w-full max-w-lg shadow-2xl max-h-[85vh] overflow-y-auto">
             <h2 className="font-display text-xl font-semibold text-afj-black mb-5">Novo Cliente</h2>
             <form onSubmit={salvarCliente} className="space-y-4">
               <div className="grid grid-cols-2 gap-3">

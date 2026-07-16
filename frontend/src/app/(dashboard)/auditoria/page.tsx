@@ -115,7 +115,8 @@ export default function AuditoriaPage() {
           <p className="text-afj-black/40 text-sm mt-1">Todas as ações do sistema são registradas aqui automaticamente</p>
         </div>
       ) : (
-        <div className="afj-card overflow-hidden">
+        <div className="afj-card">
+          <div className="overflow-x-auto">
           <table className="afj-table">
             <thead>
               <tr>
@@ -162,6 +163,7 @@ export default function AuditoriaPage() {
               ))}
             </tbody>
           </table>
+          </div>
         </div>
       )}
     </div>
