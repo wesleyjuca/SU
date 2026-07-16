@@ -150,7 +150,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       )}
 
       {/* ─── Sidebar AFJ ─────────────────────────────────────────────── */}
-      <aside aria-label="Menu lateral" className={`afj-sidebar fixed md:static inset-y-0 left-0 z-30 transform transition-transform duration-200 ${sidebarOpen ? "translate-x-0" : "-translate-x-full"} md:translate-x-0`}>
+      {/* A barra é sempre `fixed` (ver .afj-sidebar); o conteúdo compensa com md:ml-64.
+          Antes tinha md:static aqui → a barra entrava no fluxo E o conteúdo mantinha
+          a margem, gerando ~256px de vão vazio ("conteúdo na lateral"). */}
+      <aside aria-label="Menu lateral" className={`afj-sidebar fixed inset-y-0 left-0 z-30 transform transition-transform duration-200 ${sidebarOpen ? "translate-x-0" : "-translate-x-full"} md:translate-x-0`}>
         {/* Logo — dinâmico ou monograma AFJ como fallback */}
         <div className="afj-sidebar-logo">
           <div className="flex items-center gap-3">

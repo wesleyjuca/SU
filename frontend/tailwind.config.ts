@@ -9,6 +9,10 @@ const config: Config = {
   ],
   theme: {
     extend: {
+      // Breakpoint para telas grandes / Smart TV (uso na recepção/sala a 3 m).
+      screens: {
+        tv: "1920px",
+      },
       colors: {
         // ─── Identidade Visual AFJ (Almeida, Freire & Jucá) ─────────────────
         // gold/cream/navy vêm das variáveis --brand-* (canais RGB), então a

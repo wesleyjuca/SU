@@ -281,7 +281,7 @@
   .afj-table { @apply w-full text-sm; }
 
   .afj-table thead th {
-    @apply text-[10px] font-semibold text-afj-black/40 uppercase tracking-widest
+    @apply text-[10px] tv:text-sm font-semibold text-afj-black/40 uppercase tracking-widest
            bg-afj-cream/60 border-b border-afj-cream-dark px-4 py-3 text-left;
   }
 
@@ -306,15 +306,15 @@
   }
 
   .afj-stat-card .stat-value {
-    @apply font-display text-3xl font-bold text-afj-black;
+    @apply font-display text-3xl tv:text-5xl font-bold text-afj-black;
   }
 
   .afj-stat-card .stat-label {
-    @apply text-[10px] text-afj-black/40 uppercase tracking-widest;
+    @apply text-[10px] tv:text-sm text-afj-black/40 uppercase tracking-widest;
   }
 
   .afj-stat-card .stat-sub {
-    @apply text-xs text-afj-black/30 mt-0.5;
+    @apply text-xs tv:text-sm text-afj-black/30 mt-0.5;
   }
 
   /* ─── Cabeçalho de seção ──────────────────────────────────────────────── */
@@ -323,7 +323,7 @@
   }
 
   .afj-section-title {
-    @apply text-[11px] font-semibold text-afj-black/50 uppercase tracking-[0.12em];
+    @apply text-[11px] tv:text-sm font-semibold text-afj-black/50 uppercase tracking-[0.12em];
   }
 
   /* ─── Cabeçalho de página ─────────────────────────────────────────────── */
@@ -333,5 +333,25 @@
   /* ─── Empty state ─────────────────────────────────────────────────────── */
   .afj-empty-state {
     @apply flex flex-col items-center justify-center py-16 text-center gap-3;
+  }
+}
+
+/* ─── Telas grandes / Smart TV ─────────────────────────────────────────────
+   Escala global modesta em telas muito grandes (4K/TV a distância) — os tokens
+   rem do Tailwind acompanham o root font-size. E anel de foco reforçado para
+   navegação por controle remoto (D-pad). */
+@media (min-width: 2560px) {
+  html { font-size: 19px; }
+}
+@media (min-width: 1920px) {
+  a:focus-visible,
+  button:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible,
+  [tabindex]:focus-visible {
+    outline-width: 3px;
+    outline-offset: 3px;
+    outline-color: rgba(184, 149, 74, 0.9);
   }
 }

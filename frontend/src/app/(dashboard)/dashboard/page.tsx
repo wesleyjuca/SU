@@ -66,6 +66,20 @@ function StatusColor(status: string): string {
   return { RUNNING: "bg-afj-gold", SUCCESS: "bg-green-500", FAILED: "bg-red-500", AWAITING_APPROVAL: "bg-amber-500" }[status] ?? "bg-gray-400";
 }
 
+// Horário seguro para o feed — antes exibia "Invalid Date" quando created_at
+// vinha vazio/mal formatado. Retorna relativo (agora/há Xm) ou hora/dia.
+function fmtWhen(iso?: string): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "";
+  const diff = Date.now() - d.getTime();
+  if (diff < 0) return "agora";
+  if (diff < 60_000) return "agora";
+  if (diff < 3_600_000) return `há ${Math.floor(diff / 60_000)}m`;
+  if (diff < 86_400_000) return d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+  return d.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" });
+}
+
 export default function DashboardPage() {
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [runs, setRuns] = useState<AgentRun[]>([]);
@@ -143,10 +157,10 @@ export default function DashboardPage() {
     {showOnboarding && (
       <OnboardingWizard onComplete={() => setShowOnboarding(false)} />
     )}
-    <div className="space-y-6 max-w-7xl mx-auto">
+    <div className="space-y-6 max-w-[1600px] mx-auto">
       {!showOnboarding && <PushPermissionBanner />}
       <div>
-        <h1 className="font-display text-2xl font-semibold text-afj-black">Dashboard</h1>
+        <h1 className="font-display text-2xl tv:text-3xl font-semibold text-afj-black">Dashboard</h1>
         <p className="text-afj-black/50 text-sm mt-0.5">Visão geral do escritório em tempo real</p>
       </div>
 
@@ -244,16 +258,22 @@ export default function DashboardPage() {
               {metrics?.agentes_ativos_24h ? `${metrics.agentes_ativos_24h} ativos` : "19 agentes"}
             </span>
           </div>
-          <div className="space-y-2">
-            {AGENT_NAMES.map((ag) => (
-              <div key={ag} className="flex items-center justify-between text-sm">
-                <div className="flex items-center gap-2">
-                  <AgentDot status={agentStatus[ag] ?? "idle"} />
-                  <span className="text-afj-black/80">{AGENT_LABELS[ag] ?? ag}</span>
+          {/* 2 colunas: os 19 agentes não formam mais uma coluna alta e estreita */}
+          <div className="grid grid-cols-2 gap-x-4 gap-y-2">
+            {AGENT_NAMES.map((ag) => {
+              const st = agentStatus[ag] ?? "idle";
+              return (
+                <div key={ag} className="flex items-center justify-between gap-2 text-sm min-w-0">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <AgentDot status={st} />
+                    <span className="text-afj-black/80 truncate">{AGENT_LABELS[ag] ?? ag}</span>
+                  </div>
+                  {st !== "idle" && (
+                    <span className="text-afj-black/30 text-[10px] capitalize flex-shrink-0">{st}</span>
+                  )}
                 </div>
-                <span className="text-afj-black/30 text-xs capitalize">{agentStatus[ag] ?? "idle"}</span>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
 
@@ -280,7 +300,7 @@ export default function DashboardPage() {
                     {run.duration_ms && <span className="text-afj-black/30 ml-1">({run.duration_ms}ms)</span>}
                   </div>
                   <span className="text-afj-black/30 text-xs flex-shrink-0">
-                    {new Date(run.created_at).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}
+                    {fmtWhen(run.created_at)}
                   </span>
                 </div>
               ))}
