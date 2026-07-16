@@ -54,19 +54,18 @@ async def erase_client_data(
     client.status = "INATIVO"
     await db.flush()
 
-    # Registra auditoria
-    try:
-        from app.models.audit_log import AuditLog
-        log = AuditLog(
-            user_id=current_user.id,
-            action=f"LGPD:ERASURE:{client_id}",
-            success=True,
-            error_detail=None,
-        )
-        db.add(log)
-        await db.flush()
-    except Exception:
-        pass
+    # Registra auditoria (tenant-scoped — antes nascia sem tenant_id e sumia do
+    # painel de Auditoria, que filtra por tenant; e o except silencioso escondia
+    # falhas numa operação sensível de LGPD).
+    from app.models.audit_log import AuditLog
+    db.add(AuditLog(
+        user_id=current_user.id,
+        tenant_id=current_user.tenant_id,
+        action=f"LGPD:ERASURE:{client_id}",
+        success=True,
+        error_detail=None,
+    ))
+    await db.flush()
 
     return {
         "message": "Dados anonimizados conforme LGPD art. 18 IV",

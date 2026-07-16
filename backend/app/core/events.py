@@ -130,6 +130,8 @@ async def lifespan(app: FastAPI):
             "ALTER TABLE billing_invoices ADD COLUMN IF NOT EXISTS data_vencimento DATE",
             "ALTER TABLE billing_invoices ADD COLUMN IF NOT EXISTS created_by UUID REFERENCES users(id)",
             "ALTER TABLE billing_invoices ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT now()",
+            # Fase 48 — faixas de alerta de prazo já enviadas (janela resiliente a downtime)
+            "ALTER TABLE process_deadlines ADD COLUMN IF NOT EXISTS alertas_enviados JSONB DEFAULT '[]'::jsonb",
         ]:
             try:
                 async with engine.begin() as conn:

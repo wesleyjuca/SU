@@ -26,9 +26,31 @@ async def websocket_endpoint(
         if payload.get("sub") != user_id:
             await websocket.close(code=4001)
             return
+        # Token revogado (logout) não deve manter a conexão viva até expirar.
+        from app.core.security import is_token_blacklisted
+        jti = payload.get("jti", "")
+        if jti and await is_token_blacklisted(jti):
+            await websocket.close(code=4001)
+            return
     except JWTError:
         await websocket.close(code=4001)
         return
+
+    # Usuário desativado não conecta (revogação imediata de acesso).
+    try:
+        import uuid as _uuid
+        from sqlalchemy import select
+        from app.db.base import AsyncSessionLocal
+        from app.models.user import User
+        async with AsyncSessionLocal() as _db:
+            active = (await _db.execute(
+                select(User.is_active).where(User.id == _uuid.UUID(user_id))
+            )).scalar_one_or_none()
+        if not active:
+            await websocket.close(code=4001)
+            return
+    except Exception:
+        pass
 
     await websocket.accept()
     _connections.setdefault(user_id, set()).add(websocket)
