@@ -127,3 +127,4 @@ zopfli==0.4.1
 zstandard==0.25.0
 email-validator==2.2.0
 python-multipart==0.0.12
+sentry-sdk[fastapi]==2.42.1

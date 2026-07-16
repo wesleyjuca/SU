@@ -38,8 +38,14 @@ class AFJWebSocket {
     const token = typeof window !== "undefined" ? localStorage.getItem("afj_access_token") : null;
     if (!token) return;
 
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const url = `${protocol}//${window.location.host}/api/v1/ws/${this.userId}?token=${token}`;
+    // Deriva o host do backend de NEXT_PUBLIC_API_URL (split Vercel/Railway):
+    // os rewrites do Next só fazem proxy de HTTP, não de upgrade WebSocket —
+    // conectar em window.location.host falha silenciosamente em produção.
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL;
+    const wsBase = apiUrl
+      ? apiUrl.replace(/^http/, "ws")
+      : `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}`;
+    const url = `${wsBase}/api/v1/ws/${this.userId}?token=${token}`;
 
     try {
       this.ws = new WebSocket(url);

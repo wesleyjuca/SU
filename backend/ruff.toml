@@ -1,0 +1,20 @@
+# Lint do backend — gate real no CI (sem --exit-zero).
+# Ignores documentados abaixo; qualquer erro novo fora deles QUEBRA o Validate.
+target-version = "py312"
+
+[lint]
+select = ["E4", "E7", "E9", "F"]
+ignore = [
+    "E712", # `== True` é intencional em filtros SQLAlchemy (`.where(x == True)`)
+    "E741", # nomes de 1 letra (l, I) usados em loops/lambdas existentes
+]
+
+[lint.per-file-ignores]
+# Forward-refs de relacionamento SQLAlchemy (Mapped[list["Outro"]]) — o nome
+# só existe em runtime via registry; F821 aqui é falso-positivo.
+"app/models/*" = ["F821"]
+# Imports tardios propositalmente locais (evitam ciclo/custo no boot).
+"app/api/v1/portal.py" = ["E402"]
+# Variáveis mantidas por clareza em código de relatório/monitor legado.
+"app/core/middleware.py" = ["F841"]
+"app/agents/contract/contract_agent.py" = ["F841"]

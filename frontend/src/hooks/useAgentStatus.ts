@@ -18,9 +18,16 @@ export function useAgentStatus() {
   const [isConnected, setIsConnected] = useState(false);
 
   useEffect(() => {
-    const userId = typeof window !== "undefined"
-      ? localStorage.getItem("afj_user_id")
-      : null;
+    // O login grava o usuário como JSON em "afj_user" — a chave "afj_user_id"
+    // nunca existiu, então o WS jamais conectava e tudo degradava p/ polling.
+    let userId: string | null = null;
+    if (typeof window !== "undefined") {
+      try {
+        userId = JSON.parse(localStorage.getItem("afj_user") || "null")?.id ?? null;
+      } catch {
+        userId = null;
+      }
+    }
 
     if (!userId) return;
 

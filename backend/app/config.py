@@ -60,7 +60,7 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str = ""
     GEMINI_API_KEY: str = ""                # chave do Google AI Studio / Vertex (aceita GOOGLE_API_KEY)
     GOOGLE_API_KEY: str = ""                # alias — copiado para GEMINI_API_KEY se este estiver vazio
-    DEFAULT_CLAUDE_MODEL: str = "claude-opus-4-7"
+    DEFAULT_CLAUDE_MODEL: str = "claude-sonnet-5"
     DEFAULT_GEMINI_MODEL: str = "gemini-2.5-flash"
 
     # ─── Google Workspace (OAuth) ────────────────────────────────────────────
