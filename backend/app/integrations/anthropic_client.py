@@ -5,7 +5,7 @@ multi-provider (`app.integrations.llm_client`), que roteia para Anthropic
 Claude ou Google Gemini conforme `settings.AI_PROVIDER`. Nenhum agente
 precisa mudar.
 """
-from app.integrations.llm_client import call_llm, MODEL_PRICING, _cost as _calc_cost
+from app.integrations.llm_client import call_llm, _cost as _calc_cost
 
 
 def calculate_cost(model: str, input_tokens: int, output_tokens: int) -> float:

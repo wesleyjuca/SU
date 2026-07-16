@@ -53,6 +53,7 @@ api_router.include_router(reports_admin.router)
 # degrades only /agents/* without bringing down the entire app
 try:
     from app.api.v1 import agents as _agents_mod
-    api_router.include_router(_agents_mod.router, dependencies=_STAFF)
+    # _BLOCK: tenant suspenso por inadimplência não gasta tokens de IA.
+    api_router.include_router(_agents_mod.router, dependencies=_BLOCK_STAFF)
 except Exception as _exc:
     log.error("agents_router_failed", error=str(_exc))

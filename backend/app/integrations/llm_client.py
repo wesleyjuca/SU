@@ -21,7 +21,8 @@ ai_creds_ctx: "contextvars.ContextVar[dict | None]" = contextvars.ContextVar("ai
 # ─── Preços aproximados por 1M tokens (input/output) ─────────────────────────
 MODEL_PRICING = {
     # Anthropic
-    "claude-opus-4-7": {"input": 15.0, "output": 75.0},
+    "claude-sonnet-5": {"input": 3.0, "output": 15.0},
+    "claude-opus-4-8": {"input": 15.0, "output": 75.0},
     "claude-sonnet-4-6": {"input": 3.0, "output": 15.0},
     "claude-haiku-4-5-20251001": {"input": 0.25, "output": 1.25},
     # Google Gemini

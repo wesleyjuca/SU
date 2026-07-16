@@ -4,7 +4,8 @@ from app.agents.base.agent import BaseAgent
 from app.agents.base.result import AgentResult, AgentStatus
 from app.agents.brain.context import AgentContext
 from app.integrations.anthropic_client import call_claude, AFJ_LEGAL_SYSTEM_PROMPT
-import structlog, uuid
+import structlog
+import uuid
 
 log = structlog.get_logger()
 

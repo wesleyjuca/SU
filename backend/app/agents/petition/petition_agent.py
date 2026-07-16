@@ -20,6 +20,7 @@ from app.agents.brain.context import AgentContext
 from app.integrations.anthropic_client import call_claude, AFJ_LEGAL_SYSTEM_PROMPT
 from app.agents.petition.templates.base_template import get_template
 import structlog
+from app.config import settings
 
 log = structlog.get_logger()
 
@@ -196,7 +197,7 @@ Gere a petição completa seguindo o template e as regras absolutas do sistema."
             process_id=ctx.process_id,
             tipo_peticao=tipo,
             template_used=tipo,
-            ai_model="claude-opus-4-7",
+            ai_model=settings.DEFAULT_CLAUDE_MODEL,
             ai_tokens_used=tokens,
             review_status="PENDENTE_REVISAO",
         )

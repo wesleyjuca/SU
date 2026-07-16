@@ -48,8 +48,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Backend lint
-        run: cd backend && pip install ruff && ruff check app/ --exit-zero
+      - name: Backend lint (gate real — config em backend/ruff.toml)
+        run: cd backend && pip install ruff && ruff check app/
       - name: Backend tests
         run: |
           cd backend

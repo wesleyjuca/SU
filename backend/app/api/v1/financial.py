@@ -8,7 +8,7 @@ from datetime import date
 import uuid
 
 from app.db.base import get_db
-from app.dependencies import get_current_user, require_role
+from app.dependencies import require_role
 from app.models.user import User
 from app.models.financial import FinancialEntry
 
@@ -148,7 +148,8 @@ async def export_financial(
     db: AsyncSession = Depends(get_db),
 ):
     """Exporta lançamentos como CSV."""
-    import csv, io
+    import csv
+    import io
     from fastapi.responses import StreamingResponse
 
     query = (

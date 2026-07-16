@@ -1,6 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  typescript: { ignoreBuildErrors: true },
+  // TS agora É gate no build (tsc roda no CI e aqui) — só o eslint fica fora.
+  typescript: { ignoreBuildErrors: false },
   eslint: { ignoreDuringBuilds: true },
   // "standalone" is for Docker; Vercel sets VERCEL=1 and handles output itself
   ...(process.env.VERCEL ? {} : { output: "standalone" }),
