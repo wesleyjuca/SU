@@ -31,8 +31,30 @@ class RefreshRequest(BaseModel):
     refresh_token: str
 
 
+_LOGIN_MAX_FAILS = 8       # tentativas erradas antes de bloquear
+_LOGIN_WINDOW_SEC = 900    # janela de 15 min
+
+
+async def _login_rl_key(request: Request, email: str) -> str:
+    ip = request.client.host if request.client else "?"
+    return f"login_fail:{ip}:{email.lower()}"
+
+
 @router.post("/login", response_model=TokenResponse)
 async def login(body: LoginRequest, request: Request, db: AsyncSession = Depends(get_db)):
+    # Rate-limit por IP+email (anti brute-force). Sem Redis, vira no-op.
+    from app.db.redis import get_redis
+    from fastapi import HTTPException
+    redis = await get_redis()
+    rl_key = await _login_rl_key(request, body.email)
+    if redis:
+        try:
+            fails = int(await redis.get(rl_key) or 0)
+        except Exception:
+            fails = 0
+        if fails >= _LOGIN_MAX_FAILS:
+            raise HTTPException(status_code=429, detail="Muitas tentativas. Aguarde alguns minutos e tente novamente.")
+
     result = await db.execute(select(User).where(User.email == body.email, User.is_active.is_(True)))
     user = result.scalar_one_or_none()
 
@@ -43,6 +65,13 @@ async def login(body: LoginRequest, request: Request, db: AsyncSession = Depends
         except Exception:
             ok = False
     if not user or not ok:
+        if redis:
+            try:
+                n = await redis.incr(rl_key)
+                if n == 1:
+                    await redis.expire(rl_key, _LOGIN_WINDOW_SEC)
+            except Exception:
+                pass
         # Motivo detalhado só no log (mensagem ao usuário permanece genérica).
         import structlog
         structlog.get_logger().warning(
@@ -51,6 +80,12 @@ async def login(body: LoginRequest, request: Request, db: AsyncSession = Depends
             reason="user_not_found_or_inactive" if not user else "wrong_password",
         )
         raise UnauthorizedError("E-mail ou senha incorretos")
+
+    if redis:
+        try:
+            await redis.delete(rl_key)  # login OK — zera o contador de falhas
+        except Exception:
+            pass
 
     user.last_login_at = datetime.now(timezone.utc)
     access_token = create_access_token(str(user.id), user.role)

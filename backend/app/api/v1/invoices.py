@@ -18,6 +18,14 @@ from app.models.client import Client
 router = APIRouter(prefix="/financial/invoices", tags=["invoices"])
 
 _STATUS = {"RASCUNHO", "EMITIDA", "PAGA", "CANCELADA"}
+# Máquina de estados: transições válidas. PAGA e CANCELADA são terminais —
+# impede reverter uma fatura paga (ex.: PAGA→RASCUNHO) que corrompia o financeiro.
+_TRANSICOES = {
+    "RASCUNHO": {"EMITIDA", "CANCELADA"},
+    "EMITIDA": {"PAGA", "CANCELADA"},
+    "PAGA": set(),
+    "CANCELADA": set(),
+}
 
 
 class InvoiceItem(BaseModel):
@@ -139,6 +147,12 @@ async def patch_invoice(
     if body.status not in _STATUS:
         raise HTTPException(status_code=422, detail=f"Status inválido. Use: {', '.join(sorted(_STATUS))}")
     inv = await _get_invoice(db, invoice_id, current_user.tenant_id)
+    if body.status != inv.status and body.status not in _TRANSICOES.get(inv.status, set()):
+        raise HTTPException(
+            status_code=422,
+            detail=f"Transição inválida: {inv.status} → {body.status}. "
+                   "Uma fatura paga ou cancelada não pode ser revertida.",
+        )
     inv.status = body.status
     if body.status == "EMITIDA" and not inv.emitido_em:
         inv.emitido_em = datetime.now(timezone.utc)

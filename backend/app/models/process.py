@@ -77,6 +77,9 @@ class ProcessDeadline(Base):
     tipo: Mapped[str | None] = mapped_column(String(50))  # CONTESTACAO, RECURSO, MANIFESTACAO
     status: Mapped[str] = mapped_column(String(20), default="PENDENTE", index=True)
     responsavel_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id"))
+    # Faixas de alerta (3/7/15 dias) já notificadas — evita reenvio diário e
+    # torna o alerta resiliente a downtime do worker (não depende de data exata).
+    alertas_enviados: Mapped[list | None] = mapped_column(JSONB, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     process: Mapped["LegalProcess"] = relationship(back_populates="deadlines")

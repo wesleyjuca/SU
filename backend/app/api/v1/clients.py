@@ -359,84 +359,10 @@ async def delete_client(
     await db.flush()
 
 
-@router.get("/{client_id}/export")
-async def export_client_data(
-    client_id: str,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """LGPD art. 18 VI — portabilidade de dados."""
-    result = await db.execute(
-        select(Client).where(
-            Client.id == uuid.UUID(client_id),
-            Client.tenant_id == current_user.tenant_id,
-        )
-    )
-    client = result.scalar_one_or_none()
-    if not client:
-        raise NotFoundError("Cliente", client_id)
-    interactions_result = await db.execute(
-        select(ClientInteraction)
-        .where(ClientInteraction.client_id == uuid.UUID(client_id))
-        .order_by(desc(ClientInteraction.created_at))
-    )
-    interactions = interactions_result.scalars().all()
-    return {
-        "exportado_em": datetime.now(timezone.utc).isoformat(),
-        "base_legal": "LGPD art. 18 VI — Portabilidade de dados",
-        "titular": {
-            "id": str(client.id),
-            "nome": client.nome_completo,
-            "email": client.email,
-            "telefone": client.telefone,
-            "tipo": client.tipo,
-            "status": client.status,
-            "lgpd_consent": client.lgpd_consent,
-            "lgpd_consent_at": client.lgpd_consent_at.isoformat() if client.lgpd_consent_at else None,
-            "created_at": client.created_at.isoformat(),
-        },
-        "interacoes": [
-            {"tipo": i.tipo, "descricao": i.descricao, "created_at": i.created_at.isoformat()}
-            for i in interactions
-        ],
-    }
-
-
-@router.delete("/{client_id}/data", status_code=200)
-async def erase_client_data(
-    client_id: str,
-    current_user: User = Depends(require_role("ADMIN")),
-    db: AsyncSession = Depends(get_db),
-):
-    """LGPD art. 18 VI — direito ao esquecimento: anonimiza dados sensíveis."""
-    result = await db.execute(
-        select(Client).where(
-            Client.id == uuid.UUID(client_id),
-            Client.tenant_id == current_user.tenant_id,
-        )
-    )
-    client = result.scalar_one_or_none()
-    if not client:
-        raise NotFoundError("Cliente", client_id)
-
-    client.nome_completo = f"[ANONIMIZADO-{client_id[:8]}]"
-    client.razao_social = None
-    client.cpf = None
-    client.cnpj = None
-    client.email = f"[removido]@{client_id[:8]}.invalid"
-    client.telefone = None
-    client.whatsapp = None
-    client.observacoes = None
-    client.status = "INATIVO"
-    await db.flush()
-
-    return {
-        "message": "Dados anonimizados conforme LGPD art. 18",
-        "client_id": client_id,
-        "anonimizado_em": datetime.now(timezone.utc).isoformat(),
-        "base_legal": "LGPD art. 18 — Direito ao esquecimento",
-        "realizado_por": str(current_user.id),
-    }
+# LGPD (portabilidade e direito ao esquecimento) vive em app/api/v1/lgpd.py
+# (/lgpd/clients/{id}/export e /lgpd/clients/{id}/data) — o frontend usa aquelas
+# rotas. As duplicatas que existiam aqui foram removidas para não manter dois
+# caminhos divergentes de uma operação sensível de dados. (Fase 48)
 
 
 def _contact_to_dict(c: ClientContact) -> dict:

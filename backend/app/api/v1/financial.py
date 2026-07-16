@@ -1,5 +1,5 @@
 """Endpoints financeiros — honorários, despesas e relatórios."""
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
 from pydantic import BaseModel
@@ -199,6 +199,10 @@ async def mark_paid(
     if not entry:
         from app.core.exceptions import NotFoundError
         raise NotFoundError("Lançamento", entry_id)
+    if entry.status == "PAGO":
+        return {"message": "Lançamento já estava pago", "id": entry_id}
+    if entry.status == "CANCELADO":
+        raise HTTPException(status_code=422, detail="Lançamento cancelado não pode ser marcado como pago.")
     entry.status = "PAGO"
     entry.data_pagamento = date.today()
     return {"message": "Marcado como pago", "id": entry_id}
