@@ -22,7 +22,7 @@ const AREAS: { titulo: string; recursos: Recurso[] }[] = [
     recursos: [
       { icon: Scale, nome: "Processos & Prazos", desc: "Cadastro, captura por OAB, andamentos, alertas e cálculo automático de prazo (dias úteis, recesso e feriados forenses locais configuráveis por comarca); lançamento direto da Agenda.", estado: "operacional" },
       { icon: FileText, nome: "Petições & Contratos", desc: "Geração com IA, editor, versionamento, PDF e ciclo de vida (arquivar/excluir).", estado: "operacional" },
-      { icon: BookOpen, nome: "Pesquisa Jurídica (RAG)", desc: "Busca semântica em jurisprudência, legislação, doutrina e memórias — documentos aprovados são indexados automaticamente.", estado: "parcial" },
+      { icon: BookOpen, nome: "Pesquisa Jurídica (RAG)", desc: "Busca semântica em jurisprudência, legislação, doutrina e memórias — documentos aprovados e arquivos digitalizados (OCR) entram automaticamente na busca privada do escritório.", estado: "parcial" },
       { icon: FileText, nome: "Modelos de Petição", desc: "Biblioteca de modelos reutilizados pela IA — importe do Word (.docx), edite no app ou baixe para editar no Word.", estado: "operacional" },
       { icon: ScanLine, nome: "Digitalização & OCR", desc: "PDFs e imagens enviados são digitalizados automaticamente: o texto é extraído em segundo plano, fica pesquisável e pode ser conferido na hora.", estado: "operacional" },
       { icon: Shapes, nome: "Visual Law", desc: "Fluxogramas e linhas do tempo jurídicas geradas por IA.", estado: "operacional" },
