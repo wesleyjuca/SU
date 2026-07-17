@@ -3,7 +3,7 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
   PieChart, Pie, Cell,
 } from "recharts";
-import { Trophy, Users, Scale } from "lucide-react";
+import { Trophy, Users, Scale, Gauge } from "lucide-react";
 
 const GOLD = "#B8954A";
 const GREEN = "#16A34A";
@@ -32,7 +32,7 @@ function Empty({ msg }: { msg: string }) {
 export interface GestaoData {
   rentabilidade_clientes: { cliente: string; receita: number; despesa: number; resultado: number }[];
   rentabilidade_processos: { processo: string; resultado: number }[];
-  produtividade_advogados: { advogado: string; processos: number; documentos: number; prazos_cumpridos: number }[];
+  produtividade_advogados: { advogado: string; processos: number; processos_ativos: number; prazos_pendentes: number; documentos: number; prazos_cumpridos: number }[];
   taxa_exito: {
     por_desfecho: Record<string, number>;
     total_com_desfecho: number;
@@ -46,6 +46,16 @@ export default function GestaoCharts({ data }: { data: GestaoData }) {
     ...c, nome: c.cliente.length > 16 ? c.cliente.slice(0, 15) + "…" : c.cliente,
   }));
   const desfData = Object.entries(data.taxa_exito.por_desfecho).map(([k, v]) => ({ name: k, value: v }));
+  // Distribuição de carga: só quem tem processos ativos ou prazos pendentes, mais carregado no topo
+  const carga = data.produtividade_advogados
+    .filter((a) => a.processos_ativos > 0 || a.prazos_pendentes > 0)
+    .map((a) => ({
+      nome: a.advogado.length > 18 ? a.advogado.slice(0, 17) + "…" : a.advogado,
+      ativos: a.processos_ativos,
+      prazos: a.prazos_pendentes,
+    }))
+    .sort((a, b) => b.ativos - a.ativos || b.prazos - a.prazos)
+    .slice(0, 12);
 
   return (
     <div className="space-y-5">
@@ -95,6 +105,27 @@ export default function GestaoCharts({ data }: { data: GestaoData }) {
         ) : <Empty msg="Sem lançamentos financeiros vinculados a clientes" />}
       </div>
 
+      {/* Distribuição de carga por advogado (carga atual, para equilibrar/reatribuir) */}
+      <div className="afj-card p-5">
+        <div className="flex items-start justify-between gap-3 flex-wrap mb-4">
+          <h3 className="font-semibold text-sm text-afj-black flex items-center gap-2"><Gauge size={15} className="text-afj-gold" /> Distribuição de carga (processos ativos + prazos pendentes)</h3>
+          <p className="text-[10px] text-afj-black/35 max-w-xs text-right">Carga atual por advogado. Para reequilibrar, use “Transferir carteira” em Admin → Usuários.</p>
+        </div>
+        {carga.length > 0 ? (
+          <ResponsiveContainer width="100%" height={Math.max(160, carga.length * 34)}>
+            <BarChart data={carga} layout="vertical" margin={{ left: 10, right: 16 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#EAE5D8" horizontal={false} />
+              <XAxis type="number" allowDecimals={false} tick={{ fontSize: 11, fill: "#6B6B6B" }} axisLine={false} tickLine={false} />
+              <YAxis type="category" dataKey="nome" tick={{ fontSize: 11, fill: "#6B6B6B" }} axisLine={false} tickLine={false} width={110} />
+              <Tooltip />
+              <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11 }} />
+              <Bar dataKey="ativos" name="Processos ativos" fill={GOLD} radius={[0, 2, 2, 0]} />
+              <Bar dataKey="prazos" name="Prazos pendentes" fill={NAVY} radius={[0, 2, 2, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        ) : <Empty msg="Sem processos ativos ou prazos pendentes atribuídos" />}
+      </div>
+
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         {/* Produtividade por advogado */}
         <div className="afj-card p-5">
@@ -102,19 +133,20 @@ export default function GestaoCharts({ data }: { data: GestaoData }) {
           {data.produtividade_advogados.length > 0 ? (
             <div className="overflow-x-auto">
               <table className="afj-table w-full">
-                <thead><tr><th>Advogado</th><th className="text-right">Processos</th><th className="text-right">Documentos</th><th className="text-right">Prazos ✓</th></tr></thead>
+                <thead><tr><th>Advogado</th><th className="text-right">Ativos</th><th className="text-right">Prazos pend.</th><th className="text-right">Documentos</th><th className="text-right">Prazos ✓</th></tr></thead>
                 <tbody>
                   {data.produtividade_advogados.map((a) => (
                     <tr key={a.advogado}>
                       <td className="font-medium text-afj-black">{a.advogado}</td>
-                      <td className="text-right text-afj-black/70">{a.processos}</td>
+                      <td className="text-right text-afj-black/70">{a.processos_ativos}</td>
+                      <td className="text-right text-afj-black/70">{a.prazos_pendentes}</td>
                       <td className="text-right text-afj-black/70">{a.documentos}</td>
                       <td className="text-right text-afj-black/70">{a.prazos_cumpridos}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-              <p className="text-[10px] text-afj-black/35 mt-2">Métricas proxy (processos como responsável, documentos gerados, prazos cumpridos) — não inclui horas trabalhadas.</p>
+              <p className="text-[10px] text-afj-black/35 mt-2">Ativos = processos ATIVO/SUSPENSO como responsável; prazos pendentes = ainda não cumpridos. Métricas proxy — não incluem horas trabalhadas.</p>
             </div>
           ) : <Empty msg="Sem dados de produtividade" />}
         </div>
