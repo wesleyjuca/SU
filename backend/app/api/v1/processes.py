@@ -392,6 +392,174 @@ async def set_process_team(
     return (await _to_responses(db, [process]))[0]
 
 
+# ─── Reatribuição de carteira (advogado sai / entra de férias) ───────────────
+class ReatribuirCarteira(BaseModel):
+    de_advogado_id: str
+    para_advogado_id: str
+    incluir_colaboracoes: bool = True   # também transfere onde é COLABORADOR
+    apenas_ativos: bool = True          # só processos ATIVO/SUSPENSO
+
+
+async def _transferir_participacao(db: AsyncSession, process_id: uuid.UUID,
+                                   de: uuid.UUID, para: uuid.UUID, papel: str) -> None:
+    """Move a participação de `de` para `para` num processo, respeitando o unique
+    (process_id, user_id): se `para` já participa, remove a linha de `de` e apenas
+    promove `para` a RESPONSAVEL quando for o caso."""
+    rows = (await db.execute(
+        select(ProcessTeamMember).where(
+            ProcessTeamMember.process_id == process_id,
+            ProcessTeamMember.user_id.in_([de, para]),
+        )
+    )).scalars().all()
+    de_row = next((r for r in rows if r.user_id == de), None)
+    para_row = next((r for r in rows if r.user_id == para), None)
+    if de_row is not None:
+        await db.delete(de_row)
+    if para_row is not None:
+        if papel == "RESPONSAVEL":
+            para_row.papel = "RESPONSAVEL"
+    else:
+        db.add(ProcessTeamMember(process_id=process_id, user_id=para, papel=papel))
+
+
+@router.get("/carteira/{user_id}")
+async def get_carteira(
+    user_id: str,
+    # Ver a carteira de um advogado é ação de gestão
+    current_user: User = Depends(require_role("ADMIN", "SOCIO", "GESTOR")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Resumo da carteira de um advogado (para prévia antes de reatribuir)."""
+    from sqlalchemy import func
+    uid = uuid.UUID(user_id)
+    await _validar_advogados_do_tenant(db, current_user.tenant_id, [uid])
+
+    como_resp = (await db.execute(
+        select(func.count(LegalProcess.id)).where(
+            LegalProcess.tenant_id == current_user.tenant_id,
+            LegalProcess.responsavel_id == uid,
+        )
+    )).scalar_one() or 0
+    resp_ativos = (await db.execute(
+        select(func.count(LegalProcess.id)).where(
+            LegalProcess.tenant_id == current_user.tenant_id,
+            LegalProcess.responsavel_id == uid,
+            LegalProcess.situacao.in_(["ATIVO", "SUSPENSO"]),
+        )
+    )).scalar_one() or 0
+    como_colab = (await db.execute(
+        select(func.count(ProcessTeamMember.id))
+        .join(LegalProcess, LegalProcess.id == ProcessTeamMember.process_id)
+        .where(
+            LegalProcess.tenant_id == current_user.tenant_id,
+            ProcessTeamMember.user_id == uid,
+            ProcessTeamMember.papel == "COLABORADOR",
+        )
+    )).scalar_one() or 0
+    prazos_pendentes = (await db.execute(
+        select(func.count(ProcessDeadline.id))
+        .join(LegalProcess, LegalProcess.id == ProcessDeadline.process_id)
+        .where(
+            LegalProcess.tenant_id == current_user.tenant_id,
+            ProcessDeadline.responsavel_id == uid,
+            ProcessDeadline.status == "PENDENTE",
+        )
+    )).scalar_one() or 0
+    return {
+        "responsavel": int(como_resp),
+        "responsavel_ativos": int(resp_ativos),
+        "colaborador": int(como_colab),
+        "prazos_pendentes": int(prazos_pendentes),
+    }
+
+
+@router.post("/reatribuir")
+async def reatribuir_carteira(
+    body: ReatribuirCarteira,
+    # Reatribuir a carteira de outro advogado é ação de gestão
+    current_user: User = Depends(require_role("ADMIN", "SOCIO", "GESTOR")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Transfere a carteira de um advogado para outro: processos onde é responsável
+    (e, opcionalmente, onde é colaborador) + os prazos pendentes correspondentes.
+    Usado quando um advogado deixa o escritório ou entra de licença."""
+    from fastapi import HTTPException
+    from sqlalchemy import update as sa_update
+    from app.models.notification import Notification
+
+    de = uuid.UUID(body.de_advogado_id)
+    para = uuid.UUID(body.para_advogado_id)
+    if de == para:
+        raise HTTPException(status_code=422, detail="Selecione advogados diferentes.")
+    nomes = await _validar_advogados_do_tenant(db, current_user.tenant_id, [de, para])
+
+    # 1. Processos onde `de` é o responsável
+    q = select(LegalProcess).where(
+        LegalProcess.tenant_id == current_user.tenant_id,
+        LegalProcess.responsavel_id == de,
+    )
+    if body.apenas_ativos:
+        q = q.where(LegalProcess.situacao.in_(["ATIVO", "SUSPENSO"]))
+    processos_resp = (await db.execute(q)).scalars().all()
+    afetados: set[uuid.UUID] = set()
+    for p in processos_resp:
+        p.responsavel_id = para
+        await _transferir_participacao(db, p.id, de, para, "RESPONSAVEL")
+        afetados.add(p.id)
+
+    # Prazos pendentes desses processos: seguem o novo responsável
+    if afetados:
+        await db.execute(
+            sa_update(ProcessDeadline)
+            .where(
+                ProcessDeadline.process_id.in_(afetados),
+                ProcessDeadline.responsavel_id == de,
+                ProcessDeadline.status == "PENDENTE",
+            )
+            .values(responsavel_id=para)
+        )
+
+    # 2. Participações como colaborador (opcional)
+    colaboracoes = 0
+    if body.incluir_colaboracoes:
+        rows = (await db.execute(
+            select(ProcessTeamMember.process_id)
+            .join(LegalProcess, LegalProcess.id == ProcessTeamMember.process_id)
+            .where(
+                LegalProcess.tenant_id == current_user.tenant_id,
+                ProcessTeamMember.user_id == de,
+                ProcessTeamMember.papel == "COLABORADOR",
+            )
+        )).all()
+        for (pid,) in rows:
+            await _transferir_participacao(db, pid, de, para, "COLABORADOR")
+            colaboracoes += 1
+            afetados.add(pid)
+
+    # 3. Notifica o advogado de destino
+    if afetados:
+        db.add(Notification(
+            user_id=para,
+            tenant_id=current_user.tenant_id,
+            tipo="NOVO_ANDAMENTO",
+            titulo="Carteira reatribuída a você",
+            corpo=(f"{len(processos_resp)} processo(s) como responsável"
+                   + (f" e {colaboracoes} como colaborador" if colaboracoes else "")
+                   + f" foram transferidos de {nomes.get(de, 'outro advogado')}."),
+            priority="HIGH",
+            link="/minha-area",
+        ))
+
+    await db.commit()
+    return {
+        "de": nomes.get(de),
+        "para": nomes.get(para),
+        "processos_responsavel": len(processos_resp),
+        "colaboracoes": colaboracoes,
+        "processos_afetados": len(afetados),
+    }
+
+
 @router.delete("/{process_id}", status_code=204)
 async def archive_process(
     process_id: str,

@@ -72,6 +72,7 @@ const ROADMAP: { fase: string; itens: string; estado: Estado }[] = [
   { fase: "Monitoramento de Publicações (DJe)", itens: "Captura automática de intimações (Comunica/DJEN) por OAB → andamento + notificação; prazo por triagem", estado: "operacional" },
   { fase: "Equipe por processo + Minha Área", itens: "Responsável + colaboradores por processo; filtro \"Meus\" em Processos/Agenda/Publicações; painel pessoal do advogado", estado: "operacional" },
   { fase: "OABs do escritório + planos + filiais", itens: "OABs dos sócios na varredura DJe e captura em massa; limites reais por plano (STANDARD/PRO/ENTERPRISE); filiais self-serve no ENTERPRISE", estado: "operacional" },
+  { fase: "Reatribuição de carteira", itens: "Transferir processos e prazos de um advogado para outro (saída/licença), com prévia da carteira e opção de incluir colaborações", estado: "operacional" },
   { fase: "Segurança & Produção", itens: "Papéis/HITL blindados, worker em produção, tempo-real, CI com gates", estado: "operacional" },
   { fase: "Mobile / PWA / App nativo", itens: "PWA instalável e offline; base Capacitor pronta para publicar Android/iOS", estado: "operacional" },
   { fase: "Integrações Externas", itens: "WhatsApp, assinatura eletrônica, gateway de pagamento (aguardam credenciais)", estado: "planejado" },
