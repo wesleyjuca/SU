@@ -68,8 +68,10 @@ const ROADMAP: { fase: string; itens: string; estado: Estado }[] = [
   { fase: "Admin SaaS", itens: "Saúde, personalização, usuários, plano & uso, revisão de acessos", estado: "operacional" },
   { fase: "Portal do Cliente", itens: "Acesso externo, mensagens, documentos PDF (WhatsApp aguarda credenciais)", estado: "operacional" },
   { fase: "Ética, Controle & Integridade", itens: "Controles ativos + código de conduta, canal de denúncias, treinamentos", estado: "parcial" },
-  { fase: "Integrações Externas", itens: "WhatsApp, assinatura eletrônica (aguardam credenciais)", estado: "planejado" },
-  { fase: "Mobile / PWA", itens: "App instalável hoje; offline ampliado e push em evolução", estado: "parcial" },
+  { fase: "Monitoramento de Publicações (DJe)", itens: "Captura automática de intimações (Comunica/DJEN) por OAB → andamento + notificação; prazo por triagem", estado: "operacional" },
+  { fase: "Segurança & Produção", itens: "Papéis/HITL blindados, worker em produção, tempo-real, CI com gates", estado: "operacional" },
+  { fase: "Mobile / PWA / App nativo", itens: "PWA instalável e offline; base Capacitor pronta para publicar Android/iOS", estado: "operacional" },
+  { fase: "Integrações Externas", itens: "WhatsApp, assinatura eletrônica, gateway de pagamento (aguardam credenciais)", estado: "planejado" },
   { fase: "Multi-unidade & SaaS", itens: "P1+P2 entregues (isolamento, provisionamento, cobrança manual) · P3 em curso: relatórios consolidados da banca com exportação PDF/Excel/CSV entregues; gateway de pagamento e subdomínios seguem", estado: "parcial" },
 ];
 

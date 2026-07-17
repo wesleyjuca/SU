@@ -3,7 +3,7 @@ import { useState, useEffect, useCallback } from "react";
 import {
   Activity, Database, Zap, Search, Bot, Globe, Mail, Shield, Lock,
   FileSearch, Bell, HardDrive, Archive, RefreshCw, CheckCircle, XCircle,
-  AlertTriangle, Clock, Wrench, ChevronDown, ChevronRight,
+  AlertTriangle, Clock, Wrench, ChevronDown, ChevronRight, Newspaper,
 } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 
@@ -97,6 +97,14 @@ const MODULES: Module[] = [
     getLatency: (d) => d.services.datajud.latency_ms,
   },
   {
+    key: "publicacoes",
+    label: "Publicações / DJe",
+    desc: "Comunica/DJEN — captura automática de intimações por OAB",
+    icon: Newspaper,
+    getStatus: () => "funcionando",
+    getLatency: () => null,
+  },
+  {
     key: "auth",
     label: "Autenticação",
     desc: "JWT — tokens de acesso e sessão",
@@ -131,9 +139,9 @@ const MODULES: Module[] = [
   {
     key: "notificacoes",
     label: "Notificações Push",
-    desc: "Alertas em tempo real no navegador",
+    desc: "Web Push (VAPID) — alertas em tempo real no navegador e no app",
     icon: Bell,
-    getStatus: () => "em_desenvolvimento",
+    getStatus: () => "funcionando",
     getLatency: () => null,
   },
   {
@@ -169,10 +177,14 @@ const PHASES = [
   { name: "Financeiro + Faturamento", items: "Receitas/despesas, inadimplência, faturas a cliente (PDF timbrado)", done: true },
   { name: "Multi-tenant / SaaS",      items: "Isolamento por escritório, unidades da banca, cobrança mensal + bloqueio suave", done: true },
   { name: "Relatórios + Gestão",      items: "Financeiro/processos/IA, consolidado da banca (PDF/Excel/CSV), rentabilidade/produtividade/êxito", done: true },
-  { name: "Prazos automáticos",       items: "Dias úteis, feriados forenses (nacionais + locais) e recesso; alertas", done: true },
+  { name: "Prazos automáticos",       items: "Dias úteis, feriados forenses (nacionais + locais) e recesso; alertas resilientes", done: true },
   { name: "CRM + Funil de vendas",    items: "Clientes/LGPD, oportunidades com forecast, Portal do Cliente", done: true },
-  { name: "Integrações externas",     items: "Gateway de pagamento, protocolo/assinatura digital, WhatsApp — aguardam credenciais", done: false, active: true },
-  { name: "Mobile / PWA",             items: "App instalável hoje; offline ampliado e push em evolução", done: false },
+  { name: "Segurança & HITL",         items: "Papéis (allowlist), isolamento do portal, aprovações restritas, faturas/LGPD blindados, rate-limit", done: true },
+  { name: "Produção viva",            items: "Worker/agendador Celery no deploy, WebSocket tempo-real, Sentry, CI com gates reais", done: true },
+  { name: "Multi-dispositivo",        items: "Celular, tablet e Smart TV (painel de recepção); PWA instalável e offline", done: true },
+  { name: "Publicações / DJe",        items: "Captura automática de intimações (Comunica/DJEN) → andamento + prazo por triagem", done: true },
+  { name: "App nativo (base)",        items: "Projeto Capacitor pronto para gerar/publicar Android e iOS (ver MOBILE.md)", done: true },
+  { name: "Integrações externas",     items: "Gateway de pagamento, assinatura digital, WhatsApp — aguardam credenciais", done: false, active: true },
 ];
 
 // Conclusão honesta: pilares concluídos + metade dos parciais (integrações
