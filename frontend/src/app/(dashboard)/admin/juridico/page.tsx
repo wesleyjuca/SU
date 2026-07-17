@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect } from "react";
-import { Gavel, Plus, X, Save, Loader2, CalendarClock, BadgeCheck, DownloadCloud } from "lucide-react";
+import { Gavel, Plus, X, Save, Loader2, CalendarClock, BadgeCheck, DownloadCloud, EyeOff } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
 
@@ -25,8 +25,31 @@ export default function JuridicoPage() {
   const [savingOabs, setSavingOabs] = useState(false);
   const [capturando, setCapturando] = useState(false);
   const [novaOab, setNovaOab] = useState({ numero: "", uf: "SP", nome: "" });
+  const [confidencial, setConfidencial] = useState(false);
+  const [savingConf, setSavingConf] = useState(false);
 
-  useEffect(() => { fetchFeriados(); fetchOabs(); }, []);
+  useEffect(() => { fetchFeriados(); fetchOabs(); fetchConfidencial(); }, []);
+
+  async function fetchConfidencial() {
+    try {
+      const res = await fetch("/api/v1/tenant/confidencial", { headers: authH() });
+      if (res.ok) { const d = await res.json(); setConfidencial(!!d.modo_confidencial); }
+    } catch { /* opcional */ }
+  }
+
+  async function toggleConfidencial() {
+    const novo = !confidencial;
+    setSavingConf(true);
+    try {
+      const res = await fetch("/api/v1/tenant/confidencial", {
+        method: "PUT", headers: authH(),
+        body: JSON.stringify({ modo_confidencial: novo }),
+      });
+      if (res.ok) { setConfidencial(novo); toast.success(novo ? "Modo confidencial ativado." : "Modo confidencial desativado."); }
+      else { const d = await res.json(); toast.error(d.detail || "Erro ao salvar."); }
+    } catch { toast.error("Falha de conexão."); }
+    finally { setSavingConf(false); }
+  }
 
   async function fetchOabs() {
     setLoadingOabs(true);
@@ -221,6 +244,34 @@ export default function JuridicoPage() {
             title={oabs.length === 0 ? "Cadastre e salve as OABs primeiro" : "Busca processos nos tribunais para cada OAB salva"}
             className="btn-afj-outline rounded-sm py-2 px-4 text-sm flex items-center gap-2 disabled:opacity-50">
             {capturando ? <Loader2 size={14} className="animate-spin" /> : <DownloadCloud size={14} />} Capturar processos
+          </button>
+        </div>
+      </div>
+
+      {/* Modo confidencial */}
+      <div className="afj-card p-5">
+        <div className="flex items-center gap-2 mb-1">
+          <EyeOff size={16} className="text-afj-gold" />
+          <h2 className="font-semibold text-afj-black">Modo confidencial</h2>
+        </div>
+        <p className="text-xs text-afj-black/50 mb-4">
+          Quando ligado, cada advogado vê apenas os processos em que é responsável ou faz parte da equipe — em Processos,
+          Agenda, Publicações e ao abrir um processo. Sócios e gestão (ADMIN, SÓCIO, GESTOR) continuam com a visão total do escritório.
+        </p>
+        <div className="flex items-center justify-between border border-afj-cream-dark rounded-sm px-4 py-3">
+          <div>
+            <p className="text-sm font-medium text-afj-black">Restringir a visão dos advogados à sua equipe</p>
+            <p className="text-xs text-afj-black/45 mt-0.5">{confidencial ? "Ativado — advogados veem só a própria carteira." : "Desativado — todos do escritório veem todos os processos."}</p>
+          </div>
+          <button
+            onClick={toggleConfidencial}
+            disabled={savingConf}
+            role="switch"
+            aria-checked={confidencial}
+            aria-label="Alternar modo confidencial"
+            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors flex-shrink-0 disabled:opacity-50 ${confidencial ? "bg-afj-gold" : "bg-afj-cream-dark"}`}
+          >
+            <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${confidencial ? "translate-x-6" : "translate-x-1"}`} />
           </button>
         </div>
       </div>

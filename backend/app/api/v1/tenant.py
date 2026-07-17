@@ -342,6 +342,38 @@ async def update_feriados(
     return {"feriados": itens}
 
 
+# ─── Modo confidencial (advogado vê só os processos da sua equipe) ───────────
+class ConfidencialUpdate(BaseModel):
+    modo_confidencial: bool
+
+
+@router.get("/confidencial")
+async def get_confidencial(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Estado do modo confidencial do escritório."""
+    _, config = await _get_or_create_config(db, current_user)
+    return {"modo_confidencial": bool((config.extra_data or {}).get("modo_confidencial"))}
+
+
+@router.put("/confidencial")
+async def update_confidencial(
+    body: ConfidencialUpdate,
+    current_user: User = Depends(require_role("ADMIN")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Liga/desliga o modo confidencial. Ligado: advogados comuns veem só os
+    processos da sua equipe; ADMIN/SOCIO/GESTOR continuam com visão total."""
+    tenant, config = await _get_or_create_config(db, current_user)
+    meta = dict(config.extra_data or {})
+    meta["modo_confidencial"] = bool(body.modo_confidencial)
+    config.extra_data = meta
+    await db.flush()
+    await invalidate_tenant_cache(tenant.slug)
+    return {"modo_confidencial": meta["modo_confidencial"]}
+
+
 # ─── OABs monitoradas do escritório (sócios capturam mesmo sem login) ────────
 class OabItem(BaseModel):
     numero: str

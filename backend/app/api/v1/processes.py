@@ -150,7 +150,7 @@ async def get_agenda(
         )
         .order_by(ProcessDeadline.data_prazo.asc())
     )
-    if mine:
+    if mine or await _confinar_a_equipe(db, current_user):
         from sqlalchemy import or_
         query = query.where(or_(
             ProcessDeadline.responsavel_id == current_user.id,
@@ -186,6 +186,29 @@ def _mine_filter(user_id):
     )
 
 
+# Papéis de gestão sempre veem todo o escritório, mesmo no modo confidencial.
+_VE_TUDO_ROLES = {"ADMIN", "SUPERADMIN", "SOCIO", "GESTOR"}
+
+
+async def _confidencial_ativo(db: AsyncSession, tenant_id) -> bool:
+    """Modo confidencial do escritório (TenantConfig.extra_data['modo_confidencial'])."""
+    from app.models.tenant import TenantConfig
+    if not tenant_id:
+        return False
+    cfg = (await db.execute(
+        select(TenantConfig).where(TenantConfig.tenant_id == tenant_id)
+    )).scalar_one_or_none()
+    return bool((cfg.extra_data or {}).get("modo_confidencial")) if cfg else False
+
+
+async def _confinar_a_equipe(db: AsyncSession, current_user: User) -> bool:
+    """True quando o usuário deve ver só os processos da sua equipe: modo
+    confidencial ligado E papel não-gestão. Gestão (ADMIN/SOCIO/GESTOR) vê tudo."""
+    if current_user.role in _VE_TUDO_ROLES:
+        return False
+    return await _confidencial_ativo(db, current_user.tenant_id)
+
+
 @router.get("", response_model=list[ProcessResponse])
 async def list_processes(
     tribunal: str | None = None,
@@ -214,7 +237,7 @@ async def list_processes(
         query = query.where(LegalProcess.situacao == situacao)
     if client_id:
         query = query.where(LegalProcess.client_id == uuid.UUID(client_id))
-    if mine:
+    if mine or await _confinar_a_equipe(db, current_user):
         query = query.where(_mine_filter(current_user.id))
 
     result = await db.execute(query)
@@ -258,6 +281,16 @@ async def get_process(
     process = result.scalar_one_or_none()
     if not process:
         raise NotFoundError("Processo", process_id)
+    # Modo confidencial: só a equipe do processo o abre (não vaza existência p/ terceiros).
+    if await _confinar_a_equipe(db, current_user):
+        na_equipe = (await db.execute(
+            select(ProcessTeamMember.id).where(
+                ProcessTeamMember.process_id == process.id,
+                ProcessTeamMember.user_id == current_user.id,
+            )
+        )).scalar_one_or_none()
+        if process.responsavel_id != current_user.id and not na_equipe:
+            raise NotFoundError("Processo", process_id)
     return (await _to_responses(db, [process]))[0]
 
 
