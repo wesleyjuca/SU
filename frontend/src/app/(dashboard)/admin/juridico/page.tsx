@@ -1,10 +1,13 @@
 "use client";
 import { useState, useEffect } from "react";
-import { Gavel, Plus, X, Save, Loader2, CalendarClock } from "lucide-react";
+import { Gavel, Plus, X, Save, Loader2, CalendarClock, BadgeCheck, DownloadCloud } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
 
 interface Feriado { data: string; descricao: string | null }
+interface Oab { numero: string; uf: string; nome: string | null }
+
+const UFS = ["AC","AL","AM","AP","BA","CE","DF","ES","GO","MA","MG","MS","MT","PA","PB","PE","PI","PR","RJ","RN","RO","RR","RS","SC","SE","SP","TO"];
 
 function authH(): HeadersInit {
   const t = typeof window !== "undefined" ? localStorage.getItem("afj_access_token") : null;
@@ -17,8 +20,54 @@ export default function JuridicoPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [novo, setNovo] = useState({ data: "", descricao: "" });
+  const [oabs, setOabs] = useState<Oab[]>([]);
+  const [loadingOabs, setLoadingOabs] = useState(true);
+  const [savingOabs, setSavingOabs] = useState(false);
+  const [capturando, setCapturando] = useState(false);
+  const [novaOab, setNovaOab] = useState({ numero: "", uf: "SP", nome: "" });
 
-  useEffect(() => { fetchFeriados(); }, []);
+  useEffect(() => { fetchFeriados(); fetchOabs(); }, []);
+
+  async function fetchOabs() {
+    setLoadingOabs(true);
+    try {
+      const res = await fetch("/api/v1/tenant/oabs", { headers: authH() });
+      if (res.ok) { const d = await res.json(); setOabs(d.oabs || []); }
+    } catch { toast.error("Falha ao carregar OABs."); }
+    finally { setLoadingOabs(false); }
+  }
+
+  function adicionarOab() {
+    const numero = novaOab.numero.replace(/\D/g, "");
+    if (!numero) { toast.error("Informe o número da OAB."); return; }
+    if (oabs.some((o) => o.numero === numero && o.uf === novaOab.uf)) { toast.error("OAB já cadastrada."); return; }
+    setOabs([...oabs, { numero, uf: novaOab.uf, nome: novaOab.nome.trim() || null }]);
+    setNovaOab({ numero: "", uf: novaOab.uf, nome: "" });
+  }
+
+  async function salvarOabs() {
+    setSavingOabs(true);
+    try {
+      const res = await fetch("/api/v1/tenant/oabs", {
+        method: "PUT", headers: authH(),
+        body: JSON.stringify({ oabs }),
+      });
+      if (res.ok) toast.success("OABs monitoradas salvas.");
+      else { const d = await res.json(); toast.error(d.detail || "Erro ao salvar."); }
+    } catch { toast.error("Falha de conexão."); }
+    finally { setSavingOabs(false); }
+  }
+
+  async function capturarProcessos() {
+    setCapturando(true);
+    try {
+      const res = await fetch("/api/v1/tenant/oabs/capturar", { method: "POST", headers: authH() });
+      const d = await res.json().catch(() => ({}));
+      if (res.ok) toast.success(d.message || "Captura iniciada.");
+      else toast.error(d.detail || "Erro ao iniciar captura.");
+    } catch { toast.error("Falha de conexão."); }
+    finally { setCapturando(false); }
+  }
 
   async function fetchFeriados() {
     setLoading(true);
@@ -112,6 +161,68 @@ export default function JuridicoPage() {
         <button onClick={salvar} disabled={saving} className="btn-afj-primary rounded-sm py-2 px-4 text-sm mt-4 flex items-center gap-2 disabled:opacity-50">
           {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Salvar feriados
         </button>
+      </div>
+
+      {/* OABs monitoradas */}
+      <div className="afj-card p-5">
+        <div className="flex items-center gap-2 mb-1">
+          <BadgeCheck size={16} className="text-afj-gold" />
+          <h2 className="font-semibold text-afj-black">OABs monitoradas (sócios)</h2>
+        </div>
+        <p className="text-xs text-afj-black/50 mb-4">
+          Além das OABs dos usuários com login, cadastre aqui as OABs dos sócios do escritório — mesmo sem acesso ao sistema, elas entram
+          na varredura diária do DJe (intimações) e na captura de processos em massa.
+        </p>
+
+        <div className="flex gap-2 items-end mb-4 flex-wrap">
+          <div>
+            <label className="text-[11px] text-afj-black/50 block mb-0.5">Número</label>
+            <input value={novaOab.numero} onChange={(e) => setNovaOab({ ...novaOab, numero: e.target.value })}
+              placeholder="123456" className="w-28 border border-afj-cream-dark rounded-sm px-2 py-1.5 text-sm" />
+          </div>
+          <div>
+            <label className="text-[11px] text-afj-black/50 block mb-0.5">UF</label>
+            <select value={novaOab.uf} onChange={(e) => setNovaOab({ ...novaOab, uf: e.target.value })}
+              className="border border-afj-cream-dark rounded-sm px-2 py-1.5 text-sm bg-white">
+              {UFS.map((u) => <option key={u} value={u}>{u}</option>)}
+            </select>
+          </div>
+          <div className="flex-1 min-w-[140px]">
+            <label className="text-[11px] text-afj-black/50 block mb-0.5">Nome do sócio (opcional)</label>
+            <input value={novaOab.nome} onChange={(e) => setNovaOab({ ...novaOab, nome: e.target.value })}
+              placeholder="Ex.: Dr. João de Almeida" className="w-full border border-afj-cream-dark rounded-sm px-3 py-1.5 text-sm" />
+          </div>
+          <button onClick={adicionarOab} className="btn-afj-outline rounded-sm py-1.5 px-3 text-sm flex items-center gap-1.5"><Plus size={14} /> Adicionar</button>
+        </div>
+
+        {loadingOabs ? (
+          <div className="space-y-2">{Array.from({ length: 2 }).map((_, i) => <div key={i} className="h-9 bg-afj-cream-dark rounded animate-pulse" />)}</div>
+        ) : oabs.length === 0 ? (
+          <p className="text-sm text-afj-black/40 text-center py-4">Nenhuma OAB cadastrada — a varredura usa só as OABs dos usuários com login.</p>
+        ) : (
+          <div className="divide-y divide-afj-cream-dark border border-afj-cream-dark rounded-sm">
+            {oabs.map((o) => (
+              <div key={`${o.numero}-${o.uf}`} className="flex items-center justify-between px-3 py-2">
+                <div>
+                  <span className="text-sm font-medium text-afj-black font-mono">{o.numero}/{o.uf}</span>
+                  {o.nome && <span className="text-xs text-afj-black/50 ml-2">{o.nome}</span>}
+                </div>
+                <button onClick={() => setOabs(oabs.filter((x) => !(x.numero === o.numero && x.uf === o.uf)))} className="text-red-400 hover:text-red-600 p-1"><X size={16} /></button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="flex gap-2 mt-4 flex-wrap">
+          <button onClick={salvarOabs} disabled={savingOabs} className="btn-afj-primary rounded-sm py-2 px-4 text-sm flex items-center gap-2 disabled:opacity-50">
+            {savingOabs ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Salvar OABs
+          </button>
+          <button onClick={capturarProcessos} disabled={capturando || oabs.length === 0}
+            title={oabs.length === 0 ? "Cadastre e salve as OABs primeiro" : "Busca processos nos tribunais para cada OAB salva"}
+            className="btn-afj-outline rounded-sm py-2 px-4 text-sm flex items-center gap-2 disabled:opacity-50">
+            {capturando ? <Loader2 size={14} className="animate-spin" /> : <DownloadCloud size={14} />} Capturar processos
+          </button>
+        </div>
       </div>
     </div>
   );

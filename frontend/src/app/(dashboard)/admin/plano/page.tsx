@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import { Gauge, Users2, HardDrive, Coins, Bot, RefreshCw, Crown, Receipt } from "lucide-react";
+import { Gauge, Users2, HardDrive, Coins, Bot, RefreshCw, Crown, Receipt, Building2, Plus, Loader2, KeyRound } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 
 interface BillingInfo {
@@ -41,7 +41,8 @@ function barColor(pct: number): string {
 function UsageBar({ label, icon: Icon, atual, limite, unidade }: {
   label: string; icon: React.ElementType; atual: number; limite: number; unidade: string;
 }) {
-  const pct = limite > 0 ? Math.min((atual / limite) * 100, 100) : 0;
+  const ilimitado = limite <= 0;
+  const pct = !ilimitado ? Math.min((atual / limite) * 100, 100) : 0;
   return (
     <div className="afj-card p-5">
       <div className="flex items-center justify-between mb-2">
@@ -49,23 +50,62 @@ function UsageBar({ label, icon: Icon, atual, limite, unidade }: {
           <Icon size={15} className="text-afj-gold" /> {label}
         </p>
         <p className="text-xs text-afj-black/50">
-          <span className="font-semibold text-afj-black">{atual.toLocaleString("pt-BR")}</span> / {limite.toLocaleString("pt-BR")} {unidade}
+          <span className="font-semibold text-afj-black">{atual.toLocaleString("pt-BR")}</span> / {ilimitado ? "Ilimitado" : `${limite.toLocaleString("pt-BR")} ${unidade}`}
         </p>
       </div>
       <div className="h-2.5 bg-afj-cream-dark rounded-full overflow-hidden">
-        <div className={`h-full rounded-full transition-all ${barColor(pct)}`} style={{ width: `${pct}%` }} />
+        <div className={`h-full rounded-full transition-all ${ilimitado ? "bg-afj-gold/40" : barColor(pct)}`} style={{ width: ilimitado ? "100%" : `${pct}%` }} />
       </div>
-      <p className={`text-[11px] mt-1.5 ${pct >= 90 ? "text-red-600 font-semibold" : pct >= 70 ? "text-amber-600" : "text-afj-black/40"}`}>
-        {pct.toFixed(0)}% do limite do plano{pct >= 90 ? " — considere ampliar o plano" : ""}
+      <p className={`text-[11px] mt-1.5 ${!ilimitado && pct >= 90 ? "text-red-600 font-semibold" : !ilimitado && pct >= 70 ? "text-amber-600" : "text-afj-black/40"}`}>
+        {ilimitado ? "Sem limite no seu plano" : `${pct.toFixed(0)}% do limite do plano${pct >= 90 ? " — considere ampliar o plano" : ""}`}
       </p>
     </div>
   );
 }
 
+interface Unit { id: string; name: string; unit_label: string | null; is_active: boolean; users: number }
+interface UnitsData { plano_permite_filiais: boolean; units: Unit[] }
+
 export default function PlanoUsoPage() {
   const [data, setData] = useState<Usage | null>(null);
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
+  const [unitsData, setUnitsData] = useState<UnitsData | null>(null);
+  const [novaUnidade, setNovaUnidade] = useState(false);
+  const [unitForm, setUnitForm] = useState({ name: "", unit_label: "", admin_email: "", admin_name: "" });
+  const [criandoUnidade, setCriandoUnidade] = useState(false);
+  const [credenciais, setCredenciais] = useState<{ admin_email: string; temp_password: string; name: string } | null>(null);
+
+  async function fetchUnits() {
+    try {
+      const token = localStorage.getItem("afj_access_token");
+      const res = await fetch("/api/v1/tenant/units", { headers: { Authorization: `Bearer ${token}` } });
+      if (res.ok) setUnitsData(await res.json());
+    } catch { /* seção opcional — silencioso */ }
+  }
+
+  async function criarUnidade() {
+    if (!unitForm.name || !unitForm.unit_label || !unitForm.admin_email || !unitForm.admin_name) return;
+    setCriandoUnidade(true);
+    try {
+      const token = localStorage.getItem("afj_access_token");
+      const res = await fetch("/api/v1/tenant/units", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify(unitForm),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setCredenciais({ admin_email: d.admin_email, temp_password: d.temp_password, name: d.name });
+        setNovaUnidade(false);
+        setUnitForm({ name: "", unit_label: "", admin_email: "", admin_name: "" });
+        fetchUnits();
+      } else {
+        setErro(d.detail || "Erro ao criar a unidade.");
+      }
+    } catch { setErro("Falha de conexão ao criar a unidade."); }
+    finally { setCriandoUnidade(false); }
+  }
 
   async function fetchUsage() {
     setLoading(true);
@@ -82,7 +122,7 @@ export default function PlanoUsoPage() {
     finally { setLoading(false); }
   }
 
-  useEffect(() => { fetchUsage(); }, []);
+  useEffect(() => { fetchUsage(); fetchUnits(); }, []);
 
   return (
     <div className="max-w-4xl mx-auto space-y-5">
@@ -182,6 +222,85 @@ export default function PlanoUsoPage() {
               );
             })}
           </div>
+
+          {/* Minhas unidades (filiais) */}
+          {unitsData && (
+            <div className="afj-card p-5">
+              <div className="flex items-center justify-between flex-wrap gap-2 mb-1">
+                <p className="text-sm font-semibold text-afj-black flex items-center gap-2">
+                  <Building2 size={15} className="text-afj-gold" /> Minhas unidades (filiais)
+                </p>
+                {unitsData.plano_permite_filiais && (
+                  <button onClick={() => { setNovaUnidade(!novaUnidade); setCredenciais(null); }}
+                    className="btn-afj-outline rounded-sm py-1.5 px-3 text-xs flex items-center gap-1.5">
+                    <Plus size={13} /> Nova unidade
+                  </button>
+                )}
+              </div>
+              <p className="text-xs text-afj-black/45 mb-3">
+                Cada filial é um ambiente isolado da banca, com seus próprios usuários e dados.
+                {!unitsData.plano_permite_filiais && " Disponível no plano ENTERPRISE — fale com a plataforma para upgrade."}
+              </p>
+
+              {credenciais && (
+                <div className="bg-amber-50 border border-amber-200 rounded-sm px-4 py-3 mb-3 text-sm">
+                  <p className="font-semibold text-amber-800 flex items-center gap-1.5"><KeyRound size={14} /> Unidade “{credenciais.name}” criada</p>
+                  <p className="text-amber-700 text-xs mt-1">
+                    Admin: <span className="font-mono">{credenciais.admin_email}</span> · Senha temporária:{" "}
+                    <span className="font-mono font-bold">{credenciais.temp_password}</span>
+                  </p>
+                  <p className="text-amber-600 text-[11px] mt-1">Anote agora — a senha não será exibida novamente.</p>
+                </div>
+              )}
+
+              {novaUnidade && (
+                <div className="border border-afj-cream-dark rounded-sm p-4 mb-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {[
+                    { k: "name", label: "Nome da unidade", ph: "Ex.: AFJ Advogados — Fortaleza" },
+                    { k: "unit_label", label: "Identificação (cidade/região)", ph: "Ex.: Fortaleza/CE" },
+                    { k: "admin_name", label: "Nome do administrador", ph: "Ex.: Maria Freire" },
+                    { k: "admin_email", label: "E-mail do administrador", ph: "admin@filial.com.br" },
+                  ].map((f) => (
+                    <div key={f.k}>
+                      <label className="text-[11px] text-afj-black/50 block mb-0.5">{f.label}</label>
+                      <input
+                        value={unitForm[f.k as keyof typeof unitForm]}
+                        onChange={(e) => setUnitForm({ ...unitForm, [f.k]: e.target.value })}
+                        placeholder={f.ph}
+                        type={f.k === "admin_email" ? "email" : "text"}
+                        className="w-full border border-afj-cream-dark rounded-sm px-3 py-1.5 text-sm focus:outline-none focus:border-afj-gold"
+                      />
+                    </div>
+                  ))}
+                  <div className="sm:col-span-2 flex justify-end gap-2">
+                    <button onClick={() => setNovaUnidade(false)} className="btn-afj-outline rounded-sm py-1.5 px-3 text-xs">Cancelar</button>
+                    <button onClick={criarUnidade} disabled={criandoUnidade}
+                      className="btn-afj-primary rounded-sm py-1.5 px-3 text-xs flex items-center gap-1.5 disabled:opacity-50">
+                      {criandoUnidade ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} />} Criar unidade
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {unitsData.units.length === 0 ? (
+                <p className="text-sm text-afj-black/40 text-center py-3">Nenhuma filial cadastrada.</p>
+              ) : (
+                <div className="divide-y divide-afj-cream-dark border border-afj-cream-dark rounded-sm">
+                  {unitsData.units.map((u) => (
+                    <div key={u.id} className="flex items-center justify-between px-3 py-2.5">
+                      <div>
+                        <p className="text-sm font-medium text-afj-black">{u.name}</p>
+                        <p className="text-xs text-afj-black/45">{u.unit_label || "—"} · {u.users} usuário(s)</p>
+                      </div>
+                      <span className={`text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-sm border ${u.is_active ? "bg-green-50 text-green-700 border-green-200" : "bg-gray-50 text-gray-500 border-gray-200"}`}>
+                        {u.is_active ? "Ativa" : "Inativa"}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
           <p className="text-[11px] text-afj-black/35 text-center">
             Detalhe do consumo de IA por usuário em{" "}

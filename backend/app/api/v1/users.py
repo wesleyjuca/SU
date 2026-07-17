@@ -419,6 +419,31 @@ async def invite_user(
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=409, detail="E-mail já cadastrado")
 
+    # Limite de usuários do plano (0 = ilimitado). Conta só o staff ativo —
+    # clientes do portal não ocupam assento.
+    if current_user.tenant_id:
+        from sqlalchemy import func as _func
+        from app.models.tenant import Tenant
+        tenant = (await db.execute(
+            select(Tenant).where(Tenant.id == current_user.tenant_id)
+        )).scalar_one_or_none()
+        if tenant and (tenant.max_users or 0) > 0:
+            ativos = (await db.execute(
+                select(_func.count(User.id)).where(
+                    User.tenant_id == current_user.tenant_id,
+                    User.is_active == True,  # noqa: E712
+                    User.role != "CLIENT",
+                )
+            )).scalar_one() or 0
+            if ativos >= tenant.max_users:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"Limite do plano {tenant.plan} atingido ({tenant.max_users} usuários ativos). "
+                        "Desative um usuário ou fale com a plataforma para ampliar o plano."
+                    ),
+                )
+
     alphabet = string.ascii_letters + string.digits + "!@#$"
     temp_password = "".join(secrets.choice(alphabet) for _ in range(12))
 
