@@ -87,12 +87,17 @@ async def buscar_comunicacoes(
     data_fim: date,
     max_paginas: int = 1,
     itens_por_pagina: int = 50,
+    stats: dict | None = None,
 ) -> list[Comunicacao]:
     """Consulta a Comunica por OAB e intervalo de disponibilização.
 
     `max_paginas` controla quantas páginas varrer (1 = comportamento antigo, p/ a
     varredura diária do DJe; a captura por OAB usa um valor maior). Para de paginar
     assim que uma página vem incompleta/vazia.
+
+    `stats` (opcional) é preenchido para diagnóstico: `ok` (True se a fonte
+    respondeu 200 ao menos uma vez), `requests` (nº de chamadas) e `error` (última
+    exceção). Permite ao chamador distinguir "fonte inalcançável" de "0 no período".
 
     Retorna [] em qualquer falha (host inacessível no sandbox, timeout, formato
     inesperado). Em produção (Railway), roda de verdade.
@@ -114,9 +119,13 @@ async def buscar_comunicacoes(
                     "pagina": pagina,
                 }
                 resp = await client.get(COMUNICA_URL, params=params)
+                if stats is not None:
+                    stats["requests"] = stats.get("requests", 0) + 1
                 if resp.status_code != 200:
                     log.warning("comunica_http", status=resp.status_code, oab=numero, uf=oab_uf, pagina=pagina)
                     break
+                if stats is not None:
+                    stats["ok"] = True
                 itens = _extrai_itens(resp.json())
                 for it in itens:
                     if isinstance(it, dict):
@@ -128,6 +137,8 @@ async def buscar_comunicacoes(
                 if len(itens) < itens_por_pagina:
                     break
     except Exception as exc:
+        if stats is not None:
+            stats["error"] = str(exc)
         log.warning("comunica_falhou", error=str(exc), oab=numero, uf=oab_uf)
         return out
 

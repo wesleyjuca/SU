@@ -68,6 +68,45 @@ async def list_documents(
     return [_to_response(d) for d in docs]
 
 
+class DocumentCreate(BaseModel):
+    titulo: str
+    tipo: str = "OUTROS"
+    conteudo_texto: str | None = None
+    conteudo_html: str | None = None
+    process_id: str | None = None
+    client_id: str | None = None
+
+
+@router.post("", status_code=201, response_model=DocumentResponse)
+async def create_document(
+    body: DocumentCreate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Cria um documento manual (sem arquivo) — texto/HTML digitado no app.
+
+    Nasce como RASCUNHO; a promoção a APROVADO/PROTOCOLADO segue o gate de papel
+    do `PUT /{id}` (invariante HITL)."""
+    titulo = (body.titulo or "").strip()
+    if not titulo:
+        raise HTTPException(status_code=422, detail="Informe o título do documento.")
+    doc = Document(
+        tipo=body.tipo or "OUTROS",
+        titulo=titulo,
+        conteudo_texto=body.conteudo_texto,
+        conteudo_html=body.conteudo_html,
+        status="RASCUNHO",
+        gerado_por_ia=False,
+        created_by=current_user.id,
+        tenant_id=current_user.tenant_id,
+        process_id=uuid.UUID(body.process_id) if body.process_id else None,
+        client_id=uuid.UUID(body.client_id) if body.client_id else None,
+    )
+    db.add(doc)
+    await db.flush()
+    return _to_response(doc)
+
+
 @router.post("/upload", status_code=201, response_model=DocumentResponse)
 async def upload_document(
     background_tasks: BackgroundTasks,

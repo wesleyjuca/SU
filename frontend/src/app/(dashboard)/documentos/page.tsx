@@ -1,8 +1,11 @@
 "use client";
 import { useState, useEffect, useRef } from "react";
-import { FolderOpen, Search, FileText, Download, Upload, ScanLine, X, CloudUpload, Eye } from "lucide-react";
+import { FolderOpen, Search, FileText, Download, Upload, ScanLine, X, CloudUpload, Eye, Plus, Pencil, Trash2, Save, Loader2 } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
+
+const TIPOS = ["PETICAO", "CONTRATO", "PROCURACAO", "PARECER", "RECURSO", "OUTROS"];
+const STATUSES = ["RASCUNHO", "REVISAO", "APROVADO", "PROTOCOLADO", "REJEITADO"];
 
 interface Documento {
   id: string;
@@ -63,6 +66,79 @@ export default function DocumentosPage() {
   const [loadingTexto, setLoadingTexto] = useState<string | null>(null);
   const [textoModal, setTextoModal] = useState<{ titulo: string; texto: string } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Criar / editar / excluir
+  const emptyForm = { titulo: "", tipo: "OUTROS", status: "RASCUNHO", conteudo_texto: "" };
+  const [showNew, setShowNew] = useState(false);
+  const [newForm, setNewForm] = useState(emptyForm);
+  const [editDoc, setEditDoc] = useState<Documento | null>(null);
+  const [editForm, setEditForm] = useState(emptyForm);
+  const [saving, setSaving] = useState(false);
+  const [loadingEdit, setLoadingEdit] = useState(false);
+  const [deleting, setDeleting] = useState<string | null>(null);
+
+  const authH = () => ({
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${typeof window !== "undefined" ? localStorage.getItem("afj_access_token") : ""}`,
+  });
+
+  async function criarDoc() {
+    if (!newForm.titulo.trim()) { toast.error("Informe o título."); return; }
+    setSaving(true);
+    try {
+      const res = await fetch("/api/v1/documents", {
+        method: "POST", headers: authH(),
+        body: JSON.stringify({ titulo: newForm.titulo, tipo: newForm.tipo, conteudo_texto: newForm.conteudo_texto || null }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (res.ok) { toast.success("Documento criado."); setShowNew(false); setNewForm(emptyForm); fetchDocs(); }
+      else toast.error(d.detail || "Erro ao criar documento.");
+    } catch { toast.error("Erro de conexão."); }
+    finally { setSaving(false); }
+  }
+
+  async function abrirEdicao(d: Documento) {
+    setEditDoc(d);
+    setEditForm({ titulo: d.titulo, tipo: d.tipo, status: d.status, conteudo_texto: "" });
+    setLoadingEdit(true);
+    try {
+      const res = await fetch(`/api/v1/documents/${d.id}/content`, { headers: authH() });
+      if (res.ok) {
+        const c = await res.json();
+        setEditForm({ titulo: d.titulo, tipo: d.tipo, status: d.status, conteudo_texto: c.conteudo_texto || c.conteudo_html || "" });
+      }
+    } catch { /* mantém o form base */ }
+    finally { setLoadingEdit(false); }
+  }
+
+  async function salvarEdicao() {
+    if (!editDoc) return;
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/v1/documents/${editDoc.id}`, {
+        method: "PUT", headers: authH(),
+        body: JSON.stringify({
+          titulo: editForm.titulo, tipo: editForm.tipo, status: editForm.status,
+          conteudo_texto: editForm.conteudo_texto,
+        }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (res.ok) { toast.success("Documento atualizado."); setEditDoc(null); fetchDocs(); }
+      else toast.error(d.detail || "Erro ao salvar.");
+    } catch { toast.error("Erro de conexão."); }
+    finally { setSaving(false); }
+  }
+
+  async function excluirDoc(d: Documento) {
+    if (!confirm(`Arquivar "${d.titulo}"? Ele sai da lista mas pode ser recuperado filtrando por arquivados.`)) return;
+    setDeleting(d.id);
+    try {
+      const res = await fetch(`/api/v1/documents/${d.id}`, { method: "DELETE", headers: authH() });
+      if (res.ok) { toast.success("Documento arquivado."); fetchDocs(); }
+      else { const e = await res.json().catch(() => ({})); toast.error(e.detail || "Erro ao arquivar."); }
+    } catch { toast.error("Erro de conexão."); }
+    finally { setDeleting(null); }
+  }
 
   useEffect(() => { fetchDocs(); }, [filtroTipo, filtroStatus]);
 
@@ -223,6 +299,12 @@ export default function DocumentosPage() {
             {uploading ? <X size={14} className="animate-spin" /> : <Upload size={14} />}
             {uploading ? "Enviando..." : "Upload"}
           </button>
+          <button
+            onClick={() => { setShowNew(true); setNewForm(emptyForm); }}
+            className="btn-afj-primary rounded-sm flex items-center gap-2"
+          >
+            <Plus size={14} /> Novo documento
+          </button>
         </div>
       </div>
 
@@ -339,12 +421,29 @@ export default function DocumentosPage() {
                         <ScanLine size={14} className={ocrRunning === d.id ? "animate-pulse" : ""} />
                       </button>
                       <button
+                        onClick={() => abrirEdicao(d)}
+                        className="tap-target text-afj-black/30 hover:text-afj-gold transition-colors"
+                        title="Editar documento"
+                        aria-label="Editar documento"
+                      >
+                        <Pencil size={14} />
+                      </button>
+                      <button
                         onClick={() => downloadDoc(d.id, d.titulo)}
                         className="tap-target text-afj-black/30 hover:text-afj-gold transition-colors"
                         title="Baixar PDF"
                         aria-label="Baixar documento como PDF"
                       >
                         <Download size={14} />
+                      </button>
+                      <button
+                        onClick={() => excluirDoc(d)}
+                        disabled={deleting === d.id}
+                        className="tap-target text-afj-black/30 hover:text-red-500 transition-colors disabled:opacity-40"
+                        title="Arquivar documento"
+                        aria-label="Arquivar documento"
+                      >
+                        <Trash2 size={14} />
                       </button>
                       {googleConnected && (
                         <button
@@ -363,6 +462,82 @@ export default function DocumentosPage() {
               ))}
             </tbody>
           </table>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Novo documento */}
+      {showNew && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => !saving && setShowNew(false)}>
+          <div className="afj-card w-full max-w-lg max-h-[85vh] overflow-y-auto p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
+            <h2 className="font-display text-lg font-semibold text-afj-black flex items-center gap-2"><Plus size={18} className="text-afj-gold" /> Novo documento</h2>
+            <div>
+              <label className="text-[11px] text-afj-black/55 block mb-1 uppercase tracking-widest font-semibold">Título</label>
+              <input value={newForm.titulo} onChange={(e) => setNewForm({ ...newForm, titulo: e.target.value })}
+                placeholder="Ex.: Parecer sobre o caso X" className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold" />
+            </div>
+            <div>
+              <label className="text-[11px] text-afj-black/55 block mb-1 uppercase tracking-widest font-semibold">Tipo</label>
+              <select value={newForm.tipo} onChange={(e) => setNewForm({ ...newForm, tipo: e.target.value })}
+                className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm bg-white focus:outline-none focus:border-afj-gold">
+                {TIPOS.map((t) => <option key={t} value={t}>{t}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="text-[11px] text-afj-black/55 block mb-1 uppercase tracking-widest font-semibold">Conteúdo</label>
+              <textarea value={newForm.conteudo_texto} onChange={(e) => setNewForm({ ...newForm, conteudo_texto: e.target.value })}
+                rows={8} placeholder="Digite o conteúdo do documento..." className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold resize-none" />
+            </div>
+            <div className="flex gap-2 justify-end">
+              <button onClick={() => setShowNew(false)} disabled={saving} className="btn-afj-outline rounded-sm text-sm py-2 px-4">Cancelar</button>
+              <button onClick={criarDoc} disabled={saving} className="btn-afj-primary rounded-sm text-sm py-2 px-4 flex items-center gap-2">
+                {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Criar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Editar documento */}
+      {editDoc && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => !saving && setEditDoc(null)}>
+          <div className="afj-card w-full max-w-lg max-h-[85vh] overflow-y-auto p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
+            <h2 className="font-display text-lg font-semibold text-afj-black flex items-center gap-2"><Pencil size={18} className="text-afj-gold" /> Editar documento</h2>
+            <div>
+              <label className="text-[11px] text-afj-black/55 block mb-1 uppercase tracking-widest font-semibold">Título</label>
+              <input value={editForm.titulo} onChange={(e) => setEditForm({ ...editForm, titulo: e.target.value })}
+                className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold" />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-[11px] text-afj-black/55 block mb-1 uppercase tracking-widest font-semibold">Tipo</label>
+                <select value={editForm.tipo} onChange={(e) => setEditForm({ ...editForm, tipo: e.target.value })}
+                  className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm bg-white focus:outline-none focus:border-afj-gold">
+                  {TIPOS.map((t) => <option key={t} value={t}>{t}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="text-[11px] text-afj-black/55 block mb-1 uppercase tracking-widest font-semibold">Status</label>
+                <select value={editForm.status} onChange={(e) => setEditForm({ ...editForm, status: e.target.value })}
+                  className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm bg-white focus:outline-none focus:border-afj-gold">
+                  {STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </div>
+            </div>
+            <div>
+              <label className="text-[11px] text-afj-black/55 block mb-1 uppercase tracking-widest font-semibold">Conteúdo</label>
+              <textarea value={editForm.conteudo_texto} onChange={(e) => setEditForm({ ...editForm, conteudo_texto: e.target.value })}
+                rows={10} disabled={loadingEdit}
+                placeholder={loadingEdit ? "Carregando conteúdo..." : "Conteúdo do documento..."}
+                className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold resize-none disabled:opacity-60" />
+            </div>
+            <p className="text-[11px] text-afj-black/40">Aprovar/protocolar é restrito a advogados, sócios e administradores.</p>
+            <div className="flex gap-2 justify-end">
+              <button onClick={() => setEditDoc(null)} disabled={saving} className="btn-afj-outline rounded-sm text-sm py-2 px-4">Cancelar</button>
+              <button onClick={salvarEdicao} disabled={saving || loadingEdit} className="btn-afj-primary rounded-sm text-sm py-2 px-4 flex items-center gap-2">
+                {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Salvar
+              </button>
+            </div>
           </div>
         </div>
       )}

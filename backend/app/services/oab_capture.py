@@ -81,12 +81,18 @@ async def capturar_por_oab(
 
     oabs = await _oabs_do_tenant(db, tenant_id)
     if not oabs:
-        return {"oabs": 0, "processos_encontrados": 0, "processos_criados": 0}
+        return {"oabs": 0, "comunicacoes_encontradas": 0, "processos_encontrados": 0,
+                "processos_criados": 0, "fonte_respondeu": False}
+
+    # Diagnóstico da fonte (distingue "inalcançável" de "0 no período").
+    stats: dict = {}
+    total_comunicacoes = 0
 
     # numero_cnj (dígitos) -> dados do processo a criar
     achados: dict[str, dict] = {}
     for numero, uf, owner in oabs:
-        comunicacoes = await buscar_comunicacoes(numero, uf, inicio, hoje, max_paginas=20)
+        comunicacoes = await buscar_comunicacoes(numero, uf, inicio, hoje, max_paginas=20, stats=stats)
+        total_comunicacoes += len(comunicacoes)
         for c in comunicacoes:
             cnj = c.numero_cnj
             if not cnj or cnj in achados:
@@ -100,7 +106,9 @@ async def capturar_por_oab(
             }
 
     if not achados:
-        return {"oabs": len(oabs), "processos_encontrados": 0, "processos_criados": 0}
+        return {"oabs": len(oabs), "comunicacoes_encontradas": total_comunicacoes,
+                "processos_encontrados": 0, "processos_criados": 0,
+                "fonte_respondeu": bool(stats.get("ok"))}
 
     # Já existentes no tenant (dedup por dígitos do CNJ)
     existentes = {
@@ -147,9 +155,11 @@ async def capturar_por_oab(
 
     await db.commit()
     log.info("oab_capture_done", tenant=str(tenant_id), oabs=len(oabs),
-             encontrados=len(achados), criados=criados)
+             comunicacoes=total_comunicacoes, encontrados=len(achados), criados=criados)
     return {
         "oabs": len(oabs),
+        "comunicacoes_encontradas": total_comunicacoes,
         "processos_encontrados": len(achados),
         "processos_criados": criados,
+        "fonte_respondeu": bool(stats.get("ok")),
     }
