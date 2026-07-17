@@ -494,12 +494,28 @@ async def analytics_gestao(
                    ProcessDeadline.responsavel_id.is_not(None))
             .group_by(ProcessDeadline.responsavel_id)
         )).all())
+        # Carga atual: processos em andamento e prazos ainda pendentes por responsável
+        proc_ativos_por_resp = dict((await db.execute(
+            select(LegalProcess.responsavel_id, func.count(LegalProcess.id))
+            .where(LegalProcess.tenant_id == tid, LegalProcess.responsavel_id.is_not(None),
+                   LegalProcess.situacao.in_(["ATIVO", "SUSPENSO"]))
+            .group_by(LegalProcess.responsavel_id)
+        )).all())
+        prazos_pendentes = dict((await db.execute(
+            select(ProcessDeadline.responsavel_id, func.count(ProcessDeadline.id))
+            .join(LegalProcess, ProcessDeadline.process_id == LegalProcess.id)
+            .where(LegalProcess.tenant_id == tid, ProcessDeadline.status == "PENDENTE",
+                   ProcessDeadline.responsavel_id.is_not(None))
+            .group_by(ProcessDeadline.responsavel_id)
+        )).all())
         usuarios = (await db.execute(
             select(User).where(User.tenant_id == tid, User.is_active == True, User.role != "CLIENT")  # noqa: E712
         )).scalars().all()
         produtividade = sorted(
             [{"advogado": u.full_name,
               "processos": int(proc_por_resp.get(u.id, 0)),
+              "processos_ativos": int(proc_ativos_por_resp.get(u.id, 0)),
+              "prazos_pendentes": int(prazos_pendentes.get(u.id, 0)),
               "documentos": int(docs_por_autor.get(u.id, 0)),
               "prazos_cumpridos": int(prazos_cumpridos.get(u.id, 0))}
              for u in usuarios],
