@@ -61,7 +61,8 @@ async def list_publicacoes(
     )
     if status:
         q = q.where(Intimacao.status == status)
-    if mine:
+    from app.api.v1.processes import _confinar_a_equipe
+    if mine or await _confinar_a_equipe(db, current_user):
         from app.models.process import LegalProcess, ProcessTeamMember
         from sqlalchemy import or_
         meus = select(LegalProcess.id).where(
