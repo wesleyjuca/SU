@@ -21,6 +21,7 @@ const AREAS: { titulo: string; recursos: Recurso[] }[] = [
     titulo: "Jurídico",
     recursos: [
       { icon: Scale, nome: "Processos & Prazos", desc: "Cadastro, captura por OAB, andamentos, alertas e cálculo automático de prazo (dias úteis, recesso e feriados forenses locais configuráveis por comarca); lançamento direto da Agenda.", estado: "operacional" },
+      { icon: Scale, nome: "Equipe por Processo & Minha Área", desc: "Cada processo tem um responsável e colaboradores; intimações notificam a equipe toda. O filtro \"Meus\" em Processos/Agenda/Publicações e a página Minha Área mostram só o que é seu.", estado: "operacional" },
       { icon: BookOpen, nome: "Publicações & Intimações (DJe)", desc: "Monitoramento automático do Diário de Justiça Eletrônico (DJEN/Comunica) pelas OABs do escritório: cada intimação vira andamento no processo e notifica o responsável; a triagem confirma tipo e dias e gera o prazo.", estado: "operacional" },
       { icon: FileText, nome: "Petições & Contratos", desc: "Geração com IA, editor, versionamento, PDF e ciclo de vida (arquivar/excluir).", estado: "operacional" },
       { icon: BookOpen, nome: "Pesquisa Jurídica (RAG)", desc: "Busca semântica em jurisprudência, legislação, doutrina e memórias — documentos aprovados e arquivos digitalizados (OCR) entram automaticamente na busca privada do escritório.", estado: "parcial" },
@@ -69,6 +70,7 @@ const ROADMAP: { fase: string; itens: string; estado: Estado }[] = [
   { fase: "Portal do Cliente", itens: "Acesso externo, mensagens, documentos PDF (WhatsApp aguarda credenciais)", estado: "operacional" },
   { fase: "Ética, Controle & Integridade", itens: "Controles ativos + código de conduta, canal de denúncias, treinamentos", estado: "parcial" },
   { fase: "Monitoramento de Publicações (DJe)", itens: "Captura automática de intimações (Comunica/DJEN) por OAB → andamento + notificação; prazo por triagem", estado: "operacional" },
+  { fase: "Equipe por processo + Minha Área", itens: "Responsável + colaboradores por processo; filtro \"Meus\" em Processos/Agenda/Publicações; painel pessoal do advogado", estado: "operacional" },
   { fase: "Segurança & Produção", itens: "Papéis/HITL blindados, worker em produção, tempo-real, CI com gates", estado: "operacional" },
   { fase: "Mobile / PWA / App nativo", itens: "PWA instalável e offline; base Capacitor pronta para publicar Android/iOS", estado: "operacional" },
   { fase: "Integrações Externas", itens: "WhatsApp, assinatura eletrônica, gateway de pagamento (aguardam credenciais)", estado: "planejado" },

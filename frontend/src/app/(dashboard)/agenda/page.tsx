@@ -63,6 +63,7 @@ export default function AgendaPage() {
   const [items, setItems] = useState<AgendaItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [dias, setDias] = useState(30);
+  const [somenteMeus, setSomenteMeus] = useState(false);
   const [completing, setCompleting] = useState<string | null>(null);
   const [googleEnabled, setGoogleEnabled] = useState(false);
 
@@ -75,7 +76,7 @@ export default function AgendaPage() {
   const [calculando, setCalculando] = useState(false);
   const [salvando, setSalvando] = useState(false);
 
-  useEffect(() => { fetchAgenda(); }, [dias]);
+  useEffect(() => { fetchAgenda(); }, [dias, somenteMeus]);
 
   async function abrirNovoPrazo() {
     setModal(true);
@@ -137,7 +138,7 @@ export default function AgendaPage() {
     setLoading(true);
     try {
       const token = localStorage.getItem("afj_access_token");
-      const res = await fetch(`/api/v1/processes/agenda?dias=${dias}`, {
+      const res = await fetch(`/api/v1/processes/agenda?dias=${dias}${somenteMeus ? "&mine=true" : ""}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (res.ok) setItems(await res.json());
@@ -263,7 +264,18 @@ export default function AgendaPage() {
             Prazos processuais ordenados por urgência
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            onClick={() => setSomenteMeus(!somenteMeus)}
+            className={`text-xs px-3 py-1.5 rounded-sm border transition-colors ${
+              somenteMeus
+                ? "border-afj-gold bg-afj-gold/10 text-afj-gold font-semibold"
+                : "border-afj-cream-dark text-afj-black/50 hover:border-afj-gold/50"
+            }`}
+          >
+            Meus prazos
+          </button>
+          <span className="w-px h-5 bg-afj-cream-dark" />
           {FILTRO_DIAS.map((d) => (
             <button
               key={d}

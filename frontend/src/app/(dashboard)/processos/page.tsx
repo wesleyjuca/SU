@@ -57,6 +57,7 @@ export default function ProcessosPage() {
   const [offset, setOffset] = useState(0);
   const [search, setSearch] = useState("");
   const [filtroArea, setFiltroArea] = useState("");
+  const [somenteMeus, setSomenteMeus] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<Partial<Processo>>({});
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -77,7 +78,7 @@ export default function ProcessosPage() {
 
   useEffect(() => {
     fetchProcessos(0, false);
-  }, [filtroArea]);
+  }, [filtroArea, somenteMeus]);
 
   async function fetchProcessos(newOffset = 0, append = false) {
     if (append) setLoadingMore(true);
@@ -86,6 +87,7 @@ export default function ProcessosPage() {
       const token = localStorage.getItem("afj_access_token");
       const params = new URLSearchParams();
       if (filtroArea) params.set("area_direito", filtroArea);
+      if (somenteMeus) params.set("mine", "true");
       params.set("limit", String(PAGE_SIZE));
       params.set("offset", String(newOffset));
       const res = await fetch(`/api/v1/processes?${params}`, {
@@ -226,6 +228,15 @@ export default function ProcessosPage() {
             placeholder="Buscar por número CNJ ou tribunal..."
             className="w-full pl-9 pr-4 py-2 text-sm border border-afj-cream-dark rounded-sm focus:outline-none focus:border-afj-gold bg-white"
           />
+        </div>
+        {/* Minha Área: alterna entre os processos do advogado logado e todos */}
+        <div className="flex rounded-sm border border-afj-cream-dark overflow-hidden">
+          {[[false, "Todos"], [true, "Meus"]].map(([v, l]) => (
+            <button key={String(v)} onClick={() => setSomenteMeus(v as boolean)}
+              className={`text-xs px-3 py-2 transition-colors ${somenteMeus === v ? "bg-afj-gold/15 text-afj-gold font-semibold" : "bg-white text-afj-black/50 hover:text-afj-black"}`}>
+              {l as string}
+            </button>
+          ))}
         </div>
         <select
           value={filtroArea}

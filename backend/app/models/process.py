@@ -47,6 +47,25 @@ class LegalProcess(Base):
     deadlines: Mapped[list["ProcessDeadline"]] = relationship(back_populates="process", cascade="all, delete-orphan")
     parties: Mapped[list["ProcessParty"]] = relationship(back_populates="process", cascade="all, delete-orphan")
     documents: Mapped[list["Document"]] = relationship(back_populates="process")
+    team: Mapped[list["ProcessTeamMember"]] = relationship(back_populates="process", cascade="all, delete-orphan")
+
+
+class ProcessTeamMember(Base):
+    """Equipe do processo (N:N processo↔advogados). `responsavel_id` do processo
+    continua como o principal; a equipe habilita a "Minha Área" de cada advogado
+    e as notificações direcionadas."""
+    __tablename__ = "process_team"
+    __table_args__ = (
+        UniqueConstraint("process_id", "user_id", name="uq_process_team_member"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    process_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("legal_processes.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    papel: Mapped[str] = mapped_column(String(20), default="COLABORADOR")  # RESPONSAVEL | COLABORADOR
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    process: Mapped["LegalProcess"] = relationship(back_populates="team")
 
 
 class ProcessMovement(Base):

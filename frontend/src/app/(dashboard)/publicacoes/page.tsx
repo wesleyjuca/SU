@@ -34,6 +34,7 @@ export default function PublicacoesPage() {
   const [items, setItems] = useState<Publicacao[]>([]);
   const [loading, setLoading] = useState(true);
   const [filtro, setFiltro] = useState("NOVA");
+  const [somenteMeus, setSomenteMeus] = useState(false);
   const [varrendo, setVarrendo] = useState(false);
   const [triar, setTriar] = useState<Publicacao | null>(null);
   const [tipo, setTipo] = useState("MANIFESTACAO");
@@ -42,12 +43,15 @@ export default function PublicacoesPage() {
 
   const token = () => (typeof window !== "undefined" ? localStorage.getItem("afj_access_token") : null);
 
-  useEffect(() => { fetchItems(); }, [filtro]);
+  useEffect(() => { fetchItems(); }, [filtro, somenteMeus]);
 
   async function fetchItems() {
     setLoading(true);
     try {
-      const params = filtro ? `?status=${filtro}` : "";
+      const qp = new URLSearchParams();
+      if (filtro) qp.set("status", filtro);
+      if (somenteMeus) qp.set("mine", "true");
+      const params = qp.toString() ? `?${qp}` : "";
       const res = await fetch(`/api/v1/publicacoes${params}`, { headers: { Authorization: `Bearer ${token()}` } });
       if (res.ok) setItems(await res.json());
     } finally { setLoading(false); }
@@ -113,13 +117,18 @@ export default function PublicacoesPage() {
         )}
       </div>
 
-      <div className="flex gap-2">
+      <div className="flex gap-2 flex-wrap items-center">
         {[["NOVA", "A triar"], ["TRIADA", "Triadas"], ["IGNORADA", "Arquivadas"], ["", "Todas"]].map(([v, l]) => (
           <button key={v} onClick={() => setFiltro(v)}
             className={`text-xs px-3 py-1.5 rounded-sm border transition-colors ${filtro === v ? "bg-afj-gold/10 border-afj-gold/40 text-afj-gold" : "border-afj-cream-dark text-afj-black/50 hover:border-afj-gold/30"}`}>
             {l}
           </button>
         ))}
+        <span className="w-px h-5 bg-afj-cream-dark mx-1" />
+        <button onClick={() => setSomenteMeus(!somenteMeus)}
+          className={`text-xs px-3 py-1.5 rounded-sm border transition-colors ${somenteMeus ? "bg-afj-gold/10 border-afj-gold/40 text-afj-gold font-semibold" : "border-afj-cream-dark text-afj-black/50 hover:border-afj-gold/30"}`}>
+          Meus processos
+        </button>
       </div>
 
       {loading ? (
