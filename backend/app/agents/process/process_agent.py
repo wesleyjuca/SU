@@ -251,38 +251,38 @@ class ProcessAgent(BaseAgent):
         )
 
     async def _search_by_oab(self, ctx: AgentContext, task: dict) -> AgentResult:
-        """Busca processos vinculados a uma OAB específica e salva no banco."""
+        """Captura processos de uma OAB via Comunica/DJEN (fonte pública).
+
+        Nota: o DataJud público não expõe partes/advogados e o PJe/ESAJ exigem
+        login — por isso a busca por OAB usa a Comunica, mesma fonte do monitor
+        de intimações. Para andamentos (fetch_movements) o DataJud segue válido.
+        """
+        from datetime import date, timedelta
+        from app.integrations.dje.comunica import buscar_comunicacoes
+
         oab = task.get("oab")
-        uf = task.get("uf", "")
-        tribunal = task.get("tribunal")
-        tenant_id_str = task.get("_tenant_id")
+        uf = (task.get("uf") or "").upper()
+        tenant_id_str = task.get("_tenant_id") or (str(ctx.tenant_id) if ctx.tenant_id else None)
 
-        if not oab:
-            return AgentResult(status=AgentStatus.FAILED, agent_name=self.name, error="oab é obrigatório")
+        if not oab or not uf:
+            return AgentResult(status=AgentStatus.FAILED, agent_name=self.name, error="oab e uf são obrigatórios")
 
-        # Se tribunal específico fornecido, busca nele; caso contrário busca em todos os tribunais da UF
-        if tribunal:
-            tribunais_busca = [tribunal.upper()]
-        else:
-            uf_upper = uf.upper() if uf else ""
-            tribunais_busca = UF_TO_TRIBUNAIS.get(uf_upper, [f"TJ{uf_upper}"] if uf_upper else ["TJSP"])
+        hoje = date.today()
+        inicio = hoje - timedelta(days=int(task.get("dias_retro", 365)))
+        comunicacoes = await buscar_comunicacoes(oab, uf, inicio, hoje, max_paginas=20)
 
-        todos_processos: list[str] = []
-        for trib in tribunais_busca:
-            client = self._get_tribunal_client(trib)
-            try:
-                processos = await client.search_by_oab(oab, uf)
-                todos_processos.extend(processos)
-            except Exception as exc:
-                log.warning("oab_search_tribunal_failed", tribunal=trib, oab=oab, error=str(exc))
+        # Processos distintos (número com máscara) e o tribunal de cada um.
+        vistos: dict[str, str] = {}
+        for c in comunicacoes:
+            if c.numero_cnj and c.numero_cnj not in vistos:
+                vistos[c.numero_cnj] = c.numero_cnj_fmt or c.numero_cnj
 
-        # Persistir processos encontrados
         salvos = 0
-        if todos_processos and tenant_id_str:
+        if vistos and tenant_id_str:
             salvos = await self._save_processes_from_oab(
-                processos_numeros=todos_processos,
-                tribunal=tribunais_busca[0] if len(tribunais_busca) == 1 else "VÁRIOS",
-                oab=oab,
+                processos_numeros=list(vistos.values()),
+                tribunal="VÁRIOS",
+                oab=f"{oab}/{uf}",
                 uf=uf,
                 tenant_id=uuid.UUID(tenant_id_str),
             )
@@ -293,9 +293,9 @@ class ProcessAgent(BaseAgent):
             output={
                 "oab": oab,
                 "uf": uf,
-                "processos_encontrados": len(todos_processos),
+                "processos_encontrados": len(vistos),
                 "processos_salvos": salvos,
-                "numeros_cnj": todos_processos[:50],  # limita payload
+                "numeros_cnj": list(vistos.values())[:50],
             },
         )
 

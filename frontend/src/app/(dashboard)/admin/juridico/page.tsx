@@ -86,8 +86,10 @@ export default function JuridicoPage() {
     try {
       const res = await fetch("/api/v1/tenant/oabs/capturar", { method: "POST", headers: authH() });
       const d = await res.json().catch(() => ({}));
-      if (res.ok) toast.success(d.message || "Captura iniciada.");
-      else toast.error(d.detail || "Erro ao iniciar captura.");
+      if (res.ok) {
+        if (d.processos_criados > 0) toast.success(d.message || "Processos capturados.");
+        else toast.warning(d.message || "Nenhum processo novo encontrado.");
+      } else toast.error(d.detail || "Erro na captura.");
     } catch { toast.error("Falha de conexão."); }
     finally { setCapturando(false); }
   }

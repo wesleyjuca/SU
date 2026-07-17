@@ -8,7 +8,7 @@ import {
   LayoutDashboard, Scale, FileText, Users, FolderOpen,
   Bot, CheckSquare, DollarSign, Shield, Shapes, Settings,
   Bell, Search, ChevronRight, FileEdit, Menu, X, LogOut, BarChart2, CalendarClock, BookOpen,
-  Moon, Sun, Activity, Users2, Palette, KeyRound, GraduationCap, Compass, Coins, ShieldCheck, Plug, Gauge, Building2, Receipt, Gavel, MonitorPlay, Newspaper, Briefcase
+  Moon, Sun, Activity, Users2, Palette, KeyRound, GraduationCap, Compass, Coins, ShieldCheck, Plug, Gauge, Building2, Receipt, Gavel, MonitorPlay, Newspaper, Briefcase, ExternalLink
 } from "lucide-react";
 import { useApprovalCount } from "@/hooks/useApprovals";
 import { useNotifications } from "@/hooks/useNotifications";
@@ -60,7 +60,7 @@ const navSections = [
       { href: "/financeiro", label: "Financeiro", icon: DollarSign, roles: GESTAO },
       { href: "/relatorios", label: "Relatórios", icon: BarChart2, roles: GESTAO },
       { href: "/custos-ia", label: "Custos de IA", icon: Coins, roles: ["ADMIN", "SOCIO"] },
-      { href: "/tv", label: "Painel TV", icon: MonitorPlay, roles: GESTAO },
+      { href: "/tv", label: "Painel TV", icon: MonitorPlay, roles: GESTAO, newTab: true },
     ],
   },
   {
@@ -205,15 +205,19 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                 <div className="space-y-0.5">
                   {visibleItems.map((item) => {
                     const Icon = item.icon;
-                    const isActive = pathname === item.href || pathname.startsWith(item.href + "/");
+                    const newTab = "newTab" in item && item.newTab === true;
+                    const isActive = !newTab && (pathname === item.href || pathname.startsWith(item.href + "/"));
                     return (
                       <Link
                         key={item.href}
                         href={item.href}
+                        target={newTab ? "_blank" : undefined}
+                        rel={newTab ? "noopener noreferrer" : undefined}
                         className={`afj-sidebar-nav-item ${isActive ? "active" : ""}`}
                       >
                         <Icon size={16} />
                         <span>{item.label}</span>
+                        {newTab && <ExternalLink size={11} className="ml-auto text-afj-cream/30" />}
                         {isActive && <ChevronRight size={12} className="ml-auto text-afj-gold/60" />}
                       </Link>
                     );
