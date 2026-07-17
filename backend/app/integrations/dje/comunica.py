@@ -71,13 +71,28 @@ def _normalize(item: dict) -> Comunicacao:
     )
 
 
+def _extrai_itens(data) -> list:
+    """Extrai a lista de itens da resposta (formato varia por edição da API)."""
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        return data.get("items") or data.get("content") or data.get("comunicacoes") or []
+    return []
+
+
 async def buscar_comunicacoes(
     oab_numero: str,
     oab_uf: str,
     data_inicio: date,
     data_fim: date,
+    max_paginas: int = 1,
+    itens_por_pagina: int = 50,
 ) -> list[Comunicacao]:
     """Consulta a Comunica por OAB e intervalo de disponibilização.
+
+    `max_paginas` controla quantas páginas varrer (1 = comportamento antigo, p/ a
+    varredura diária do DJe; a captura por OAB usa um valor maior). Para de paginar
+    assim que uma página vem incompleta/vazia.
 
     Retorna [] em qualquer falha (host inacessível no sandbox, timeout, formato
     inesperado). Em produção (Railway), roda de verdade.
@@ -85,35 +100,36 @@ async def buscar_comunicacoes(
     numero = _digits(oab_numero)
     if not numero or not oab_uf:
         return []
-    params = {
-        "numeroOab": numero,
-        "ufOab": oab_uf.upper(),
-        "dataDisponibilizacaoInicio": data_inicio.isoformat(),
-        "dataDisponibilizacaoFim": data_fim.isoformat(),
-        "itensPorPagina": 50,
-        "pagina": 1,
-    }
+
+    out: list[Comunicacao] = []
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-            resp = await client.get(COMUNICA_URL, params=params)
-            if resp.status_code != 200:
-                log.warning("comunica_http", status=resp.status_code, oab=numero, uf=oab_uf)
-                return []
-            data = resp.json()
+            for pagina in range(1, max(1, max_paginas) + 1):
+                params = {
+                    "numeroOab": numero,
+                    "ufOab": oab_uf.upper(),
+                    "dataDisponibilizacaoInicio": data_inicio.isoformat(),
+                    "dataDisponibilizacaoFim": data_fim.isoformat(),
+                    "itensPorPagina": itens_por_pagina,
+                    "pagina": pagina,
+                }
+                resp = await client.get(COMUNICA_URL, params=params)
+                if resp.status_code != 200:
+                    log.warning("comunica_http", status=resp.status_code, oab=numero, uf=oab_uf, pagina=pagina)
+                    break
+                itens = _extrai_itens(resp.json())
+                for it in itens:
+                    if isinstance(it, dict):
+                        try:
+                            out.append(_normalize(it))
+                        except Exception:
+                            continue
+                # Página incompleta → não há próxima.
+                if len(itens) < itens_por_pagina:
+                    break
     except Exception as exc:
         log.warning("comunica_falhou", error=str(exc), oab=numero, uf=oab_uf)
-        return []
+        return out
 
-    # A resposta pode vir como {"items": [...]} , {"content": [...]} ou lista pura.
-    itens = data if isinstance(data, list) else (
-        data.get("items") or data.get("content") or data.get("comunicacoes") or []
-    )
-    out: list[Comunicacao] = []
-    for it in itens:
-        if isinstance(it, dict):
-            try:
-                out.append(_normalize(it))
-            except Exception:
-                continue
     log.info("comunica_ok", oab=numero, uf=oab_uf, encontradas=len(out))
     return out

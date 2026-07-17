@@ -1,5 +1,5 @@
 """Endpoints de configuração de tenant/escritório."""
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel, EmailStr
@@ -425,69 +425,47 @@ async def update_oabs(
     return {"oabs": itens}
 
 
-@router.post("/oabs/capturar", status_code=202)
+@router.post("/oabs/capturar")
 async def capturar_processos_oabs(
-    background_tasks: BackgroundTasks,
     current_user: User = Depends(require_role("ADMIN")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Dispara a captura de processos (search_by_oab) para cada OAB cadastrada."""
-    import uuid as _uuid
-    from app.services.ai_budget import enforce_budget
-    from app.models.agent_run import AgentRun
-    from app.agents.brain.context import AgentContext
-    from app.api.v1.agents import _run_agent_task
+    """Captura processos das OABs do escritório via Comunica/DJEN (fonte pública).
+
+    Roda de forma síncrona (não usa IA) e retorna a contagem do que foi criado.
+    Idempotente — só cria processos que ainda não existem no escritório.
+    """
+    from app.services.oab_capture import capturar_por_oab
 
     _, config = await _get_or_create_config(db, current_user)
-    oabs = (config.extra_data or {}).get("oabs_monitoradas", [])
-    if not oabs:
-        raise HTTPException(status_code=422, detail="Nenhuma OAB cadastrada. Adicione as OABs dos sócios primeiro.")
+    oabs_cfg = (config.extra_data or {}).get("oabs_monitoradas", [])
+    # Também vale se houver advogados com OAB cadastrada (mesmo sem OAB avulsa).
+    from sqlalchemy import func
+    tem_user_oab = (await db.execute(
+        select(func.count(User.id)).where(
+            User.tenant_id == current_user.tenant_id,
+            User.oab_number.isnot(None),
+            User.is_active == True,  # noqa: E712
+        )
+    )).scalar_one() or 0
+    if not oabs_cfg and not tem_user_oab:
+        raise HTTPException(
+            status_code=422,
+            detail="Nenhuma OAB disponível. Cadastre as OABs dos sócios ou dos advogados com login.",
+        )
 
-    await enforce_budget(db, current_user.id, current_user.tenant_id)
-
-    run_ids: list[str] = []
-    for o in oabs:
-        run_id = _uuid.uuid4()
-        task_input = {"oab": o.get("numero"), "uf": o.get("uf"), "_tenant_id": str(current_user.tenant_id)}
-        db.add(AgentRun(
-            id=run_id,
-            agent_name="orchestration_agent",
-            trigger_type="MANUAL",
-            triggered_by=current_user.id,
-            input_data=task_input,
-            status="RUNNING",
-            tenant_id=current_user.tenant_id,
-        ))
-        try:
-            from app.workers.tasks.agent_tasks import run_agent_task
-            run_agent_task.delay(
-                run_id=str(run_id),
-                task_type="search_by_oab",
-                task_input=task_input,
-                triggered_by=str(current_user.id),
-                process_id=None,
-                client_id=None,
-                priority="NORMAL",
-            )
-        except Exception:
-            ctx = AgentContext(
-                run_id=run_id,
-                triggered_by=current_user.id,
-                task_type="search_by_oab",
-                task_input=task_input,
-                priority="NORMAL",
-                tenant_id=current_user.tenant_id,
-                process_id=None,
-                client_id=None,
-            )
-            background_tasks.add_task(_run_agent_task, ctx, str(run_id))
-        run_ids.append(str(run_id))
-
-    return {
-        "disparadas": len(run_ids),
-        "run_ids": run_ids,
-        "message": f"Captura iniciada para {len(run_ids)} OAB(s). Acompanhe em Agentes IA.",
-    }
+    resultado = await capturar_por_oab(
+        db, current_user.tenant_id, dias_retro=365, triggered_by=current_user.id
+    )
+    encontrados = resultado["processos_encontrados"]
+    criados = resultado["processos_criados"]
+    if criados:
+        msg = f"{criados} novo(s) processo(s) capturado(s) de {resultado['oabs']} OAB(s)."
+    elif encontrados:
+        msg = f"{encontrados} processo(s) encontrado(s) — todos já cadastrados."
+    else:
+        msg = "Nenhum processo encontrado no período para as OABs do escritório."
+    return {**resultado, "message": msg}
 
 
 # ─── Filiais self-serve (plano ENTERPRISE) ───────────────────────────────────
