@@ -45,6 +45,46 @@ export default function ProcessoDetailPage() {
   const [calc, setCalc] = useState({ data_intimacao: "", dias: "", dias_uteis: true });
   const [calcResult, setCalcResult] = useState<{ data_prazo: string; feriados_no_periodo: number; dias_uteis: boolean } | null>(null);
   const [calculando, setCalculando] = useState(false);
+  // Equipe do processo (responsável + colaboradores)
+  const [colegas, setColegas] = useState<{ id: string; full_name: string; role: string; oab: string | null }[]>([]);
+  const [editandoEquipe, setEditandoEquipe] = useState(false);
+  const [equipeForm, setEquipeForm] = useState<{ responsavel_id: string; equipe: string[] }>({ responsavel_id: "", equipe: [] });
+  const [salvandoEquipe, setSalvandoEquipe] = useState(false);
+
+  async function fetchColegas() {
+    const token = localStorage.getItem("afj_access_token");
+    const res = await fetch("/api/v1/users/colegas", { headers: { Authorization: `Bearer ${token}` } });
+    if (res.ok) setColegas(await res.json());
+  }
+
+  function abrirEditorEquipe() {
+    setEquipeForm({
+      responsavel_id: processo?.responsavel_id ?? "",
+      equipe: (processo?.equipe ?? []).filter((m) => m.papel !== "RESPONSAVEL").map((m) => m.id),
+    });
+    if (colegas.length === 0) fetchColegas();
+    setEditandoEquipe(true);
+  }
+
+  async function salvarEquipe() {
+    if (!equipeForm.responsavel_id) { toast.error("Escolha o advogado responsável."); return; }
+    setSalvandoEquipe(true);
+    try {
+      const token = localStorage.getItem("afj_access_token");
+      const res = await fetch(`/api/v1/processes/${id}/equipe`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify(equipeForm),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (res.ok) {
+        toast.success("Equipe do processo atualizada.");
+        setProcesso(d);
+        setEditandoEquipe(false);
+      } else toast.error(d.detail || "Erro ao salvar a equipe.");
+    } catch { toast.error("Erro de conexão."); }
+    finally { setSalvandoEquipe(false); }
+  }
 
   useEffect(() => {
     if (id) fetchAll();
@@ -269,6 +309,34 @@ export default function ProcessoDetailPage() {
                 </div>
               ))}
             </div>
+          </div>
+
+          {/* Equipe do processo */}
+          <div className="afj-card p-4">
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="font-semibold text-afj-black text-sm">Equipe do Processo</h2>
+              <button onClick={abrirEditorEquipe} className="tap-target text-afj-black/30 hover:text-afj-gold" title="Editar equipe" aria-label="Editar equipe do processo">
+                <Edit3 size={14} />
+              </button>
+            </div>
+            {(processo.responsavel_nome || (processo.equipe ?? []).length > 0) ? (
+              <div className="space-y-1.5 text-sm">
+                {processo.responsavel_nome && (
+                  <div className="flex justify-between gap-2">
+                    <span className="text-afj-black font-medium text-xs">{processo.responsavel_nome}</span>
+                    <span className="text-[10px] font-semibold uppercase tracking-wider text-afj-gold">Responsável</span>
+                  </div>
+                )}
+                {(processo.equipe ?? []).filter((m) => m.papel !== "RESPONSAVEL").map((m) => (
+                  <div key={m.id} className="flex justify-between gap-2">
+                    <span className="text-afj-black/70 text-xs">{m.nome}</span>
+                    <span className="text-[10px] uppercase tracking-wider text-afj-black/35">Colaborador</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-afj-black/40">Nenhum advogado atribuído — clique no lápis para definir a equipe.</p>
+            )}
           </div>
 
           {/* Próximo prazo */}
@@ -539,6 +607,57 @@ export default function ProcessoDetailPage() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: equipe do processo */}
+      {editandoEquipe && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => !salvandoEquipe && setEditandoEquipe(false)}>
+          <div className="bg-white rounded-sm p-6 w-full max-w-md shadow-2xl max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <h2 className="font-display text-lg font-semibold text-afj-black mb-1">Equipe do processo</h2>
+            <p className="text-xs text-afj-black/45 mb-4">Defina o responsável e os colaboradores — cada advogado vê os próprios processos em &quot;Meus&quot;.</p>
+
+            <label className="block text-xs font-semibold text-afj-black/50 uppercase tracking-wider mb-1">Advogado responsável</label>
+            <select
+              value={equipeForm.responsavel_id}
+              onChange={(e) => setEquipeForm((f) => ({ ...f, responsavel_id: e.target.value, equipe: f.equipe.filter((id2) => id2 !== e.target.value) }))}
+              className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm bg-white focus:outline-none focus:border-afj-gold mb-4"
+            >
+              <option value="">Selecione…</option>
+              {colegas.map((c) => (
+                <option key={c.id} value={c.id}>{c.full_name}{c.oab ? ` — OAB ${c.oab}` : ""}</option>
+              ))}
+            </select>
+
+            <label className="block text-xs font-semibold text-afj-black/50 uppercase tracking-wider mb-1">Colaboradores</label>
+            <div className="border border-afj-cream-dark rounded-sm max-h-48 overflow-y-auto mb-5 divide-y divide-afj-cream-dark/60">
+              {colegas.filter((c) => c.id !== equipeForm.responsavel_id).map((c) => (
+                <label key={c.id} className="flex items-center gap-2 px-3 py-2 text-sm cursor-pointer hover:bg-afj-cream/50">
+                  <input
+                    type="checkbox"
+                    className="accent-afj-gold"
+                    checked={equipeForm.equipe.includes(c.id)}
+                    onChange={(e) =>
+                      setEquipeForm((f) => ({
+                        ...f,
+                        equipe: e.target.checked ? [...f.equipe, c.id] : f.equipe.filter((id2) => id2 !== c.id),
+                      }))
+                    }
+                  />
+                  <span className="text-afj-black/80">{c.full_name}</span>
+                  <span className="text-[10px] text-afj-black/35 ml-auto uppercase">{c.role}</span>
+                </label>
+              ))}
+              {colegas.length === 0 && <p className="text-xs text-afj-black/40 p-3">Carregando colaboradores…</p>}
+            </div>
+
+            <div className="flex gap-2 justify-end">
+              <button onClick={() => setEditandoEquipe(false)} disabled={salvandoEquipe} className="btn-afj-outline text-sm py-2 px-4 rounded-sm">Cancelar</button>
+              <button onClick={salvarEquipe} disabled={salvandoEquipe} className="btn-afj-primary text-sm py-2 px-4 rounded-sm flex items-center gap-2">
+                {salvandoEquipe ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle size={14} />} Salvar equipe
+              </button>
+            </div>
           </div>
         </div>
       )}

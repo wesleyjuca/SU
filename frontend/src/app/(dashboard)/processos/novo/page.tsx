@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
@@ -59,6 +59,17 @@ export default function NovoProcessoPage() {
   const [apiError, setApiError] = useState("");
   const [monitoringActive, setMonitoringActive] = useState(true);
   const [vara, setVara] = useState("");
+  const [colegas, setColegas] = useState<{ id: string; full_name: string; oab: string | null }[]>([]);
+  const [responsavelId, setResponsavelId] = useState("");
+  const [equipe, setEquipe] = useState<string[]>([]);
+
+  useEffect(() => {
+    const token = localStorage.getItem("afj_access_token");
+    fetch("/api/v1/users/colegas", { headers: { Authorization: `Bearer ${token}` } })
+      .then((r) => (r.ok ? r.json() : []))
+      .then(setColegas)
+      .catch(() => setColegas([]));
+  }, []);
 
   const {
     register,
@@ -76,7 +87,13 @@ export default function NovoProcessoPage() {
       const res = await fetch("/api/v1/processes", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ ...data, vara, monitoring_active: monitoringActive }),
+        body: JSON.stringify({
+          ...data,
+          vara,
+          monitoring_active: monitoringActive,
+          ...(responsavelId ? { responsavel_id: responsavelId } : {}),
+          ...(equipe.length ? { equipe: equipe.filter((id) => id !== responsavelId) } : {}),
+        }),
       });
       if (res.ok) {
         router.push("/processos");
@@ -183,6 +200,39 @@ export default function NovoProcessoPage() {
               className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold resize-none"
             />
           </div>
+
+          {colegas.length > 0 && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
+              <div>
+                <label className="text-xs text-afj-black/60 block mb-1">Advogado responsável</label>
+                <select
+                  value={responsavelId}
+                  onChange={(e) => setResponsavelId(e.target.value)}
+                  className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold bg-white"
+                >
+                  <option value="">Eu mesmo (padrão)</option>
+                  {colegas.map((c) => (
+                    <option key={c.id} value={c.id}>{c.full_name}{c.oab ? ` — OAB ${c.oab}` : ""}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs text-afj-black/60 block mb-1">Equipe (colaboradores)</label>
+                <div className="border border-afj-cream-dark rounded-sm px-3 py-2 max-h-28 overflow-y-auto space-y-1">
+                  {colegas.filter((c) => c.id !== responsavelId).map((c) => (
+                    <label key={c.id} className="flex items-center gap-2 text-sm text-afj-black/70 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={equipe.includes(c.id)}
+                        onChange={(e) => setEquipe(e.target.checked ? [...equipe, c.id] : equipe.filter((id) => id !== c.id))}
+                      />
+                      {c.full_name}
+                    </label>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
 
           <label className="flex items-center gap-2 text-sm text-afj-black/70 cursor-pointer">
             <input

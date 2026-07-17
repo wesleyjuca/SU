@@ -48,6 +48,7 @@ def _to_dict(i: Intimacao) -> dict:
 @router.get("")
 async def list_publicacoes(
     status: str | None = Query(default=None),
+    mine: bool = Query(default=False, description="Somente intimações dos meus processos"),
     limit: int = Query(default=100, le=300),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -60,6 +61,19 @@ async def list_publicacoes(
     )
     if status:
         q = q.where(Intimacao.status == status)
+    if mine:
+        from app.models.process import LegalProcess, ProcessTeamMember
+        from sqlalchemy import or_
+        meus = select(LegalProcess.id).where(
+            LegalProcess.tenant_id == current_user.tenant_id,
+            or_(
+                LegalProcess.responsavel_id == current_user.id,
+                LegalProcess.id.in_(
+                    select(ProcessTeamMember.process_id).where(ProcessTeamMember.user_id == current_user.id)
+                ),
+            ),
+        )
+        q = q.where(Intimacao.process_id.in_(meus))
     rows = (await db.execute(q)).scalars().all()
     return [_to_dict(i) for i in rows]
 

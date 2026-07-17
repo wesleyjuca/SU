@@ -120,9 +120,18 @@ async def scan_publicacoes(db, tenant_id: uuid.UUID | None = None, dias_retro: i
                         tipo="INTIMACAO",
                         documento_url=c.link,
                     ))
+                # Notifica o responsável E toda a equipe do processo (dedup).
+                from app.models.process import ProcessTeamMember
+                equipe_ids = {
+                    r[0] for r in (await db.execute(
+                        select(ProcessTeamMember.user_id).where(ProcessTeamMember.process_id == process_id)
+                    )).all()
+                }
                 if responsavel_id:
+                    equipe_ids.add(responsavel_id)
+                for uid in equipe_ids:
                     db.add(Notification(
-                        user_id=responsavel_id,
+                        user_id=uid,
                         tenant_id=t_id,
                         tipo="NOVO_ANDAMENTO",
                         titulo=f"Nova intimação: {c.numero_cnj_fmt or 'processo'}",

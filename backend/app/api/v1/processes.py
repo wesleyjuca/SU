@@ -8,7 +8,7 @@ import uuid
 from app.db.base import get_db
 from app.dependencies import get_current_user, require_role
 from app.models.user import User
-from app.models.process import LegalProcess, ProcessMovement, ProcessDeadline
+from app.models.process import LegalProcess, ProcessMovement, ProcessDeadline, ProcessTeamMember
 from app.core.exceptions import NotFoundError
 
 router = APIRouter(prefix="/processes", tags=["processes"])
@@ -30,6 +30,14 @@ class ProcessCreate(BaseModel):
     oab_responsavel: str | None = None
     monitoring_active: bool = True
     desfecho: str | None = None  # EXITO, PARCIAL, ACORDO, DERROTA
+    responsavel_id: str | None = None       # advogado principal (default: quem cria)
+    equipe: list[str] | None = None         # demais advogados do processo
+
+
+class TeamMemberOut(BaseModel):
+    id: str
+    nome: str
+    papel: str
 
 
 class ProcessResponse(BaseModel):
@@ -43,15 +51,87 @@ class ProcessResponse(BaseModel):
     valor_causa: float | None
     client_id: str | None
     responsavel_id: str | None
+    responsavel_nome: str | None = None
+    equipe: list[TeamMemberOut] = []
     proximo_prazo_at: str | None
     ultimo_andamento_at: str | None
     monitoring_active: bool
     created_at: str
 
 
+async def _validar_advogados_do_tenant(db: AsyncSession, tenant_id, user_ids: list[uuid.UUID]) -> dict:
+    """Retorna {id: nome} dos usuários que pertencem ao tenant; 422 se algum não pertencer."""
+    if not user_ids:
+        return {}
+    rows = (await db.execute(
+        select(User.id, User.full_name).where(
+            User.id.in_(user_ids),
+            User.tenant_id == tenant_id,
+            User.is_active == True,  # noqa: E712
+        )
+    )).all()
+    found = {r[0]: r[1] for r in rows}
+    faltantes = set(user_ids) - set(found)
+    if faltantes:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=422, detail="Advogado(s) não encontrado(s) neste escritório.")
+    return found
+
+
+async def _set_team(db: AsyncSession, process: LegalProcess, tenant_id,
+                    responsavel_id: uuid.UUID | None, equipe_ids: list[uuid.UUID]) -> None:
+    """Define a equipe do processo. O responsável entra como RESPONSAVEL e é
+    espelhado em `process.responsavel_id` (retrocompat); os demais, COLABORADOR."""
+    todos = list({*(equipe_ids or []), *( [responsavel_id] if responsavel_id else [] )})
+    await _validar_advogados_do_tenant(db, tenant_id, todos)
+
+    # substitui a equipe atual
+    from sqlalchemy import delete as sa_delete
+    await db.execute(sa_delete(ProcessTeamMember).where(ProcessTeamMember.process_id == process.id))
+    if responsavel_id:
+        process.responsavel_id = responsavel_id
+        db.add(ProcessTeamMember(process_id=process.id, user_id=responsavel_id, papel="RESPONSAVEL"))
+    for uid in equipe_ids or []:
+        if uid != responsavel_id:
+            db.add(ProcessTeamMember(process_id=process.id, user_id=uid, papel="COLABORADOR"))
+    await db.flush()
+
+
+async def _to_responses(db: AsyncSession, processes: list[LegalProcess]) -> list[ProcessResponse]:
+    """Converte processos em respostas, resolvendo nomes do responsável e da equipe
+    em 2 queries (batch) — sem N+1."""
+    if not processes:
+        return []
+    ids = [p.id for p in processes]
+    team_rows = (await db.execute(
+        select(ProcessTeamMember.process_id, ProcessTeamMember.user_id, ProcessTeamMember.papel, User.full_name)
+        .join(User, User.id == ProcessTeamMember.user_id)
+        .where(ProcessTeamMember.process_id.in_(ids))
+    )).all()
+    team_map: dict = {}
+    for pid, uid_, papel, nome in team_rows:
+        team_map.setdefault(pid, []).append(TeamMemberOut(id=str(uid_), nome=nome, papel=papel))
+
+    resp_ids = {p.responsavel_id for p in processes if p.responsavel_id}
+    nomes = {}
+    if resp_ids:
+        nomes = dict((await db.execute(
+            select(User.id, User.full_name).where(User.id.in_(resp_ids))
+        )).all())
+
+    out = []
+    for p in processes:
+        base = _to_response(p)
+        base.responsavel_nome = nomes.get(p.responsavel_id)
+        base.equipe = team_map.get(p.id, [])
+        out.append(base)
+    return out
+
+
 @router.get("/agenda")
 async def get_agenda(
     dias: int = Query(default=30, ge=1, le=90),
+    mine: bool = Query(default=False, description="Somente prazos dos meus processos/sob minha responsabilidade"),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -60,7 +140,7 @@ async def get_agenda(
     now = datetime.now(timezone.utc).date()
     cutoff = now + timedelta(days=dias)
 
-    q = await db.execute(
+    query = (
         select(ProcessDeadline, LegalProcess)
         .join(LegalProcess, ProcessDeadline.process_id == LegalProcess.id)
         .where(
@@ -70,6 +150,13 @@ async def get_agenda(
         )
         .order_by(ProcessDeadline.data_prazo.asc())
     )
+    if mine:
+        from sqlalchemy import or_
+        query = query.where(or_(
+            ProcessDeadline.responsavel_id == current_user.id,
+            _mine_filter(current_user.id),
+        ))
+    q = await db.execute(query)
     rows = q.all()
     return [
         {
@@ -88,12 +175,24 @@ async def get_agenda(
     ]
 
 
+def _mine_filter(user_id):
+    """Processos onde sou o responsável OU estou na equipe (Minha Área)."""
+    from sqlalchemy import or_
+    return or_(
+        LegalProcess.responsavel_id == user_id,
+        LegalProcess.id.in_(
+            select(ProcessTeamMember.process_id).where(ProcessTeamMember.user_id == user_id)
+        ),
+    )
+
+
 @router.get("", response_model=list[ProcessResponse])
 async def list_processes(
     tribunal: str | None = None,
     area_direito: str | None = None,
     situacao: str | None = None,
     client_id: str | None = None,
+    mine: bool = Query(default=False, description="Somente os processos do advogado logado"),
     limit: int = Query(default=50, le=200),
     offset: int = 0,
     current_user: User = Depends(get_current_user),
@@ -115,10 +214,12 @@ async def list_processes(
         query = query.where(LegalProcess.situacao == situacao)
     if client_id:
         query = query.where(LegalProcess.client_id == uuid.UUID(client_id))
+    if mine:
+        query = query.where(_mine_filter(current_user.id))
 
     result = await db.execute(query)
     processes = result.scalars().all()
-    return [_to_response(p) for p in processes]
+    return await _to_responses(db, list(processes))
 
 
 @router.post("", response_model=ProcessResponse, status_code=201)
@@ -127,15 +228,19 @@ async def create_process(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    responsavel = uuid.UUID(body.responsavel_id) if body.responsavel_id else current_user.id
+    equipe = [uuid.UUID(e) for e in (body.equipe or [])]
+
     process = LegalProcess(
-        **body.model_dump(exclude_none=True, exclude={"client_id"}),
-        responsavel_id=current_user.id,
+        **body.model_dump(exclude_none=True, exclude={"client_id", "responsavel_id", "equipe"}),
+        responsavel_id=responsavel,
         tenant_id=current_user.tenant_id,
         client_id=uuid.UUID(body.client_id) if body.client_id else None,
     )
     db.add(process)
     await db.flush()
-    return _to_response(process)
+    await _set_team(db, process, current_user.tenant_id, responsavel, equipe)
+    return (await _to_responses(db, [process]))[0]
 
 
 @router.get("/{process_id}", response_model=ProcessResponse)
@@ -153,7 +258,7 @@ async def get_process(
     process = result.scalar_one_or_none()
     if not process:
         raise NotFoundError("Processo", process_id)
-    return _to_response(process)
+    return (await _to_responses(db, [process]))[0]
 
 
 @router.get("/{process_id}/movements")
@@ -243,13 +348,48 @@ async def update_process(
     process = result.scalar_one_or_none()
     if not process:
         raise NotFoundError("Processo", process_id)
-    for field, value in body.model_dump(exclude_none=True).items():
+    for field, value in body.model_dump(exclude_none=True, exclude={"responsavel_id", "equipe"}).items():
         if field == "client_id" and value:
             setattr(process, field, uuid.UUID(value))
         else:
             setattr(process, field, value)
+    # Reatribuição de responsável/equipe (opcional no mesmo PUT)
+    if body.responsavel_id or body.equipe is not None:
+        responsavel = uuid.UUID(body.responsavel_id) if body.responsavel_id else process.responsavel_id
+        equipe = [uuid.UUID(e) for e in (body.equipe or [])]
+        await _set_team(db, process, current_user.tenant_id, responsavel, equipe)
     await db.flush()
-    return _to_response(process)
+    return (await _to_responses(db, [process]))[0]
+
+
+class TeamUpdate(BaseModel):
+    responsavel_id: str
+    equipe: list[str] = []
+
+
+@router.put("/{process_id}/equipe", response_model=ProcessResponse)
+async def set_process_team(
+    process_id: str,
+    body: TeamUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Define o advogado responsável e a equipe do processo (todos do tenant)."""
+    result = await db.execute(
+        select(LegalProcess).where(
+            LegalProcess.id == uuid.UUID(process_id),
+            LegalProcess.tenant_id == current_user.tenant_id,
+        )
+    )
+    process = result.scalar_one_or_none()
+    if not process:
+        raise NotFoundError("Processo", process_id)
+    await _set_team(
+        db, process, current_user.tenant_id,
+        uuid.UUID(body.responsavel_id),
+        [uuid.UUID(e) for e in body.equipe],
+    )
+    return (await _to_responses(db, [process]))[0]
 
 
 @router.delete("/{process_id}", status_code=204)

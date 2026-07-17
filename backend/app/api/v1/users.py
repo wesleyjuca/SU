@@ -339,6 +339,34 @@ async def update_me(
     return {"message": "Perfil atualizado"}
 
 
+@router.get("/colegas")
+async def list_colegas(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Lista reduzida dos colaboradores ativos do escritório (id, nome, papel,
+    OAB) — para o seletor de equipe do processo. Aberta a qualquer staff (o
+    router já barra CLIENT); a lista completa continua admin-only em GET /users."""
+    rows = (await db.execute(
+        select(User.id, User.full_name, User.role, User.oab_number, User.oab_uf)
+        .where(
+            User.tenant_id == current_user.tenant_id,
+            User.is_active == True,  # noqa: E712
+            User.role != "CLIENT",
+        )
+        .order_by(User.full_name.asc())
+    )).all()
+    return [
+        {
+            "id": str(r[0]),
+            "full_name": r[1],
+            "role": r[2],
+            "oab": f"{r[3]}/{r[4]}" if r[3] and r[4] else None,
+        }
+        for r in rows
+    ]
+
+
 @router.get("")
 async def list_users(
     search: str | None = None,
