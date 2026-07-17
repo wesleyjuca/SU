@@ -3,6 +3,7 @@ import { useState, useEffect } from "react";
 import {
   Users, Plus, Pencil, UserCheck, UserX, Copy, Check, Search,
   KeyRound, History, ChevronRight, X, Filter, ClipboardCheck, AlertTriangle,
+  ArrowRightLeft, Briefcase, Loader2,
 } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useUserStore } from "@/store";
@@ -101,6 +102,54 @@ export default function UsuariosPage() {
   const [resetting, setResetting] = useState(false);
   const [newTempPwd, setNewTempPwd] = useState("");
   const [resetCopied, setResetCopied] = useState(false);
+
+  // Reatribuição de carteira
+  const [carteiraUser, setCarteiraUser] = useState<UserItem | null>(null);
+  const [carteira, setCarteira] = useState<{ responsavel: number; responsavel_ativos: number; colaborador: number; prazos_pendentes: number } | null>(null);
+  const [paraId, setParaId] = useState("");
+  const [incluirColab, setIncluirColab] = useState(true);
+  const [apenasAtivos, setApenasAtivos] = useState(true);
+  const [transferindo, setTransferindo] = useState(false);
+  const [transfResult, setTransfResult] = useState<{ para: string; processos_responsavel: number; colaboracoes: number } | null>(null);
+  const [transfError, setTransfError] = useState("");
+
+  async function openCarteira(u: UserItem) {
+    setCarteiraUser(u);
+    setCarteira(null);
+    setParaId("");
+    setIncluirColab(true);
+    setApenasAtivos(true);
+    setTransfResult(null);
+    setTransfError("");
+    try {
+      const token = localStorage.getItem("afj_access_token");
+      const res = await fetch(`/api/v1/processes/carteira/${u.id}`, { headers: { Authorization: `Bearer ${token}` } });
+      if (res.ok) setCarteira(await res.json());
+    } catch { /* prévia opcional */ }
+  }
+
+  async function transferirCarteira() {
+    if (!carteiraUser || !paraId) return;
+    setTransferindo(true);
+    setTransfError("");
+    try {
+      const token = localStorage.getItem("afj_access_token");
+      const res = await fetch("/api/v1/processes/reatribuir", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          de_advogado_id: carteiraUser.id,
+          para_advogado_id: paraId,
+          incluir_colaboracoes: incluirColab,
+          apenas_ativos: apenasAtivos,
+        }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (res.ok) setTransfResult(d);
+      else setTransfError(d.detail || "Erro ao reatribuir a carteira.");
+    } catch { setTransfError("Falha de conexão."); }
+    finally { setTransferindo(false); }
+  }
 
   useEffect(() => {
     fetchUsers(0, false);
@@ -407,6 +456,16 @@ export default function UsuariosPage() {
                 >
                   <History size={13} />
                 </button>
+                {u.is_active && u.role !== "CLIENT" && (
+                  <button
+                    onClick={() => openCarteira(u)}
+                    className="text-afj-black/35 hover:text-afj-gold transition-colors p-2 rounded-sm hover:bg-afj-gold/5"
+                    aria-label="Transferir carteira"
+                    title="Transferir carteira (processos e prazos)"
+                  >
+                    <ArrowRightLeft size={13} />
+                  </button>
+                )}
                 {u.id !== me?.id && (
                   <button
                     onClick={() => handleUpdate(u.id, { is_active: !u.is_active })}
@@ -569,6 +628,82 @@ export default function UsuariosPage() {
                   </button>
                 </div>
               </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Modal — Transferir Carteira */}
+      {carteiraUser && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={(e) => { if (e.target === e.currentTarget) setCarteiraUser(null); }}>
+          <div className="bg-white rounded-sm shadow-xl max-w-md w-full p-6 space-y-4 max-h-[85vh] overflow-y-auto">
+            <h3 className="font-display text-lg font-semibold text-afj-black flex items-center gap-2">
+              <Briefcase size={18} className="text-afj-gold" /> Transferir carteira
+            </h3>
+
+            {transfResult ? (
+              <div className="space-y-4">
+                <div className="p-4 bg-green-50 border border-green-200 rounded-sm text-sm">
+                  <p className="font-semibold text-green-800 mb-1">Carteira transferida!</p>
+                  <p className="text-green-700 text-xs">
+                    {transfResult.processos_responsavel} processo(s) como responsável
+                    {transfResult.colaboracoes > 0 ? ` e ${transfResult.colaboracoes} como colaborador` : ""} agora são de <strong>{transfResult.para}</strong>.
+                  </p>
+                </div>
+                <button onClick={() => { setCarteiraUser(null); fetchUsers(0, false); }} className="w-full btn-afj-primary rounded-sm">Concluir</button>
+              </div>
+            ) : (
+              <>
+                <p className="text-xs text-afj-black/50">
+                  Transferir os processos e prazos pendentes de <strong>{carteiraUser.full_name}</strong> para outro advogado — útil quando alguém sai do escritório ou entra de licença.
+                </p>
+
+                {/* Prévia da carteira */}
+                <div className="grid grid-cols-3 gap-2">
+                  {[
+                    { label: "Responsável", value: carteira?.responsavel },
+                    { label: "Colaborador", value: carteira?.colaborador },
+                    { label: "Prazos pend.", value: carteira?.prazos_pendentes },
+                  ].map((k) => (
+                    <div key={k.label} className="border border-afj-cream-dark rounded-sm px-2 py-2 text-center">
+                      <p className="text-lg font-bold text-afj-black font-display">{carteira ? k.value : "—"}</p>
+                      <p className="text-[10px] text-afj-black/45 uppercase tracking-wide">{k.label}</p>
+                    </div>
+                  ))}
+                </div>
+
+                <div>
+                  <label className="text-[10px] text-afj-black/55 block mb-1 uppercase tracking-widest font-semibold">Transferir para</label>
+                  <select value={paraId} onChange={(e) => setParaId(e.target.value)}
+                    className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm bg-white focus:outline-none focus:border-afj-gold">
+                    <option value="">Selecione o advogado de destino...</option>
+                    {users.filter((x) => x.is_active && x.role !== "CLIENT" && x.id !== carteiraUser.id).map((x) => (
+                      <option key={x.id} value={x.id}>{x.full_name} — {x.role}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="flex items-center gap-2 text-sm text-afj-black/70 cursor-pointer">
+                    <input type="checkbox" checked={apenasAtivos} onChange={(e) => setApenasAtivos(e.target.checked)} />
+                    Apenas processos ativos/suspensos
+                  </label>
+                  <label className="flex items-center gap-2 text-sm text-afj-black/70 cursor-pointer">
+                    <input type="checkbox" checked={incluirColab} onChange={(e) => setIncluirColab(e.target.checked)} />
+                    Também transferir onde é colaborador
+                  </label>
+                </div>
+
+                {transfError && <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-sm px-3 py-2">{transfError}</p>}
+
+                <div className="flex gap-2 pt-1">
+                  <button onClick={() => setCarteiraUser(null)} className="flex-1 btn-afj-outline rounded-sm">Cancelar</button>
+                  <button onClick={transferirCarteira} disabled={transferindo || !paraId}
+                    className="flex-1 btn-afj-primary rounded-sm disabled:opacity-50 flex items-center justify-center gap-2">
+                    {transferindo ? <Loader2 size={14} className="animate-spin" /> : <ArrowRightLeft size={14} />} Transferir
+                  </button>
+                </div>
+              </>
             )}
           </div>
         </div>
