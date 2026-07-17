@@ -44,6 +44,20 @@ async def scan_publicacoes(db, tenant_id: uuid.UUID | None = None, dias_retro: i
         q = q.where(User.tenant_id == tenant_id)
     oabs = [(n, u, t) for (n, u, t) in (await db.execute(q)).all() if n and u and t]
 
+    # União com as OABs cadastradas no escritório (sócios sem login também
+    # capturam) — dedup por (número, UF, tenant).
+    from app.models.tenant import TenantConfig
+    cfg_q = select(TenantConfig.tenant_id, TenantConfig.extra_data)
+    if tenant_id:
+        cfg_q = cfg_q.where(TenantConfig.tenant_id == tenant_id)
+    vistos = {(_digits(n), (u or "").upper(), t) for (n, u, t) in oabs}
+    for t_id, extra in (await db.execute(cfg_q)).all():
+        for o in ((extra or {}).get("oabs_monitoradas") or []):
+            numero, uf = _digits(o.get("numero")), (o.get("uf") or "").strip().upper()
+            if numero and len(uf) == 2 and (numero, uf, t_id) not in vistos:
+                vistos.add((numero, uf, t_id))
+                oabs.append((numero, uf, t_id))
+
     # Cache do mapa CNJ→processo por tenant (evita recarregar por OAB).
     proc_cache: dict[uuid.UUID, dict[str, tuple]] = {}
 

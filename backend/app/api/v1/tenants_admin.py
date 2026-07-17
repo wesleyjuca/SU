@@ -24,6 +24,18 @@ router = APIRouter(prefix="/tenants", tags=["tenants-admin"])
 
 _ALPHABET = string.ascii_letters + string.digits + "!@#$"
 
+# Tiers de plano — limites derivados automaticamente (0 = ilimitado).
+# Custom override permitido: informe max_users explicitamente no create/patch.
+PLAN_TIERS: dict[str, dict[str, int]] = {
+    "STANDARD": {"max_users": 10, "max_storage_gb": 50},
+    "PRO": {"max_users": 25, "max_storage_gb": 200},
+    "ENTERPRISE": {"max_users": 0, "max_storage_gb": 0},  # ilimitado + filiais self-serve
+}
+
+
+def _tier_limits(plan: str | None) -> dict[str, int] | None:
+    return PLAN_TIERS.get((plan or "").strip().upper())
+
 
 def _slugify(name: str) -> str:
     base = re.sub(r"[^a-z0-9]+", "-", (name or "").strip().lower()).strip("-")
@@ -44,7 +56,7 @@ async def _unique_slug(db: AsyncSession, name: str) -> str:
 class TenantCreate(BaseModel):
     name: str
     plan: str = "STANDARD"
-    max_users: int = 10
+    max_users: int | None = None   # None → derivado do tier do plano
     admin_email: EmailStr
     admin_name: str
 
@@ -53,7 +65,7 @@ class UnitCreate(BaseModel):
     name: str
     unit_label: str
     plan: str = "STANDARD"
-    max_users: int = 10
+    max_users: int | None = None   # None → derivado do tier do plano
     admin_email: EmailStr
     admin_name: str
 
@@ -73,9 +85,13 @@ async def _provision(
         raise HTTPException(status_code=409, detail="Já existe um usuário com este e-mail.")
 
     slug = await _unique_slug(db, body.name)
+    tier = _tier_limits(body.plan) or PLAN_TIERS["STANDARD"]
     tenant = Tenant(
         id=uuid.uuid4(), name=body.name.strip(), slug=slug,
-        plan=body.plan, max_users=body.max_users, is_active=True,
+        plan=body.plan,
+        max_users=body.max_users if body.max_users is not None else tier["max_users"],
+        max_storage_gb=tier["max_storage_gb"],
+        is_active=True,
         parent_tenant_id=parent_tenant_id, unit_label=unit_label,
     )
     db.add(tenant)
@@ -174,6 +190,13 @@ async def update_tenant(
     updates = body.model_dump(exclude_none=True)
     if updates.get("is_active") is False and tenant.slug == DEFAULT_TENANT_SLUG:
         raise HTTPException(status_code=422, detail="O escritório raiz da plataforma não pode ser desativado.")
+
+    # Mudou o plano sem informar max_users? Re-deriva os limites do tier.
+    if "plan" in updates and "max_users" not in updates:
+        tier = _tier_limits(updates["plan"])
+        if tier:
+            updates["max_users"] = tier["max_users"]
+            updates["max_storage_gb"] = tier["max_storage_gb"]
 
     for field, value in updates.items():
         setattr(tenant, field, value)

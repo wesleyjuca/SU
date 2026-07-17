@@ -1,8 +1,8 @@
 """Endpoints de configuração de tenant/escritório."""
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
 from typing import Any
 
 from app.db.base import get_db
@@ -340,6 +340,209 @@ async def update_feriados(
     await db.flush()
     await invalidate_tenant_cache(tenant.slug)
     return {"feriados": itens}
+
+
+# ─── OABs monitoradas do escritório (sócios capturam mesmo sem login) ────────
+class OabItem(BaseModel):
+    numero: str
+    uf: str
+    nome: str | None = None
+
+
+class OabsUpdate(BaseModel):
+    oabs: list[OabItem]
+
+
+@router.get("/oabs")
+async def get_oabs(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """OABs monitoradas do escritório (varredura DJe + captura de processos)."""
+    _, config = await _get_or_create_config(db, current_user)
+    oabs = (config.extra_data or {}).get("oabs_monitoradas", [])
+    return {"oabs": oabs if isinstance(oabs, list) else []}
+
+
+@router.put("/oabs")
+async def update_oabs(
+    body: OabsUpdate,
+    current_user: User = Depends(require_role("ADMIN")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Salva as OABs monitoradas em TenantConfig.extra_data (JSONB), dedup por número+UF."""
+    import re as _re
+    itens: list[dict] = []
+    vistos: set[tuple[str, str]] = set()
+    for o in body.oabs:
+        numero = _re.sub(r"\D", "", o.numero or "")
+        uf = (o.uf or "").strip().upper()
+        if not numero or len(uf) != 2 or not uf.isalpha():
+            raise HTTPException(status_code=422, detail=f"OAB inválida: {o.numero}/{o.uf} (use número + UF de 2 letras).")
+        if (numero, uf) in vistos:
+            continue
+        vistos.add((numero, uf))
+        itens.append({"numero": numero, "uf": uf, "nome": (o.nome or "").strip() or None})
+
+    tenant, config = await _get_or_create_config(db, current_user)
+    meta = dict(config.extra_data or {})
+    meta["oabs_monitoradas"] = itens
+    config.extra_data = meta
+    await db.flush()
+    await invalidate_tenant_cache(tenant.slug)
+    return {"oabs": itens}
+
+
+@router.post("/oabs/capturar", status_code=202)
+async def capturar_processos_oabs(
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(require_role("ADMIN")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Dispara a captura de processos (search_by_oab) para cada OAB cadastrada."""
+    import uuid as _uuid
+    from app.services.ai_budget import enforce_budget
+    from app.models.agent_run import AgentRun
+    from app.agents.brain.context import AgentContext
+    from app.api.v1.agents import _run_agent_task
+
+    _, config = await _get_or_create_config(db, current_user)
+    oabs = (config.extra_data or {}).get("oabs_monitoradas", [])
+    if not oabs:
+        raise HTTPException(status_code=422, detail="Nenhuma OAB cadastrada. Adicione as OABs dos sócios primeiro.")
+
+    await enforce_budget(db, current_user.id, current_user.tenant_id)
+
+    run_ids: list[str] = []
+    for o in oabs:
+        run_id = _uuid.uuid4()
+        task_input = {"oab": o.get("numero"), "uf": o.get("uf"), "_tenant_id": str(current_user.tenant_id)}
+        db.add(AgentRun(
+            id=run_id,
+            agent_name="orchestration_agent",
+            trigger_type="MANUAL",
+            triggered_by=current_user.id,
+            input_data=task_input,
+            status="RUNNING",
+            tenant_id=current_user.tenant_id,
+        ))
+        try:
+            from app.workers.tasks.agent_tasks import run_agent_task
+            run_agent_task.delay(
+                run_id=str(run_id),
+                task_type="search_by_oab",
+                task_input=task_input,
+                triggered_by=str(current_user.id),
+                process_id=None,
+                client_id=None,
+                priority="NORMAL",
+            )
+        except Exception:
+            ctx = AgentContext(
+                run_id=run_id,
+                triggered_by=current_user.id,
+                task_type="search_by_oab",
+                task_input=task_input,
+                priority="NORMAL",
+                tenant_id=current_user.tenant_id,
+                process_id=None,
+                client_id=None,
+            )
+            background_tasks.add_task(_run_agent_task, ctx, str(run_id))
+        run_ids.append(str(run_id))
+
+    return {
+        "disparadas": len(run_ids),
+        "run_ids": run_ids,
+        "message": f"Captura iniciada para {len(run_ids)} OAB(s). Acompanhe em Agentes IA.",
+    }
+
+
+# ─── Filiais self-serve (plano ENTERPRISE) ───────────────────────────────────
+class MyUnitCreate(BaseModel):
+    name: str
+    unit_label: str
+    admin_email: EmailStr
+    admin_name: str
+
+
+def _plano_permite_filiais(plan: str | None) -> bool:
+    return (plan or "").strip().upper() in ("ENTERPRISE", "BANCA")
+
+
+async def _my_tenant(db: AsyncSession, current_user: User) -> Tenant:
+    tenant = None
+    if current_user.tenant_id:
+        tenant = (await db.execute(
+            select(Tenant).where(Tenant.id == current_user.tenant_id)
+        )).scalar_one_or_none()
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Escritório não encontrado.")
+    return tenant
+
+
+@router.get("/units")
+async def list_my_units(
+    current_user: User = Depends(require_role("ADMIN", "SOCIO")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Unidades (filiais) do meu escritório, com nº de usuários por unidade."""
+    from sqlalchemy import func as _func
+    tenant = await _my_tenant(db, current_user)
+    units = (await db.execute(
+        select(Tenant).where(Tenant.parent_tenant_id == tenant.id).order_by(Tenant.created_at)
+    )).scalars().all()
+    counts = dict((await db.execute(
+        select(User.tenant_id, _func.count(User.id))
+        .where(User.tenant_id.in_([u.id for u in units]), User.is_active == True)  # noqa: E712
+        .group_by(User.tenant_id)
+    )).all()) if units else {}
+    return {
+        "plano_permite_filiais": _plano_permite_filiais(tenant.plan),
+        "units": [
+            {
+                "id": str(u.id),
+                "name": u.name,
+                "unit_label": u.unit_label,
+                "is_active": u.is_active,
+                "users": int(counts.get(u.id, 0)),
+            }
+            for u in units
+        ],
+    }
+
+
+@router.post("/units", status_code=201)
+async def create_my_unit(
+    body: MyUnitCreate,
+    current_user: User = Depends(require_role("ADMIN")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Cria uma filial do próprio escritório (self-serve, plano ENTERPRISE).
+
+    A banca-mãe é SEMPRE o tenant do usuário (anti-escalada: um ADMIN não
+    consegue criar unidade sob outro escritório).
+    """
+    from app.api.v1.tenants_admin import UnitCreate, _provision
+
+    tenant = await _my_tenant(db, current_user)
+    if tenant.parent_tenant_id is not None:
+        raise HTTPException(status_code=422, detail="Uma unidade não pode criar sub-unidades (apenas 1 nível).")
+    if not _plano_permite_filiais(tenant.plan):
+        raise HTTPException(
+            status_code=403,
+            detail=f"Filiais estão disponíveis no plano ENTERPRISE (seu plano: {tenant.plan}). Fale com a plataforma para upgrade.",
+        )
+
+    unit_body = UnitCreate(
+        name=body.name,
+        unit_label=body.unit_label,
+        plan=tenant.plan,
+        max_users=tenant.max_users,
+        admin_email=body.admin_email,
+        admin_name=body.admin_name,
+    )
+    return await _provision(db, unit_body, parent_tenant_id=tenant.id, unit_label=body.unit_label.strip())
 
 
 @router.get("/usage")

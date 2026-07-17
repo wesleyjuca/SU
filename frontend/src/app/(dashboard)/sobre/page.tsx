@@ -71,6 +71,7 @@ const ROADMAP: { fase: string; itens: string; estado: Estado }[] = [
   { fase: "Ética, Controle & Integridade", itens: "Controles ativos + código de conduta, canal de denúncias, treinamentos", estado: "parcial" },
   { fase: "Monitoramento de Publicações (DJe)", itens: "Captura automática de intimações (Comunica/DJEN) por OAB → andamento + notificação; prazo por triagem", estado: "operacional" },
   { fase: "Equipe por processo + Minha Área", itens: "Responsável + colaboradores por processo; filtro \"Meus\" em Processos/Agenda/Publicações; painel pessoal do advogado", estado: "operacional" },
+  { fase: "OABs do escritório + planos + filiais", itens: "OABs dos sócios na varredura DJe e captura em massa; limites reais por plano (STANDARD/PRO/ENTERPRISE); filiais self-serve no ENTERPRISE", estado: "operacional" },
   { fase: "Segurança & Produção", itens: "Papéis/HITL blindados, worker em produção, tempo-real, CI com gates", estado: "operacional" },
   { fase: "Mobile / PWA / App nativo", itens: "PWA instalável e offline; base Capacitor pronta para publicar Android/iOS", estado: "operacional" },
   { fase: "Integrações Externas", itens: "WhatsApp, assinatura eletrônica, gateway de pagamento (aguardam credenciais)", estado: "planejado" },
