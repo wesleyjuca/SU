@@ -133,6 +133,7 @@ async def lifespan(app: FastAPI):
             # Fase 48 — faixas de alerta de prazo já enviadas (janela resiliente a downtime)
             "ALTER TABLE process_deadlines ADD COLUMN IF NOT EXISTS alertas_enviados JSONB DEFAULT '[]'::jsonb",
             "ALTER TABLE document_versions ADD COLUMN IF NOT EXISTS conteudo_texto TEXT",
+            "ALTER TABLE process_movements ADD COLUMN IF NOT EXISTS possivel_prazo BOOLEAN DEFAULT FALSE",
         ]:
             try:
                 async with engine.begin() as conn:

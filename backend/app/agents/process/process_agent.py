@@ -155,6 +155,7 @@ class ProcessAgent(BaseAgent):
 
         db, owned = await self._get_db()
         novos = 0
+        algum_prazo = False
         try:
             for mov, enriched in zip(movimentos, movimentos_com_resumo):
                 # Evitar duplicatas por data + descrição
@@ -168,6 +169,9 @@ class ProcessAgent(BaseAgent):
                 if existing.scalar_one_or_none():
                     continue
 
+                from app.utils.prazo import movimento_sugere_prazo
+                sugere = movimento_sugere_prazo(f"{mov.descricao} {enriched.get('ai_resumo') or ''}")
+                algum_prazo = algum_prazo or sugere
                 pm = ProcessMovement(
                     process_id=process_id,
                     data_movimento=mov.data,
@@ -176,6 +180,7 @@ class ProcessAgent(BaseAgent):
                     documento_url=mov.documento_url,
                     raw_html=str(mov.raw_data) if mov.raw_data else None,
                     ai_summary=enriched.get("ai_resumo"),
+                    possivel_prazo=sugere,
                 )
                 db.add(pm)
                 novos += 1
@@ -187,7 +192,7 @@ class ProcessAgent(BaseAgent):
                 )).scalar_one_or_none()
                 if proc:
                     from app.services.andamento_notify import notificar_equipe_andamento
-                    await notificar_equipe_andamento(db, proc, novos)
+                    await notificar_equipe_andamento(db, proc, novos, com_prazo=algum_prazo)
             await db.commit()
         except Exception as exc:
             await db.rollback()

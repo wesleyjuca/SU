@@ -131,3 +131,27 @@ def calcular_prazo(
         "dias": dias,
         "dias_uteis": dias_uteis,
     }
+
+
+# ─── Heurística: o andamento provavelmente inicia um prazo? ───────────────────
+# Sinais textuais comuns em intimações/despachos que disparam prazo processual.
+_PRAZO_SINAIS = (
+    "intime-se", "intime -se", "intimacao", "intimação", "intimado", "intimada",
+    "cite-se", "cite -se", "citacao", "citação", "citado", "citada",
+    "publique-se", "manifest", "conteste", "contestacao", "contestação",
+    "impugn", "recorra", "recurso", "apresente", "no prazo", "prazo de",
+    "dias uteis", "dias úteis", "responder em", "vista dos autos", "abertura de vista",
+)
+
+
+def movimento_sugere_prazo(texto: str | None) -> bool:
+    """True se o texto do andamento aparenta iniciar um prazo processual.
+
+    Heurística conservadora (falsos positivos são preferíveis a perder prazo):
+    o resultado é apenas um SINAL — a criação do prazo continua sendo humana
+    (o advogado confirma tipo/dias na calculadora). Sem I/O, testável isolado.
+    """
+    if not texto:
+        return False
+    t = texto.lower()
+    return any(sinal in t for sinal in _PRAZO_SINAIS)

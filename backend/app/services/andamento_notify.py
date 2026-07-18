@@ -9,9 +9,10 @@ from __future__ import annotations
 from sqlalchemy import select
 
 
-async def notificar_equipe_andamento(db, process, qtd: int) -> int:
+async def notificar_equipe_andamento(db, process, qtd: int, com_prazo: bool = False) -> int:
     """Cria uma Notification de novo andamento para o responsável + equipe do
-    processo (dedup por usuário). Retorna quantos usuários foram notificados."""
+    processo (dedup por usuário). `com_prazo` destaca que há andamento que
+    provavelmente inicia um prazo. Retorna quantos usuários foram notificados."""
     if qtd <= 0 or not getattr(process, "tenant_id", None):
         return 0
 
@@ -29,13 +30,16 @@ async def notificar_equipe_andamento(db, process, qtd: int) -> int:
         return 0
 
     rotulo = process.numero_cnj or "processo"
+    corpo = (f"{qtd} novo(s) andamento(s) no processo — "
+             + ("⚠ inclui possível prazo, verifique." if com_prazo
+                else "confira e verifique possíveis prazos."))
     for uid in equipe_ids:
         db.add(Notification(
             user_id=uid,
             tenant_id=process.tenant_id,
             tipo="NOVO_ANDAMENTO",
             titulo=f"Novo andamento: {rotulo}",
-            corpo=f"{qtd} novo(s) andamento(s) no processo — confira e verifique possíveis prazos.",
+            corpo=corpo,
             priority="HIGH",
             link=f"/processos/{process.id}",
         ))

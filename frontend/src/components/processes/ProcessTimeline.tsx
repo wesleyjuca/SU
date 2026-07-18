@@ -1,12 +1,13 @@
 "use client";
-import { FileText } from "lucide-react";
+import { FileText, AlertTriangle, CalendarPlus } from "lucide-react";
 import type { Movimentacao } from "@/types";
 
 interface ProcessTimelineProps {
   movimentacoes: Movimentacao[];
+  onGerarPrazo?: (descricao: string) => void;
 }
 
-export function ProcessTimeline({ movimentacoes }: ProcessTimelineProps) {
+export function ProcessTimeline({ movimentacoes, onGerarPrazo }: ProcessTimelineProps) {
   if (movimentacoes.length === 0) {
     return (
       <div className="py-8 text-center text-afj-black/40 text-sm">
@@ -45,11 +46,28 @@ export function ProcessTimeline({ movimentacoes }: ProcessTimelineProps) {
                   </div>
                 )}
 
-                {m.tipo && (
-                  <span className="inline-block mt-1 text-xs bg-afj-cream text-afj-black/50 px-1.5 py-0.5 rounded">
-                    {m.tipo}
-                  </span>
-                )}
+                <div className="flex items-center gap-2 flex-wrap mt-1">
+                  {m.tipo && (
+                    <span className="inline-block text-xs bg-afj-cream text-afj-black/50 px-1.5 py-0.5 rounded">
+                      {m.tipo}
+                    </span>
+                  )}
+                  {m.possivel_prazo && (
+                    <>
+                      <span className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded-sm bg-amber-50 text-amber-700 border border-amber-200">
+                        <AlertTriangle size={10} /> Possível prazo
+                      </span>
+                      {onGerarPrazo && (
+                        <button
+                          onClick={() => onGerarPrazo(m.descricao)}
+                          className="inline-flex items-center gap-1 text-[11px] text-afj-gold hover:underline font-medium"
+                        >
+                          <CalendarPlus size={11} /> Gerar prazo
+                        </button>
+                      )}
+                    </>
+                  )}
+                </div>
               </div>
 
               <span className="text-xs text-afj-black/40 flex-shrink-0 pt-0.5">
@@ -66,16 +84,17 @@ export function ProcessTimeline({ movimentacoes }: ProcessTimelineProps) {
 interface ProcessTimelineCardProps {
   movimentacoes: Movimentacao[];
   title?: string;
+  onGerarPrazo?: (descricao: string) => void;
 }
 
-export function ProcessTimelineCard({ movimentacoes, title = "Movimentações" }: ProcessTimelineCardProps) {
+export function ProcessTimelineCard({ movimentacoes, title = "Movimentações", onGerarPrazo }: ProcessTimelineCardProps) {
   return (
     <div className="afj-card p-4">
       <h2 className="font-semibold text-afj-black text-sm mb-4 flex items-center gap-2">
         <FileText size={14} />
         {title} ({movimentacoes.length})
       </h2>
-      <ProcessTimeline movimentacoes={movimentacoes} />
+      <ProcessTimeline movimentacoes={movimentacoes} onGerarPrazo={onGerarPrazo} />
     </div>
   );
 }
