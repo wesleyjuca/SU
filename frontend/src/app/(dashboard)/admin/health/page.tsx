@@ -91,7 +91,7 @@ const MODULES: Module[] = [
   {
     key: "datajud",
     label: "CNJ DataJud",
-    desc: "API pública — captura de processos",
+    desc: "API pública — enriquecimento de metadados e andamentos por número (a busca por OAB é via Comunica)",
     icon: Globe,
     getStatus: (d) => d.services.datajud.ok ? "funcionando" : "atencao",
     getLatency: (d) => d.services.datajud.latency_ms,
@@ -184,6 +184,12 @@ const PHASES = [
   { name: "Multi-dispositivo",        items: "Celular, tablet e Smart TV (painel de recepção); PWA instalável e offline", done: true },
   { name: "Publicações / DJe",        items: "Captura automática de intimações (Comunica/DJEN) → andamento + prazo por triagem", done: true },
   { name: "App nativo (base)",        items: "Projeto Capacitor pronto para gerar/publicar Android e iOS (ver MOBILE.md)", done: true },
+  { name: "Equipe & Minha Área",      items: "Responsável + colaboradores por processo; filtro \"Meus\" e painel pessoal do advogado", done: true },
+  { name: "Planos, limites & filiais", items: "Tiers STANDARD/PRO/ENTERPRISE com limites reais; filiais self-serve no ENTERPRISE", done: true },
+  { name: "Gestão de carteira",       items: "Reatribuição de carteira entre advogados + painel de distribuição de carga na gestão", done: true },
+  { name: "Modo confidencial",        items: "Interruptor por escritório: advogado vê só a própria equipe; sócios/gestão veem tudo", done: true },
+  { name: "Monitoramento processual", items: "Captura por OAB (Comunica) + enriquecimento e andamentos reais (DataJud) + aviso à equipe + sinal de possível prazo", done: true },
+  { name: "Gestão documental",        items: "CRUD completo de documentos (criar/editar/arquivar) + histórico de versões com restauração", done: true },
   { name: "Integrações externas",     items: "Gateway de pagamento, assinatura digital, WhatsApp — aguardam credenciais", done: false, active: true },
 ];
 
