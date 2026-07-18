@@ -463,8 +463,13 @@ async def capturar_processos_oabs(
         msg = f"{criados} novo(s) processo(s) capturado(s) de {resultado['oabs']} OAB(s)."
     elif encontrados:
         msg = f"{encontrados} processo(s) encontrado(s) — todos já cadastrados."
+    elif not resultado.get("fonte_respondeu"):
+        # A fonte pública não respondeu: quase sempre é o ambiente sem acesso à
+        # internet externa (egress/rede) ou a Comunica fora do ar — não é erro de dados.
+        msg = ("A fonte pública (Comunica/DJEN) não respondeu. Verifique se o ambiente "
+               "tem acesso à internet externa (egress) ou tente novamente mais tarde.")
     else:
-        msg = "Nenhum processo encontrado no período para as OABs do escritório."
+        msg = "A fonte respondeu, mas não há publicações no período para as OABs do escritório."
     return {**resultado, "message": msg}
 
 

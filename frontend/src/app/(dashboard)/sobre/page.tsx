@@ -76,6 +76,7 @@ const ROADMAP: { fase: string; itens: string; estado: Estado }[] = [
   { fase: "Distribuição de carga", itens: "Painel de carga por advogado no relatório de gestão (processos ativos + prazos pendentes) para equilibrar o trabalho da equipe", estado: "operacional" },
   { fase: "Modo confidencial", itens: "Interruptor por escritório: advogados veem só os processos da sua equipe; sócios/gestão mantêm a visão total. Aplica em Processos, Agenda, Publicações e detalhe", estado: "operacional" },
   { fase: "Captura por OAB (Comunica/DJEN)", itens: "Captura de processos pelas OABs do escritório via fonte pública (sem credenciais); liga o processo ao advogado dono da OAB. Painel TV abre em nova janela", estado: "operacional" },
+  { fase: "CRUD de Documentos", itens: "Criar documento manual, editar (título, tipo, status, conteúdo) e arquivar direto na tela de Documentos; diagnóstico claro na captura por OAB (fonte inalcançável × sem publicações)", estado: "operacional" },
   { fase: "Segurança & Produção", itens: "Papéis/HITL blindados, worker em produção, tempo-real, CI com gates", estado: "operacional" },
   { fase: "Mobile / PWA / App nativo", itens: "PWA instalável e offline; base Capacitor pronta para publicar Android/iOS", estado: "operacional" },
   { fase: "Integrações Externas", itens: "WhatsApp, assinatura eletrônica, gateway de pagamento (aguardam credenciais)", estado: "planejado" },
