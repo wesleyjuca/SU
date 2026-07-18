@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect, useRef } from "react";
-import { FolderOpen, Search, FileText, Download, Upload, ScanLine, X, CloudUpload, Eye, Plus, Pencil, Trash2, Save, Loader2 } from "lucide-react";
+import { FolderOpen, Search, FileText, Download, Upload, ScanLine, X, CloudUpload, Eye, Plus, Pencil, Trash2, Save, Loader2, History, RotateCcw } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
 
@@ -127,6 +127,36 @@ export default function DocumentosPage() {
       else toast.error(d.detail || "Erro ao salvar.");
     } catch { toast.error("Erro de conexão."); }
     finally { setSaving(false); }
+  }
+
+  // Histórico de versões
+  interface Versao { id: string; versao: number; change_summary: string | null; autor: string | null; created_at: string | null }
+  const [histDoc, setHistDoc] = useState<Documento | null>(null);
+  const [versoes, setVersoes] = useState<Versao[]>([]);
+  const [loadingHist, setLoadingHist] = useState(false);
+  const [restaurando, setRestaurando] = useState<string | null>(null);
+
+  async function abrirHistorico(d: Documento) {
+    setHistDoc(d);
+    setVersoes([]);
+    setLoadingHist(true);
+    try {
+      const res = await fetch(`/api/v1/documents/${d.id}/versions`, { headers: authH() });
+      if (res.ok) setVersoes(await res.json());
+    } catch { toast.error("Erro ao carregar o histórico."); }
+    finally { setLoadingHist(false); }
+  }
+
+  async function restaurarVersao(v: Versao) {
+    if (!histDoc) return;
+    if (!confirm(`Restaurar a versão ${v.versao}? O conteúdo atual será guardado como uma nova versão.`)) return;
+    setRestaurando(v.id);
+    try {
+      const res = await fetch(`/api/v1/documents/${histDoc.id}/versions/${v.id}/restore`, { method: "POST", headers: authH() });
+      if (res.ok) { toast.success(`Versão ${v.versao} restaurada.`); setHistDoc(null); fetchDocs(); }
+      else { const e = await res.json().catch(() => ({})); toast.error(e.detail || "Erro ao restaurar."); }
+    } catch { toast.error("Erro de conexão."); }
+    finally { setRestaurando(null); }
   }
 
   async function excluirDoc(d: Documento) {
@@ -429,6 +459,14 @@ export default function DocumentosPage() {
                         <Pencil size={14} />
                       </button>
                       <button
+                        onClick={() => abrirHistorico(d)}
+                        className="tap-target text-afj-black/30 hover:text-afj-gold transition-colors"
+                        title="Histórico de versões"
+                        aria-label="Histórico de versões"
+                      >
+                        <History size={14} />
+                      </button>
+                      <button
                         onClick={() => downloadDoc(d.id, d.titulo)}
                         className="tap-target text-afj-black/30 hover:text-afj-gold transition-colors"
                         title="Baixar PDF"
@@ -537,6 +575,41 @@ export default function DocumentosPage() {
               <button onClick={salvarEdicao} disabled={saving || loadingEdit} className="btn-afj-primary rounded-sm text-sm py-2 px-4 flex items-center gap-2">
                 {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Salvar
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Histórico de versões */}
+      {histDoc && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setHistDoc(null)}>
+          <div className="afj-card w-full max-w-lg max-h-[80vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 py-3 border-b border-afj-cream-dark">
+              <div className="flex items-center gap-2 min-w-0">
+                <History size={16} className="text-afj-gold flex-shrink-0" />
+                <span className="font-semibold text-afj-black truncate">Histórico — {histDoc.titulo}</span>
+              </div>
+              <button onClick={() => setHistDoc(null)} className="text-afj-black/40 hover:text-afj-black" aria-label="Fechar"><X size={18} /></button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-4 space-y-2">
+              {loadingHist ? (
+                Array.from({ length: 3 }).map((_, i) => <div key={i} className="h-12 bg-afj-cream-dark rounded animate-pulse" />)
+              ) : versoes.length === 0 ? (
+                <p className="text-sm text-afj-black/40 text-center py-8">Ainda não há versões anteriores. Edite o conteúdo do documento para começar o histórico.</p>
+              ) : (
+                versoes.map((v) => (
+                  <div key={v.id} className="flex items-center justify-between gap-3 border border-afj-cream-dark rounded-sm px-3 py-2.5">
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-afj-black">v{v.versao} <span className="text-afj-black/45 font-normal">· {v.change_summary || "—"}</span></p>
+                      <p className="text-xs text-afj-black/40">{v.autor || "—"}{v.created_at ? ` · ${new Date(v.created_at).toLocaleString("pt-BR")}` : ""}</p>
+                    </div>
+                    <button onClick={() => restaurarVersao(v)} disabled={restaurando === v.id}
+                      className="btn-afj-outline rounded-sm py-1.5 px-3 text-xs flex items-center gap-1.5 flex-shrink-0 disabled:opacity-50">
+                      {restaurando === v.id ? <Loader2 size={12} className="animate-spin" /> : <RotateCcw size={12} />} Restaurar
+                    </button>
+                  </div>
+                ))
+              )}
             </div>
           </div>
         </div>
