@@ -62,6 +62,90 @@ async def _oabs_do_tenant(db, tenant_id: uuid.UUID) -> list[tuple[str, str, uuid
     return [(n, u, owner) for (n, u), owner in vistos.items()]
 
 
+_AREA_KEYWORDS: list[tuple[str, str]] = [
+    ("TRABALH", "TRABALHISTA"),
+    ("TRIBUT", "TRIBUTARIO"),
+    ("PREVIDENC", "PREVIDENCIARIO"),
+    ("CONSUM", "CONSUMIDOR"),
+    ("PENAL", "PENAL"),
+    ("CRIMIN", "PENAL"),
+    ("FAMIL", "CIVIL"),
+    ("CIVIL", "CIVIL"),
+]
+
+
+def _area_from_assuntos(assuntos: list[str]) -> str | None:
+    """Mapeia (best-effort) os assuntos do CNJ para a área do direito do sistema."""
+    texto = " ".join(assuntos).upper()
+    for chave, area in _AREA_KEYWORDS:
+        if chave in texto:
+            return area
+    return None
+
+
+async def _enriquecer_via_datajud(db, procs: list[tuple]) -> None:
+    """Preenche metadados (classe/assunto/órgão/data) e cria os andamentos de cada
+    processo pelo número, via DataJud público. Best-effort: qualquer falha é ignorada."""
+    if not procs:
+        return
+    from datetime import datetime, timezone
+    from app.models.process import ProcessMovement
+    from app.integrations.tribunais.cnj import CNJDataJudClient
+
+    client = CNJDataJudClient()
+    try:
+        for proc, tribunal in procs:
+            try:
+                dados = await client.fetch_processo(proc.numero_cnj, tribunal)
+            except Exception:
+                dados = None
+            if not dados:
+                continue
+            if dados.get("classe") and not proc.tipo_acao:
+                proc.tipo_acao = dados["classe"][:255]
+            if dados.get("orgao_julgador") and not proc.vara:
+                proc.vara = dados["orgao_julgador"][:255]
+            area = _area_from_assuntos(dados.get("assuntos") or [])
+            if area and not proc.area_direito:
+                proc.area_direito = area
+            if dados.get("data_ajuizamento") and not proc.distribuicao_data:
+                try:
+                    proc.distribuicao_data = datetime.fromisoformat(
+                        dados["data_ajuizamento"].replace("Z", "+00:00")
+                    ).date()
+                except (ValueError, AttributeError):
+                    pass
+            meta = dict(proc.metadata_json or {})
+            meta["datajud"] = {"classe": dados.get("classe"), "grau": dados.get("grau"),
+                               "assuntos": (dados.get("assuntos") or [])[:5]}
+            proc.metadata_json = meta
+
+            # Andamentos (dedup por processo+data+descrição)
+            vistos: set[tuple] = set()
+            for mov in (dados.get("movimentos") or [])[:100]:
+                nome = (mov.get("nome") or "").strip()
+                if not nome:
+                    continue
+                dh = mov.get("dataHora", "")
+                try:
+                    dt = datetime.fromisoformat(dh.replace("Z", "+00:00"))
+                except (ValueError, AttributeError):
+                    dt = datetime.now(timezone.utc)
+                chave = (dt.date().isoformat(), nome[:120])
+                if chave in vistos:
+                    continue
+                vistos.add(chave)
+                db.add(ProcessMovement(
+                    process_id=proc.id,
+                    data_movimento=dt,
+                    descricao=nome[:2000],
+                    tipo="ANDAMENTO",
+                ))
+            proc.ultimo_andamento_at = datetime.now(timezone.utc)
+    finally:
+        await client.close()
+
+
 async def capturar_por_oab(
     db,
     tenant_id: uuid.UUID,
@@ -120,6 +204,7 @@ async def capturar_por_oab(
     }
 
     criados = 0
+    novos: list[tuple] = []  # (proc, tribunal) p/ enriquecer via DataJud
     for cnj, info in achados.items():
         if cnj in existentes:
             continue
@@ -140,7 +225,12 @@ async def capturar_por_oab(
         # Liga ao advogado dono da OAB (aparece na Minha Área / modo confidencial)
         if info["owner"]:
             db.add(ProcessTeamMember(process_id=proc.id, user_id=info["owner"], papel="RESPONSAVEL"))
+        novos.append((proc, info["tribunal"]))
         criados += 1
+
+    # Enriquecimento via DataJud (metadados + andamentos por número). Bounded p/ não
+    # estourar timeout; a busca por OAB NÃO existe no DataJud público (só por número).
+    await _enriquecer_via_datajud(db, novos[:40])
 
     if triggered_by and criados:
         db.add(Notification(

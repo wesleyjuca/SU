@@ -51,8 +51,10 @@ class Settings(BaseSettings):
         return v
 
     # ─── Integrações externas ────────────────────────────────────────────────
-    # Chave pública CNJ DataJud (documentada em https://datajud-wiki.cnj.jus.br/)
-    CNJ_API_KEY: str = "cDZHYzlZa0JadVREZDJCendFbGpZVlJBZFM4Z1JUdzRGbENnUVJBanFrTHlDWDhFN05oYjY4WUpUeVFGWUt"
+    # Chave PÚBLICA do CNJ DataJud (compartilhada abertamente na doc:
+    # https://datajud-wiki.cnj.jus.br/api-publica/acesso). O CNJ pode rotacioná-la
+    # a qualquer momento — se o enriquecimento parar, basta setar a env CNJ_API_KEY.
+    CNJ_API_KEY: str = "cDZHYzlZa0JadVREZDJCendQbXY6SkJlTzNjLV9TRENyQk1RdnFKZGRQdw=="
 
     # ─── IA ──────────────────────────────────────────────────────────────────
     AI_PROVIDER: str = "anthropic"          # "anthropic" | "gemini" (Google)
