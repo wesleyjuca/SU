@@ -77,6 +77,10 @@ class Settings(BaseSettings):
     # ─── Polling ─────────────────────────────────────────────────────────────
     PROCESS_POLLING_INTERVAL_MINUTES: int = 30
     PROCESS_POLLING_BATCH_SIZE: int = 50
+    # Resumir cada andamento com IA no polling em LOTE é caro (1 chamada Claude por
+    # movimento × todos os processos, a cada 30 min). Desligado por padrão — o resumo
+    # continua disponível sob demanda. Ligue (env POLL_AI_SUMMARY=true) se quiser.
+    POLL_AI_SUMMARY: bool = False
     PUBLICATION_SCAN_HOUR: int = 7
     DEADLINE_ALERT_DAYS: list[int] = [3, 7, 15]
 

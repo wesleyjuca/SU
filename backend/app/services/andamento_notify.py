@@ -1,0 +1,42 @@
+"""Notificação de novos andamentos processuais à equipe do processo.
+
+Fecha o ciclo do monitoramento: quando o polling (batch ou manual "Atualizar
+andamentos") traz movimentações novas, o responsável e a equipe são avisados —
+espelha o padrão de notificação de intimações do dje_monitor.
+"""
+from __future__ import annotations
+
+from sqlalchemy import select
+
+
+async def notificar_equipe_andamento(db, process, qtd: int) -> int:
+    """Cria uma Notification de novo andamento para o responsável + equipe do
+    processo (dedup por usuário). Retorna quantos usuários foram notificados."""
+    if qtd <= 0 or not getattr(process, "tenant_id", None):
+        return 0
+
+    from app.models.process import ProcessTeamMember
+    from app.models.notification import Notification
+
+    equipe_ids = {
+        r[0] for r in (await db.execute(
+            select(ProcessTeamMember.user_id).where(ProcessTeamMember.process_id == process.id)
+        )).all()
+    }
+    if process.responsavel_id:
+        equipe_ids.add(process.responsavel_id)
+    if not equipe_ids:
+        return 0
+
+    rotulo = process.numero_cnj or "processo"
+    for uid in equipe_ids:
+        db.add(Notification(
+            user_id=uid,
+            tenant_id=process.tenant_id,
+            tipo="NOVO_ANDAMENTO",
+            titulo=f"Novo andamento: {rotulo}",
+            corpo=f"{qtd} novo(s) andamento(s) no processo — confira e verifique possíveis prazos.",
+            priority="HIGH",
+            link=f"/processos/{process.id}",
+        ))
+    return len(equipe_ids)
