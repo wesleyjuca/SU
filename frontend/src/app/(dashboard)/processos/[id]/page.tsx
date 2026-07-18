@@ -447,7 +447,13 @@ export default function ProcessoDetailPage() {
 
         {/* Timeline de movimentações */}
         <div className="lg:col-span-2">
-          <ProcessTimelineCard movimentacoes={movimentacoes} />
+          <ProcessTimelineCard
+            movimentacoes={movimentacoes}
+            onGerarPrazo={(descricao) => {
+              setPrazoForm({ descricao: descricao.slice(0, 200), tipo: "", data_prazo: "", data_fatal: "", observacoes: "" });
+              setShowPrazoModal(true);
+            }}
+          />
         </div>
       </div>
 

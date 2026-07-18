@@ -70,6 +70,7 @@ export interface Movimentacao {
   tipo: string | null;
   documento_url: string | null;
   ai_summary: string | null;
+  possivel_prazo?: boolean;
   created_at: string;
 }
 

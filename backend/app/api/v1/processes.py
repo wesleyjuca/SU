@@ -324,6 +324,7 @@ async def get_movements(
             "tipo": m.tipo,
             "ai_summary": m.ai_summary,
             "documento_url": m.documento_url,
+            "possivel_prazo": bool(m.possivel_prazo),
         }
         for m in movements
     ]
@@ -471,6 +472,7 @@ async def atualizar_andamentos(
         )).all() if dm
     }
     novos = 0
+    algum_prazo = False
     for mov in (dados.get("movimentos") or [])[:200]:
         nome = (mov.get("nome") or "").strip()
         if not nome:
@@ -484,14 +486,20 @@ async def atualizar_andamentos(
         if chave in existentes:
             continue
         existentes.add(chave)
-        db.add(ProcessMovement(process_id=process.id, data_movimento=dt, descricao=nome[:2000], tipo="ANDAMENTO"))
+        from app.utils.prazo import movimento_sugere_prazo
+        sugere = movimento_sugere_prazo(nome)
+        algum_prazo = algum_prazo or sugere
+        db.add(ProcessMovement(
+            process_id=process.id, data_movimento=dt, descricao=nome[:2000], tipo="ANDAMENTO",
+            possivel_prazo=sugere,
+        ))
         novos += 1
 
     process.last_polled_at = datetime.now(timezone.utc)
     if novos:
         process.ultimo_andamento_at = datetime.now(timezone.utc)
         from app.services.andamento_notify import notificar_equipe_andamento
-        await notificar_equipe_andamento(db, process, novos)
+        await notificar_equipe_andamento(db, process, novos, com_prazo=algum_prazo)
     await db.commit()
     return {
         "novos": novos,
