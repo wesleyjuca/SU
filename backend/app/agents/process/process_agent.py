@@ -99,15 +99,19 @@ class ProcessAgent(BaseAgent):
             log.error("tribunal_fetch_failed", tribunal=tribunal, numero=numero_cnj, error=str(exc))
             return AgentResult(status=AgentStatus.FAILED, agent_name=self.name, error=str(exc))
 
-        # Gerar sumários com IA para cada movimento
+        # Resumo IA por movimento é caro no polling em lote (1 chamada × movimento ×
+        # todos os processos, a cada 30 min) — só quando POLL_AI_SUMMARY está ligado.
+        from app.config import settings
         movimentos_com_resumo = []
         total_tokens = 0
         total_cost = 0.0
 
         for mov in movimentos:
-            resumo, tokens, _, cost = await self._resumir_movimento({"descricao": mov.descricao})
-            total_tokens += tokens
-            total_cost += cost
+            resumo = ""
+            if settings.POLL_AI_SUMMARY:
+                resumo, tokens, _, cost = await self._resumir_movimento({"descricao": mov.descricao})
+                total_tokens += tokens
+                total_cost += cost
             movimentos_com_resumo.append({
                 "data": mov.data.isoformat() if mov.data else None,
                 "descricao": mov.descricao,
@@ -120,12 +124,13 @@ class ProcessAgent(BaseAgent):
         # Detectar prazos em movimentos
         prazos_detectados = await self._detectar_prazos(movimentos_com_resumo)
 
-        # Persistir movimentos no banco
+        # Persistir movimentos no banco (retorna quantos são NOVOS)
         process_id = ctx.process_id or (uuid.UUID(task["process_id"]) if task.get("process_id") else None)
+        novos = 0
         if process_id and movimentos:
-            await self._save_movements(process_id, movimentos, movimentos_com_resumo)
+            novos = await self._save_movements(process_id, movimentos, movimentos_com_resumo)
 
-        ctx.set_state("novos_movimentos", len(movimentos))
+        ctx.set_state("novos_movimentos", novos)
         ctx.set_state("prazos_detectados", len(prazos_detectados))
 
         return AgentResult(
@@ -142,12 +147,14 @@ class ProcessAgent(BaseAgent):
             cost_usd=total_cost,
         )
 
-    async def _save_movements(self, process_id: uuid.UUID, movimentos, movimentos_com_resumo: list[dict]):
-        """Persiste movimentos no ProcessMovement evitando duplicatas."""
+    async def _save_movements(self, process_id: uuid.UUID, movimentos, movimentos_com_resumo: list[dict]) -> int:
+        """Persiste movimentos novos (dedup por data+descrição) e, se houver novos,
+        notifica a equipe do processo. Retorna a quantidade de andamentos NOVOS."""
         from sqlalchemy import select
-        from app.models.process import ProcessMovement
+        from app.models.process import ProcessMovement, LegalProcess
 
         db, owned = await self._get_db()
+        novos = 0
         try:
             for mov, enriched in zip(movimentos, movimentos_com_resumo):
                 # Evitar duplicatas por data + descrição
@@ -171,13 +178,25 @@ class ProcessAgent(BaseAgent):
                     ai_summary=enriched.get("ai_resumo"),
                 )
                 db.add(pm)
+                novos += 1
+
+            # Novos andamentos → avisa a equipe do processo (mesmo padrão do dje_monitor).
+            if novos:
+                proc = (await db.execute(
+                    select(LegalProcess).where(LegalProcess.id == process_id)
+                )).scalar_one_or_none()
+                if proc:
+                    from app.services.andamento_notify import notificar_equipe_andamento
+                    await notificar_equipe_andamento(db, proc, novos)
             await db.commit()
         except Exception as exc:
             await db.rollback()
+            novos = 0
             log.error("save_movements_failed", process_id=str(process_id), error=str(exc))
         finally:
             if owned:
                 await db.close()
+        return novos
 
     async def _poll_all_active(self, ctx: AgentContext) -> AgentResult:
         """Polling batch de todos os processos com monitoramento ativo."""

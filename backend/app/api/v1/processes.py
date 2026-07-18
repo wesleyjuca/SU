@@ -490,6 +490,8 @@ async def atualizar_andamentos(
     process.last_polled_at = datetime.now(timezone.utc)
     if novos:
         process.ultimo_andamento_at = datetime.now(timezone.utc)
+        from app.services.andamento_notify import notificar_equipe_andamento
+        await notificar_equipe_andamento(db, process, novos)
     await db.commit()
     return {
         "novos": novos,

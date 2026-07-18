@@ -79,6 +79,7 @@ const ROADMAP: { fase: string; itens: string; estado: Estado }[] = [
   { fase: "CRUD de Documentos", itens: "Criar documento manual, editar (título, tipo, status, conteúdo) e arquivar direto na tela de Documentos; diagnóstico claro na captura por OAB (fonte inalcançável × sem publicações)", estado: "operacional" },
   { fase: "Histórico de versões de documentos", itens: "Cada edição guarda a versão anterior; a tela de Documentos mostra o histórico e permite restaurar qualquer versão", estado: "operacional" },
   { fase: "DataJud: enriquecimento + andamentos", itens: "Processos capturados são enriquecidos por número (classe, assunto, órgão) e trazem andamentos reais do DataJud; botão \"Atualizar andamentos\" no processo. Busca por OAB é via Comunica (DataJud público não indexa partes)", estado: "operacional" },
+  { fase: "Aviso de novos andamentos", itens: "Quando o monitoramento traz um andamento novo (automático a cada 30 min ou manual), o responsável e a equipe do processo são notificados; polling em lote sem custo de IA por padrão", estado: "operacional" },
   { fase: "Segurança & Produção", itens: "Papéis/HITL blindados, worker em produção, tempo-real, CI com gates", estado: "operacional" },
   { fase: "Mobile / PWA / App nativo", itens: "PWA instalável e offline; base Capacitor pronta para publicar Android/iOS", estado: "operacional" },
   { fase: "Integrações Externas", itens: "WhatsApp, assinatura eletrônica, gateway de pagamento (aguardam credenciais)", estado: "planejado" },
