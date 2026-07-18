@@ -43,6 +43,7 @@ class DocumentVersion(Base):
     document_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False)
     versao: Mapped[int] = mapped_column(Integer, nullable=False)
     conteudo_html: Mapped[str | None] = mapped_column(Text)
+    conteudo_texto: Mapped[str | None] = mapped_column(Text)
     changed_by: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id"))
     change_summary: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

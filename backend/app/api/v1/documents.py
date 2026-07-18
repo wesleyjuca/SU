@@ -276,6 +276,24 @@ async def update_document(
             detail="Aprovar ou protocolar documentos é restrito a advogados, sócios e administradores.",
         )
 
+    # Se o conteúdo vai mudar, guarda o estado ANTERIOR como versão (histórico),
+    # antes de sobrescrever. Só quando havia algum conteúdo e ele de fato muda.
+    muda_conteudo = (
+        ("conteudo_texto" in updates and updates["conteudo_texto"] != doc.conteudo_texto)
+        or ("conteudo_html" in updates and updates["conteudo_html"] != doc.conteudo_html)
+    )
+    if muda_conteudo and (doc.conteudo_texto or doc.conteudo_html):
+        from app.models.document import DocumentVersion
+        db.add(DocumentVersion(
+            document_id=doc.id,
+            versao=doc.versao,
+            conteudo_html=doc.conteudo_html,
+            conteudo_texto=doc.conteudo_texto,
+            changed_by=current_user.id,
+            change_summary="Edição",
+        ))
+        doc.versao += 1
+
     for field, value in updates.items():
         setattr(doc, field, value)
     await db.flush()
@@ -409,6 +427,81 @@ async def create_version(
     db.add(version)
     await db.flush()
     return {"document_id": doc_id, "versao": doc.versao, "version_id": str(version.id)}
+
+
+@router.get("/{doc_id}/versions")
+async def list_versions(
+    doc_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Histórico de versões do documento (mais recente primeiro)."""
+    from app.models.document import DocumentVersion
+    doc = (await db.execute(
+        select(Document.id).where(
+            Document.id == uuid.UUID(doc_id), Document.tenant_id == current_user.tenant_id
+        )
+    )).scalar_one_or_none()
+    if not doc:
+        raise NotFoundError("Documento", doc_id)
+
+    rows = (await db.execute(
+        select(DocumentVersion, User.full_name)
+        .outerjoin(User, User.id == DocumentVersion.changed_by)
+        .where(DocumentVersion.document_id == doc)
+        .order_by(desc(DocumentVersion.versao))
+    )).all()
+    return [
+        {
+            "id": str(v.id),
+            "versao": v.versao,
+            "change_summary": v.change_summary,
+            "autor": nome,
+            "created_at": v.created_at.isoformat() if v.created_at else None,
+        }
+        for v, nome in rows
+    ]
+
+
+@router.post("/{doc_id}/versions/{version_id}/restore", response_model=DocumentResponse)
+async def restore_version(
+    doc_id: str,
+    version_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Restaura o conteúdo de uma versão anterior (guarda o estado atual como nova versão)."""
+    from app.models.document import DocumentVersion
+    doc = (await db.execute(
+        select(Document).where(
+            Document.id == uuid.UUID(doc_id), Document.tenant_id == current_user.tenant_id
+        )
+    )).scalar_one_or_none()
+    if not doc:
+        raise NotFoundError("Documento", doc_id)
+    ver = (await db.execute(
+        select(DocumentVersion).where(
+            DocumentVersion.id == uuid.UUID(version_id),
+            DocumentVersion.document_id == doc.id,
+        )
+    )).scalar_one_or_none()
+    if not ver:
+        raise NotFoundError("Versão", version_id)
+
+    # Snapshot do estado atual antes de restaurar, para não perder o histórico.
+    db.add(DocumentVersion(
+        document_id=doc.id,
+        versao=doc.versao,
+        conteudo_html=doc.conteudo_html,
+        conteudo_texto=doc.conteudo_texto,
+        changed_by=current_user.id,
+        change_summary=f"Restaurado da v{ver.versao}",
+    ))
+    doc.versao += 1
+    doc.conteudo_html = ver.conteudo_html
+    doc.conteudo_texto = ver.conteudo_texto
+    await db.flush()
+    return _to_response(doc)
 
 
 class ContractCreate(BaseModel):
