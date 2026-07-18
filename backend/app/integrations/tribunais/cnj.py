@@ -1,6 +1,7 @@
 """Conector CNJ DataJud — API pública documentada do CNJ ElasticSearch."""
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Optional
 
@@ -181,43 +182,57 @@ class CNJDataJudClient(BaseTribunalClient):
         return movements
 
     async def search_by_oab(self, oab: str, uf: str) -> list[str]:
+        """A API PÚBLICA do DataJud NÃO expõe partes/advogados (resguarda os dados
+        das partes) — não é possível buscar processos por OAB por aqui. A descoberta
+        por OAB é feita pela Comunica/DJEN (services/oab_capture). Mantido só para
+        o contrato de BaseTribunalClient."""
+        log.info("datajud_oab_search_unsupported", oab=oab, uf=uf,
+                 motivo="dataset público do DataJud não indexa partes/advogados")
+        return []
+
+    async def fetch_processo(self, numero_cnj: str, tribunal: str | None = None) -> dict | None:
+        """Busca os metadados públicos de um processo pelo número (para enriquecer):
+        classe, assuntos, órgão julgador, data de ajuizamento, grau + movimentos.
+        Retorna None em qualquer falha (degradação graciosa)."""
+        if tribunal:
+            self.tribunal = tribunal.upper()
         if not self._authenticated:
             await self.authenticate()
         if not self._api_key:
-            return []
+            return None
 
+        numero_clean = re.sub(r"\D", "", numero_cnj or "")
+        if not numero_clean:
+            return None
         query = {
-            "query": {
-                "nested": {
-                    "path": "partes",
-                    "query": {
-                        "nested": {
-                            "path": "partes.advogados",
-                            "query": {
-                                "bool": {
-                                    "must": [
-                                        {"match": {"partes.advogados.numeroOAB": oab}},
-                                        {"match": {"partes.advogados.ufOAB": uf.upper()}},
-                                    ]
-                                }
-                            },
-                        }
-                    },
-                }
-            },
-            "_source": ["numeroProcesso"],
-            "size": 100,
+            "query": {"match": {"numeroProcesso": numero_clean}},
+            "_source": ["numeroProcesso", "classe", "assuntos", "orgaoJulgador",
+                        "dataAjuizamento", "grau", "tribunal", "movimentos"],
+            "size": 1,
         }
-
         headers = {"Authorization": f"APIKey {self._api_key}", "Content-Type": "application/json"}
-
         try:
             response = await self.http.post(self._search_url, json=query, headers=headers)
             response.raise_for_status()
             data = response.json()
         except Exception as exc:
-            log.error("datajud_oab_search_failed", oab=oab, uf=uf, error=str(exc))
-            return []
+            log.warning("datajud_fetch_processo_failed", numero=numero_clean, error=str(exc))
+            return None
 
         hits = data.get("hits", {}).get("hits", [])
-        return [h.get("_source", {}).get("numeroProcesso", "") for h in hits if h.get("_source", {}).get("numeroProcesso")]
+        if not hits:
+            return None
+        src = hits[0].get("_source", {})
+        classe = src.get("classe") or {}
+        orgao = src.get("orgaoJulgador") or {}
+        assuntos = src.get("assuntos") or []
+        return {
+            "numero_processo": src.get("numeroProcesso"),
+            "classe": classe.get("nome") if isinstance(classe, dict) else None,
+            "assuntos": [a.get("nome") for a in assuntos if isinstance(a, dict) and a.get("nome")],
+            "orgao_julgador": orgao.get("nome") if isinstance(orgao, dict) else None,
+            "data_ajuizamento": src.get("dataAjuizamento"),
+            "grau": src.get("grau"),
+            "tribunal": src.get("tribunal"),
+            "movimentos": src.get("movimentos") or [],
+        }

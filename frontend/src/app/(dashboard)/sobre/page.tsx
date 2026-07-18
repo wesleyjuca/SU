@@ -78,6 +78,7 @@ const ROADMAP: { fase: string; itens: string; estado: Estado }[] = [
   { fase: "Captura por OAB (Comunica/DJEN)", itens: "Captura de processos pelas OABs do escritório via fonte pública (sem credenciais); liga o processo ao advogado dono da OAB. Painel TV abre em nova janela", estado: "operacional" },
   { fase: "CRUD de Documentos", itens: "Criar documento manual, editar (título, tipo, status, conteúdo) e arquivar direto na tela de Documentos; diagnóstico claro na captura por OAB (fonte inalcançável × sem publicações)", estado: "operacional" },
   { fase: "Histórico de versões de documentos", itens: "Cada edição guarda a versão anterior; a tela de Documentos mostra o histórico e permite restaurar qualquer versão", estado: "operacional" },
+  { fase: "DataJud: enriquecimento + andamentos", itens: "Processos capturados são enriquecidos por número (classe, assunto, órgão) e trazem andamentos reais do DataJud; botão \"Atualizar andamentos\" no processo. Busca por OAB é via Comunica (DataJud público não indexa partes)", estado: "operacional" },
   { fase: "Segurança & Produção", itens: "Papéis/HITL blindados, worker em produção, tempo-real, CI com gates", estado: "operacional" },
   { fase: "Mobile / PWA / App nativo", itens: "PWA instalável e offline; base Capacitor pronta para publicar Android/iOS", estado: "operacional" },
   { fase: "Integrações Externas", itens: "WhatsApp, assinatura eletrônica, gateway de pagamento (aguardam credenciais)", estado: "planejado" },

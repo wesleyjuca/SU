@@ -425,6 +425,80 @@ async def set_process_team(
     return (await _to_responses(db, [process]))[0]
 
 
+@router.post("/{process_id}/atualizar-andamentos")
+async def atualizar_andamentos(
+    process_id: str,
+    # Buscar andamentos no tribunal é ação de trabalho — restrita ao staff jurídico/gestão
+    current_user: User = Depends(require_role("ADMIN", "SOCIO", "ADVOGADO", "GESTOR", "PARALEGAL", "ASSISTENTE")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Busca os andamentos do processo no DataJud (API pública, por número CNJ) e
+    grava os novos como ProcessMovement. Fonte só de metadados/movimentos — não
+    protocola nem executa nada."""
+    from datetime import datetime, timezone
+    from app.integrations.tribunais.cnj import CNJDataJudClient
+
+    process = (await db.execute(
+        select(LegalProcess).where(
+            LegalProcess.id == uuid.UUID(process_id),
+            LegalProcess.tenant_id == current_user.tenant_id,
+        )
+    )).scalar_one_or_none()
+    if not process:
+        raise NotFoundError("Processo", process_id)
+    if not process.numero_cnj:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=422, detail="Processo sem número CNJ — não é possível consultar o tribunal.")
+
+    client = CNJDataJudClient()
+    try:
+        dados = await client.fetch_processo(process.numero_cnj, process.tribunal)
+    except Exception:
+        dados = None
+    finally:
+        await client.close()
+
+    if dados is None:
+        return {"novos": 0, "fonte_respondeu": False,
+                "message": "A fonte pública (DataJud) não respondeu — verifique o acesso à internet do ambiente ou tente mais tarde."}
+
+    # Andamentos já existentes (dedup por data+descrição)
+    existentes = {
+        (dm.date().isoformat(), (desc or "")[:120])
+        for dm, desc in (await db.execute(
+            select(ProcessMovement.data_movimento, ProcessMovement.descricao)
+            .where(ProcessMovement.process_id == process.id)
+        )).all() if dm
+    }
+    novos = 0
+    for mov in (dados.get("movimentos") or [])[:200]:
+        nome = (mov.get("nome") or "").strip()
+        if not nome:
+            continue
+        dh = mov.get("dataHora", "")
+        try:
+            dt = datetime.fromisoformat(dh.replace("Z", "+00:00"))
+        except (ValueError, AttributeError):
+            dt = datetime.now(timezone.utc)
+        chave = (dt.date().isoformat(), nome[:120])
+        if chave in existentes:
+            continue
+        existentes.add(chave)
+        db.add(ProcessMovement(process_id=process.id, data_movimento=dt, descricao=nome[:2000], tipo="ANDAMENTO"))
+        novos += 1
+
+    process.last_polled_at = datetime.now(timezone.utc)
+    if novos:
+        process.ultimo_andamento_at = datetime.now(timezone.utc)
+    await db.commit()
+    return {
+        "novos": novos,
+        "fonte_respondeu": True,
+        "message": (f"{novos} novo(s) andamento(s) importado(s)." if novos
+                    else "Nenhum andamento novo — o processo já está atualizado."),
+    }
+
+
 # ─── Reatribuição de carteira (advogado sai / entra de férias) ───────────────
 class ReatribuirCarteira(BaseModel):
     de_advogado_id: str

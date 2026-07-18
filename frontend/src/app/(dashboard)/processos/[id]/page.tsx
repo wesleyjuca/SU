@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { ArrowLeft, Scale, AlertTriangle, Calendar, Clock, Plus, CheckCircle, Loader2, Edit3, X } from "lucide-react";
+import { ArrowLeft, Scale, AlertTriangle, Calendar, Clock, Plus, CheckCircle, Loader2, Edit3, X, RefreshCw } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
 import { ProcessTimelineCard } from "@/components/processes/ProcessTimeline";
@@ -50,6 +50,23 @@ export default function ProcessoDetailPage() {
   const [editandoEquipe, setEditandoEquipe] = useState(false);
   const [equipeForm, setEquipeForm] = useState<{ responsavel_id: string; equipe: string[] }>({ responsavel_id: "", equipe: [] });
   const [salvandoEquipe, setSalvandoEquipe] = useState(false);
+  const [atualizandoAndamentos, setAtualizandoAndamentos] = useState(false);
+
+  async function atualizarAndamentos() {
+    setAtualizandoAndamentos(true);
+    try {
+      const token = localStorage.getItem("afj_access_token");
+      const res = await fetch(`/api/v1/processes/${id}/atualizar-andamentos`, {
+        method: "POST", headers: { Authorization: `Bearer ${token}` },
+      });
+      const d = await res.json().catch(() => ({}));
+      if (res.ok) {
+        if (d.novos > 0) { toast.success(d.message || "Andamentos atualizados."); fetchAll(); }
+        else toast.warning(d.message || "Nenhum andamento novo.");
+      } else toast.error(d.detail || "Erro ao atualizar andamentos.");
+    } catch { toast.error("Erro de conexão."); }
+    finally { setAtualizandoAndamentos(false); }
+  }
 
   async function fetchColegas() {
     const token = localStorage.getItem("afj_access_token");
@@ -257,6 +274,15 @@ export default function ProcessoDetailPage() {
                 Monitorado
               </span>
             )}
+            <button
+              onClick={atualizarAndamentos}
+              disabled={atualizandoAndamentos || !processo.numero_cnj}
+              title={processo.numero_cnj ? "Buscar andamentos no tribunal (DataJud)" : "Processo sem número CNJ"}
+              className="btn-afj-outline rounded-sm flex items-center gap-1.5 text-xs disabled:opacity-50"
+            >
+              {atualizandoAndamentos ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+              Atualizar andamentos
+            </button>
             <button
               onClick={() => setShowPrazoModal(true)}
               className="btn-afj-outline rounded-sm flex items-center gap-1.5 text-xs"
