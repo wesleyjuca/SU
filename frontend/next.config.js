@@ -20,7 +20,7 @@ const nextConfig = {
       process.env.API_URL ||
       process.env.NEXT_PUBLIC_API_URL ||
       previewBackend ||
-      "https://su-production-4561.up.railway.app";
+      "http://localhost:8000";
     return [
       {
         source: "/api/v1/:path*",
