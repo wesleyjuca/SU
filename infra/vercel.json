@@ -7,12 +7,13 @@
   "rewrites": [
     {
       "source": "/api/v1/:path*",
-      "destination": "https://su-production-5a83.up.railway.app/api/v1/:path*"
+      "destination": "https://su-production-4561.up.railway.app/api/v1/:path*"
     }
   ],
   "env": {
     "NEXT_PUBLIC_APP_NAME": "AFJ CORE",
-    "NEXT_PUBLIC_API_URL": "https://su-production-5a83.up.railway.app"
+    "API_URL": "https://su-production-4561.up.railway.app",
+    "NEXT_PUBLIC_API_URL": "https://su-production-4561.up.railway.app"
   },
   "regions": ["gru1"]
 }

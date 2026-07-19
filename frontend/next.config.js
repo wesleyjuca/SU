@@ -1,4 +1,6 @@
 /** @type {import('next').NextConfig} */
+const CANONICAL_API_URL = "https://su-production-4561.up.railway.app";
+
 const nextConfig = {
   // TS agora É gate no build (tsc roda no CI e aqui) — só o eslint fica fora.
   typescript: { ignoreBuildErrors: false },
@@ -22,9 +24,8 @@ const nextConfig = {
         : "http://localhost:8000";
     const apiBase =
       process.env.API_URL ||
-      process.env.NEXT_PUBLIC_API_URL ||
       previewBackend ||
-      productionFallback;
+      CANONICAL_API_URL;
     return [
       {
         source: "/api/v1/:path*",
