@@ -30,12 +30,17 @@
 ### Frontend (Vercel → Environment Variables)
 | Variável | Por quê |
 |---|---|
-| `NEXT_PUBLIC_API_URL` | URL pública do backend Railway — usada também pelo WebSocket de notificações (os rewrites do Next não fazem proxy de WS) |
+| `API_URL` | URL canônica server-side do backend Railway (`https://su-production-4561.up.railway.app`); usada pelos rewrites HTTP do Next/Vercel para `/api/v1/*` |
+| `NEXT_PUBLIC_API_URL` | Mesma URL canônica do backend Railway (`https://su-production-4561.up.railway.app`), exposta ao browser somente para conexões diretas necessárias, como WebSocket (os rewrites do Next não fazem proxy de WS) |
 
 ## CI (GitHub Actions — "Validate")
 Gates que **quebram** o PR: `tsc --noEmit`, `next build` (com TS estrito) e
 `ruff check` do backend (config documentada em `backend/ruff.toml`).
 `pytest` ainda é informativo (exige Postgres de serviço — pendência futura).
+
+## Backend canônico
+
+O backend canônico atual é `https://su-production-4561.up.railway.app`. Mantenha `API_URL` (server-side, rewrites HTTP) e `NEXT_PUBLIC_API_URL` (browser, apenas conexões diretas como WebSocket) apontando para esse mesmo host em produção.
 
 ## Verificação pós-deploy (fumaça)
 1. `GET /ping` → `{"ok": true}` e `GET /health` → `status: operational`.
@@ -43,3 +48,4 @@ Gates que **quebram** o PR: `tsc --noEmit`, `next build` (com TS estrito) e
 3. Disparar um agente (ex.: Documentos → Processar OCR) e ver o run sair de
    `RUNNING` em ~segundos; texto extraído aparece na ficha do documento.
 4. `POST /api/v1/rag/search` autenticado → 200 (exige `OPENAI_API_KEY`).
+5. Conferir nos painéis da Vercel e Railway que `API_URL` aponta para o backend canônico acima e para o Railway cujo banco contém os usuários reais.

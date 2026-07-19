@@ -51,11 +51,8 @@ export default function PortalDocumentosPage() {
     setDownloading(docId);
     try {
       const token = getPortalToken();
-      const apiBase = process.env.NEXT_PUBLIC_API_URL
-        ? `${process.env.NEXT_PUBLIC_API_URL}/api/v1`
-        : "/api/v1";
       // PDF com o timbrado do escritório
-      const res = await fetch(`${apiBase}/portal/documents/${docId}/download`, {
+      const res = await fetch(`/api/v1/portal/documents/${docId}/download`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!res.ok) { toast.error("Erro ao baixar documento."); return; }
