@@ -5,7 +5,7 @@ from app.api.v1 import (
     auth, approvals, processes, clients, documents,
     financial, ws, audit, rag, notifications, tenant, system, lgpd, push, portal,
     petition_templates, integrity, google_integration, tenants_admin, billing,
-    reports_admin, invoices, crm, publications,
+    reports_admin, invoices, crm, publications, integrations_hub,
 )
 from app.dependencies import require_active_tenant, get_current_staff
 
@@ -46,6 +46,10 @@ api_router.include_router(portal.router, dependencies=_BLOCK)
 api_router.include_router(petition_templates.router, dependencies=_BLOCK_STAFF)
 api_router.include_router(integrity.router, dependencies=_BLOCK_STAFF)
 api_router.include_router(google_integration.router, dependencies=_BLOCK_STAFF)
+api_router.include_router(integrations_hub.router, dependencies=_BLOCK_STAFF)
+# Webhooks de provedores: público (provedores não têm JWT); validação por
+# assinatura específica do provedor nas fases de cada integração.
+api_router.include_router(integrations_hub.webhooks_router)
 api_router.include_router(tenants_admin.router)
 api_router.include_router(billing.router)
 api_router.include_router(reports_admin.router)
