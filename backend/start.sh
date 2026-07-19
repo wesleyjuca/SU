@@ -6,6 +6,9 @@
 # (ver infra/railway.toml); este script cobre o deploy de serviço único.
 set -e
 
+echo "[AFJ] Auto-migrando banco de dados…"
+alembic upgrade head
+
 if [ -n "$REDIS_URL" ] || [ -n "$CELERY_BROKER_URL" ]; then
   echo "[AFJ] Iniciando Celery worker + beat (broker configurado)…"
   celery -A app.workers.worker worker \
