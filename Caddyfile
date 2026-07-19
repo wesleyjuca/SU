@@ -1,0 +1,28 @@
+# ─── AFJ CORE SYSTEM — Reverse-proxy de produção (VPS) ─────────────────────────
+# Usado pelo serviço `caddy` do docker-compose.prod.yml.
+# TLS automático (Let's Encrypt) quando DOMAIN é um domínio real apontando
+# para o IP do VPS com as portas 80/443 abertas. Com DOMAIN=localhost, o
+# Caddy emite certificado interno auto-assinado (útil para teste local).
+
+{
+	email {$ACME_EMAIL:admin@localhost}
+}
+
+{$DOMAIN:localhost} {
+	encode gzip
+
+	# API (REST + WebSocket /api/v1/ws — reverse_proxy trata o upgrade)
+	handle /api/* {
+		reverse_proxy backend:8000
+	}
+
+	# Healthcheck do backend
+	handle /health {
+		reverse_proxy backend:8000
+	}
+
+	# Todo o resto → Next.js
+	handle {
+		reverse_proxy frontend:3000
+	}
+}
