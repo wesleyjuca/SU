@@ -1,44 +1,11 @@
 "use client";
 import { useState, useEffect } from "react";
-import { Plug, MessageCircle, PenTool, Clock, CheckCircle2, Smartphone, Loader2, LogOut, Link2 } from "lucide-react";
+import { Plug, MessageCircle, PenTool, Clock, CheckCircle2, Smartphone, Loader2, LogOut, Link2, CreditCard, Wallet, X } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
 
-// Base das integrações externas. Cada card descreve o recurso, o que já está
-// pronto no sistema para recebê-lo e o que falta (credenciais/provedor).
+// Cards estáticos (recursos que não são "conectar conta" — hoje só o PWA).
 const INTEGRACOES = [
-  {
-    icon: MessageCircle,
-    titulo: "WhatsApp — Notificações",
-    status: "planejado" as const,
-    desc: "Alertas de prazos, andamentos processuais e cobranças enviados por WhatsApp para advogados e clientes.",
-    prontos: [
-      "Sistema de notificações interno (sino) já operacional",
-      "Alertas de prazo já calculados pelo monitor de processos",
-      "Portal do cliente com vínculo seguro por cliente",
-    ],
-    faltam: [
-      "Conta WhatsApp Business API (Meta) ou provedor (ex.: Twilio)",
-      "Credenciais no Railway (token + número verificado)",
-      "Templates de mensagem aprovados pela Meta",
-    ],
-  },
-  {
-    icon: PenTool,
-    titulo: "Assinatura Eletrônica de Contratos",
-    status: "planejado" as const,
-    desc: "Envio de contratos para assinatura eletrônica (ICP-Brasil ou assinatura simples) direto do fluxo de contratos.",
-    prontos: [
-      "Contratos com conteúdo/minuta e ciclo de vida completo",
-      "Geração de PDF do documento",
-      "Fila de aprovações (HITL) para envio controlado",
-    ],
-    faltam: [
-      "Contrato com provedor (ex.: Clicksign, DocuSign, D4Sign)",
-      "Credenciais/API key no Railway",
-      "Webhook de retorno para atualizar o status do contrato",
-    ],
-  },
   {
     icon: Smartphone,
     titulo: "App Instalável (PWA)",
@@ -224,6 +191,184 @@ function GoogleWorkspaceCard() {
   );
 }
 
+// ─── Hub de integrações (conectar conta por escritório) ───────────────────────
+interface HubField { key: string; label: string; secret: boolean }
+interface HubIntegracao {
+  provider: string; nome: string; desc: string; tipo: string;
+  fields: HubField[]; ativa: string[]; obter: string;
+  status: string; connected_at: string | null;
+}
+
+const HUB_ICONS: Record<string, typeof CreditCard> = {
+  stripe: CreditCard,
+  mercadopago: Wallet,
+  clicksign: PenTool,
+  whatsapp: MessageCircle,
+};
+
+function HubCards() {
+  const toast = useToast();
+  const [itens, setItens] = useState<HubIntegracao[]>([]);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [conectando, setConectando] = useState<HubIntegracao | null>(null);
+  const [form, setForm] = useState<Record<string, string>>({});
+  const [working, setWorking] = useState(false);
+
+  async function fetchHub() {
+    try {
+      const res = await fetch("/api/v1/integrations/hub", { headers: authH() });
+      if (res.ok) setItens((await res.json()).integracoes || []);
+    } catch { /* mantém lista vazia */ }
+  }
+
+  useEffect(() => {
+    fetchHub();
+    fetch("/api/v1/users/me", { headers: authH() })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => setIsAdmin(d?.role === "ADMIN" || d?.role === "SUPERADMIN"))
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function abrirConectar(it: HubIntegracao) {
+    setForm({});
+    setConectando(it);
+  }
+
+  async function conectar() {
+    if (!conectando) return;
+    setWorking(true);
+    try {
+      const res = await fetch(`/api/v1/integrations/hub/${conectando.provider}/connect`, {
+        method: "POST", headers: authH(),
+        body: JSON.stringify({ credentials: form }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (res.ok) { toast.success(d.message || "Integração conectada."); setConectando(null); fetchHub(); }
+      else toast.error(d.detail || "Erro ao conectar.");
+    } catch { toast.error("Falha de conexão."); }
+    finally { setWorking(false); }
+  }
+
+  async function desconectar(it: HubIntegracao) {
+    if (!confirm(`Desconectar ${it.nome}? As credenciais salvas serão removidas.`)) return;
+    setWorking(true);
+    try {
+      const res = await fetch(`/api/v1/integrations/hub/${it.provider}`, { method: "DELETE", headers: authH() });
+      if (res.ok) { toast.success("Integração desconectada."); fetchHub(); }
+      else toast.error("Erro ao desconectar.");
+    } catch { toast.error("Falha de conexão."); }
+    finally { setWorking(false); }
+  }
+
+  return (
+    <>
+      {itens.map((it) => {
+        const Icon = HUB_ICONS[it.provider] || Plug;
+        const conectada = it.status === "CONECTADA";
+        return (
+          <div key={it.provider} className="afj-card p-5">
+            <div className="flex items-start justify-between gap-3 flex-wrap">
+              <div className="flex items-center gap-3">
+                <span className="w-10 h-10 rounded-sm bg-afj-gold/10 flex items-center justify-center flex-shrink-0">
+                  <Icon size={19} className="text-afj-gold" />
+                </span>
+                <div>
+                  <p className="font-semibold text-afj-black text-sm">{it.nome}</p>
+                  <p className="text-xs text-afj-black/55 mt-0.5">{it.desc}</p>
+                </div>
+              </div>
+              <span className={`inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-sm border flex-shrink-0 ${
+                conectada ? "bg-green-50 text-green-700 border-green-200" : "bg-gray-50 text-gray-500 border-gray-200"
+              }`}>
+                {conectada ? <CheckCircle2 size={11} /> : <Clock size={11} />}
+                {conectada ? "Conectada" : "Desconectada"}
+              </span>
+            </div>
+
+            <div className="mt-4">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-afj-black/40 mb-1.5">
+                {conectada ? "Habilitado com a conexão" : "O que a conexão habilita"}
+              </p>
+              <ul className="space-y-1">
+                {it.ativa.map((a) => (
+                  <li key={a} className="flex gap-1.5 text-xs text-afj-black/60">
+                    {conectada
+                      ? <CheckCircle2 size={12} className="text-green-500 flex-shrink-0 mt-0.5" />
+                      : <Clock size={12} className="text-afj-gold flex-shrink-0 mt-0.5" />} {a}
+                  </li>
+                ))}
+              </ul>
+            </div>
+
+            <div className="flex items-center gap-3 mt-4 flex-wrap">
+              {conectada ? (
+                <>
+                  {it.connected_at && (
+                    <span className="text-xs text-afj-black/55">
+                      Conectada em {new Date(it.connected_at).toLocaleDateString("pt-BR")}
+                    </span>
+                  )}
+                  {isAdmin && (
+                    <button onClick={() => desconectar(it)} disabled={working}
+                      className="btn-afj-outline text-xs py-1.5 px-3 rounded-sm flex items-center gap-1.5 disabled:opacity-50">
+                      <LogOut size={12} /> Desconectar
+                    </button>
+                  )}
+                </>
+              ) : isAdmin ? (
+                <button onClick={() => abrirConectar(it)} disabled={working}
+                  className="btn-afj-primary text-sm py-2 px-4 rounded-sm flex items-center gap-2 disabled:opacity-50">
+                  <Link2 size={14} /> Conectar
+                </button>
+              ) : (
+                <p className="text-xs text-afj-black/45">Somente o administrador do escritório pode conectar.</p>
+              )}
+            </div>
+          </div>
+        );
+      })}
+
+      {/* Modal de conexão (credenciais do provedor) */}
+      {conectando && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => !working && setConectando(null)}>
+          <div className="bg-white rounded-sm shadow-xl w-full max-w-md p-5 max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-1">
+              <h3 className="font-semibold text-afj-black text-sm">Conectar {conectando.nome}</h3>
+              <button onClick={() => setConectando(null)} disabled={working} className="text-afj-black/40 hover:text-afj-black p-1"><X size={16} /></button>
+            </div>
+            <p className="text-xs text-afj-black/50 mb-4">{conectando.obter}</p>
+            <div className="space-y-3">
+              {conectando.fields.map((f) => (
+                <div key={f.key}>
+                  <label className="block text-xs font-medium text-afj-black/70 mb-1">{f.label}</label>
+                  <input
+                    type={f.secret ? "password" : "text"}
+                    value={form[f.key] || ""}
+                    onChange={(e) => setForm((prev) => ({ ...prev, [f.key]: e.target.value }))}
+                    className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold"
+                    autoComplete="off"
+                  />
+                </div>
+              ))}
+            </div>
+            <p className="text-[11px] text-afj-black/45 mt-3">
+              As credenciais são cifradas em repouso e valem só para este escritório.
+            </p>
+            <div className="flex justify-end gap-2 mt-4">
+              <button onClick={() => setConectando(null)} disabled={working} className="btn-afj-outline text-xs py-1.5 px-3 rounded-sm">Cancelar</button>
+              <button onClick={conectar} disabled={working}
+                className="btn-afj-primary text-xs py-1.5 px-4 rounded-sm flex items-center gap-1.5 disabled:opacity-50">
+                {working ? <Loader2 size={12} className="animate-spin" /> : <Link2 size={12} />} Conectar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 export default function IntegracoesPage() {
   return (
     <div className="max-w-4xl mx-auto space-y-5">
@@ -242,6 +387,7 @@ export default function IntegracoesPage() {
 
       <div className="space-y-4">
         <GoogleWorkspaceCard />
+        <HubCards />
         {INTEGRACOES.map((it) => {
           const Icon = it.icon;
           const isParcial = it.status === "parcial";

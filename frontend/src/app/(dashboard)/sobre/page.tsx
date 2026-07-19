@@ -57,7 +57,7 @@ const AREAS: { titulo: string; recursos: Recurso[] }[] = [
       { icon: Shield, nome: "Ética, Controle & Integridade", desc: "Código de Conduta com aceite registrado, Canal de Denúncias anônimo e controles técnicos ativos (HITL, auditoria, LGPD).", estado: "operacional" },
       { icon: Sparkles, nome: "App Instalável (PWA)", desc: "Manifest e service worker publicados; offline ampliado e push em evolução.", estado: "parcial" },
       { icon: Sparkles, nome: "Google Workspace", desc: "Agenda (link já funciona), Drive e Gmail integrados via OAuth — conecte sua conta em Integrações.", estado: "parcial" },
-      { icon: Clock, nome: "Integrações Externas", desc: "WhatsApp e assinatura eletrônica mapeadas em Integrações — aguardando credenciais de provedor.", estado: "planejado" },
+      { icon: Clock, nome: "Integrações Externas", desc: "Hub \"Conectar conta\" pronto (Stripe, Mercado Pago, Clicksign, WhatsApp) com credenciais cifradas por escritório — recursos ativam nas fases de cada provedor.", estado: "parcial" },
     ],
   },
 ];
@@ -83,7 +83,7 @@ const ROADMAP: { fase: string; itens: string; estado: Estado }[] = [
   { fase: "Possível prazo no andamento", itens: "Andamentos que provavelmente iniciam um prazo (intimação, despacho) recebem um selo e um botão \"Gerar prazo\" que abre a calculadora (CPC art. 219) pré-preenchida — anti-perda-de-prazo com confirmação humana", estado: "operacional" },
   { fase: "Segurança & Produção", itens: "Papéis/HITL blindados, worker em produção, tempo-real, CI com gates", estado: "operacional" },
   { fase: "Mobile / PWA / App nativo", itens: "PWA instalável e offline; base Capacitor pronta para publicar Android/iOS", estado: "operacional" },
-  { fase: "Integrações Externas", itens: "WhatsApp, assinatura eletrônica, gateway de pagamento (aguardam credenciais)", estado: "planejado" },
+  { fase: "Integrações Externas", itens: "Hub de conexão pronto (credenciais cifradas por escritório); pagamento, assinatura e WhatsApp ativam com a conta do provedor", estado: "parcial" },
   { fase: "Multi-unidade & SaaS", itens: "P1+P2 entregues (isolamento, provisionamento, cobrança manual) · P3 em curso: relatórios consolidados da banca com exportação PDF/Excel/CSV entregues; gateway de pagamento e subdomínios seguem", estado: "parcial" },
 ];
 
