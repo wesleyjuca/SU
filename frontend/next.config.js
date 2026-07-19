@@ -16,11 +16,15 @@ const nextConfig = {
       process.env.VERCEL_ENV === "preview" && prNumber
         ? `https://su-su-pr-${prNumber}.up.railway.app`
         : null;
+    const productionFallback =
+      process.env.VERCEL || process.env.VERCEL_ENV === "production"
+        ? "https://su-production-4561.up.railway.app"
+        : "http://localhost:8000";
     const apiBase =
       process.env.API_URL ||
       process.env.NEXT_PUBLIC_API_URL ||
       previewBackend ||
-      "http://localhost:8000";
+      productionFallback;
     return [
       {
         source: "/api/v1/:path*",
