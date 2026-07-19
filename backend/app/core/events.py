@@ -134,6 +134,10 @@ async def lifespan(app: FastAPI):
             "ALTER TABLE process_deadlines ADD COLUMN IF NOT EXISTS alertas_enviados JSONB DEFAULT '[]'::jsonb",
             "ALTER TABLE document_versions ADD COLUMN IF NOT EXISTS conteudo_texto TEXT",
             "ALTER TABLE process_movements ADD COLUMN IF NOT EXISTS possivel_prazo BOOLEAN DEFAULT FALSE",
+            # Fase 68 — pagamento online de faturas (link + provedor + id externo)
+            "ALTER TABLE billing_invoices ADD COLUMN IF NOT EXISTS payment_link TEXT",
+            "ALTER TABLE billing_invoices ADD COLUMN IF NOT EXISTS payment_provider VARCHAR(30)",
+            "ALTER TABLE billing_invoices ADD COLUMN IF NOT EXISTS payment_external_id VARCHAR(150)",
         ]:
             try:
                 async with engine.begin() as conn:

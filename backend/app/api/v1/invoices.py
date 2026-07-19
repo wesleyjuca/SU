@@ -66,6 +66,8 @@ def _to_dict(inv: BillingInvoice, cliente_nome: str | None = None) -> dict:
         "status": inv.status,
         "emitido_em": inv.emitido_em.isoformat() if inv.emitido_em else None,
         "pago_em": inv.pago_em.isoformat() if inv.pago_em else None,
+        "payment_link": inv.payment_link,
+        "payment_provider": inv.payment_provider,
     }
 
 
@@ -160,6 +162,29 @@ async def patch_invoice(
         inv.pago_em = datetime.now(timezone.utc)
     await db.commit()
     return {"message": "Fatura atualizada.", "status": inv.status}
+
+
+@router.post("/{invoice_id}/payment-link")
+async def gerar_link_pagamento(
+    invoice_id: str,
+    current_user: User = Depends(require_role("ADMIN", "SOCIO", "GESTOR")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Gera o link de pagamento no gateway conectado (Stripe/Mercado Pago).
+
+    O cliente paga pelo link; o webhook do provedor confirma e a fatura vira
+    PAGA automaticamente (verificação server-side na API do provedor)."""
+    from app.services.payment_gateway import criar_link_pagamento
+
+    inv = await _get_invoice(db, invoice_id, current_user.tenant_id)
+    if inv.payment_link and inv.status == "EMITIDA":
+        return {"message": "Link já gerado.", "payment_link": inv.payment_link, "provider": inv.payment_provider}
+    result = await criar_link_pagamento(db, current_user.tenant_id, inv)
+    inv.payment_link = result["url"]
+    inv.payment_provider = result["provider"]
+    inv.payment_external_id = result["external_id"]
+    await db.flush()
+    return {"message": "Link de pagamento gerado.", "payment_link": inv.payment_link, "provider": inv.payment_provider}
 
 
 @router.delete("/{invoice_id}", status_code=204)

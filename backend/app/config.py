@@ -40,6 +40,10 @@ class Settings(BaseSettings):
     # ─── CORS ────────────────────────────────────────────────────────────────
     CORS_ORIGINS: list[str] = ["http://localhost:3000"]
 
+    # URL pública do sistema (usada em redirects de pagamento e webhooks).
+    # Se vazio, usa o primeiro CORS origin.
+    PUBLIC_BASE_URL: str = ""
+
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod
     def parse_cors_origins(cls, v):
