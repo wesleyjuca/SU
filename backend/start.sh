@@ -6,8 +6,15 @@
 # (ver infra/railway.toml); este script cobre o deploy de serviço único.
 set -e
 
-echo "[AFJ] Auto-migrando banco de dados…"
-alembic upgrade head
+# Auto-migração best-effort: em bancos legados criados via create_all (sem
+# carimbo do alembic), `upgrade head` falha em "table already exists" — não pode
+# derrubar o boot (set -e). O startup do app aplica create_all + ALTERs de
+# qualquer forma; para alinhar o alembic num banco legado, rode uma única vez:
+#   alembic stamp head
+echo "[AFJ] Auto-migrando banco de dados (alembic upgrade head)…"
+if ! alembic upgrade head; then
+  echo "[AFJ][WARN] alembic falhou (banco legado sem carimbo?) — seguindo; o startup aplica create_all/ALTERs."
+fi
 
 if [ -n "$REDIS_URL" ] || [ -n "$CELERY_BROKER_URL" ]; then
   echo "[AFJ] Iniciando Celery worker + beat (broker configurado)…"

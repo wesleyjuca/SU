@@ -1,5 +1,9 @@
 # Deploy — AFJ CORE SYSTEM
 
+> **Self-hosted em VPS (HostGator VPS/Cloud etc.)?** Veja o guia dedicado
+> [`DEPLOY_VPS.md`](./DEPLOY_VPS.md) — `docker-compose.prod.yml` com
+> frontend + backend + Caddy (HTTPS automático) num único servidor.
+
 ## Topologia
 - **Frontend**: Vercel (auto-deploy no push a `main` que toque `frontend/**`).
 - **Backend**: Railway (auto-deploy; build pelo `Dockerfile` da raiz, config em `railway.toml`).
