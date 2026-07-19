@@ -65,13 +65,17 @@ async def hub_disconnect(
 
 # ─── Receiver público de webhooks ─────────────────────────────────────────────
 @webhooks_router.post("/{provider}")
-async def receive_webhook(provider: str, request: Request):
+async def receive_webhook(
+    provider: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
     """Recebe callbacks dos provedores (sem auth — eles não têm JWT nosso).
 
-    Base (Fase 67): valida o provedor, registra o evento no log e responde 200
-    para o provedor não re-tentar. O processamento real (confirmar pagamento,
-    atualizar contrato assinado…) é ligado nas fases de cada integração, que
-    também validam a assinatura específica do provedor (ex.: Stripe-Signature)."""
+    Segurança: o payload é tratado como DICA. Para pagamento (stripe/
+    mercadopago), a confirmação real é feita consultando a API do provedor
+    com as credenciais do escritório — nunca se marca uma fatura como PAGA
+    só porque o POST chegou. Sempre responde 200 (evita re-tentativas)."""
     if provider not in integration_hub.PROVIDERS:
         return {"received": False, "error": "provedor desconhecido"}
     try:
@@ -84,4 +88,11 @@ async def receive_webhook(provider: str, request: Request):
         event=payload.get("type") or payload.get("event") or payload.get("action"),
         keys=sorted(payload.keys())[:10] if isinstance(payload, dict) else None,
     )
+    if provider in ("stripe", "mercadopago"):
+        from app.services.payment_gateway import processar_webhook_pagamento
+        result = await processar_webhook_pagamento(
+            db, provider, payload if isinstance(payload, dict) else {}, dict(request.query_params),
+        )
+        log.info("webhook_pagamento", provider=provider, **result)
+        return {"received": True, **result}
     return {"received": True}

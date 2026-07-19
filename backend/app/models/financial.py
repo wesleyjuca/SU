@@ -43,6 +43,10 @@ class BillingInvoice(Base):
     data_vencimento: Mapped[date | None] = mapped_column(Date)
     valor_total: Mapped[Decimal | None] = mapped_column(Numeric(15, 2))
     status: Mapped[str] = mapped_column(String(20), default="RASCUNHO")  # RASCUNHO/EMITIDA/PAGA/CANCELADA
+    # Pagamento online (Fase 68): link gerado no gateway conectado do escritório
+    payment_link: Mapped[str | None] = mapped_column(Text)
+    payment_provider: Mapped[str | None] = mapped_column(String(30))     # stripe | mercadopago
+    payment_external_id: Mapped[str | None] = mapped_column(String(150))  # checkout session / preference id
     created_by: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id"))
     emitido_em: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     pago_em: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

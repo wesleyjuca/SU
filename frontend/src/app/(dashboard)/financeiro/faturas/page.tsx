@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect } from "react";
-import { Receipt, Plus, X, FileText, Trash2, CheckCircle, Send, Loader2 } from "lucide-react";
+import { Receipt, Plus, X, FileText, Trash2, CheckCircle, Send, Loader2, Link2, Copy } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
 
@@ -10,6 +10,7 @@ interface Invoice {
   itens: { descricao: string; valor: number }[]; valor_total: number; status: string;
   periodo_inicio: string | null; periodo_fim: string | null; data_vencimento: string | null;
   emitido_em: string | null; pago_em: string | null;
+  payment_link: string | null; payment_provider: string | null;
 }
 interface Cliente { id: string; nome_completo: string }
 
@@ -102,6 +103,24 @@ export default function FaturasPage() {
     finally { setBusy(null); }
   }
 
+  async function copiarLink(link: string) {
+    try { await navigator.clipboard.writeText(link); toast.success("Link de pagamento copiado — envie ao cliente."); }
+    catch { toast.warning(`Link: ${link}`); }
+  }
+
+  async function gerarLinkPagamento(inv: Invoice) {
+    setBusy(inv.id);
+    try {
+      const res = await fetch(`/api/v1/financial/invoices/${inv.id}/payment-link`, { method: "POST", headers: authH() });
+      const d = await res.json().catch(() => ({}));
+      if (res.ok && d.payment_link) {
+        await copiarLink(d.payment_link);
+        fetchInvoices();
+      } else toast.error(d.detail || "Erro ao gerar o link de pagamento.");
+    } catch { toast.error("Falha de conexão."); }
+    finally { setBusy(null); }
+  }
+
   async function baixarPdf(inv: Invoice) {
     setBusy(inv.id);
     try {
@@ -167,7 +186,14 @@ export default function FaturasPage() {
                         <button onClick={() => mudarStatus(inv, "EMITIDA")} disabled={busy === inv.id} title="Emitir" className="text-amber-600 hover:text-amber-700 p-1.5 rounded hover:bg-amber-50 disabled:opacity-40"><Send size={15} /></button>
                       )}
                       {inv.status === "EMITIDA" && (
-                        <button onClick={() => mudarStatus(inv, "PAGA")} disabled={busy === inv.id} title="Marcar paga" className="text-green-600 hover:text-green-700 p-1.5 rounded hover:bg-green-50 disabled:opacity-40"><CheckCircle size={15} /></button>
+                        <>
+                          {inv.payment_link ? (
+                            <button onClick={() => copiarLink(inv.payment_link!)} disabled={busy === inv.id} title="Copiar link de pagamento" className="text-afj-gold hover:text-afj-gold/80 p-1.5 rounded hover:bg-afj-cream disabled:opacity-40"><Copy size={15} /></button>
+                          ) : (
+                            <button onClick={() => gerarLinkPagamento(inv)} disabled={busy === inv.id} title="Gerar link de pagamento (Stripe/Mercado Pago)" className="text-afj-gold hover:text-afj-gold/80 p-1.5 rounded hover:bg-afj-cream disabled:opacity-40"><Link2 size={15} /></button>
+                          )}
+                          <button onClick={() => mudarStatus(inv, "PAGA")} disabled={busy === inv.id} title="Marcar paga" className="text-green-600 hover:text-green-700 p-1.5 rounded hover:bg-green-50 disabled:opacity-40"><CheckCircle size={15} /></button>
+                        </>
                       )}
                       {inv.status === "RASCUNHO" && (
                         <button onClick={() => excluir(inv)} disabled={busy === inv.id} title="Excluir rascunho" className="text-red-500 hover:text-red-600 p-1.5 rounded hover:bg-red-50 disabled:opacity-40"><Trash2 size={15} /></button>
