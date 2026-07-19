@@ -95,4 +95,13 @@ async def receive_webhook(
         )
         log.info("webhook_pagamento", provider=provider, **result)
         return {"received": True, **result}
+    if provider == "clicksign":
+        from app.services.esign import processar_webhook_assinatura
+        try:
+            result = await processar_webhook_assinatura(db, payload if isinstance(payload, dict) else {})
+        except Exception as exc:
+            log.warning("webhook_assinatura_erro", error=str(exc))
+            result = {"processed": False, "reason": "erro interno"}
+        log.info("webhook_assinatura", **result)
+        return {"received": True, **result}
     return {"received": True}

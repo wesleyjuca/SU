@@ -7,7 +7,7 @@ from typing import Any
 import uuid
 
 from app.db.base import get_db
-from app.dependencies import get_current_user
+from app.dependencies import get_current_user, require_role
 from app.models.user import User
 from app.models.document import Document, Contract
 from app.core.exceptions import NotFoundError
@@ -549,6 +549,52 @@ async def create_contract(
     db.add(contract)
     await db.flush()
     return {"id": str(doc.id), "titulo": doc.titulo, "status": doc.status, "tipo": doc.tipo}
+
+
+class ContractSendSignature(BaseModel):
+    email: str
+    nome: str
+
+
+@router.post("/contracts/{doc_id}/enviar-assinatura")
+async def enviar_contrato_assinatura(
+    doc_id: str,
+    body: ContractSendSignature,
+    current_user: User = Depends(require_role("ADVOGADO", "GESTOR", "SOCIO", "ADMIN")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Envia o contrato para assinatura eletrônica via Clicksign (Integrações).
+
+    Ação humana com gate de papel (o advogado é o humano no circuito); o
+    signatário recebe o e-mail do Clicksign e o webhook de retorno marca o
+    contrato como ASSINADO após verificação na API do provedor."""
+    from app.services.esign import enviar_para_assinatura
+
+    doc = (await db.execute(
+        select(Document).where(
+            Document.id == uuid.UUID(doc_id),
+            Document.tenant_id == current_user.tenant_id,
+            Document.tipo == "CONTRATO",
+        )
+    )).scalar_one_or_none()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Contrato não encontrado.")
+    if not (doc.conteudo_html or doc.conteudo_texto):
+        raise HTTPException(status_code=422, detail="Contrato sem conteúdo — gere ou escreva a minuta antes de enviar.")
+    contract = (await db.execute(
+        select(Contract).where(Contract.document_id == doc.id)
+    )).scalar_one_or_none()
+    if not contract:
+        raise HTTPException(status_code=404, detail="Registro do contrato não encontrado.")
+    if contract.status == "ASSINADO":
+        raise HTTPException(status_code=422, detail="Contrato já assinado.")
+
+    result = await enviar_para_assinatura(db, current_user.tenant_id, doc, contract, body.email.strip(), body.nome.strip())
+    return {
+        "message": f"Contrato enviado para assinatura de {body.email.strip()} via Clicksign.",
+        **result,
+        "status": contract.status,
+    }
 
 
 class ContractGenerateRequest(BaseModel):

@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect } from "react";
-import { FileSignature, Plus, Search, Calendar, Pencil, Trash2, X, Loader2, RefreshCw, Sparkles, Archive } from "lucide-react";
+import { FileSignature, Plus, Search, Calendar, Pencil, Trash2, X, Loader2, RefreshCw, Sparkles, Archive, Send } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
 
@@ -22,6 +22,8 @@ interface Cliente { id: string; nome_completo: string; razao_social: string | nu
 const STATUS_STYLE: Record<string, string> = {
   RASCUNHO: "badge-pendente",
   ATIVO: "badge-ativo",
+  AGUARDANDO_ASSINATURA: "badge-pendente",
+  ASSINADO: "badge-ativo",
   ENCERRADO: "badge-arquivado",
   CANCELADO: "badge-arquivado",
 };
@@ -60,6 +62,9 @@ export default function ContratosPage() {
   const [generating, setGenerating] = useState(false);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [editStatus, setEditStatus] = useState("RASCUNHO");
+  const [signingContrato, setSigningContrato] = useState<Contrato | null>(null);
+  const [signForm, setSignForm] = useState({ email: "", nome: "" });
+  const [sending, setSending] = useState(false);
 
   useEffect(() => {
     fetchContratos();
@@ -83,6 +88,33 @@ export default function ContratosPage() {
       headers: { Authorization: `Bearer ${token}` },
     });
     if (res.ok) setClientes(await res.json());
+  }
+
+  function abrirEnvioAssinatura(c: Contrato) {
+    const cli = clientes.find((x) => x.id === c.client_id);
+    setSignForm({ email: "", nome: cli?.nome_completo || "" });
+    setSigningContrato(c);
+  }
+
+  async function enviarAssinatura() {
+    if (!signingContrato || !signForm.email.trim() || !signForm.nome.trim()) {
+      toast.error("Informe nome e e-mail do signatário."); return;
+    }
+    setSending(true);
+    try {
+      const token = localStorage.getItem("afj_access_token");
+      const res = await fetch(`/api/v1/documents/contracts/${signingContrato.id}/enviar-assinatura`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ email: signForm.email.trim(), nome: signForm.nome.trim() }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (res.ok) {
+        toast.success(d.message || "Contrato enviado para assinatura via Clicksign.");
+        setSigningContrato(null); fetchContratos();
+      } else toast.error(d.detail || "Erro ao enviar para assinatura.");
+    } catch { toast.error("Falha de conexão."); }
+    finally { setSending(false); }
   }
 
   async function criarContrato(e: React.FormEvent) {
@@ -281,6 +313,16 @@ export default function ContratosPage() {
                 </div>
               )}
               <div className="mt-3 pt-2 border-t border-afj-cream-dark flex items-center justify-end gap-2">
+                {c.status !== "ASSINADO" && c.status !== "CANCELADO" && (
+                  <button
+                    onClick={() => abrirEnvioAssinatura(c)}
+                    className="text-afj-black/30 hover:text-afj-gold transition-colors"
+                    aria-label="Enviar para assinatura eletrônica"
+                    title="Enviar para assinatura (Clicksign)"
+                  >
+                    <Send size={13} />
+                  </button>
+                )}
                 <button
                   onClick={() => abrirEdicao(c)}
                   className="text-afj-black/30 hover:text-afj-gold transition-colors"
@@ -501,6 +543,43 @@ export default function ContratosPage() {
                 <Trash2 size={13} /> Excluir permanentemente
               </button>
               <button onClick={() => setDeletingId(null)} className="w-full text-afj-black/50 text-sm py-1 hover:text-afj-black">Cancelar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Enviar para assinatura eletrônica (Clicksign) */}
+      {signingContrato && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => !sending && setSigningContrato(null)}>
+          <div className="bg-white rounded-sm shadow-xl w-full max-w-md p-5" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-1">
+              <h2 className="font-semibold text-afj-black text-sm flex items-center gap-2">
+                <FileSignature size={15} className="text-afj-gold" /> Enviar para assinatura
+              </h2>
+              <button onClick={() => setSigningContrato(null)} disabled={sending} className="text-afj-black/40 hover:text-afj-black"><X size={16} /></button>
+            </div>
+            <p className="text-xs text-afj-black/50 mb-4">
+              “{signingContrato.titulo}” será enviado via <strong>Clicksign</strong> — o signatário recebe um e-mail para assinar;
+              quando concluir, o contrato muda para ASSINADO automaticamente.
+            </p>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-medium text-afj-black/70 mb-1">Nome do signatário *</label>
+                <input value={signForm.nome} onChange={(e) => setSignForm({ ...signForm, nome: e.target.value })}
+                  className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold" />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-afj-black/70 mb-1">E-mail do signatário *</label>
+                <input type="email" value={signForm.email} onChange={(e) => setSignForm({ ...signForm, email: e.target.value })}
+                  className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold" />
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 mt-4">
+              <button onClick={() => setSigningContrato(null)} disabled={sending} className="btn-afj-outline text-xs py-1.5 px-3 rounded-sm">Cancelar</button>
+              <button onClick={enviarAssinatura} disabled={sending}
+                className="btn-afj-primary text-xs py-1.5 px-4 rounded-sm flex items-center gap-1.5 disabled:opacity-50">
+                {sending ? <Loader2 size={12} className="animate-spin" /> : <Send size={12} />} Enviar
+              </button>
             </div>
           </div>
         </div>
