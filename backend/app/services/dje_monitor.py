@@ -153,6 +153,21 @@ async def scan_publicacoes(db, tenant_id: uuid.UUID | None = None, dias_retro: i
                         priority="HIGH",
                         link="/publicacoes",
                     ))
+                # WhatsApp best-effort para quem tem telefone cadastrado
+                if equipe_ids:
+                    from app.models.user import User as _User
+                    from app.services.whatsapp import enviar_whatsapp
+                    tels = (await db.execute(
+                        select(_User.telefone).where(
+                            _User.id.in_(equipe_ids), _User.telefone.isnot(None)
+                        )
+                    )).scalars().all()
+                    for tel in tels:
+                        await enviar_whatsapp(
+                            db, t_id, tel,
+                            f"Nova intimação: {c.numero_cnj_fmt or 'processo'} "
+                            f"({c.tipo_comunicacao or 'Intimação'}) — revise e defina o prazo em Publicações.",
+                        )
 
     await db.commit()
     log.info("dje_scan_done", oabs=len(oabs), novas=novas, casadas=casadas, tenant=str(tenant_id) if tenant_id else "all")

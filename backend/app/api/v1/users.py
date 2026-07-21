@@ -62,6 +62,7 @@ def _validate_role_assignment(role: str, current_user: User) -> None:
 
 class ProfileUpdate(BaseModel):
     full_name: str | None = None
+    telefone: str | None = None   # WhatsApp p/ alertas de prazo/intimação (Fase 70)
 
 
 class UserInvite(BaseModel):
@@ -321,6 +322,7 @@ async def get_me(
         "tenant_id": str(current_user.tenant_id) if current_user.tenant_id else None,
         "oab_number": current_user.oab_number,
         "oab_uf": current_user.oab_uf,
+        "telefone": current_user.telefone,
         "is_root": is_root,
         "is_unit": is_unit,
         "has_units": has_units,
@@ -335,6 +337,8 @@ async def update_me(
 ):
     if body.full_name is not None:
         current_user.full_name = body.full_name
+    if body.telefone is not None:
+        current_user.telefone = body.telefone.strip() or None
     await db.commit()
     return {"message": "Perfil atualizado"}
 

@@ -73,9 +73,14 @@ PROVIDERS: dict[str, dict] = {
             {"key": "phone_number_id", "label": "Phone number ID", "secret": False},
         ],
         "ativa": [
-            "Envio de notificações por template aprovado (fase WhatsApp)",
+            "Alertas de prazo para o advogado (telefone no Perfil)",
+            "Aviso de nova intimação para a equipe do processo",
+            "Fatura com link de pagamento enviada ao cliente",
         ],
-        "obter": "Meta for Developers → app WhatsApp Business → API Setup.",
+        "obter": "Meta for Developers → app WhatsApp Business → API Setup. "
+                 "Crie e aprove um template chamado 'afj_notificacao' (pt_BR) com "
+                 "um parâmetro {{1}} no corpo — mensagens fora da janela de 24h "
+                 "exigem template aprovado.",
     },
 }
 

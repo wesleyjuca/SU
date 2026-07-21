@@ -81,6 +81,12 @@ def check_upcoming_deadlines(self):
                         body=prazo.descricao[:100],
                         url=f"/processos/{prazo.process_id}",
                     )
+                if user and user.telefone:
+                    from app.services.whatsapp import enviar_whatsapp
+                    await enviar_whatsapp(
+                        db, user.tenant_id, user.telefone,
+                        f"Prazo em {dias} dia{'s' if dias != 1 else ''} ({prazo.data_prazo}): {prazo.descricao[:120]}",
+                    )
 
             # ── Vencimento de contratos (D-30/15/7) ──────────────────────────
             from sqlalchemy import func as _func

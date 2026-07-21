@@ -138,6 +138,8 @@ async def lifespan(app: FastAPI):
             "ALTER TABLE billing_invoices ADD COLUMN IF NOT EXISTS payment_link TEXT",
             "ALTER TABLE billing_invoices ADD COLUMN IF NOT EXISTS payment_provider VARCHAR(30)",
             "ALTER TABLE billing_invoices ADD COLUMN IF NOT EXISTS payment_external_id VARCHAR(150)",
+            # Fase 70 — WhatsApp do colaborador (notificações de prazo/intimação)
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS telefone VARCHAR(20)",
         ]:
             try:
                 async with engine.begin() as conn:

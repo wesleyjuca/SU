@@ -184,7 +184,28 @@ async def gerar_link_pagamento(
     inv.payment_provider = result["provider"]
     inv.payment_external_id = result["external_id"]
     await db.flush()
-    return {"message": "Link de pagamento gerado.", "payment_link": inv.payment_link, "provider": inv.payment_provider}
+
+    # WhatsApp best-effort ao cliente (se conectado e com telefone cadastrado)
+    whatsapp_enviado = False
+    if inv.client_id:
+        cliente = (await db.execute(
+            select(Client).where(Client.id == inv.client_id, Client.tenant_id == current_user.tenant_id)
+        )).scalar_one_or_none()
+        if cliente and cliente.telefone:
+            from app.services.whatsapp import enviar_whatsapp
+            whatsapp_enviado = await enviar_whatsapp(
+                db, current_user.tenant_id, cliente.telefone,
+                f"Fatura {inv.numero or ''} no valor de R$ {float(inv.valor_total):.2f}. "
+                f"Pague pelo link: {inv.payment_link}",
+            )
+
+    return {
+        "message": "Link de pagamento gerado."
+                   + (" Enviado ao cliente por WhatsApp." if whatsapp_enviado else ""),
+        "payment_link": inv.payment_link,
+        "provider": inv.payment_provider,
+        "whatsapp_enviado": whatsapp_enviado,
+    }
 
 
 @router.delete("/{invoice_id}", status_code=204)

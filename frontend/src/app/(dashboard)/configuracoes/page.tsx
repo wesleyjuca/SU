@@ -21,7 +21,7 @@ export default function ConfiguracoesPage() {
   const { subscribed, subscribe, unsubscribe, loading: pushLoading } = usePushSubscription();
 
   // Perfil
-  const [perfil, setPerfil] = useState({ full_name: "", email: "", oab_number: "", oab_uf: "" });
+  const [perfil, setPerfil] = useState({ full_name: "", email: "", oab_number: "", oab_uf: "", telefone: "" });
   const [perfilLoaded, setPerfilLoaded] = useState(false);
 
   // Notificações
@@ -58,6 +58,7 @@ export default function ConfiguracoesPage() {
           ...p,
           full_name: data.full_name ?? "",
           email: data.email ?? "",
+          telefone: data.telefone ?? "",
         }));
         setPerfilLoaded(true);
       }
@@ -71,7 +72,7 @@ export default function ConfiguracoesPage() {
       await fetch("/api/v1/users/me", {
         method: "PUT",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ full_name: perfil.full_name }),
+        body: JSON.stringify({ full_name: perfil.full_name, telefone: perfil.telefone }),
       });
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
@@ -225,6 +226,19 @@ export default function ConfiguracoesPage() {
                     placeholder="seu@email.com"
                   />
                   <p className="text-[10px] text-afj-black/35 mt-0.5">E-mail não pode ser alterado aqui.</p>
+                </div>
+                <div>
+                  <label className="text-xs text-afj-black/60 block mb-1">WhatsApp</label>
+                  <input
+                    type="tel"
+                    value={perfil.telefone}
+                    onChange={(e) => setPerfil({ ...perfil, telefone: e.target.value })}
+                    className={inputCls}
+                    placeholder="(68) 99999-9999"
+                  />
+                  <p className="text-[10px] text-afj-black/35 mt-0.5">
+                    Recebe alertas de prazo e intimações se o escritório conectar o WhatsApp em Integrações.
+                  </p>
                 </div>
                 <div>
                   <label className="text-xs text-afj-black/60 block mb-1">Número OAB</label>
