@@ -16,6 +16,7 @@ class User(Base):
     full_name: Mapped[str] = mapped_column(String(255), nullable=False)
     oab_number: Mapped[str | None] = mapped_column(String(20))
     oab_uf: Mapped[str | None] = mapped_column(String(2))
+    telefone: Mapped[str | None] = mapped_column(String(20))  # WhatsApp (Fase 70)
     role: Mapped[str] = mapped_column(String(50), nullable=False, default="ASSISTENTE")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     mfa_secret: Mapped[str | None] = mapped_column(String(255))
