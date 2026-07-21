@@ -128,11 +128,11 @@ def _parse_esaj_html(html: str, since: datetime) -> list[MovementData]:
                 if data_mov < since:
                     continue
                 movements.append(MovementData(
-                    data_movimento=data_mov,
+                    data=data_mov,
                     descricao=descricao,
                     tipo=None,
                     documento_url=None,
-                    raw_html=str(row),
+                    raw_data={"html": str(row)},
                 ))
             except ValueError:
                 continue

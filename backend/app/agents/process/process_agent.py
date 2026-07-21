@@ -148,51 +148,33 @@ class ProcessAgent(BaseAgent):
         )
 
     async def _save_movements(self, process_id: uuid.UUID, movimentos, movimentos_com_resumo: list[dict]) -> int:
-        """Persiste movimentos novos (dedup por data+descrição) e, se houver novos,
-        notifica a equipe do processo. Retorna a quantidade de andamentos NOVOS."""
+        """Persiste movimentos novos via importador ÚNICO (dedup canônico, Fase 72)
+        e notifica a equipe. Retorna a quantidade de andamentos NOVOS."""
         from sqlalchemy import select
-        from app.models.process import ProcessMovement, LegalProcess
+        from app.models.process import LegalProcess
+        from app.services.movements_import import importar_movimentos, MovimentoEntrada
 
         db, owned = await self._get_db()
         novos = 0
-        algum_prazo = False
         try:
-            for mov, enriched in zip(movimentos, movimentos_com_resumo):
-                # Evitar duplicatas por data + descrição
-                existing = await db.execute(
-                    select(ProcessMovement).where(
-                        ProcessMovement.process_id == process_id,
-                        ProcessMovement.data_movimento == mov.data,
-                        ProcessMovement.descricao == mov.descricao,
-                    )
-                )
-                if existing.scalar_one_or_none():
-                    continue
-
-                from app.utils.prazo import movimento_sugere_prazo
-                sugere = movimento_sugere_prazo(f"{mov.descricao} {enriched.get('ai_resumo') or ''}")
-                algum_prazo = algum_prazo or sugere
-                pm = ProcessMovement(
-                    process_id=process_id,
-                    data_movimento=mov.data,
+            proc = (await db.execute(
+                select(LegalProcess).where(LegalProcess.id == process_id)
+            )).scalar_one_or_none()
+            if not proc:
+                return 0
+            entradas = [
+                MovimentoEntrada(
+                    data=mov.data,
                     descricao=mov.descricao,
-                    tipo=mov.tipo,
+                    tipo=mov.tipo or "ANDAMENTO",
                     documento_url=mov.documento_url,
-                    raw_html=str(mov.raw_data) if mov.raw_data else None,
-                    ai_summary=enriched.get("ai_resumo"),
-                    possivel_prazo=sugere,
+                    raw=str(mov.raw_data) if mov.raw_data else None,
+                    ai_summary=enriched.get("ai_resumo") or None,
                 )
-                db.add(pm)
-                novos += 1
-
-            # Novos andamentos → avisa a equipe do processo (mesmo padrão do dje_monitor).
-            if novos:
-                proc = (await db.execute(
-                    select(LegalProcess).where(LegalProcess.id == process_id)
-                )).scalar_one_or_none()
-                if proc:
-                    from app.services.andamento_notify import notificar_equipe_andamento
-                    await notificar_equipe_andamento(db, proc, novos, com_prazo=algum_prazo)
+                for mov, enriched in zip(movimentos, movimentos_com_resumo)
+            ]
+            resultado = await importar_movimentos(db, proc, entradas, notificar=True)
+            novos = resultado["novos"]
             await db.commit()
         except Exception as exc:
             await db.rollback()
@@ -229,6 +211,8 @@ class ProcessAgent(BaseAgent):
         polled = 0
         errors = 0
         novos_movimentos = 0
+        polled_ids: list[uuid.UUID] = []
+        inicio_batch = datetime.now(timezone.utc)
 
         for processo in processos:
             try:
@@ -246,130 +230,86 @@ class ProcessAgent(BaseAgent):
                 if result_poll.succeeded:
                     polled += 1
                     novos_movimentos += sub_ctx.get_state("novos_movimentos", 0)
-                    # Atualizar last_polled_at usando context manager para evitar leak de conexão
-                    from sqlalchemy import update
-                    from app.models.process import LegalProcess as LP
-                    from sqlalchemy.ext.asyncio import AsyncSession
-                    from app.db.base import engine
-                    async with AsyncSession(engine) as db2:
-                        await db2.execute(
-                            update(LP).where(LP.id == processo.id).values(last_polled_at=datetime.now(timezone.utc))
-                        )
-                        await db2.commit()
+                    polled_ids.append(processo.id)
                 else:
                     errors += 1
             except Exception as exc:
                 errors += 1
                 log.error("batch_poll_error", processo=str(processo.id), error=str(exc))
 
+        # Uma única sessão para o fechamento do batch (antes: 1 sessão POR processo)
+        # — atualiza last_polled_at de todos e registra o SyncRun do ciclo.
+        stats = {
+            "total_processos": len(processos),
+            "polled_ok": polled,
+            "errors": errors,
+            "novos_movimentos": novos_movimentos,
+        }
+        try:
+            from sqlalchemy import update
+            from app.models.process import LegalProcess as LP
+            from app.models.sync_run import SyncRun
+            from sqlalchemy.ext.asyncio import AsyncSession
+            from app.db.base import engine
+            async with AsyncSession(engine) as db2:
+                if polled_ids:
+                    await db2.execute(
+                        update(LP).where(LP.id.in_(polled_ids)).values(last_polled_at=datetime.now(timezone.utc))
+                    )
+                db2.add(SyncRun(
+                    tenant_id=None, fonte="datajud", tipo="POLLING",
+                    status="OK" if errors == 0 else "ERRO",
+                    stats=stats, started_at=inicio_batch,
+                    finished_at=datetime.now(timezone.utc),
+                ))
+                await db2.commit()
+        except Exception as exc:
+            log.warning("poll_batch_close_failed", error=str(exc))
+
         return AgentResult(
             status=AgentStatus.SUCCESS,
             agent_name=self.name,
-            output={
-                "total_processos": len(processos),
-                "polled_ok": polled,
-                "errors": errors,
-                "novos_movimentos": novos_movimentos,
-                "polled_at": datetime.now(timezone.utc).isoformat(),
-            },
+            output={**stats, "polled_at": datetime.now(timezone.utc).isoformat()},
         )
 
     async def _search_by_oab(self, ctx: AgentContext, task: dict) -> AgentResult:
-        """Captura processos de uma OAB via Comunica/DJEN (fonte pública).
+        """Captura processos por OAB — DELEGA ao serviço consolidado (Fase 72).
 
-        Nota: o DataJud público não expõe partes/advogados e o PJe/ESAJ exigem
-        login — por isso a busca por OAB usa a Comunica, mesma fonte do monitor
-        de intimações. Para andamentos (fetch_movements) o DataJud segue válido.
-        """
-        from datetime import date, timedelta
-        from app.integrations.dje.comunica import buscar_comunicacoes
+        A implementação própria deste agente (sem enriquecimento, sem equipe,
+        tribunal fixo) foi aposentada: capturar_por_oab é o caminho único, com
+        dedup, responsável/equipe, enriquecimento DataJud e SyncRun."""
+        from app.services.oab_capture import capturar_por_oab
 
         oab = task.get("oab")
         uf = (task.get("uf") or "").upper()
         tenant_id_str = task.get("_tenant_id") or (str(ctx.tenant_id) if ctx.tenant_id else None)
-
         if not oab or not uf:
             return AgentResult(status=AgentStatus.FAILED, agent_name=self.name, error="oab e uf são obrigatórios")
+        if not tenant_id_str:
+            return AgentResult(status=AgentStatus.FAILED, agent_name=self.name, error="tenant não identificado")
 
-        hoje = date.today()
-        inicio = hoje - timedelta(days=int(task.get("dias_retro", 365)))
-        comunicacoes = await buscar_comunicacoes(oab, uf, inicio, hoje, max_paginas=20)
-
-        # Processos distintos (número com máscara) e o tribunal de cada um.
-        vistos: dict[str, str] = {}
-        for c in comunicacoes:
-            if c.numero_cnj and c.numero_cnj not in vistos:
-                vistos[c.numero_cnj] = c.numero_cnj_fmt or c.numero_cnj
-
-        salvos = 0
-        if vistos and tenant_id_str:
-            salvos = await self._save_processes_from_oab(
-                processos_numeros=list(vistos.values()),
-                tribunal="VÁRIOS",
-                oab=f"{oab}/{uf}",
-                uf=uf,
-                tenant_id=uuid.UUID(tenant_id_str),
+        db, owned = await self._get_db()
+        try:
+            resultado = await capturar_por_oab(
+                db, uuid.UUID(tenant_id_str),
+                dias_retro=int(task.get("dias_retro", 365)),
+                triggered_by=ctx.triggered_by,
+                apenas_oab=(oab, uf),
             )
+        except Exception as exc:
+            if owned:
+                await db.rollback()
+            log.error("search_by_oab_failed", oab=oab, error=str(exc))
+            return AgentResult(status=AgentStatus.FAILED, agent_name=self.name, error=str(exc))
+        finally:
+            if owned:
+                await db.close()
 
         return AgentResult(
             status=AgentStatus.SUCCESS,
             agent_name=self.name,
-            output={
-                "oab": oab,
-                "uf": uf,
-                "processos_encontrados": len(vistos),
-                "processos_salvos": salvos,
-                "numeros_cnj": list(vistos.values())[:50],
-            },
+            output={"oab": oab, "uf": uf, **resultado},
         )
-
-    async def _save_processes_from_oab(
-        self,
-        processos_numeros: list[str],
-        tribunal: str,
-        oab: str,
-        uf: str,
-        tenant_id: uuid.UUID,
-    ) -> int:
-        """Persiste processos encontrados por OAB no banco, evitando duplicatas."""
-        from sqlalchemy import select
-        from app.models.process import LegalProcess
-
-        db, owned = await self._get_db()
-        salvos = 0
-        try:
-            for numero_cnj in processos_numeros:
-                if not numero_cnj:
-                    continue
-                existing = await db.execute(
-                    select(LegalProcess).where(
-                        LegalProcess.numero_cnj == numero_cnj,
-                        LegalProcess.tenant_id == tenant_id,
-                    )
-                )
-                if existing.scalar_one_or_none():
-                    continue
-
-                processo = LegalProcess(
-                    tenant_id=tenant_id,
-                    numero_cnj=numero_cnj,
-                    tribunal=tribunal if tribunal != "VÁRIOS" else f"TJ{uf.upper()}",
-                    uf=uf.upper() if uf else None,
-                    situacao="ATIVO",
-                    oab_responsavel=oab,
-                    monitoring_active=True,
-                    metadata_json={"fonte_captura": "OAB", "oab_origem": oab},
-                )
-                db.add(processo)
-                salvos += 1
-            await db.commit()
-        except Exception as exc:
-            await db.rollback()
-            log.error("save_processes_from_oab_failed", oab=oab, error=str(exc))
-        finally:
-            if owned:
-                await db.close()
-        return salvos
 
     async def _resumir_movimento(self, movimento: dict) -> tuple[str, int, int, float]:
         """Gera resumo IA de um andamento processual (2-3 frases)."""

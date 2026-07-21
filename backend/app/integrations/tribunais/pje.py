@@ -86,11 +86,11 @@ class PJeClient(BaseTribunalClient):
         for item in data.get("movimentos", []):
             try:
                 movements.append(MovementData(
-                    data_movimento=datetime.fromisoformat(item["dataMovimento"]),
+                    data=datetime.fromisoformat(item["dataMovimento"]),
                     descricao=item.get("descricao", ""),
                     tipo=item.get("tipo"),
                     documento_url=item.get("documentoUrl"),
-                    raw_html=item.get("html"),
+                    raw_data={"html": item.get("html")} if item.get("html") else None,
                 ))
             except (KeyError, ValueError):
                 continue
