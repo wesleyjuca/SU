@@ -81,6 +81,8 @@ class ProcessMovement(Base):
     ai_summary: Mapped[str | None] = mapped_column(Text)
     # Heurística: o andamento provavelmente inicia um prazo (intimação, despacho c/ prazo…).
     possivel_prazo: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Dedup canônico (Fase 72): sha256(dia|descrição normalizada) — ver services/movements_import.py
+    dedup_hash: Mapped[str | None] = mapped_column(String(64), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     process: Mapped["LegalProcess"] = relationship(back_populates="movements")

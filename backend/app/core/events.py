@@ -140,6 +140,10 @@ async def lifespan(app: FastAPI):
             "ALTER TABLE billing_invoices ADD COLUMN IF NOT EXISTS payment_external_id VARCHAR(150)",
             # Fase 70 — WhatsApp do colaborador (notificações de prazo/intimação)
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS telefone VARCHAR(20)",
+            # Fase 72 — dedup canônico de movimentos (importador único de captura)
+            "ALTER TABLE process_movements ADD COLUMN IF NOT EXISTS dedup_hash VARCHAR(64)",
+            "CREATE INDEX IF NOT EXISTS ix_process_movements_dedup_hash ON process_movements (dedup_hash)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_process_movements_dedup ON process_movements (process_id, dedup_hash) WHERE dedup_hash IS NOT NULL",
         ]:
             try:
                 async with engine.begin() as conn:

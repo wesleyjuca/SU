@@ -70,6 +70,9 @@ async def scan_publicacoes(db, tenant_id: uuid.UUID | None = None, dias_retro: i
             proc_cache[t_id] = {_digits(cnj): (pid, resp) for (pid, cnj, resp) in rows if _digits(cnj)}
         return proc_cache[t_id]
 
+    from app.services.movements_import import iniciar_sync, finalizar_sync
+    sync = await iniciar_sync(db, tenant_id, fonte="comunica", tipo="SCAN")
+
     novas = 0
     casadas = 0
     for oab_numero, oab_uf, t_id in oabs:
@@ -117,13 +120,15 @@ async def scan_publicacoes(db, tenant_id: uuid.UUID | None = None, dias_retro: i
             if process_id:
                 casadas += 1
                 dm = datetime.combine(dt_disp or hoje, datetime.min.time()).replace(tzinfo=timezone.utc)
-                # dedupe do movimento por (processo, data, descrição)
+                # dedupe CANÔNICO do movimento (Fase 72 — mesmo hash do importador
+                # único; um andamento importado pelo polling não duplica como intimação)
+                from app.services.movements_import import dedup_hash as _dh
                 desc = (c.texto or c.tipo_comunicacao or "Intimação")[:2000]
+                h_mov = _dh(dm, desc)
                 dup = (await db.execute(
                     select(ProcessMovement.id).where(
                         ProcessMovement.process_id == process_id,
-                        ProcessMovement.data_movimento == dm,
-                        ProcessMovement.descricao == desc,
+                        ProcessMovement.dedup_hash == h_mov,
                     )
                 )).scalar_one_or_none()
                 if not dup:
@@ -133,6 +138,7 @@ async def scan_publicacoes(db, tenant_id: uuid.UUID | None = None, dias_retro: i
                         descricao=desc,
                         tipo="INTIMACAO",
                         documento_url=c.link,
+                        dedup_hash=h_mov,
                     ))
                 # Notifica o responsável E toda a equipe do processo (dedup).
                 from app.models.process import ProcessTeamMember
@@ -169,6 +175,8 @@ async def scan_publicacoes(db, tenant_id: uuid.UUID | None = None, dias_retro: i
                             f"({c.tipo_comunicacao or 'Intimação'}) — revise e defina o prazo em Publicações.",
                         )
 
+    resultado = {"oabs_monitoradas": len(oabs), "intimacoes_novas": novas, "casadas_com_processo": casadas}
+    await finalizar_sync(db, sync, "OK", resultado)
     await db.commit()
     log.info("dje_scan_done", oabs=len(oabs), novas=novas, casadas=casadas, tenant=str(tenant_id) if tenant_id else "all")
-    return {"oabs_monitoradas": len(oabs), "intimacoes_novas": novas, "casadas_com_processo": casadas}
+    return resultado

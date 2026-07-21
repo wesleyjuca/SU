@@ -84,13 +84,14 @@ def _area_from_assuntos(assuntos: list[str]) -> str | None:
 
 
 async def _enriquecer_via_datajud(db, procs: list[tuple]) -> None:
-    """Preenche metadados (classe/assunto/órgão/data) e cria os andamentos de cada
-    processo pelo número, via DataJud público. Best-effort: qualquer falha é ignorada."""
+    """Preenche metadados (classe/assunto/órgão/data) e importa os andamentos de
+    cada processo pelo número, via DataJud público + importador único (Fase 72).
+    Best-effort: qualquer falha é ignorada."""
     if not procs:
         return
-    from datetime import datetime, timezone
-    from app.models.process import ProcessMovement
+    from datetime import datetime
     from app.integrations.tribunais.cnj import CNJDataJudClient
+    from app.services.movements_import import importar_movimentos, parse_datajud_movimentos
 
     client = CNJDataJudClient()
     try:
@@ -120,28 +121,10 @@ async def _enriquecer_via_datajud(db, procs: list[tuple]) -> None:
                                "assuntos": (dados.get("assuntos") or [])[:5]}
             proc.metadata_json = meta
 
-            # Andamentos (dedup por processo+data+descrição)
-            vistos: set[tuple] = set()
-            for mov in (dados.get("movimentos") or [])[:100]:
-                nome = (mov.get("nome") or "").strip()
-                if not nome:
-                    continue
-                dh = mov.get("dataHora", "")
-                try:
-                    dt = datetime.fromisoformat(dh.replace("Z", "+00:00"))
-                except (ValueError, AttributeError):
-                    dt = datetime.now(timezone.utc)
-                chave = (dt.date().isoformat(), nome[:120])
-                if chave in vistos:
-                    continue
-                vistos.add(chave)
-                db.add(ProcessMovement(
-                    process_id=proc.id,
-                    data_movimento=dt,
-                    descricao=nome[:2000],
-                    tipo="ANDAMENTO",
-                ))
-            proc.ultimo_andamento_at = datetime.now(timezone.utc)
+            # Backfill inicial: sem notificação de equipe (processo recém-criado)
+            await importar_movimentos(
+                db, proc, parse_datajud_movimentos(dados, limite=100), notificar=False,
+            )
     finally:
         await client.close()
 
@@ -151,22 +134,48 @@ async def capturar_por_oab(
     tenant_id: uuid.UUID,
     dias_retro: int = 365,
     triggered_by: uuid.UUID | None = None,
+    apenas_oab: tuple[str, str] | None = None,
 ) -> dict:
     """Captura processos das OABs do escritório e cria os inexistentes.
 
     Idempotente: dedup contra LegalProcess por (tenant, numero_cnj).
+    `apenas_oab=(numero, uf)` restringe a captura a uma única OAB (caminho do
+    agente, Fase 72 — antes havia uma 2ª implementação paralela e mais pobre).
+    Cada execução registra um SyncRun (histórico de sincronizações).
     """
     from app.models.process import LegalProcess, ProcessTeamMember
+    from app.models.user import User
     from app.models.notification import Notification
     from app.integrations.dje.comunica import buscar_comunicacoes
+    from app.services.movements_import import iniciar_sync, finalizar_sync
 
     hoje = date.today()
     inicio = hoje - timedelta(days=max(1, dias_retro))
 
-    oabs = await _oabs_do_tenant(db, tenant_id)
+    if apenas_oab:
+        n, u = _digits(apenas_oab[0]), (apenas_oab[1] or "").strip().upper()
+        owner = None
+        if n and len(u) == 2:
+            candidatos = (await db.execute(
+                select(User.id, User.oab_number).where(
+                    User.tenant_id == tenant_id,
+                    User.oab_uf == u,
+                    User.oab_number.isnot(None),
+                    User.is_active == True,  # noqa: E712
+                )
+            )).all()
+            owner = next((uid for uid, num in candidatos if _digits(num) == n), None)
+        oabs = [(n, u, owner)] if n and len(u) == 2 else []
+    else:
+        oabs = await _oabs_do_tenant(db, tenant_id)
+
+    sync = await iniciar_sync(db, tenant_id, fonte="comunica+datajud", tipo="CAPTURA")
     if not oabs:
-        return {"oabs": 0, "comunicacoes_encontradas": 0, "processos_encontrados": 0,
-                "processos_criados": 0, "fonte_respondeu": False}
+        resultado = {"oabs": 0, "comunicacoes_encontradas": 0, "processos_encontrados": 0,
+                     "processos_criados": 0, "fonte_respondeu": False}
+        await finalizar_sync(db, sync, "OK", resultado)
+        await db.commit()
+        return resultado
 
     # Diagnóstico da fonte (distingue "inalcançável" de "0 no período").
     stats: dict = {}
@@ -190,9 +199,12 @@ async def capturar_por_oab(
             }
 
     if not achados:
-        return {"oabs": len(oabs), "comunicacoes_encontradas": total_comunicacoes,
-                "processos_encontrados": 0, "processos_criados": 0,
-                "fonte_respondeu": bool(stats.get("ok"))}
+        resultado = {"oabs": len(oabs), "comunicacoes_encontradas": total_comunicacoes,
+                     "processos_encontrados": 0, "processos_criados": 0,
+                     "fonte_respondeu": bool(stats.get("ok"))}
+        await finalizar_sync(db, sync, "OK" if stats.get("ok") else "ERRO", resultado)
+        await db.commit()
+        return resultado
 
     # Já existentes no tenant (dedup por dígitos do CNJ)
     existentes = {
@@ -243,13 +255,15 @@ async def capturar_por_oab(
             link="/processos",
         ))
 
-    await db.commit()
-    log.info("oab_capture_done", tenant=str(tenant_id), oabs=len(oabs),
-             comunicacoes=total_comunicacoes, encontrados=len(achados), criados=criados)
-    return {
+    resultado = {
         "oabs": len(oabs),
         "comunicacoes_encontradas": total_comunicacoes,
         "processos_encontrados": len(achados),
         "processos_criados": criados,
         "fonte_respondeu": bool(stats.get("ok")),
     }
+    await finalizar_sync(db, sync, "OK", resultado)
+    await db.commit()
+    log.info("oab_capture_done", tenant=str(tenant_id), oabs=len(oabs),
+             comunicacoes=total_comunicacoes, encontrados=len(achados), criados=criados)
+    return resultado

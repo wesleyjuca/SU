@@ -209,6 +209,36 @@ async def _confinar_a_equipe(db: AsyncSession, current_user: User) -> bool:
     return await _confidencial_ativo(db, current_user.tenant_id)
 
 
+@router.get("/sincronizacoes")
+async def listar_sincronizacoes(
+    limit: int = Query(default=20, le=100),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Histórico de sincronizações da captura (Fase 72): capturas por OAB e
+    varreduras de intimações do escritório + ciclos globais de polling."""
+    from sqlalchemy import or_, and_
+    from app.models.sync_run import SyncRun
+
+    rows = (await db.execute(
+        select(SyncRun).where(
+            or_(
+                SyncRun.tenant_id == current_user.tenant_id,
+                and_(SyncRun.tenant_id.is_(None), SyncRun.tipo == "POLLING"),
+            )
+        ).order_by(SyncRun.started_at.desc()).limit(limit)
+    )).scalars().all()
+    return [{
+        "id": str(r.id),
+        "fonte": r.fonte,
+        "tipo": r.tipo,
+        "status": r.status,
+        "stats": r.stats or {},
+        "started_at": r.started_at.isoformat() if r.started_at else None,
+        "finished_at": r.finished_at.isoformat() if r.finished_at else None,
+    } for r in rows]
+
+
 @router.get("", response_model=list[ProcessResponse])
 async def list_processes(
     tribunal: str | None = None,
@@ -460,46 +490,18 @@ async def atualizar_andamentos(
         await client.close()
 
     if dados is None:
+        process.last_polled_at = datetime.now(timezone.utc)
+        await db.commit()
         return {"novos": 0, "fonte_respondeu": False,
                 "message": "A fonte pública (DataJud) não respondeu — verifique o acesso à internet do ambiente ou tente mais tarde."}
 
-    # Andamentos já existentes (dedup por data+descrição)
-    existentes = {
-        (dm.date().isoformat(), (desc or "")[:120])
-        for dm, desc in (await db.execute(
-            select(ProcessMovement.data_movimento, ProcessMovement.descricao)
-            .where(ProcessMovement.process_id == process.id)
-        )).all() if dm
-    }
-    novos = 0
-    algum_prazo = False
-    for mov in (dados.get("movimentos") or [])[:200]:
-        nome = (mov.get("nome") or "").strip()
-        if not nome:
-            continue
-        dh = mov.get("dataHora", "")
-        try:
-            dt = datetime.fromisoformat(dh.replace("Z", "+00:00"))
-        except (ValueError, AttributeError):
-            dt = datetime.now(timezone.utc)
-        chave = (dt.date().isoformat(), nome[:120])
-        if chave in existentes:
-            continue
-        existentes.add(chave)
-        from app.utils.prazo import movimento_sugere_prazo
-        sugere = movimento_sugere_prazo(nome)
-        algum_prazo = algum_prazo or sugere
-        db.add(ProcessMovement(
-            process_id=process.id, data_movimento=dt, descricao=nome[:2000], tipo="ANDAMENTO",
-            possivel_prazo=sugere,
-        ))
-        novos += 1
-
-    process.last_polled_at = datetime.now(timezone.utc)
-    if novos:
-        process.ultimo_andamento_at = datetime.now(timezone.utc)
-        from app.services.andamento_notify import notificar_equipe_andamento
-        await notificar_equipe_andamento(db, process, novos, com_prazo=algum_prazo)
+    # Importador ÚNICO (Fase 72): dedup canônico + possivel_prazo + notificação
+    # da equipe — mesmo caminho do agente de polling e da captura por OAB.
+    from app.services.movements_import import importar_movimentos, parse_datajud_movimentos
+    resultado = await importar_movimentos(
+        db, process, parse_datajud_movimentos(dados, limite=200), notificar=True,
+    )
+    novos = resultado["novos"]
     await db.commit()
     return {
         "novos": novos,
