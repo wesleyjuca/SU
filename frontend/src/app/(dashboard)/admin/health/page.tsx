@@ -4,6 +4,7 @@ import {
   Activity, Database, Zap, Search, Bot, Globe, Mail, Shield, Lock,
   FileSearch, Bell, HardDrive, Archive, RefreshCw, CheckCircle, XCircle,
   AlertTriangle, Clock, Wrench, ChevronDown, ChevronRight, Newspaper,
+  Cpu, Layers, ListChecks, Boxes,
 } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 
@@ -47,6 +48,22 @@ interface Module {
   icon: React.ElementType;
   getStatus: (data: HealthData) => ModuleStatus;
   getLatency?: (data: HealthData) => number | null;
+}
+
+// Snapshot de infra do endpoint SUPERADMIN /system/brain/infra (F1).
+interface BrainInfra {
+  timestamp: string;
+  coleta_ms: number;
+  celery: { ok: boolean; workers: number; total_ativas?: number; detail?: string;
+    workers_detail?: { nome: string; ativas: number; agendadas: number }[];
+    beat_schedule?: { nome: string; task: string; schedule: string }[] };
+  redis: { ok: boolean; configured?: boolean; memoria_usada?: string; clientes_conectados?: number;
+    total_chaves?: number; fila_celery?: number | null; detail?: string };
+  qdrant: { ok: boolean; configured?: boolean; total_colecoes?: number;
+    colecoes?: { nome: string; pontos: number | null }[]; detail?: string };
+  postgres_pool: { ok: boolean; tamanho?: number; em_uso?: number; overflow?: number };
+  jobs: { ok: boolean; agent_runs_24h_por_status?: Record<string, number>;
+    sync_runs_recentes?: { fonte: string; tipo: string; status: string; started_at: string | null }[] };
 }
 
 const MODULES: Module[] = [
@@ -264,6 +281,20 @@ export default function HealthPage() {
   const [showRoadmap, setShowRoadmap] = useState(false);
   const [showDiagnostic, setShowDiagnostic] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
+  const [infra, setInfra] = useState<BrainInfra | null>(null);
+
+  // Infra profunda (Celery/Redis/Qdrant/pool/jobs) — só o SUPERADMIN é autorizado
+  // pelo endpoint; para os demais admins o 403 é silencioso (painel some).
+  const fetchInfra = useCallback(async () => {
+    try {
+      const token = localStorage.getItem("afj_access_token");
+      const res = await fetch("/api/v1/system/brain/infra", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) setInfra(await res.json());
+      else setInfra(null);
+    } catch { setInfra(null); }
+  }, []);
 
   const fetchHealth = useCallback(async () => {
     setLoading(true);
@@ -287,13 +318,13 @@ export default function HealthPage() {
     }
   }, []);
 
-  useEffect(() => { fetchHealth(); }, [fetchHealth]);
+  useEffect(() => { fetchHealth(); fetchInfra(); }, [fetchHealth, fetchInfra]);
 
   useEffect(() => {
     if (!autoRefresh) return;
-    const interval = setInterval(fetchHealth, 15000);
+    const interval = setInterval(() => { fetchHealth(); fetchInfra(); }, 15000);
     return () => clearInterval(interval);
-  }, [autoRefresh, fetchHealth]);
+  }, [autoRefresh, fetchHealth, fetchInfra]);
 
   // 3 estados: operacional (verde), degradado (vermelho, só se o backend disse),
   // e não-verificado (âmbar) quando não há dado por erro de fetch.
@@ -413,6 +444,115 @@ export default function HealthPage() {
           </div>
         </div>
       ) : null}
+
+      {/* Infraestrutura em tempo real (SUPERADMIN — /system/brain/infra, F1) */}
+      {infra && (
+        <div className="afj-card p-5">
+          <h2 className="font-semibold text-sm text-afj-black mb-4 flex items-center gap-2">
+            <Cpu size={15} className="text-afj-gold" />
+            Infraestrutura em tempo real
+            <span className="text-[10px] font-normal text-afj-black/35">· coleta {infra.coleta_ms}ms</span>
+          </h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            {/* Celery */}
+            <div className="rounded-sm border border-afj-cream-dark p-3">
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-afj-black/70 mb-2">
+                <Zap size={12} className={infra.celery.ok ? "text-green-500" : "text-red-500"} /> Celery
+              </div>
+              {infra.celery.ok ? (
+                <>
+                  <p className="text-2xl font-bold text-afj-black">{infra.celery.workers}</p>
+                  <p className="text-[11px] text-afj-black/50">worker(s) · {infra.celery.total_ativas ?? 0} task(s) ativa(s)</p>
+                </>
+              ) : (
+                <p className="text-[11px] text-red-600">{infra.celery.detail || "nenhum worker respondeu"}</p>
+              )}
+            </div>
+            {/* Redis */}
+            <div className="rounded-sm border border-afj-cream-dark p-3">
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-afj-black/70 mb-2">
+                <Database size={12} className={infra.redis.ok ? "text-green-500" : "text-red-500"} /> Redis
+              </div>
+              {infra.redis.ok ? (
+                <>
+                  <p className="text-sm font-bold text-afj-black">{infra.redis.memoria_usada || "—"}</p>
+                  <p className="text-[11px] text-afj-black/50">
+                    fila: {infra.redis.fila_celery ?? "—"} · {infra.redis.clientes_conectados ?? "—"} clientes · {infra.redis.total_chaves ?? "—"} chaves
+                  </p>
+                </>
+              ) : (
+                <p className="text-[11px] text-red-600">{infra.redis.detail || "indisponível"}</p>
+              )}
+            </div>
+            {/* Qdrant */}
+            <div className="rounded-sm border border-afj-cream-dark p-3">
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-afj-black/70 mb-2">
+                <Boxes size={12} className={infra.qdrant.ok ? "text-green-500" : "text-afj-black/30"} /> Qdrant (RAG)
+              </div>
+              {infra.qdrant.ok ? (
+                <>
+                  <p className="text-2xl font-bold text-afj-black">{infra.qdrant.total_colecoes ?? 0}</p>
+                  <p className="text-[11px] text-afj-black/50">
+                    coleções · {(infra.qdrant.colecoes || []).reduce((s, c) => s + (c.pontos || 0), 0).toLocaleString("pt-BR")} pontos
+                  </p>
+                </>
+              ) : (
+                <p className="text-[11px] text-afj-black/45">{infra.qdrant.detail || "não configurado"}</p>
+              )}
+            </div>
+            {/* Postgres pool */}
+            <div className="rounded-sm border border-afj-cream-dark p-3">
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-afj-black/70 mb-2">
+                <Layers size={12} className={infra.postgres_pool.ok ? "text-green-500" : "text-red-500"} /> Postgres pool
+              </div>
+              {infra.postgres_pool.ok ? (
+                <>
+                  <p className="text-2xl font-bold text-afj-black">{infra.postgres_pool.em_uso ?? 0}<span className="text-sm text-afj-black/40">/{infra.postgres_pool.tamanho ?? 0}</span></p>
+                  <p className="text-[11px] text-afj-black/50">conexões em uso · overflow {infra.postgres_pool.overflow ?? 0}</p>
+                </>
+              ) : (
+                <p className="text-[11px] text-red-600">indisponível</p>
+              )}
+            </div>
+          </div>
+
+          {/* AgentRun por status (24h) + SyncRun recentes */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-4">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-afj-black/40 mb-2 flex items-center gap-1.5">
+                <ListChecks size={12} /> Execuções de agentes (24h)
+              </p>
+              {infra.jobs.ok && Object.keys(infra.jobs.agent_runs_24h_por_status || {}).length > 0 ? (
+                <div className="flex flex-wrap gap-2">
+                  {Object.entries(infra.jobs.agent_runs_24h_por_status || {}).map(([st, n]) => (
+                    <span key={st} className={`inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-sm border ${
+                      st === "SUCCESS" ? "bg-green-50 text-green-700 border-green-200"
+                      : st === "FAILED" ? "bg-red-50 text-red-600 border-red-200"
+                      : st === "RUNNING" ? "bg-blue-50 text-blue-700 border-blue-200"
+                      : "bg-afj-cream text-afj-black/60 border-afj-cream-dark"
+                    }`}>{st}: <strong>{n}</strong></span>
+                  ))}
+                </div>
+              ) : <p className="text-xs text-afj-black/40">Sem execuções nas últimas 24h.</p>}
+            </div>
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-afj-black/40 mb-2 flex items-center gap-1.5">
+                <RefreshCw size={12} /> Sincronizações recentes (captura)
+              </p>
+              {infra.jobs.sync_runs_recentes && infra.jobs.sync_runs_recentes.length > 0 ? (
+                <div className="space-y-1 max-h-28 overflow-y-auto pr-1">
+                  {infra.jobs.sync_runs_recentes.map((s, i) => (
+                    <div key={i} className="flex items-center justify-between text-[11px] text-afj-black/60">
+                      <span>{s.tipo} · {s.fonte}</span>
+                      <span className={s.status === "OK" ? "text-green-600" : s.status === "ERRO" ? "text-red-600" : "text-afj-black/40"}>{s.status}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : <p className="text-xs text-afj-black/40">Nenhuma sincronização registrada.</p>}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Atividade de agentes e roadmap */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
