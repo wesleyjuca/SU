@@ -1,6 +1,7 @@
 "use client";
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Send, Loader2, Sparkles, RefreshCw } from "lucide-react";
+import { Send, Loader2, Sparkles, RefreshCw, Mic, MicOff, Volume2 } from "lucide-react";
+import { useVoice } from "@/hooks/useVoice";
 
 interface Msg { role: "user" | "assistant"; content: string }
 
@@ -10,18 +11,23 @@ export function BrainAssistant() {
   const [streaming, setStreaming] = useState(false);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Ref p/ evitar reentrância no envio (o hook de voz chama enviar via callback).
+  const streamingRef = useRef(false);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [messages]);
 
   // Envia a mensagem e consome o stream SSE (data: {delta}|{done}|{error}).
-  const enviar = useCallback(async (texto: string) => {
+  // Retorna o texto final do assistente (para leitura por voz).
+  const enviar = useCallback(async (texto: string): Promise<string> => {
     const pergunta = texto.trim();
-    if (!pergunta || streaming) return;
+    if (!pergunta || streamingRef.current) return "";
     setInput("");
     setMessages((m) => [...m, { role: "user", content: pergunta }, { role: "assistant", content: "" }]);
+    streamingRef.current = true;
     setStreaming(true);
+    let finalTexto = "";
     try {
       const token = localStorage.getItem("afj_access_token");
       const res = await fetch("/api/v1/system/brain/assistant", {
@@ -30,8 +36,9 @@ export function BrainAssistant() {
         body: JSON.stringify({ message: pergunta, conversation_id: conversationId }),
       });
       if (!res.ok || !res.body) {
-        setMessages((m) => { const n = [...m]; n[n.length - 1] = { role: "assistant", content: `Erro (HTTP ${res.status}).` }; return n; });
-        return;
+        const msg = `Erro (HTTP ${res.status}).`;
+        setMessages((m) => { const n = [...m]; n[n.length - 1] = { role: "assistant", content: msg }; return n; });
+        return "";
       }
       const reader = res.body.getReader();
       const dec = new TextDecoder();
@@ -49,8 +56,10 @@ export function BrainAssistant() {
           try {
             const ev = JSON.parse(t.slice(5).trim());
             if (ev.delta) {
+              finalTexto += ev.delta;
               setMessages((m) => { const n = [...m]; n[n.length - 1] = { role: "assistant", content: n[n.length - 1].content + ev.delta }; return n; });
             } else if (ev.error) {
+              finalTexto = "";
               setMessages((m) => { const n = [...m]; n[n.length - 1] = { role: "assistant", content: `Erro: ${ev.error}` }; return n; });
             } else if (ev.done && ev.conversation_id) {
               setConversationId(ev.conversation_id);
@@ -60,22 +69,68 @@ export function BrainAssistant() {
       }
     } catch {
       setMessages((m) => { const n = [...m]; n[n.length - 1] = { role: "assistant", content: "Falha de conexão." }; return n; });
+      return "";
     } finally {
+      streamingRef.current = false;
       setStreaming(false);
     }
-  }, [streaming, conversationId]);
+    return finalTexto;
+  }, [conversationId]);
+
+  // ─── Conversa por voz (F6): STT dispara enviar, TTS lê a resposta ────────────
+  const voice = useVoice({
+    onFinal: (texto) => {
+      // Fala do usuário concluída → envia e, ao terminar, lê a resposta em voz.
+      enviar(texto).then((resposta) => {
+        if (resposta && voiceActiveRef.current) voice.speak(resposta);
+      });
+    },
+  });
+  // Espelha o estado ativo p/ uso dentro do .then acima sem stale closure.
+  const voiceActiveRef = useRef(false);
+  useEffect(() => { voiceActiveRef.current = voice.active; }, [voice.active]);
+
+  const enviarTexto = useCallback(() => {
+    const txt = input;
+    enviar(txt).then((resposta) => {
+      // Se o modo voz estiver ligado, também lê respostas digitadas.
+      if (resposta && voiceActiveRef.current) voice.speak(resposta);
+    });
+  }, [input, enviar, voice]);
 
   return (
     <div className="afj-card p-0 flex flex-col" style={{ height: 460 }}>
       <div className="flex items-center justify-between px-4 py-3 border-b border-afj-cream-dark">
         <h2 className="font-semibold text-afj-black text-sm flex items-center gap-2">
           <Sparkles size={15} className="text-afj-gold" /> Assistente do Cérebro
+          {voice.speaking && (
+            <span className="flex items-center gap-1 text-[11px] font-normal text-afj-gold">
+              <Volume2 size={12} className="animate-pulse" /> falando…
+            </span>
+          )}
         </h2>
-        <button
-          onClick={() => { setMessages([]); setConversationId(null); }}
-          className="text-afj-black/40 hover:text-afj-black p-1" title="Nova conversa" aria-label="Nova conversa">
-          <RefreshCw size={14} />
-        </button>
+        <div className="flex items-center gap-1">
+          {voice.supported && (
+            <button
+              onClick={voice.toggle}
+              className={`p-1.5 rounded-sm transition-colors ${
+                voice.active
+                  ? "bg-afj-gold/15 text-afj-gold"
+                  : "text-afj-black/40 hover:text-afj-black"
+              }`}
+              title={voice.active ? "Desligar conversa por voz" : "Conversar por voz"}
+              aria-label={voice.active ? "Desligar conversa por voz" : "Conversar por voz"}
+              aria-pressed={voice.active}
+            >
+              {voice.active ? <Mic size={15} className={voice.listening ? "animate-pulse" : ""} /> : <MicOff size={15} />}
+            </button>
+          )}
+          <button
+            onClick={() => { voice.stop(); setMessages([]); setConversationId(null); }}
+            className="text-afj-black/40 hover:text-afj-black p-1" title="Nova conversa" aria-label="Nova conversa">
+            <RefreshCw size={14} />
+          </button>
+        </div>
       </div>
 
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
@@ -83,6 +138,11 @@ export function BrainAssistant() {
           <div className="text-center text-afj-black/40 text-sm py-8">
             <Sparkles size={24} className="mx-auto mb-2 text-afj-gold/40" />
             Pergunte sobre módulos, integrações, saúde da infraestrutura ou como algo funciona no sistema.
+            {voice.supported && (
+              <p className="text-[11px] mt-2 text-afj-black/30">
+                Toque no microfone para conversar por voz (contínuo, com interrupção).
+              </p>
+            )}
           </div>
         )}
         {messages.map((m, i) => (
@@ -93,9 +153,24 @@ export function BrainAssistant() {
             </div>
           </div>
         ))}
+        {/* Transcrição parcial da fala do usuário (interim) */}
+        {voice.interim && (
+          <div className="flex justify-end">
+            <div className="max-w-[85%] rounded-lg px-3 py-2 text-sm italic text-afj-black/45 bg-afj-gold/5 border border-dashed border-afj-gold/30">
+              {voice.interim}…
+            </div>
+          </div>
+        )}
       </div>
 
-      <form onSubmit={(e) => { e.preventDefault(); enviar(input); }}
+      {voice.active && (
+        <div className="px-4 py-1.5 border-t border-afj-cream-dark bg-afj-gold/5 text-[11px] text-afj-gold flex items-center gap-1.5">
+          <Mic size={11} className={voice.listening ? "animate-pulse" : ""} />
+          {voice.speaking ? "Assistente falando — fale para interromper" : voice.listening ? "Ouvindo… pode falar" : "Modo voz ativo"}
+        </div>
+      )}
+
+      <form onSubmit={(e) => { e.preventDefault(); enviarTexto(); }}
         className="flex items-center gap-2 px-3 py-3 border-t border-afj-cream-dark">
         <input
           value={input}
