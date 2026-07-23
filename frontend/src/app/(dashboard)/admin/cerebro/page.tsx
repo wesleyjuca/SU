@@ -8,6 +8,7 @@ import ReactFlow, {
 import "reactflow/dist/style.css";
 import { Brain, RefreshCw, Cpu, Activity } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
+import { BrainAssistant } from "@/components/cerebro/BrainAssistant";
 import { useUserStore } from "@/store";
 
 // ─── Tipos dos endpoints /system/brain/* (F1) ────────────────────────────────
@@ -189,6 +190,9 @@ export default function CerebroPage() {
             <Activity size={11} /> Anel verde = saudável · vermelho = indisponível · sinais dourados = fluxos ativos
             {lastRefresh && ` · atualizado ${lastRefresh.toLocaleTimeString("pt-BR")}`}
           </p>
+
+          {/* Assistente IA do sistema (RAG + streaming) */}
+          <BrainAssistant />
         </>
       )}
     </div>

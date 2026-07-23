@@ -9,6 +9,7 @@ from app.models.notification import Notification
 from app.models.integrity import ConductAcceptance, IntegrityReport
 from app.models.integrations import GoogleIntegration, TenantIntegration
 from app.models.sync_run import SyncRun
+from app.models.assistant import AssistantConversation, AssistantMessage
 from app.models.billing import BillingAccount, TenantPayment
 from app.models.crm import Opportunity
 from app.models.intimacao import Intimacao
@@ -26,6 +27,8 @@ __all__ = [
     "GoogleIntegration",
     "TenantIntegration",
     "SyncRun",
+    "AssistantConversation",
+    "AssistantMessage",
     "BillingAccount", "TenantPayment",
     "Opportunity",
     "Intimacao",
