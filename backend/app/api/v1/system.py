@@ -564,8 +564,11 @@ async def analytics_gestao(
 
 @router.get("/health/detailed")
 async def health_detailed(current_user: User = Depends(get_current_user)):
-    """Health check detalhado com latências — apenas para ADMIN/SOCIO."""
-    if current_user.role not in ("ADMIN", "SOCIO"):
+    """Health check detalhado com latências — ADMIN/SOCIO/SUPERADMIN.
+
+    (SUPERADMIN estava sendo rejeitado aqui apesar de ver a página de Saúde no
+    frontend — divergência de gate corrigida no Bloco F.)"""
+    if current_user.role not in ("ADMIN", "SOCIO", "SUPERADMIN"):
         from fastapi import HTTPException
         raise HTTPException(status_code=403, detail="Acesso negado")
 
@@ -671,6 +674,13 @@ async def health_detailed(current_user: User = Depends(get_current_user)):
             for r in q.all()
         ]
 
+    # Celery: workers vivos + tarefas ativas (leve — inspect com timeout curto).
+    try:
+        from app.services.brain_infra import _celery as _celery_probe
+        celery_status = await _celery_probe()
+    except Exception:
+        celery_status = {"ok": False, "workers": 0}
+
     from app.config import settings as cfg
     from app.core.events import APP_START_TIME
     from app.integrations.llm_client import resolve_provider as _resolve_provider
@@ -711,6 +721,8 @@ async def health_detailed(current_user: User = Depends(get_current_user)):
         "email_enabled": cfg.EMAIL_ENABLED,
         "sentry_enabled": bool(cfg.SENTRY_DSN),
         "recent_agent_runs": recent_runs,
+        "celery": {"ok": celery_status.get("ok"), "workers": celery_status.get("workers", 0),
+                   "total_ativas": celery_status.get("total_ativas", 0)},
     }
 
 
@@ -836,3 +848,36 @@ async def set_ai_budget(
     await db.flush()
     return {"user_id": body.user_id, "monthly_limit_usd": body.monthly_limit_usd,
             "alert_pct": body.alert_pct, "message": "Limite salvo"}
+
+
+# ─── Painel Cérebro (SUPERADMIN) — observabilidade de infra + mapa ────────────
+async def _audit_brain(user_id, action: str) -> None:
+    """Registra no audit_log o acesso a dados internos do sistema (trilha)."""
+    try:
+        from app.db.base import AsyncSessionLocal
+        from app.models.audit_log import AuditLog
+        async with AsyncSessionLocal() as db:
+            db.add(AuditLog(
+                user_id=user_id, action=action, resource_type="SYSTEM",
+                success=True, legal_basis="legitimate_interest",
+            ))
+            await db.commit()
+    except Exception:
+        pass  # auditoria best-effort nunca derruba a consulta
+
+
+@router.get("/brain/infra")
+async def brain_infra(current_user: User = Depends(require_role("SUPERADMIN"))):
+    """Snapshot de infraestrutura em tempo real — Celery, Redis, Qdrant,
+    Postgres pool, jobs (AgentRun/SyncRun). Exclusivo do SUPERADMIN."""
+    from app.services.brain_infra import coletar_infra
+    await _audit_brain(current_user.id, "BRAIN_INFRA_VIEW")
+    return await coletar_infra()
+
+
+@router.get("/brain/map")
+async def brain_map(current_user: User = Depends(require_role("SUPERADMIN"))):
+    """Mapa de módulos do sistema (nós + arestas) para o grafo do Cérebro."""
+    from app.services.system_map import construir_mapa
+    await _audit_brain(current_user.id, "BRAIN_MAP_VIEW")
+    return construir_mapa()
