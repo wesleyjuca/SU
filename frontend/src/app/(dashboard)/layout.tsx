@@ -5,11 +5,9 @@ import { usePathname } from "next/navigation";
 import { useUserStore, useThemeStore } from "@/store";
 import { fetchAndApplyTheme } from "@/lib/theme";
 import {
-  LayoutDashboard, Scale, FileText, Users, FolderOpen,
-  Bot, CheckSquare, DollarSign, Shield, Shapes, Settings,
-  Bell, Search, ChevronRight, FileEdit, Menu, X, LogOut, BarChart2, CalendarClock, BookOpen,
-  Moon, Sun, Activity, Users2, Palette, KeyRound, GraduationCap, Compass, Coins, ShieldCheck, Plug, Gauge, Building2, Receipt, Gavel, MonitorPlay, Newspaper, Briefcase, ExternalLink
+  Bell, Search, ChevronRight, Menu, X, LogOut, Moon, Sun, ExternalLink
 } from "lucide-react";
+import { navSections } from "@/lib/nav";
 import { useApprovalCount } from "@/hooks/useApprovals";
 import { useNotifications } from "@/hooks/useNotifications";
 import { useBilling } from "@/hooks/useBilling";
@@ -19,75 +17,7 @@ import { SearchModal } from "@/components/layout/SearchModal";
 import { BottomNav } from "@/components/layout/BottomNav";
 import { ToastProvider } from "@/components/ui/Toast";
 
-// Menu por papel: `roles: null` = todos; senão, lista de papéis que veem o item.
-// Estagiários (PARALEGAL/ASSISTENTE) veem apenas o essencial do dia a dia.
-const ADV = ["ADMIN", "SUPERADMIN", "SOCIO", "ADVOGADO"];
-const GESTAO = ["ADMIN", "SUPERADMIN", "SOCIO", "GESTOR"];
-
-const navSections = [
-  {
-    title: null,
-    items: [
-      { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, roles: null },
-    ],
-  },
-  {
-    title: "JURÍDICO",
-    items: [
-      { href: "/minha-area", label: "Minha Área", icon: Briefcase, roles: null },
-      { href: "/processos", label: "Processos", icon: Scale, roles: null },
-      { href: "/publicacoes", label: "Publicações", icon: Newspaper, roles: null },
-      { href: "/agenda", label: "Agenda", icon: CalendarClock, roles: null },
-      { href: "/peticoes", label: "Petições", icon: FileEdit, roles: ADV },
-      { href: "/clientes", label: "Clientes", icon: Users, roles: null },
-      { href: "/documentos", label: "Documentos", icon: FolderOpen, roles: null },
-      { href: "/contratos", label: "Contratos", icon: FileText, roles: ADV },
-    ],
-  },
-  {
-    title: "INTELIGÊNCIA IA",
-    items: [
-      { href: "/agentes", label: "Agentes IA", icon: Bot, roles: ADV },
-      { href: "/minha-ia", label: "Minha IA", icon: KeyRound, roles: ADV },
-      { href: "/aprovacoes", label: "Aprovações", icon: CheckSquare, roles: ADV },
-      { href: "/busca-juridica", label: "Pesquisa Jurídica", icon: BookOpen, roles: null },
-      { href: "/visual-law", label: "Visual Law", icon: Shapes, roles: ADV },
-    ],
-  },
-  {
-    title: "GESTÃO",
-    items: [
-      { href: "/financeiro", label: "Financeiro", icon: DollarSign, roles: GESTAO },
-      { href: "/relatorios", label: "Relatórios", icon: BarChart2, roles: GESTAO },
-      { href: "/custos-ia", label: "Custos de IA", icon: Coins, roles: ["ADMIN", "SOCIO"] },
-      { href: "/tv", label: "Painel TV", icon: MonitorPlay, roles: GESTAO, newTab: true },
-    ],
-  },
-  {
-    title: "AJUDA",
-    items: [
-      { href: "/ajuda", label: "Ajuda & Treinamento", icon: GraduationCap, roles: null },
-      { href: "/sobre", label: "Visão Geral", icon: Compass, roles: null },
-      { href: "/etica", label: "Ética & Integridade", icon: ShieldCheck, roles: null },
-      { href: "/configuracoes", label: "Configurações", icon: Settings, roles: null },
-    ],
-  },
-  {
-    title: "ADMINISTRAÇÃO",
-    items: [
-      { href: "/admin/escritorios", label: "Escritórios", icon: Building2, roles: ["SUPERADMIN"] },
-      { href: "/admin/faturamento", label: "Faturamento", icon: Receipt, roles: ["SUPERADMIN"] },
-      { href: "/admin/relatorios-banca", label: "Relatórios da Banca", icon: BarChart2, roles: ["SUPERADMIN", "ADMIN", "SOCIO"] },
-      { href: "/admin/usuarios", label: "Usuários", icon: Users2, roles: ["ADMIN", "SUPERADMIN"] },
-      { href: "/admin/plano", label: "Plano & Uso", icon: Gauge, roles: ["ADMIN", "SUPERADMIN"] },
-      { href: "/admin/personalizacao", label: "Personalização", icon: Palette, roles: ["ADMIN", "SUPERADMIN"] },
-      { href: "/admin/juridico", label: "Config. Jurídica", icon: Gavel, roles: ["ADMIN", "SUPERADMIN"] },
-      { href: "/integracoes", label: "Integrações", icon: Plug, roles: ["ADMIN", "SUPERADMIN"] },
-      { href: "/auditoria", label: "Auditoria", icon: Shield, roles: ["ADMIN", "SOCIO", "SUPERADMIN"] },
-      { href: "/admin/health", label: "Saúde do Sistema", icon: Activity, roles: ["ADMIN", "SUPERADMIN"] },
-    ],
-  },
-];
+// Menu único em @/lib/nav (consumido também por BottomNav e SearchModal).
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -156,7 +86,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       {/* A barra é sempre `fixed` (ver .afj-sidebar); o conteúdo compensa com md:ml-64.
           Antes tinha md:static aqui → a barra entrava no fluxo E o conteúdo mantinha
           a margem, gerando ~256px de vão vazio ("conteúdo na lateral"). */}
-      <aside aria-label="Menu lateral" className={`afj-sidebar fixed inset-y-0 left-0 z-30 transform transition-transform duration-200 ${sidebarOpen ? "translate-x-0" : "-translate-x-full"} md:translate-x-0`}>
+      <aside id="sidebar" aria-label="Menu lateral" className={`afj-sidebar fixed inset-y-0 left-0 z-30 transform transition-transform duration-200 ${sidebarOpen ? "translate-x-0" : "-translate-x-full"} md:translate-x-0`}>
         {/* Logo — dinâmico ou monograma AFJ como fallback */}
         <div className="afj-sidebar-logo">
           <div className="flex items-center gap-3">
