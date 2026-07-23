@@ -6,7 +6,7 @@ import {
   DollarSign, Shield, Shapes, Settings, FileEdit, BarChart2, CalendarClock,
   BookOpen, Activity, Users2, Palette, KeyRound, GraduationCap, Compass,
   Coins, ShieldCheck, Plug, Gauge, Building2, Receipt, Gavel, MonitorPlay,
-  Newspaper, Briefcase,
+  Newspaper, Briefcase, Brain,
 } from "lucide-react";
 
 export type NavItem = {
@@ -66,6 +66,7 @@ export const navSections: NavSection[] = [
     { href: "/integracoes", label: "Integrações", icon: Plug, roles: ["ADMIN", "SUPERADMIN"] },
     { href: "/auditoria", label: "Auditoria", icon: Shield, roles: ["ADMIN", "SOCIO", "SUPERADMIN"] },
     { href: "/admin/health", label: "Saúde do Sistema", icon: Activity, roles: ["ADMIN", "SUPERADMIN"] },
+    { href: "/admin/cerebro", label: "Cérebro", icon: Brain, roles: ["SUPERADMIN"] },
   ]},
 ];
 
