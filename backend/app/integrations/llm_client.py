@@ -130,3 +130,68 @@ async def call_llm(
         content, in_t, out_t = await _call_anthropic(api_key, messages, system, mdl, max_tokens, temperature)
 
     return content, in_t, out_t, _cost(mdl, in_t, out_t)
+
+
+def _resolve_creds(provider, model):
+    """Resolve (prov, api_key, mdl) considerando BYOK — igual ao call_llm."""
+    creds = ai_creds_ctx.get()
+    if creds and creds.get("api_key"):
+        prov = resolve_provider(provider or creds.get("provider"))
+        return prov, creds["api_key"], model or creds.get("model") or _default_model(prov)
+    prov = resolve_provider(provider)
+    api_key = (settings.GEMINI_API_KEY or settings.OPENAI_API_KEY) if prov == "gemini" else settings.ANTHROPIC_API_KEY
+    return prov, api_key, model or _default_model(prov)
+
+
+async def call_llm_stream(
+    messages: list[dict],
+    system: str = "",
+    model: str | None = None,
+    max_tokens: int = 4096,
+    temperature: float = 0.3,
+    provider: str | None = None,
+):
+    """Gerador assíncrono para chat com streaming de tokens.
+
+    Emite tuplas ("delta", texto) conforme os tokens chegam e, ao final,
+    ("done", {input_tokens, output_tokens, cost_usd}). Se o provider falhar
+    ANTES de emitir qualquer token, cai para uma chamada não-streaming
+    (evita resposta vazia); se falhar no meio, encerra com o que já saiu."""
+    prov, api_key, mdl = _resolve_creds(provider, model)
+    emitido = False
+    try:
+        if prov == "gemini":
+            client = _get_gemini(api_key)
+            oai_messages = ([{"role": "system", "content": system}] if system else []) + list(messages)
+            stream = await client.chat.completions.create(
+                model=mdl, messages=oai_messages, max_tokens=max_tokens,
+                temperature=temperature, stream=True, stream_options={"include_usage": True},
+            )
+            in_t = out_t = 0
+            async for chunk in stream:
+                if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
+                    emitido = True
+                    yield ("delta", chunk.choices[0].delta.content)
+                if getattr(chunk, "usage", None):
+                    in_t = getattr(chunk.usage, "prompt_tokens", 0) or 0
+                    out_t = getattr(chunk.usage, "completion_tokens", 0) or 0
+        else:
+            client = _get_anthropic(api_key)
+            kwargs = {"model": mdl, "max_tokens": max_tokens, "temperature": temperature, "messages": messages}
+            if system:
+                kwargs["system"] = system
+            in_t = out_t = 0
+            async with client.messages.stream(**kwargs) as stream:
+                async for text in stream.text_stream:
+                    emitido = True
+                    yield ("delta", text)
+                final = await stream.get_final_message()
+                in_t, out_t = final.usage.input_tokens, final.usage.output_tokens
+        yield ("done", {"input_tokens": in_t, "output_tokens": out_t, "cost_usd": _cost(mdl, in_t, out_t)})
+    except Exception:
+        if not emitido:
+            content, in_t, out_t, cost = await call_llm(messages, system, model, max_tokens, temperature, provider)
+            yield ("delta", content)
+            yield ("done", {"input_tokens": in_t, "output_tokens": out_t, "cost_usd": cost, "fallback": True})
+        else:
+            yield ("done", {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0, "interrompido": True})

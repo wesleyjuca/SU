@@ -881,3 +881,91 @@ async def brain_map(current_user: User = Depends(require_role("SUPERADMIN"))):
     from app.services.system_map import construir_mapa
     await _audit_brain(current_user.id, "BRAIN_MAP_VIEW")
     return construir_mapa()
+
+
+# ─── Assistente IA do Cérebro (SUPERADMIN — chat multi-turn + streaming SSE) ──
+class BrainChatRequest(BaseModel):
+    message: str
+    conversation_id: str | None = None
+
+
+@router.post("/brain/assistant")
+async def brain_assistant(
+    body: BrainChatRequest,
+    current_user: User = Depends(require_role("SUPERADMIN")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Chat administrativo com streaming (SSE). Cada linha `data: {json}`:
+    {"delta": "..."} para tokens, {"done": true, "conversation_id", "cost_usd"} no fim.
+    RAG na doc do sistema + snapshot de infra no contexto. Guardrail de custo."""
+    from fastapi.responses import StreamingResponse
+    from fastapi import HTTPException
+    from app.models.assistant import AssistantConversation, AssistantMessage
+    from app.services.ai_budget import enforce_budget
+    from app.services.brain_assistant import responder_stream
+
+    pergunta = (body.message or "").strip()
+    if not pergunta:
+        raise HTTPException(status_code=422, detail="Mensagem vazia.")
+
+    # Guardrail de custo mensal do usuário (best-effort; 429 se estourou).
+    await enforce_budget(db, current_user.id, current_user.tenant_id)
+
+    # Conversa (cria ou recupera) + histórico
+    conv = None
+    if body.conversation_id:
+        conv = (await db.execute(
+            select(AssistantConversation).where(AssistantConversation.id == uuid.UUID(body.conversation_id))
+        )).scalar_one_or_none()
+    if conv is None:
+        conv = AssistantConversation(user_id=current_user.id, titulo=pergunta[:80])
+        db.add(conv)
+        await db.flush()
+
+    hist_rows = (await db.execute(
+        select(AssistantMessage.role, AssistantMessage.content)
+        .where(AssistantMessage.conversation_id == conv.id)
+        .order_by(AssistantMessage.created_at)
+    )).all()
+    historico = [{"role": r, "content": c} for r, c in hist_rows]
+    historico.append({"role": "user", "content": pergunta})
+
+    db.add(AssistantMessage(conversation_id=conv.id, role="user", content=pergunta))
+    await db.commit()
+    conv_id = str(conv.id)
+    await _audit_brain(current_user.id, "BRAIN_ASSISTANT_CHAT")
+
+    async def gerar():
+        resposta = []
+        custo = 0.0
+        try:
+            async for tipo, dado in responder_stream(db, historico, pergunta):
+                if tipo == "delta":
+                    resposta.append(dado)
+                    yield f"data: {json.dumps({'delta': dado}, ensure_ascii=False)}\n\n"
+                elif tipo == "done":
+                    custo = dado.get("cost_usd", 0.0)
+        except Exception as exc:
+            yield f"data: {json.dumps({'error': str(exc)[:200]})}\n\n"
+        # Persiste a resposta do assistente (sessão nova — o generator roda após o request)
+        try:
+            from app.db.base import AsyncSessionLocal
+            async with AsyncSessionLocal() as db2:
+                db2.add(AssistantMessage(
+                    conversation_id=uuid.UUID(conv_id), role="assistant",
+                    content="".join(resposta), cost_usd=custo,
+                ))
+                await db2.commit()
+        except Exception:
+            pass
+        yield f"data: {json.dumps({'done': True, 'conversation_id': conv_id, 'cost_usd': custo})}\n\n"
+
+    return StreamingResponse(gerar(), media_type="text/event-stream")
+
+
+@router.post("/brain/assistant/reindex")
+async def brain_assistant_reindex(current_user: User = Depends(require_role("SUPERADMIN"))):
+    """Reindexa a documentação do sistema na coleção RAG documentacao_sistema."""
+    from app.services.brain_assistant import reindexar_documentacao
+    await _audit_brain(current_user.id, "BRAIN_ASSISTANT_REINDEX")
+    return await reindexar_documentacao()

@@ -62,6 +62,14 @@ COLLECTIONS: dict[str, dict] = {
             "tipo": PayloadSchemaType.KEYWORD,
         },
     },
+    "documentacao_sistema": {
+        "description": "Documentação/arquitetura do próprio sistema — base do assistente do Cérebro (SUPERADMIN)",
+        "vector_size": settings.EMBEDDING_DIMENSIONS,
+        "distance": Distance.COSINE,
+        "payload_fields": {
+            "fonte": PayloadSchemaType.KEYWORD,
+        },
+    },
 }
 
 
