@@ -1,15 +1,18 @@
 "use client";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { Search, Scale, Users, FolderOpen, X, Loader2 } from "lucide-react";
+import { Search, Scale, Users, FolderOpen, X, Loader2, Compass } from "lucide-react";
 import api from "@/lib/api";
+import { useUserStore } from "@/store";
+import { flatNavForRole } from "@/lib/nav";
 
 interface Result {
   id: string;
   label: string;
   sub: string;
   href: string;
-  type: "processo" | "cliente" | "documento";
+  type: "processo" | "cliente" | "documento" | "pagina";
+  newTab?: boolean;
 }
 
 interface SearchModalProps {
@@ -19,6 +22,7 @@ interface SearchModalProps {
 
 export function SearchModal({ open, onClose }: SearchModalProps) {
   const router = useRouter();
+  const { user } = useUserStore();
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<Result[]>([]);
   const [loading, setLoading] = useState(false);
@@ -33,8 +37,21 @@ export function SearchModal({ open, onClose }: SearchModalProps) {
     }
   }, [open]);
 
+  // Rotas/itens de menu que o papel pode ver e cujo rótulo casa com a busca —
+  // permite ir a Financeiro/Configurações/Integrações/etc. por busca (menos cliques).
+  const paginasMatch = useCallback((q: string): Result[] => {
+    const termo = q.trim().toLowerCase();
+    if (!termo) return [];
+    return flatNavForRole(user?.role)
+      .filter((i) => i.label.toLowerCase().includes(termo))
+      .slice(0, 6)
+      .map((i) => ({ id: i.href, label: i.label, sub: "Ir para a página", href: i.href, type: "pagina" as const, newTab: i.newTab }));
+  }, [user?.role]);
+
   const search = useCallback(async (q: string) => {
     if (!q.trim()) { setResults([]); return; }
+    const paginas = paginasMatch(q);
+    setResults(paginas);   // páginas aparecem instantâneas (sem esperar a rede)
     setLoading(true);
     try {
       const [procs, clients, docs] = await Promise.allSettled([
@@ -42,7 +59,7 @@ export function SearchModal({ open, onClose }: SearchModalProps) {
         api.get<{ id: string; nome_completo: string; email: string | null }[]>(`/clients?search=${encodeURIComponent(q)}&limit=5`),
         api.get<{ id: string; titulo: string; tipo: string }[]>(`/documents?search=${encodeURIComponent(q)}&limit=5`),
       ]);
-      const combined: Result[] = [];
+      const combined: Result[] = [...paginas];
       if (procs.status === "fulfilled") {
         procs.value.forEach((p) => combined.push({ id: p.id, label: p.numero_cnj, sub: `${p.tribunal} · ${p.area_direito}`, href: `/processos/${p.id}`, type: "processo" }));
       }
@@ -56,7 +73,7 @@ export function SearchModal({ open, onClose }: SearchModalProps) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [paginasMatch]);
 
   function handleChange(e: React.ChangeEvent<HTMLInputElement>) {
     const v = e.target.value;
@@ -65,14 +82,15 @@ export function SearchModal({ open, onClose }: SearchModalProps) {
     debounceRef.current = setTimeout(() => search(v), 300);
   }
 
-  function navigate(href: string) {
+  function navigate(href: string, newTab?: boolean) {
+    if (newTab) { window.open(href, "_blank", "noopener,noreferrer"); onClose(); return; }
     router.push(href);
     onClose();
   }
 
   if (!open) return null;
 
-  const icon = { processo: <Scale size={14} className="text-afj-gold" />, cliente: <Users size={14} className="text-blue-500" />, documento: <FolderOpen size={14} className="text-green-500" /> };
+  const icon = { processo: <Scale size={14} className="text-afj-gold" />, cliente: <Users size={14} className="text-blue-500" />, documento: <FolderOpen size={14} className="text-green-500" />, pagina: <Compass size={14} className="text-afj-black/40" /> };
 
   return (
     <div className="fixed inset-0 bg-black/60 z-50 flex items-start justify-center pt-16 px-4" onClick={onClose}>
@@ -107,7 +125,7 @@ export function SearchModal({ open, onClose }: SearchModalProps) {
           {results.map((r) => (
             <button
               key={`${r.type}-${r.id}`}
-              onClick={() => navigate(r.href)}
+              onClick={() => navigate(r.href, r.newTab)}
               className="w-full flex items-center gap-3 px-4 py-3 hover:bg-afj-cream/60 transition-colors text-left"
             >
               <span className="flex-shrink-0">{icon[r.type]}</span>
