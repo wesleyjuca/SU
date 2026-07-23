@@ -15,11 +15,27 @@ SKIP_AUDIT_PATHS = {"/api/v1/auth/login", "/api/v1/auth/refresh", "/health", "/d
 RATE_LIMIT_RULES: dict[str, tuple[int, int]] = {
     "auth": (10, 60),          # 10 req/min por IP (brute-force protection)
     "agents_trigger": (20, 60), # 20 req/min por user
+    "brain_assistant": (15, 60), # 15 msg/min por user (assistente do Cérebro / LLM)
     "default": (200, 60),       # 200 req/min por IP
 }
 
 AUTH_PATHS = {"/api/v1/auth/login", "/api/v1/auth/refresh"}
 AGENT_TRIGGER_PATH = "/api/v1/agents/trigger"
+BRAIN_ASSISTANT_PATH = "/api/v1/system/brain/assistant"
+
+
+def _user_identifier(request: Request, fallback: str) -> str:
+    """Extrai o identificador do usuário (jti/sub) do JWT p/ limitar por usuário."""
+    auth_header = request.headers.get("authorization", "")
+    if not auth_header:
+        return fallback
+    try:
+        from jose import jwt as _jwt
+        token = auth_header.replace("Bearer ", "").replace("bearer ", "")
+        payload = _jwt.get_unverified_claims(token)
+        return payload.get("jti") or payload.get("sub") or fallback
+    except Exception:
+        return fallback
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
@@ -100,17 +116,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             identifier = client_ip
         elif path == AGENT_TRIGGER_PATH:
             rule_key = "agents_trigger"
-            auth_header = request.headers.get("authorization", "")
-            if auth_header:
-                try:
-                    from jose import jwt as _jwt
-                    token = auth_header.replace("Bearer ", "").replace("bearer ", "")
-                    payload = _jwt.get_unverified_claims(token)
-                    identifier = payload.get("jti") or payload.get("sub") or client_ip
-                except Exception:
-                    identifier = client_ip
-            else:
-                identifier = client_ip
+            identifier = _user_identifier(request, client_ip)
+        elif path == BRAIN_ASSISTANT_PATH:
+            # Assistente do Cérebro chama LLM (custo real) — limita por usuário.
+            rule_key = "brain_assistant"
+            identifier = _user_identifier(request, client_ip)
         else:
             rule_key = "default"
             identifier = client_ip

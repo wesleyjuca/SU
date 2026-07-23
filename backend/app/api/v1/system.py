@@ -914,9 +914,19 @@ async def brain_assistant(
     # Conversa (cria ou recupera) + histórico
     conv = None
     if body.conversation_id:
-        conv = (await db.execute(
-            select(AssistantConversation).where(AssistantConversation.id == uuid.UUID(body.conversation_id))
-        )).scalar_one_or_none()
+        # Defesa em profundidade: só carrega conversa do próprio usuário (evita
+        # que um SUPERADMIN abra conversa de outro por UUID adivinhado).
+        try:
+            conv_uuid = uuid.UUID(body.conversation_id)
+        except (ValueError, AttributeError):
+            conv_uuid = None
+        if conv_uuid is not None:
+            conv = (await db.execute(
+                select(AssistantConversation).where(
+                    AssistantConversation.id == conv_uuid,
+                    AssistantConversation.user_id == current_user.id,
+                )
+            )).scalar_one_or_none()
     if conv is None:
         conv = AssistantConversation(user_id=current_user.id, titulo=pergunta[:80])
         db.add(conv)
