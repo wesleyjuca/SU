@@ -53,6 +53,7 @@ const AREAS: { titulo: string; recursos: Recurso[] }[] = [
     titulo: "Plataforma & Segurança",
     recursos: [
       { icon: Shield, nome: "Multi-tenant & Auditoria", desc: "Isolamento total entre escritórios e log imutável de ações.", estado: "operacional" },
+      { icon: Sparkles, nome: "Cérebro (SuperAdmin)", desc: "Painel exclusivo do dono da plataforma: mapa vivo de módulos, integrações e infraestrutura (Celery, Redis, Qdrant, Postgres) em tempo real, assistente de IA com RAG da documentação do sistema e conversa por voz — todo acesso autenticado, autorizado e auditado.", estado: "operacional" },
       { icon: KeyRound, nome: "Autenticação JWT", desc: "Tokens de acesso/refresh com sessões estáveis.", estado: "operacional" },
       { icon: Shield, nome: "Ética, Controle & Integridade", desc: "Código de Conduta com aceite registrado, Canal de Denúncias anônimo e controles técnicos ativos (HITL, auditoria, LGPD).", estado: "operacional" },
       { icon: Sparkles, nome: "App Instalável (PWA)", desc: "Manifest e service worker publicados; offline ampliado e push em evolução.", estado: "parcial" },
