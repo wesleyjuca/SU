@@ -360,6 +360,41 @@ async def get_movements(
     ]
 
 
+@router.get("/{process_id}/partes")
+async def get_partes(
+    process_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Lista as partes do processo (autor, réu, advogados) — populadas pela fonte
+    credenciada PDPJ (Fase 75). Vazio até o processo ter partes importadas."""
+    from app.models.process import ProcessParty
+    proc_check = await db.execute(
+        select(LegalProcess.id).where(
+            LegalProcess.id == uuid.UUID(process_id),
+            LegalProcess.tenant_id == current_user.tenant_id,
+        )
+    )
+    if not proc_check.scalar_one_or_none():
+        raise NotFoundError("Processo", process_id)
+    rows = (await db.execute(
+        select(ProcessParty)
+        .where(ProcessParty.process_id == uuid.UUID(process_id))
+        .order_by(ProcessParty.polo, ProcessParty.tipo)
+    )).scalars().all()
+    return [
+        {
+            "id": str(p.id),
+            "tipo": p.tipo,
+            "nome": p.nome,
+            "cpf_cnpj": p.cpf_cnpj,
+            "oab": p.oab,
+            "polo": p.polo,
+        }
+        for p in rows
+    ]
+
+
 @router.get("/{process_id}/deadlines")
 async def get_deadlines(
     process_id: str,
