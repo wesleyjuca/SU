@@ -53,6 +53,19 @@ async def hub_connect(
     }
 
 
+@router.post("/{provider}/test")
+async def hub_test(
+    provider: str,
+    current_user: User = Depends(require_role("ADMIN")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Testa a credencial conectada e atualiza o status (CONECTADA/ERRO).
+    Disponível para as fontes credenciadas (PJe/PDPJ, Escavador, Judit)."""
+    r = await integration_hub.testar_conexao(db, current_user.tenant_id, provider)
+    await db.commit()
+    return r
+
+
 @router.delete("/{provider}")
 async def hub_disconnect(
     provider: str,
