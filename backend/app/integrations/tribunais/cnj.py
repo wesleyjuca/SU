@@ -100,7 +100,13 @@ class CNJDataJudClient(BaseTribunalClient):
 
     @property
     def _index(self) -> str:
-        return TRIBUNAL_INDICES.get(self.tribunal, f"api_publica_{self.tribunal.lower()}")
+        # Fase 87: a tabela `tribunais` (cache carregado no boot) é a fonte
+        # primária; o dict hardcoded vira fallback de degradação (cache vazio
+        # — sandbox, boot ainda não concluído etc.), preservando o
+        # comportamento de antes desta fase em qualquer ambiente sem DB.
+        from app.services.tribunais_ref import indice_datajud
+        return (indice_datajud(self.tribunal)
+                or TRIBUNAL_INDICES.get(self.tribunal, f"api_publica_{self.tribunal.lower()}"))
 
     @property
     def _search_url(self) -> str:

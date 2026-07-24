@@ -81,6 +81,19 @@ async def _seed_tribunais(engine) -> None:
     log.info("seed_tribunais_complete", inseridos=len(novos))
 
 
+async def _carregar_cache_tribunais(engine) -> None:
+    """Fase 87 — carrega o cache de leitura da tabela `tribunais` (não do dict
+    hardcoded), tornando-a a fonte de verdade em runtime. Best-effort: falha
+    aqui só significa que `CNJDataJudClient._index` cai no fallback hardcoded
+    (comportamento idêntico ao de antes desta fase)."""
+    from sqlalchemy.ext.asyncio import AsyncSession
+    from app.services.tribunais_ref import carregar_cache
+
+    async with AsyncSession(engine) as session:
+        cache = await carregar_cache(session)
+    log.info("tribunais_cache_carregado", tribunais=len(cache))
+
+
 async def _background_warmup() -> None:
     """Optional warmup that runs after the app is already serving requests."""
     await asyncio.sleep(2)
@@ -185,6 +198,11 @@ async def lifespan(app: FastAPI):
             await _seed_tribunais(engine)
         except Exception as exc:
             log.warning("seed_tribunais_warning", error=str(exc))
+
+        try:
+            await _carregar_cache_tribunais(engine)
+        except Exception as exc:
+            log.warning("tribunais_cache_warning", error=str(exc))
     else:
         log.warning("database_skipped", reason="DATABASE_URL not configured — running in degraded mode")
 
