@@ -16,9 +16,6 @@ import structlog
 
 log = structlog.get_logger()
 
-CIRCUIT_BREAKER_FAILURES = 3
-CIRCUIT_BREAKER_TIMEOUT_SECONDS = 1800  # 30 minutos
-
 
 @dataclass
 class MovementData:

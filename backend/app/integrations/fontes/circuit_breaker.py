@@ -1,7 +1,6 @@
 """Circuit breaker real para as fontes processuais (Fase 73).
 
-Porta a ideia que jazia morta em `integrations/diario_oficial/monitor.py`
-(abertura temporizada por tribunal) e a completa com os três estados clássicos:
+Implementa os três estados clássicos de um disjuntor (abertura temporizada):
 
     closed  → tudo passa; conta falhas consecutivas
     open    → nada passa; após `reset_timeout` s vira half_open
