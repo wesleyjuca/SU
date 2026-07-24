@@ -15,41 +15,9 @@ from app.agents.base.agent import BaseAgent
 from app.agents.base.result import AgentResult, AgentStatus
 from app.agents.brain.context import AgentContext
 from app.integrations.anthropic_client import call_claude
-from app.integrations.tribunais.cnj import CNJDataJudClient
 import structlog
 
 log = structlog.get_logger()
-
-# Mapa UF → tribunais relevantes (TJ estadual + TRF regional + TRT regional)
-UF_TO_TRIBUNAIS: dict[str, list[str]] = {
-    "AC": ["TJAC", "TRF1", "TRT14"],
-    "AL": ["TJAL", "TRF5", "TRT19"],
-    "AM": ["TJAM", "TRF1", "TRT11"],
-    "AP": ["TJAP", "TRF1", "TRT8"],
-    "BA": ["TJBA", "TRF1", "TRT5"],
-    "CE": ["TJCE", "TRF5", "TRT7"],
-    "DF": ["TJDFT", "TRF1", "TRT10"],
-    "ES": ["TJES", "TRF2", "TRT17"],
-    "GO": ["TJGO", "TRF1", "TRT18"],
-    "MA": ["TJMA", "TRF1", "TRT16"],
-    "MG": ["TJMG", "TRF1", "TRT3"],
-    "MS": ["TJMS", "TRF3", "TRT24"],
-    "MT": ["TJMT", "TRF1", "TRT23"],
-    "PA": ["TJPA", "TRF1", "TRT8"],
-    "PB": ["TJPB", "TRF5", "TRT13"],
-    "PE": ["TJPE", "TRF5", "TRT6"],
-    "PI": ["TJPI", "TRF1", "TRT22"],
-    "PR": ["TJPR", "TRF4", "TRT9"],
-    "RJ": ["TJRJ", "TRF2", "TRT1"],
-    "RN": ["TJRN", "TRF5", "TRT21"],
-    "RO": ["TJRO", "TRF1", "TRT14"],
-    "RR": ["TJRR", "TRF1", "TRT11"],
-    "RS": ["TJRS", "TRF4", "TRT4"],
-    "SC": ["TJSC", "TRF4", "TRT12"],
-    "SE": ["TJSE", "TRF5", "TRT20"],
-    "SP": ["TJSP", "TRF3", "TRT2"],
-    "TO": ["TJTO", "TRF1", "TRT10"],
-}
 
 
 class ProcessAgent(BaseAgent):
@@ -93,7 +61,7 @@ class ProcessAgent(BaseAgent):
 
         # Fase 74: andamentos via DataJudFonte (mesmo cliente CNJ, agora sob
         # circuit breaker + fail-soft). Preserva o shape MovementData (código/raw)
-        # que este agente consome. `_get_tribunal_client` fica p/ compatibilidade.
+        # que este agente consome.
         from app.integrations.fontes.registry import obter_fonte
         fonte_dj = obter_fonte("datajud")
         movimentos = await fonte_dj.fetch_movements_datajud(numero_cnj, tribunal) if fonte_dj else []
@@ -337,10 +305,6 @@ class ProcessAgent(BaseAgent):
                     "requer_validacao_humana": True,
                 })
         return prazos
-
-    def _get_tribunal_client(self, tribunal: str) -> CNJDataJudClient:
-        """Retorna cliente DataJud CNJ para o tribunal informado."""
-        return CNJDataJudClient(tribunal=tribunal.upper())
 
     async def _register_tools(self):
         return []
