@@ -511,6 +511,59 @@ async def atualizar_andamentos(
     }
 
 
+@router.post("/{process_id}/atualizar-partes")
+async def atualizar_partes(
+    process_id: str,
+    current_user: User = Depends(require_role("ADMIN", "SOCIO", "ADVOGADO", "GESTOR", "PARALEGAL", "ASSISTENTE")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Backfill das PARTES do processo via PDPJ (fonte credenciada, Fase 75).
+
+    Exige que o escritório tenha conectado o provedor "pdpj" em Integrações
+    (opt-in). Sem credencial → 422 orientando a conectar. O DataJud público não
+    expõe partes, por isso este caminho é separado."""
+    from fastapi import HTTPException
+    from app.integrations.fontes.pdpj_fonte import para_tenant
+    from app.services.partes_import import importar_partes
+
+    process = (await db.execute(
+        select(LegalProcess).where(
+            LegalProcess.id == uuid.UUID(process_id),
+            LegalProcess.tenant_id == current_user.tenant_id,
+        )
+    )).scalar_one_or_none()
+    if not process:
+        raise NotFoundError("Processo", process_id)
+    if not process.numero_cnj:
+        raise HTTPException(status_code=422, detail="Processo sem número CNJ — não é possível consultar o PDPJ.")
+
+    fonte = await para_tenant(db, current_user.tenant_id)
+    if not fonte:
+        raise HTTPException(
+            status_code=422,
+            detail="PDPJ não conectado. Conecte o provedor 'PJe / PDPJ' em Integrações para importar as partes.",
+        )
+
+    try:
+        partes = await fonte.partes(process.numero_cnj, process.tribunal)
+    except Exception:
+        partes = []
+    if not partes:
+        return {"novas": 0, "fonte_respondeu": False,
+                "message": "O PDPJ não retornou partes (token expirado/sem acesso ao processo, ou fora do ar)."}
+
+    resultado = await importar_partes(db, process, partes)
+    await db.commit()
+    novas = resultado["novas"]
+    return {
+        "novas": novas,
+        "total": resultado["total"],
+        "fonte_respondeu": True,
+        "message": (f"{novas} nova(s) parte(s) importada(s)." if novas
+                    else "Nenhuma parte nova — as partes já estão atualizadas."),
+    }
+
+
 # ─── Reatribuição de carteira (advogado sai / entra de férias) ───────────────
 class ReatribuirCarteira(BaseModel):
     de_advogado_id: str
