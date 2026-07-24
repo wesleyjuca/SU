@@ -90,43 +90,39 @@ async def _enriquecer_via_datajud(db, procs: list[tuple]) -> None:
     if not procs:
         return
     from datetime import datetime
-    from app.integrations.tribunais.cnj import CNJDataJudClient
+    from app.integrations.fontes.registry import obter_fonte
     from app.services.movements_import import importar_movimentos, parse_datajud_movimentos
 
-    client = CNJDataJudClient()
-    try:
-        for proc, tribunal in procs:
+    # Fase 74: detalhe via DataJudFonte (mesmo cliente CNJ, agora sob circuit
+    # breaker + client fechado a cada chamada). A fonte é fail-soft (breaker).
+    fonte_dj = obter_fonte("datajud")
+    for proc, tribunal in procs:
+        dados = await fonte_dj.detalhar(proc.numero_cnj, tribunal) if fonte_dj else None
+        if not dados:
+            continue
+        if dados.get("classe") and not proc.tipo_acao:
+            proc.tipo_acao = dados["classe"][:255]
+        if dados.get("orgao_julgador") and not proc.vara:
+            proc.vara = dados["orgao_julgador"][:255]
+        area = _area_from_assuntos(dados.get("assuntos") or [])
+        if area and not proc.area_direito:
+            proc.area_direito = area
+        if dados.get("data_ajuizamento") and not proc.distribuicao_data:
             try:
-                dados = await client.fetch_processo(proc.numero_cnj, tribunal)
-            except Exception:
-                dados = None
-            if not dados:
-                continue
-            if dados.get("classe") and not proc.tipo_acao:
-                proc.tipo_acao = dados["classe"][:255]
-            if dados.get("orgao_julgador") and not proc.vara:
-                proc.vara = dados["orgao_julgador"][:255]
-            area = _area_from_assuntos(dados.get("assuntos") or [])
-            if area and not proc.area_direito:
-                proc.area_direito = area
-            if dados.get("data_ajuizamento") and not proc.distribuicao_data:
-                try:
-                    proc.distribuicao_data = datetime.fromisoformat(
-                        dados["data_ajuizamento"].replace("Z", "+00:00")
-                    ).date()
-                except (ValueError, AttributeError):
-                    pass
-            meta = dict(proc.metadata_json or {})
-            meta["datajud"] = {"classe": dados.get("classe"), "grau": dados.get("grau"),
-                               "assuntos": (dados.get("assuntos") or [])[:5]}
-            proc.metadata_json = meta
+                proc.distribuicao_data = datetime.fromisoformat(
+                    dados["data_ajuizamento"].replace("Z", "+00:00")
+                ).date()
+            except (ValueError, AttributeError):
+                pass
+        meta = dict(proc.metadata_json or {})
+        meta["datajud"] = {"classe": dados.get("classe"), "grau": dados.get("grau"),
+                           "assuntos": (dados.get("assuntos") or [])[:5]}
+        proc.metadata_json = meta
 
-            # Backfill inicial: sem notificação de equipe (processo recém-criado)
-            await importar_movimentos(
-                db, proc, parse_datajud_movimentos(dados, limite=100), notificar=False,
-            )
-    finally:
-        await client.close()
+        # Backfill inicial: sem notificação de equipe (processo recém-criado)
+        await importar_movimentos(
+            db, proc, parse_datajud_movimentos(dados, limite=100), notificar=False,
+        )
 
 
 async def capturar_por_oab(
@@ -146,8 +142,9 @@ async def capturar_por_oab(
     from app.models.process import LegalProcess, ProcessTeamMember
     from app.models.user import User
     from app.models.notification import Notification
-    from app.integrations.dje.comunica import buscar_comunicacoes
+    from app.integrations.fontes.registry import obter_fonte
     from app.services.movements_import import iniciar_sync, finalizar_sync
+    from app.services.tribunais_ref import normalizar_codigo
 
     hoje = date.today()
     inicio = hoje - timedelta(days=max(1, dias_retro))
@@ -178,25 +175,30 @@ async def capturar_por_oab(
         return resultado
 
     # Diagnóstico da fonte (distingue "inalcançável" de "0 no período").
+    # `stats["itens"]` acumula o total bruto de comunicações (a fonte preenche).
     stats: dict = {}
-    total_comunicacoes = 0
+    fonte_comunica = obter_fonte("comunica")
 
     # numero_cnj (dígitos) -> dados do processo a criar
     achados: dict[str, dict] = {}
     for numero, uf, owner in oabs:
-        comunicacoes = await buscar_comunicacoes(numero, uf, inicio, hoje, max_paginas=20, stats=stats)
-        total_comunicacoes += len(comunicacoes)
-        for c in comunicacoes:
-            cnj = c.numero_cnj
+        descobertos = await fonte_comunica.descobrir_por_oab(
+            numero, uf, inicio, hoje, max_paginas=20, stats=stats,
+        ) if fonte_comunica else []
+        for p in descobertos:
+            cnj = p.numero_cnj
             if not cnj or cnj in achados:
                 continue
+            raw = p.raw
+            numero_fmt = getattr(raw, "numero_cnj_fmt", None) or cnj
             achados[cnj] = {
-                "numero_cnj_fmt": c.numero_cnj_fmt or cnj,
-                "tribunal": (c.tribunal or f"TJ{uf}").upper(),
+                "numero_cnj_fmt": numero_fmt,
+                "tribunal": normalizar_codigo(p.tribunal or f"TJ{uf}"),
                 "uf": uf,
                 "oab": f"{numero}/{uf}",
                 "owner": owner,
             }
+    total_comunicacoes = stats.get("itens", 0)
 
     if not achados:
         resultado = {"oabs": len(oabs), "comunicacoes_encontradas": total_comunicacoes,

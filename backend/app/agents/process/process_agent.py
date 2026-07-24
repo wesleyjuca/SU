@@ -91,13 +91,12 @@ class ProcessAgent(BaseAgent):
         if not numero_cnj or not tribunal:
             return AgentResult(status=AgentStatus.FAILED, agent_name=self.name, error="numero_cnj e tribunal são obrigatórios")
 
-        client = self._get_tribunal_client(tribunal)
-
-        try:
-            movimentos = await client.fetch_movements(numero_cnj)
-        except Exception as exc:
-            log.error("tribunal_fetch_failed", tribunal=tribunal, numero=numero_cnj, error=str(exc))
-            return AgentResult(status=AgentStatus.FAILED, agent_name=self.name, error=str(exc))
+        # Fase 74: andamentos via DataJudFonte (mesmo cliente CNJ, agora sob
+        # circuit breaker + fail-soft). Preserva o shape MovementData (código/raw)
+        # que este agente consome. `_get_tribunal_client` fica p/ compatibilidade.
+        from app.integrations.fontes.registry import obter_fonte
+        fonte_dj = obter_fonte("datajud")
+        movimentos = await fonte_dj.fetch_movements_datajud(numero_cnj, tribunal) if fonte_dj else []
 
         # Resumo IA por movimento é caro no polling em lote (1 chamada × movimento ×
         # todos os processos, a cada 30 min) — só quando POLL_AI_SUMMARY está ligado.

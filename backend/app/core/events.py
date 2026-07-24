@@ -64,6 +64,23 @@ async def _seed_default_data(engine) -> None:
     log.info("seed_complete", reset_passwords=reset_passwords)
 
 
+async def _seed_tribunais(engine) -> None:
+    """Semeia a tabela de referência `tribunais` a partir do mapa canônico
+    (TRIBUNAL_INDICES). Idempotente: insere só os códigos que ainda faltam."""
+    from sqlalchemy.ext.asyncio import AsyncSession
+    from sqlalchemy import select
+    from app.models.tribunal import Tribunal
+    from app.services.tribunais_ref import linhas_seed
+
+    async with AsyncSession(engine) as session:
+        existentes = {c for (c,) in (await session.execute(select(Tribunal.codigo))).all()}
+        novos = [Tribunal(**linha) for linha in linhas_seed() if linha["codigo"] not in existentes]
+        if novos:
+            session.add_all(novos)
+            await session.commit()
+    log.info("seed_tribunais_complete", inseridos=len(novos))
+
+
 async def _background_warmup() -> None:
     """Optional warmup that runs after the app is already serving requests."""
     await asyncio.sleep(2)
@@ -155,6 +172,11 @@ async def lifespan(app: FastAPI):
             await _seed_default_data(engine)
         except Exception as exc:
             log.warning("seed_warning", error=str(exc))
+
+        try:
+            await _seed_tribunais(engine)
+        except Exception as exc:
+            log.warning("seed_tribunais_warning", error=str(exc))
     else:
         log.warning("database_skipped", reason="DATABASE_URL not configured — running in degraded mode")
 
