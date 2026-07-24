@@ -61,6 +61,14 @@ export interface AuditEvento {
   ip_address: string | null; legal_basis: string | null; tenant_id: string | null;
 }
 
+export interface Insight {
+  tipo: "melhoria" | "erro" | "risco" | "evolucao";
+  titulo: string;
+  descricao: string;
+  prioridade: "alta" | "media" | "baixa";
+  area: string;
+}
+
 /** GET /api/v1/system/brain/<path> com o Bearer token; null em qualquer falha. */
 export async function fetchBrain<T>(path: string): Promise<T | null> {
   try {
@@ -70,6 +78,22 @@ export async function fetchBrain<T>(path: string): Promise<T | null> {
     });
     if (!res.ok) return null;
     return (await res.json()) as T;
+  } catch {
+    return null;
+  }
+}
+
+/** POST /api/v1/system/brain/<path> com o Bearer token; null em qualquer falha. */
+export async function postBrain<T>(path: string): Promise<T | null> {
+  try {
+    const token = localStorage.getItem("afj_access_token");
+    const res = await fetch(`/api/v1/system/brain/${path}`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) return data as T | null;
+    return data as T;
   } catch {
     return null;
   }
