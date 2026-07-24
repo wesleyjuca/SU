@@ -346,6 +346,12 @@ export default function ProcessoDetailPage() {
                 { label: "OAB Responsável", value: processo.oab_responsavel },
                 { label: "Comarca / UF", value: processo.comarca ? `${processo.comarca} / ${processo.uf}` : processo.uf },
                 {
+                  label: "Origem",
+                  value: processo.fonte === "OAB" ? "Captura automática (OAB)"
+                    : processo.fonte === "MANUAL" ? "Cadastro manual"
+                    : processo.fonte ?? null,
+                },
+                {
                   label: "Valor da Causa",
                   value: processo.valor_causa
                     ? `R$ ${processo.valor_causa.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`

@@ -257,7 +257,8 @@ async def capturar_por_oab(
             oab_responsavel=info["oab"],
             responsavel_id=info["owner"],
             monitoring_active=True,
-            metadata_json={"fonte_captura": "OAB", "oab_origem": info["oab"]},
+            fonte="OAB",
+            metadata_json={"oab_origem": info["oab"]},
         )
         db.add(proc)
         await db.flush()

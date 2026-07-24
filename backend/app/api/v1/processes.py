@@ -56,6 +56,7 @@ class ProcessResponse(BaseModel):
     proximo_prazo_at: str | None
     ultimo_andamento_at: str | None
     monitoring_active: bool
+    fonte: str | None = None
     created_at: str
 
 
@@ -289,6 +290,7 @@ async def create_process(
         responsavel_id=responsavel,
         tenant_id=current_user.tenant_id,
         client_id=uuid.UUID(body.client_id) if body.client_id else None,
+        fonte="MANUAL",
     )
     db.add(process)
     await db.flush()
@@ -1016,5 +1018,6 @@ def _to_response(p: LegalProcess) -> ProcessResponse:
         proximo_prazo_at=p.proximo_prazo_at.isoformat() if p.proximo_prazo_at else None,
         ultimo_andamento_at=p.ultimo_andamento_at.isoformat() if p.ultimo_andamento_at else None,
         monitoring_active=p.monitoring_active,
+        fonte=p.fonte,
         created_at=p.created_at.isoformat(),
     )
