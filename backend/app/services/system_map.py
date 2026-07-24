@@ -47,6 +47,18 @@ def _fontes_captura() -> list[str]:
         return []
 
 
+def _fontes_caps() -> dict[str, list[str]]:
+    """Capabilities por fonte registrada (p/ o drill-down do nó no mapa)."""
+    try:
+        from app.integrations.fontes.registry import todas_as_fontes
+        return {
+            getattr(f, "nome", "?"): sorted(c.value for c in getattr(f, "capabilities", set()))
+            for f in todas_as_fontes()
+        }
+    except Exception:
+        return {}
+
+
 def _tribunais_count() -> int:
     """Nº de tribunais na tabela de referência (fonte única, Fase 74)."""
     try:
@@ -92,9 +104,12 @@ def construir_mapa() -> dict:
     for p in providers:
         nos.append({"id": f"prov_{p}", "label": p, "grupo": "integracoes"})
     # Nós por fonte da captura (comunica, datajud, …) + PDPJ credenciado
+    caps = _fontes_caps()
     for f in fontes:
-        nos.append({"id": f"fonte_{f}", "label": f, "grupo": "integracoes"})
-    nos.append({"id": "fonte_pdpj", "label": "pdpj (credenciado)", "grupo": "integracoes"})
+        nos.append({"id": f"fonte_{f}", "label": f, "grupo": "integracoes",
+                    "meta": {"capabilities": caps.get(f, [])}})
+    nos.append({"id": "fonte_pdpj", "label": "pdpj (credenciado)", "grupo": "integracoes",
+                "meta": {"capabilities": ["detalhar", "movimentos", "partes"], "credenciado": True}})
 
     arestas = [
         {"de": "api", "para": "postgres", "tipo": "dados"},

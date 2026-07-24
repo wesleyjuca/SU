@@ -883,6 +883,46 @@ async def brain_map(current_user: User = Depends(require_role("SUPERADMIN"))):
     return construir_mapa()
 
 
+@router.get("/brain/audit")
+async def brain_audit(
+    limit: int = Query(default=50, ge=1, le=200),
+    current_user: User = Depends(require_role("SUPERADMIN")),
+):
+    """Trilha de auditoria recente — visão de PLATAFORMA (todas as tenants),
+    exclusiva do SUPERADMIN. Lê o audit_log imutável (últimas N ações). Best-effort:
+    qualquer falha retorna lista vazia, nunca derruba o painel."""
+    await _audit_brain(current_user.id, "BRAIN_AUDIT_VIEW")
+    try:
+        from sqlalchemy import select, desc
+        from app.db.base import AsyncSessionLocal
+        from app.models.audit_log import AuditLog
+        async with AsyncSessionLocal() as db:
+            rows = (await db.execute(
+                select(
+                    AuditLog.id, AuditLog.timestamp, AuditLog.action, AuditLog.user_id,
+                    AuditLog.resource_type, AuditLog.resource_id, AuditLog.success,
+                    AuditLog.ip_address, AuditLog.legal_basis, AuditLog.tenant_id,
+                ).order_by(desc(AuditLog.timestamp)).limit(limit)
+            )).all()
+        return {"ok": True, "eventos": [
+            {
+                "id": r.id,
+                "timestamp": r.timestamp.isoformat() if r.timestamp else None,
+                "action": r.action,
+                "user_id": str(r.user_id) if r.user_id else None,
+                "resource_type": r.resource_type,
+                "resource_id": str(r.resource_id) if r.resource_id else None,
+                "success": bool(r.success),
+                "ip_address": r.ip_address,
+                "legal_basis": r.legal_basis,
+                "tenant_id": str(r.tenant_id) if r.tenant_id else None,
+            }
+            for r in rows
+        ]}
+    except Exception as exc:
+        return {"ok": False, "eventos": [], "detail": str(exc)[:200]}
+
+
 # ─── Assistente IA do Cérebro (SUPERADMIN — chat multi-turn + streaming SSE) ──
 class BrainChatRequest(BaseModel):
     message: str
