@@ -64,7 +64,9 @@ export const navSections: NavSection[] = [
     { href: "/admin/personalizacao", label: "Personalização", icon: Palette, roles: ["ADMIN", "SUPERADMIN"] },
     { href: "/admin/juridico", label: "Config. Jurídica", icon: Gavel, roles: ["ADMIN", "SUPERADMIN"] },
     { href: "/integracoes", label: "Integrações", icon: Plug, roles: ["ADMIN", "SUPERADMIN"] },
-    { href: "/auditoria", label: "Auditoria", icon: Shield, roles: ["ADMIN", "SOCIO", "SUPERADMIN"] },
+    // Auditoria do escritório (ADMIN/SOCIO). O SUPERADMIN usa a aba Auditoria do
+    // Cérebro (visão de plataforma) — evita entrada duplicada no menu.
+    { href: "/auditoria", label: "Auditoria", icon: Shield, roles: ["ADMIN", "SOCIO"] },
     { href: "/admin/health", label: "Saúde do Sistema", icon: Activity, roles: ["ADMIN", "SUPERADMIN"] },
     { href: "/admin/cerebro", label: "Cérebro", icon: Brain, roles: ["SUPERADMIN"] },
   ]},
