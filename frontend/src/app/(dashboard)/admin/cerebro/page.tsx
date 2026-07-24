@@ -1,18 +1,22 @@
 "use client";
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { Brain, Network, Cpu, ShieldCheck, Sparkles } from "lucide-react";
+import { Brain, Network, Cpu, ShieldCheck, Sparkles, Building2, ScrollText } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { BrainMap } from "@/components/cerebro/BrainMap";
 import { BrainInfra } from "@/components/cerebro/BrainInfra";
 import { BrainAudit } from "@/components/cerebro/BrainAudit";
 import { BrainAssistant } from "@/components/cerebro/BrainAssistant";
+import { BrainMetrics } from "@/components/cerebro/BrainMetrics";
+import { BrainLogs } from "@/components/cerebro/BrainLogs";
 import { useUserStore } from "@/store";
 
-type AbaKey = "mapa" | "infra" | "auditoria" | "assistente";
+type AbaKey = "mapa" | "infra" | "plataforma" | "logs" | "auditoria" | "assistente";
 const ABAS: { key: AbaKey; label: string; icon: React.ElementType }[] = [
   { key: "mapa", label: "Mapa", icon: Network },
   { key: "infra", label: "Infraestrutura", icon: Cpu },
+  { key: "plataforma", label: "Plataforma", icon: Building2 },
+  { key: "logs", label: "Logs", icon: ScrollText },
   { key: "auditoria", label: "Auditoria", icon: ShieldCheck },
   { key: "assistente", label: "Assistente", icon: Sparkles },
 ];
@@ -74,6 +78,8 @@ export default function CerebroPage() {
       <div>
         {aba === "mapa" && <BrainMap />}
         {aba === "infra" && <BrainInfra />}
+        {aba === "plataforma" && <BrainMetrics />}
+        {aba === "logs" && <BrainLogs />}
         {aba === "auditoria" && <BrainAudit />}
         {aba === "assistente" && <BrainAssistant />}
       </div>
