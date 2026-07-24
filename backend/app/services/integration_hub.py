@@ -82,6 +82,23 @@ PROVIDERS: dict[str, dict] = {
                  "um parâmetro {{1}} no corpo — mensagens fora da janela de 24h "
                  "exigem template aprovado.",
     },
+    "pdpj": {
+        "nome": "PJe / PDPJ — Partes dos processos",
+        "desc": "Consulta credenciada à API do PDPJ (CNJ) para preencher as PARTES "
+                "dos processos (autor, réu, advogados) — dado que a base pública do "
+                "DataJud não expõe. Opcional e por escritório.",
+        "tipo": "api_key",
+        "fields": [
+            {"key": "sso_token", "label": "Token SSO (Bearer) do PDPJ/CNJ Corporativo", "secret": True},
+            {"key": "base_url", "label": "URL base da API PDPJ (opcional)", "secret": False},
+        ],
+        "ativa": [
+            "Preenchimento das partes/advogados na captura por OAB",
+            "Botão \"Atualizar partes\" no processo (backfill sob demanda)",
+        ],
+        "obter": "Acesso via CNJ Corporativo (SSO). Cole o token Bearer emitido para "
+                 "o PDPJ. Deixe a URL base em branco para usar o portal nacional.",
+    },
 }
 
 
