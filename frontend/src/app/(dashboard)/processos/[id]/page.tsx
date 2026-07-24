@@ -1,11 +1,11 @@
 "use client";
 import { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { ArrowLeft, Scale, AlertTriangle, Calendar, Clock, Plus, CheckCircle, Loader2, Edit3, X, RefreshCw } from "lucide-react";
+import { ArrowLeft, Scale, AlertTriangle, Calendar, Clock, Plus, CheckCircle, Loader2, Edit3, X, RefreshCw, Users } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
 import { ProcessTimelineCard } from "@/components/processes/ProcessTimeline";
-import type { Processo, Movimentacao, Prazo } from "@/types";
+import type { Processo, Movimentacao, Prazo, Parte } from "@/types";
 
 const SITUACAO_STYLE: Record<string, string> = {
   ATIVO: "badge-ativo",
@@ -51,6 +51,24 @@ export default function ProcessoDetailPage() {
   const [equipeForm, setEquipeForm] = useState<{ responsavel_id: string; equipe: string[] }>({ responsavel_id: "", equipe: [] });
   const [salvandoEquipe, setSalvandoEquipe] = useState(false);
   const [atualizandoAndamentos, setAtualizandoAndamentos] = useState(false);
+  const [partes, setPartes] = useState<Parte[]>([]);
+  const [atualizandoPartes, setAtualizandoPartes] = useState(false);
+
+  async function atualizarPartes() {
+    setAtualizandoPartes(true);
+    try {
+      const token = localStorage.getItem("afj_access_token");
+      const res = await fetch(`/api/v1/processes/${id}/atualizar-partes`, {
+        method: "POST", headers: { Authorization: `Bearer ${token}` },
+      });
+      const d = await res.json().catch(() => ({}));
+      if (res.ok) {
+        if (d.novas > 0) { toast.success(d.message || "Partes atualizadas."); fetchAll(); }
+        else toast.warning(d.message || "Nenhuma parte nova.");
+      } else toast.error(d.detail || "Erro ao atualizar partes.");
+    } catch { toast.error("Erro de conexão."); }
+    finally { setAtualizandoPartes(false); }
+  }
 
   async function atualizarAndamentos() {
     setAtualizandoAndamentos(true);
@@ -112,14 +130,16 @@ export default function ProcessoDetailPage() {
     const headers = { Authorization: `Bearer ${token}` };
     setLoading(true);
     try {
-      const [pRes, mRes, dRes] = await Promise.all([
+      const [pRes, mRes, dRes, paRes] = await Promise.all([
         fetch(`/api/v1/processes/${id}`, { headers }),
         fetch(`/api/v1/processes/${id}/movements`, { headers }),
         fetch(`/api/v1/processes/${id}/deadlines`, { headers }),
+        fetch(`/api/v1/processes/${id}/partes`, { headers }),
       ]);
       if (pRes.ok) setProcesso(await pRes.json());
       if (mRes.ok) setMovimentacoes(await mRes.json());
       if (dRes.ok) setPrazos(await dRes.json());
+      if (paRes.ok) setPartes(await paRes.json());
     } finally { setLoading(false); }
   }
 
@@ -284,6 +304,15 @@ export default function ProcessoDetailPage() {
               Atualizar andamentos
             </button>
             <button
+              onClick={atualizarPartes}
+              disabled={atualizandoPartes || !processo.numero_cnj}
+              title={processo.numero_cnj ? "Importar partes do processo (PJe/PDPJ — requer integração conectada)" : "Processo sem número CNJ"}
+              className="btn-afj-outline rounded-sm flex items-center gap-1.5 text-xs disabled:opacity-50"
+            >
+              {atualizandoPartes ? <Loader2 size={12} className="animate-spin" /> : <Users size={12} />}
+              Atualizar partes
+            </button>
+            <button
               onClick={() => setShowPrazoModal(true)}
               className="btn-afj-outline rounded-sm flex items-center gap-1.5 text-xs"
             >
@@ -362,6 +391,35 @@ export default function ProcessoDetailPage() {
               </div>
             ) : (
               <p className="text-xs text-afj-black/40">Nenhum advogado atribuído — clique no lápis para definir a equipe.</p>
+            )}
+          </div>
+
+          {/* Partes do processo (PJe/PDPJ) */}
+          <div className="afj-card p-4">
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="font-semibold text-afj-black text-sm flex items-center gap-1.5">
+                <Users size={14} className="text-afj-gold" /> Partes
+              </h2>
+              {partes.length > 0 && (
+                <span className="text-[10px] uppercase tracking-wider text-afj-black/35">{partes.length}</span>
+              )}
+            </div>
+            {partes.length > 0 ? (
+              <div className="space-y-1.5 text-sm">
+                {partes.map((p) => (
+                  <div key={p.id} className="flex justify-between gap-2">
+                    <span className="text-afj-black/80 text-xs">
+                      {p.nome}
+                      {p.oab && <span className="text-afj-black/40"> · OAB {p.oab}</span>}
+                    </span>
+                    <span className="text-[10px] uppercase tracking-wider text-afj-black/35 flex-shrink-0">{p.tipo}</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-afj-black/40">
+                Nenhuma parte importada. Use &quot;Atualizar partes&quot; (requer o PJe/PDPJ conectado em Integrações).
+              </p>
             )}
           </div>
 

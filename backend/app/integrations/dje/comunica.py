@@ -71,13 +71,46 @@ def _normalize(item: dict) -> Comunicacao:
     )
 
 
+_ITEM_KEYS = ("items", "content", "comunicacoes", "data", "results")
+_TOTAL_KEYS = ("count", "total", "totalRegistros", "totalElements", "totalCount")
+
+
 def _extrai_itens(data) -> list:
-    """Extrai a lista de itens da resposta (formato varia por edição da API)."""
+    """Extrai a lista de itens da resposta (formato varia por edição da API).
+
+    Robusto ao envelope documentado no swagger cnj/pcp/1.0.0 e a variações:
+    lista pura, {items|content|comunicacoes|data|results: [...]} ou o mesmo
+    aninhado sob {"data": {...}}."""
     if isinstance(data, list):
         return data
     if isinstance(data, dict):
-        return data.get("items") or data.get("content") or data.get("comunicacoes") or []
+        for k in _ITEM_KEYS:
+            v = data.get(k)
+            if isinstance(v, list):
+                return v
+        inner = data.get("data")
+        if isinstance(inner, dict):
+            for k in _ITEM_KEYS:
+                v = inner.get(k)
+                if isinstance(v, list):
+                    return v
     return []
+
+
+def _extrai_total(data) -> int | None:
+    """Total de registros informado pela API (p/ parar de paginar cedo)."""
+    if isinstance(data, dict):
+        for k in _TOTAL_KEYS:
+            v = data.get(k)
+            if isinstance(v, int) and v >= 0:
+                return v
+        inner = data.get("data")
+        if isinstance(inner, dict):
+            for k in _TOTAL_KEYS:
+                v = inner.get(k)
+                if isinstance(v, int) and v >= 0:
+                    return v
+    return None
 
 
 async def buscar_comunicacoes(
@@ -126,7 +159,8 @@ async def buscar_comunicacoes(
                     break
                 if stats is not None:
                     stats["ok"] = True
-                itens = _extrai_itens(resp.json())
+                corpo = resp.json()
+                itens = _extrai_itens(corpo)
                 for it in itens:
                     if isinstance(it, dict):
                         try:
@@ -136,6 +170,13 @@ async def buscar_comunicacoes(
                 # Página incompleta → não há próxima.
                 if len(itens) < itens_por_pagina:
                     break
+                # Parada antecipada: se a API informa o total e já o coletamos.
+                total = _extrai_total(corpo)
+                if total is not None:
+                    if stats is not None:
+                        stats["total"] = total
+                    if len(out) >= total:
+                        break
     except Exception as exc:
         if stats is not None:
             stats["error"] = str(exc)

@@ -84,6 +84,15 @@ export interface Prazo {
   status: "PENDENTE" | "CUMPRIDO" | "PERDIDO";
 }
 
+export interface Parte {
+  id: string;
+  tipo: string;            // AUTOR, REU, ADVOGADO, JUIZ, MP, PARTE
+  nome: string;
+  cpf_cnpj: string | null;
+  oab: string | null;
+  polo: string | null;     // ATIVO, PASSIVO
+}
+
 // ─── Documentos ──────────────────────────────────────────────────────────────
 
 export interface Documento {
