@@ -35,6 +35,20 @@ class IngestRequest(BaseModel):
     document_id: Optional[str] = None
 
 
+def _para_contrato_publico(results: list[dict]) -> list[dict]:
+    """Mapeia o shape interno de retrieve() (text/payload) pro contrato público da API (content/metadata)."""
+    return [
+        {
+            "id": r.get("id"),
+            "score": r.get("score"),
+            "collection": r.get("collection"),
+            "content": r.get("text"),
+            "metadata": r.get("payload") or {},
+        }
+        for r in results
+    ]
+
+
 @router.post("/search")
 async def rag_search(
     req: SearchRequest,
@@ -64,7 +78,8 @@ async def rag_search(
             score_threshold=req.score_threshold,
             tenant_id=current_user.tenant_id,  # isola coleções privadas por escritório
         )
-        return {"query": req.query, "collections": req.collections, "results": results, "count": len(results)}
+        contrato = _para_contrato_publico(results)
+        return {"query": req.query, "collections": req.collections, "results": contrato, "count": len(contrato)}
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
