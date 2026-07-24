@@ -161,6 +161,14 @@ async def lifespan(app: FastAPI):
             "ALTER TABLE process_movements ADD COLUMN IF NOT EXISTS dedup_hash VARCHAR(64)",
             "CREATE INDEX IF NOT EXISTS ix_process_movements_dedup_hash ON process_movements (dedup_hash)",
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_process_movements_dedup ON process_movements (process_id, dedup_hash) WHERE dedup_hash IS NOT NULL",
+            # Fase 86 — origem do processo first-class (antes só em metadata_json,
+            # nunca lida). Backfill idempotente (WHERE fonte IS NULL): só os 2
+            # caminhos de criação existem hoje (OAB e cadastro manual), então
+            # tudo que não veio da captura por OAB é seguro inferir como manual.
+            "ALTER TABLE legal_processes ADD COLUMN IF NOT EXISTS fonte VARCHAR(30)",
+            "CREATE INDEX IF NOT EXISTS ix_legal_processes_fonte ON legal_processes (fonte)",
+            "UPDATE legal_processes SET fonte = 'OAB' WHERE fonte IS NULL AND metadata_json->>'fonte_captura' = 'OAB'",
+            "UPDATE legal_processes SET fonte = 'MANUAL' WHERE fonte IS NULL",
         ]:
             try:
                 async with engine.begin() as conn:

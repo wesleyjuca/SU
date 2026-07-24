@@ -51,6 +51,7 @@ export interface Processo {
   ultimo_andamento_at: string | null;
   proximo_prazo_at: string | null;
   monitoring_active: boolean;
+  fonte?: string | null;
   responsavel_id?: string | null;
   responsavel_nome?: string | null;
   equipe?: { id: string; nome: string; papel: string }[];
