@@ -87,6 +87,34 @@ async def rag_search(
         )
 
 
+@router.get("/coverage")
+async def rag_coverage(
+    current_user: User = Depends(require_role("ADMIN", "SOCIO", "ADVOGADO", "PARALEGAL", "ASSISTENTE")),
+):
+    """Contagem de chunks indexados por coleção (só as públicas — sem detalhe de conteúdo)."""
+    try:
+        from app.db.qdrant import get_qdrant
+
+        qdrant = await get_qdrant()
+        existentes = {c.name for c in (await qdrant.get_collections()).collections}
+        colecoes = []
+        for nome in sorted(VALID_COLLECTIONS):
+            if nome not in existentes:
+                colecoes.append({"collection": nome, "pontos": 0})
+                continue
+            try:
+                info = await qdrant.count(collection_name=nome, exact=False)
+                colecoes.append({"collection": nome, "pontos": info.count})
+            except Exception:
+                colecoes.append({"collection": nome, "pontos": None})
+        return {"colecoes": colecoes}
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Serviço RAG indisponível: {str(exc)}",
+        )
+
+
 @router.post("/ingest", status_code=status.HTTP_202_ACCEPTED)
 async def rag_ingest(
     req: IngestRequest,
