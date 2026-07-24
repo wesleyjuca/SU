@@ -6,7 +6,7 @@ import ReactFlow, {
   useNodesState, useEdgesState,
 } from "reactflow";
 import "reactflow/dist/style.css";
-import { Brain, RefreshCw, Cpu, Activity } from "lucide-react";
+import { Brain, RefreshCw, Cpu, Activity, Network } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { BrainAssistant } from "@/components/cerebro/BrainAssistant";
 import { useUserStore } from "@/store";
@@ -15,11 +15,18 @@ import { useUserStore } from "@/store";
 interface MapaNo { id: string; label: string; grupo: string; saude_key?: string; meta?: Record<string, unknown> }
 interface MapaAresta { de: string; para: string; tipo: string }
 interface Mapa { nos: MapaNo[]; arestas: MapaAresta[]; resumo: { agentes: number; providers: number; routers: number } }
+interface FonteSaude { nome: string; capabilities: string[]; breaker: string | null }
 interface Infra {
   celery: { ok: boolean; workers: number };
   redis: { ok: boolean };
   qdrant: { ok: boolean; configured?: boolean };
   postgres_pool: { ok: boolean };
+  fontes?: {
+    ok: boolean;
+    fontes: FonteSaude[];
+    pdpj?: { registrado: boolean; credential_gated: boolean } | null;
+    tribunais?: number | null;
+  };
 }
 
 const GRUPO_COR: Record<string, string> = {
@@ -190,6 +197,48 @@ export default function CerebroPage() {
             <Activity size={11} /> Anel verde = saudável · vermelho = indisponível · sinais dourados = fluxos ativos
             {lastRefresh && ` · atualizado ${lastRefresh.toLocaleTimeString("pt-BR")}`}
           </p>
+
+          {/* Fontes da Captura Nacional (registry + circuit breakers) */}
+          {infra?.fontes && (
+            <div className="afj-card p-4">
+              <div className="flex items-center justify-between mb-3">
+                <h2 className="font-semibold text-afj-black text-sm flex items-center gap-2">
+                  <Network size={15} className="text-afj-gold" /> Fontes da Captura
+                </h2>
+                {typeof infra.fontes.tribunais === "number" && (
+                  <span className="text-[11px] text-afj-black/45">{infra.fontes.tribunais} tribunais</span>
+                )}
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+                {infra.fontes.fontes.map((f) => {
+                  const aberto = f.breaker === "open";
+                  const meio = f.breaker === "half_open";
+                  return (
+                    <div key={f.nome} className="border border-afj-cream-dark rounded-sm p-2.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm font-semibold text-afj-black">{f.nome}</span>
+                        <span className={`text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded-full ${
+                          aberto ? "bg-red-100 text-red-700" : meio ? "bg-amber-100 text-amber-700" : "bg-green-100 text-green-700"}`}>
+                          {aberto ? "aberto" : meio ? "meio-aberto" : "ok"}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-afj-black/45 mt-1">{f.capabilities.join(" · ")}</p>
+                    </div>
+                  );
+                })}
+                {/* PDPJ é credenciado por escritório (fora do registry global) */}
+                <div className="border border-dashed border-afj-cream-dark rounded-sm p-2.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-semibold text-afj-black">pdpj</span>
+                    <span className="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-afj-gold/15 text-afj-gold">
+                      credenciado
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-afj-black/45 mt-1">detalhar · partes · por escritório</p>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Assistente IA do sistema (RAG + streaming) */}
           <BrainAssistant />

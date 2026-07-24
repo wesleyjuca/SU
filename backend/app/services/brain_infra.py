@@ -164,12 +164,53 @@ async def _jobs() -> dict:
     return await _com_timeout(_run(), {"ok": False, "detail": "timeout"})
 
 
+# ─── Fontes da Captura (registry + circuit breakers + tabela Tribunal) ────────
+async def _fontes() -> dict:
+    """Saúde das fontes processuais: estado do circuit breaker de cada fonte do
+    registry (comunica/datajud), o conector PDPJ credenciado (por-tenant) e a
+    contagem da tabela de referência Tribunal. Best-effort."""
+    async def _run():
+        resultado: dict = {"ok": True, "fontes": [], "pdpj": None, "tribunais": None}
+        # Fontes públicas registradas (comunica, datajud)
+        try:
+            from app.integrations.fontes.registry import todas_as_fontes
+            for f in todas_as_fontes():
+                breaker = getattr(f, "_breaker", None)
+                resultado["fontes"].append({
+                    "nome": getattr(f, "nome", "?"),
+                    "capabilities": sorted(c.value for c in getattr(f, "capabilities", set())),
+                    "breaker": (breaker.state if breaker is not None else None),
+                })
+        except Exception as exc:
+            resultado["ok"] = False
+            resultado["detail"] = str(exc)[:200]
+        # PDPJ é credenciado por tenant (fora do registry global) — informativo
+        try:
+            from app.services.integration_hub import PROVIDERS
+            resultado["pdpj"] = {"registrado": "pdpj" in PROVIDERS, "credential_gated": True}
+        except Exception:
+            pass
+        # Tabela de referência de tribunais
+        try:
+            from sqlalchemy import select, func
+            from app.db.base import AsyncSessionLocal
+            from app.models.tribunal import Tribunal
+            async with AsyncSessionLocal() as db:
+                resultado["tribunais"] = (await db.execute(
+                    select(func.count(Tribunal.codigo))
+                )).scalar_one()
+        except Exception:
+            pass
+        return resultado
+    return await _com_timeout(_run(), {"ok": False, "detail": "timeout"})
+
+
 # ─── Agregação ────────────────────────────────────────────────────────────────
 async def coletar_infra() -> dict:
     """Snapshot completo de infra para o painel Cérebro. Best-effort em tudo."""
     t0 = time.monotonic()
-    celery, redis, qdrant, jobs = await asyncio.gather(
-        _celery(), _redis(), _qdrant(), _jobs(),
+    celery, redis, qdrant, jobs, fontes = await asyncio.gather(
+        _celery(), _redis(), _qdrant(), _jobs(), _fontes(),
     )
     postgres = _postgres_pool()
     return {
@@ -180,4 +221,5 @@ async def coletar_infra() -> dict:
         "qdrant": qdrant,
         "postgres_pool": postgres,
         "jobs": jobs,
+        "fontes": fontes,
     }
