@@ -125,16 +125,17 @@ async def _enriquecer_via_datajud(db, procs: list[tuple]) -> None:
         )
 
 
-async def _enriquecer_partes_pdpj(db, tenant_id, procs: list[tuple]) -> int:
-    """Se o escritório conectou o PDPJ (opt-in via hub), preenche as PARTES dos
-    processos recém-criados — dado que o DataJud público não expõe. No-op
-    silencioso quando não há credencial. Retorna quantas partes foram gravadas."""
+async def _enriquecer_partes(db, tenant_id, procs: list[tuple]) -> int:
+    """Se o escritório conectou uma fonte de partes credenciada (PDPJ/Escavador/
+    Judit), preenche as PARTES dos processos recém-criados — dado que o DataJud
+    público não expõe. No-op silencioso quando não há credencial. Retorna quantas
+    partes foram gravadas."""
     if not procs:
         return 0
-    from app.integrations.fontes.pdpj_fonte import para_tenant
+    from app.integrations.fontes.credenciadas import fonte_partes_credenciada
     from app.services.partes_import import importar_partes
 
-    fonte = await para_tenant(db, tenant_id)
+    fonte = await fonte_partes_credenciada(db, tenant_id)
     if not fonte:
         return 0
     total = 0
@@ -269,8 +270,8 @@ async def capturar_por_oab(
     # Enriquecimento via DataJud (metadados + andamentos por número). Bounded p/ não
     # estourar timeout; a busca por OAB NÃO existe no DataJud público (só por número).
     await _enriquecer_via_datajud(db, novos[:40])
-    # Partes via PDPJ (só se o escritório fez opt-in; senão no-op).
-    await _enriquecer_partes_pdpj(db, tenant_id, novos[:40])
+    # Partes via fonte credenciada (PDPJ/Escavador/Judit; só com opt-in, senão no-op).
+    await _enriquecer_partes(db, tenant_id, novos[:40])
 
     if triggered_by and criados:
         db.add(Notification(
