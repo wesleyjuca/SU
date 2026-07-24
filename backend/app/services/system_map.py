@@ -68,6 +68,63 @@ def _tribunais_count() -> int:
         return 0
 
 
+# ─── Camadas do Cérebro Neural (Fase 84) ──────────────────────────────────────
+# Anéis concêntricos ao redor do núcleo (API): inteligência → memória →
+# execução → integrações. A classificação é por id/prefixo — qualquer nó novo
+# (agente, provider ou fonte futuros) já nasce na camada certa (auto-crescimento
+# sem posições fixas). `_grupo_fallback` só entra em jogo para um id totalmente
+# desconhecido, mapeando pelo `grupo` legado como aproximação razoável.
+_CAMADA_POR_ID: dict[str, str] = {
+    "api": "nucleo",
+    "orchestrator": "inteligencia", "llm": "inteligencia", "qdrant": "inteligencia",
+    "postgres": "memoria", "redis": "memoria",
+    "celery": "execucao", "captura": "execucao",
+}
+_PREFIXOS_INTELIGENCIA = ("agente_",)
+_SUFIXOS_INTELIGENCIA = ("_agent",)
+_PREFIXOS_INTEGRACOES = ("prov_", "fonte_")
+_GRUPO_FALLBACK: dict[str, str] = {
+    "api": "nucleo", "agentes": "inteligencia", "infra": "memoria",
+    "integracoes": "integracoes", "dados": "memoria",
+}
+
+_PESO_NUCLEO = 5
+_PESO_SERVICO_CENTRAL = 3
+_PESO_FOLHA = 1
+_IDS_SERVICO_CENTRAL = {"orchestrator", "celery", "hub", "postgres", "redis", "qdrant", "llm", "captura"}
+
+_PESO_ARESTA_ESTRUTURAL = 3   # liga núcleo/orquestrador a serviços centrais
+_PESO_ARESTA_FOLHA = 1        # liga um hub a um nó-folha (agente/provider/fonte)
+_TIPOS_ARESTA_ESTRUTURAL = {"dados", "cache", "dispara", "fila", "ia", "rag", "agenda", "config"}
+
+
+def _classificar_camada(no: dict) -> str:
+    """Camada concêntrica de um nó (nucleo|inteligencia|memoria|execucao|integracoes)."""
+    nid = no.get("id") or ""
+    if nid in _CAMADA_POR_ID:
+        return _CAMADA_POR_ID[nid]
+    if nid.startswith(_PREFIXOS_INTELIGENCIA) or nid.endswith(_SUFIXOS_INTELIGENCIA):
+        return "inteligencia"
+    if nid.startswith(_PREFIXOS_INTEGRACOES):
+        return "integracoes"
+    return _GRUPO_FALLBACK.get(no.get("grupo") or "", "integracoes")
+
+
+def _peso_no(no: dict) -> int:
+    """Importância do nó (tamanho visual). Núcleo > serviços centrais > folhas."""
+    nid = no.get("id") or ""
+    if nid == "api":
+        return _PESO_NUCLEO
+    if nid in _IDS_SERVICO_CENTRAL:
+        return _PESO_SERVICO_CENTRAL
+    return _PESO_FOLHA
+
+
+def _peso_aresta(tipo: str) -> int:
+    """Espessura da sinapse. Fluxos estruturais > ligações a nós-folha."""
+    return _PESO_ARESTA_ESTRUTURAL if tipo in _TIPOS_ARESTA_ESTRUTURAL else _PESO_ARESTA_FOLHA
+
+
 def construir_mapa() -> dict:
     """Retorna {nós, arestas} para renderizar o grafo do Cérebro.
 
@@ -129,6 +186,13 @@ def construir_mapa() -> dict:
     for f in fontes:
         arestas.append({"de": "captura", "para": f"fonte_{f}", "tipo": "fonte"})
     arestas.append({"de": "captura", "para": "fonte_pdpj", "tipo": "fonte"})
+
+    # Camada concêntrica + peso (Fase 84) — aditivo, não quebra o schema atual.
+    for no in nos:
+        no["camada"] = _classificar_camada(no)
+        no["peso"] = _peso_no(no)
+    for a in arestas:
+        a["peso"] = _peso_aresta(a["tipo"])
 
     return {"nos": nos, "arestas": arestas,
             "resumo": {"agentes": len(agentes), "providers": len(providers),

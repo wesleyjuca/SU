@@ -1,7 +1,12 @@
 // Tipos compartilhados dos endpoints /system/brain/* (Cérebro 2.0 — Fase 78)
 
-export interface MapaNo { id: string; label: string; grupo: string; saude_key?: string; meta?: Record<string, unknown> }
-export interface MapaAresta { de: string; para: string; tipo: string }
+export type Camada = "nucleo" | "inteligencia" | "memoria" | "execucao" | "integracoes";
+
+export interface MapaNo {
+  id: string; label: string; grupo: string; saude_key?: string; meta?: Record<string, unknown>;
+  camada: Camada; peso: number;
+}
+export interface MapaAresta { de: string; para: string; tipo: string; peso: number }
 export interface Mapa { nos: MapaNo[]; arestas: MapaAresta[]; resumo: Record<string, number> }
 
 export interface FonteSaude { nome: string; capabilities: string[]; breaker: string | null }
