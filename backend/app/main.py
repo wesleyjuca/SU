@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 
 from app.config import settings
 from app.core.events import lifespan
+from app.core.log_buffer import capture_processor
 from app.core.middleware import AuditMiddleware, RequestLoggingMiddleware, RateLimitMiddleware, SecurityHeadersMiddleware
 from app.api.v1.router import api_router
 
@@ -36,6 +37,7 @@ structlog.configure(
     processors=[
         structlog.stdlib.add_log_level,
         structlog.processors.TimeStamper(fmt="iso"),
+        capture_processor,  # Fase 82: ring buffer p/ o painel de Logs do Cérebro
         structlog.dev.ConsoleRenderer() if settings.DEBUG else structlog.processors.JSONRenderer(),
     ]
 )

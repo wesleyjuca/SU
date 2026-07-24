@@ -30,6 +30,25 @@ export interface Infra {
   };
 }
 
+export interface LogEvento {
+  ts: string;
+  level: string;
+  event: string;
+  extra?: Record<string, string>;
+}
+
+export interface MetricasTenant {
+  tenant_id: string;
+  nome: string;
+  plano: string | null;
+  ativo: boolean;
+  usuarios_ativos: number;
+  processos: number;
+  agent_runs_24h: number;
+  sync_runs: number;
+  ultima_atividade: string | null;
+}
+
 export interface AuditEvento {
   id: number; timestamp: string | null; action: string; user_id: string | null;
   resource_type: string | null; resource_id: string | null; success: boolean;
