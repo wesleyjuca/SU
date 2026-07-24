@@ -146,12 +146,39 @@ async def triar_publicacao(
     intim.deadline_id = deadline.id
     await db.flush()
 
+    from app.services.deadline_calendar import sincronizar_prazo_no_google
+    await sincronizar_prazo_no_google(db, deadline, current_user.id)
+
     return {
         "message": "Prazo criado a partir da intimação.",
         "deadline_id": str(deadline.id),
         "data_prazo": r["data_prazo"].isoformat(),
         "process_id": str(intim.process_id),
     }
+
+
+@router.post("/{intimacao_id}/sugestao-prazo")
+async def sugestao_prazo(
+    intimacao_id: str,
+    current_user: User = Depends(require_role("ADVOGADO", "SOCIO", "ADMIN", "GESTOR")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Sugestão de IA (tipo + dias) pra pré-preencher o modal de triagem —
+    nunca cria o prazo; o humano continua confirmando via /triagem."""
+    from app.services.ai_budget import enforce_budget
+    from app.services.prazo_sugestao import sugerir_prazo
+
+    intim = (await db.execute(
+        select(Intimacao).where(
+            Intimacao.id == uuid.UUID(intimacao_id),
+            Intimacao.tenant_id == current_user.tenant_id,
+        )
+    )).scalar_one_or_none()
+    if not intim:
+        raise NotFoundError("Intimação", intimacao_id)
+
+    await enforce_budget(db, current_user.id, current_user.tenant_id)
+    return await sugerir_prazo(intim.texto or "", intim.tipo_comunicacao, intim.tribunal)
 
 
 @router.post("/{intimacao_id}/ignorar")

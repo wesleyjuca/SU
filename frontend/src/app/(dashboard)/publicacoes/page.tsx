@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import { Newspaper, RefreshCw, Check, X, Scale, ExternalLink, Loader2 } from "lucide-react";
+import { Newspaper, RefreshCw, Check, X, Scale, ExternalLink, Loader2, Sparkles } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
 import { useUserStore } from "@/store";
@@ -40,6 +40,8 @@ export default function PublicacoesPage() {
   const [tipo, setTipo] = useState("MANIFESTACAO");
   const [dias, setDias] = useState(15);
   const [salvando, setSalvando] = useState(false);
+  const [sugestao, setSugestao] = useState<{ confianca: string; justificativa: string } | null>(null);
+  const [sugerindo, setSugerindo] = useState(false);
 
   const token = () => (typeof window !== "undefined" ? localStorage.getItem("afj_access_token") : null);
 
@@ -68,6 +70,24 @@ export default function PublicacoesPage() {
       } else toast.error(d.detail || "Erro na varredura.");
     } catch { toast.error("Erro de conexão."); }
     finally { setVarrendo(false); }
+  }
+
+  function abrirTriagem(p: Publicacao) {
+    setTriar(p);
+    setTipo("MANIFESTACAO");
+    setDias(15);
+    setSugestao(null);
+    setSugerindo(true);
+    fetch(`/api/v1/publicacoes/${p.id}/sugestao-prazo`, { method: "POST", headers: { Authorization: `Bearer ${token()}` } })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((d) => {
+        if (!d?.ok) return;
+        setTipo(d.tipo);
+        setDias(d.dias);
+        setSugestao({ confianca: d.confianca, justificativa: d.justificativa });
+      })
+      .catch(() => {})
+      .finally(() => setSugerindo(false));
   }
 
   async function confirmarTriagem() {
@@ -166,7 +186,7 @@ export default function PublicacoesPage() {
               {p.status === "NOVA" && (
                 <div className="flex items-center gap-2 mt-3">
                   <button
-                    onClick={() => { setTriar(p); setTipo("MANIFESTACAO"); setDias(15); }}
+                    onClick={() => abrirTriagem(p)}
                     disabled={!p.process_id}
                     title={p.process_id ? "Gerar prazo" : "Vincule o processo (número CNJ) antes de gerar o prazo"}
                     className="btn-afj-primary text-xs py-1.5 px-3 rounded-sm flex items-center gap-1 disabled:opacity-40">
@@ -190,6 +210,17 @@ export default function PublicacoesPage() {
             <p className="text-xs text-afj-black/45 mb-4">
               {triar.numero_cnj} · disponibilizado em {triar.data_disponibilizacao ? new Date(triar.data_disponibilizacao + "T00:00:00").toLocaleDateString("pt-BR") : "—"}. O prazo é calculado em dias úteis (CPC art. 219) com feriados forenses.
             </p>
+            {sugerindo && (
+              <p className="text-xs text-afj-black/40 flex items-center gap-1.5 mb-3">
+                <Loader2 size={12} className="animate-spin" /> Consultando sugestão da IA...
+              </p>
+            )}
+            {sugestao && (
+              <p className="text-xs text-afj-gold/90 bg-afj-gold/5 border border-afj-gold/20 rounded-sm px-2.5 py-1.5 mb-3 flex items-start gap-1.5">
+                <Sparkles size={12} className="flex-shrink-0 mt-0.5" />
+                <span>Sugestão da IA (confiança: {sugestao.confianca}) — revise antes de confirmar. {sugestao.justificativa}</span>
+              </p>
+            )}
             <label className="block text-xs font-semibold text-afj-black/50 uppercase tracking-wider mb-1">Tipo de prazo</label>
             <select value={tipo} onChange={(e) => setTipo(e.target.value)} className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm bg-white focus:outline-none focus:border-afj-gold mb-4">
               {TIPOS_PRAZO.map((t) => <option key={t} value={t}>{t}</option>)}

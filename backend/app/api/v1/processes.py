@@ -953,6 +953,10 @@ async def create_deadline(
     )
     db.add(deadline)
     await db.flush()
+
+    from app.services.deadline_calendar import sincronizar_prazo_no_google
+    await sincronizar_prazo_no_google(db, deadline, current_user.id)
+
     return {
         "id": str(deadline.id),
         "process_id": process_id,

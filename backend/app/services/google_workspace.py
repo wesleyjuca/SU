@@ -6,7 +6,7 @@ automaticamente via refresh_token quando expirado.
 """
 import base64
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import httpx
 import structlog
@@ -126,6 +126,35 @@ async def calendar_create_event(token: str, titulo: str, descricao: str, inicio_
         "description": descricao,
         "start": {"dateTime": inicio_iso},
         "end": {"dateTime": fim_iso},
+        "reminders": {"useDefault": False, "overrides": [
+            {"method": "popup", "minutes": 24 * 60},
+            {"method": "popup", "minutes": 60},
+        ]},
+    }
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.post(
+            "https://www.googleapis.com/calendar/v3/calendars/primary/events",
+            headers={"Authorization": f"Bearer {token}"},
+            json=body,
+        )
+        resp.raise_for_status()
+        d = resp.json()
+        return {"id": d.get("id"), "link": d.get("htmlLink")}
+
+
+async def calendar_create_allday_event(token: str, titulo: str, descricao: str, data: date) -> dict:
+    """Cria evento de dia inteiro no calendário principal (ex.: prazo processual).
+
+    Convenção de dia inteiro do Google Calendar: `end.date` é exclusivo, por
+    isso é `data + 1 dia` — mesma convenção já usada no link manual do
+    frontend (`googleCalendarUrl()` em agenda/page.tsx).
+    """
+    fim = data + timedelta(days=1)
+    body = {
+        "summary": titulo,
+        "description": descricao,
+        "start": {"date": data.isoformat()},
+        "end": {"date": fim.isoformat()},
         "reminders": {"useDefault": False, "overrides": [
             {"method": "popup", "minutes": 24 * 60},
             {"method": "popup", "minutes": 60},
