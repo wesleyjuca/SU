@@ -144,11 +144,19 @@ async def test_datajud_fonte_capabilities_e_detalhar(monkeypatch):
     assert not fonte.suporta(Capability.PARTES)
 
     class _FakeClient:
-        def __init__(self, *a, **k): pass
+        def __init__(self, *a, **k):
+            self.tribunal = "TJCE"
+            self.closed = False
         async def fetch_processo(self, numero, tribunal=None):
             return {"numero_processo": numero, "movimentos": [
                 {"nome": "Distribuído", "dataHora": "2026-01-05T10:00:00Z"},
             ]}
+        async def fetch_movements(self, numero, since=None):
+            from app.integrations.tribunais.base import MovementData
+            return [MovementData(data=datetime(2026, 1, 5, tzinfo=timezone.utc),
+                                 descricao="Juntada", tipo="123", raw_data={"x": 1})]
+        async def close(self):
+            self.closed = True
 
     monkeypatch.setattr(fonte, "_client", lambda tribunal: _FakeClient())
     det = await fonte.detalhar("999", "TJSP")
@@ -156,3 +164,7 @@ async def test_datajud_fonte_capabilities_e_detalhar(monkeypatch):
 
     movs = await fonte.movimentos("999", "TJSP", since=datetime(2026, 1, 1, tzinfo=timezone.utc))
     assert len(movs) == 1 and movs[0].descricao == "Distribuído"
+
+    # fetch_movements_datajud preserva o shape MovementData (código + raw)
+    md = await fonte.fetch_movements_datajud("999", "TJSP")
+    assert len(md) == 1 and md[0].tipo == "123" and md[0].raw_data == {"x": 1}

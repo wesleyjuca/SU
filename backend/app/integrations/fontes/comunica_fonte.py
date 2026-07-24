@@ -44,6 +44,9 @@ class ComunicaFonte(FonteProcessual):
             oab_numero, oab_uf, data_inicio, data_fim,
             max_paginas=max_paginas, itens_por_pagina=itens_por_pagina, stats=st,
         )
+        # `itens` acumula o total BRUTO de comunicações (antes do dedup por CNJ),
+        # para o chamador preservar a métrica "comunicações encontradas".
+        st["itens"] = st.get("itens", 0) + len(comunicacoes)
         # buscar_comunicacoes não levanta; deduzimos sucesso/falha pelos stats.
         if st.get("requests") and not st.get("ok"):
             self._breaker.record_failure()

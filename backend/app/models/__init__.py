@@ -13,6 +13,7 @@ from app.models.assistant import AssistantConversation, AssistantMessage
 from app.models.billing import BillingAccount, TenantPayment
 from app.models.crm import Opportunity
 from app.models.intimacao import Intimacao
+from app.models.tribunal import Tribunal
 
 __all__ = [
     "User", "UserPermission", "Session",
@@ -33,4 +34,5 @@ __all__ = [
     "Opportunity",
     "Intimacao",
     "ProcessTeamMember",
+    "Tribunal",
 ]
