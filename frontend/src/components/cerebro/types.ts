@@ -51,7 +51,8 @@ export interface MetricasTenant {
 
 export interface AuditEvento {
   id: number; timestamp: string | null; action: string; user_id: string | null;
-  resource_type: string | null; resource_id: string | null; success: boolean;
+  agent_name: string | null; resource_type: string | null; resource_id: string | null;
+  success: boolean; contains_pii: boolean;
   ip_address: string | null; legal_basis: string | null; tenant_id: string | null;
 }
 

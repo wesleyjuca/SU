@@ -885,7 +885,7 @@ async def brain_map(current_user: User = Depends(require_role("SUPERADMIN"))):
 
 @router.get("/brain/audit")
 async def brain_audit(
-    limit: int = Query(default=50, ge=1, le=200),
+    limit: int = Query(default=100, ge=1, le=300),
     current_user: User = Depends(require_role("SUPERADMIN")),
 ):
     """Trilha de auditoria recente — visão de PLATAFORMA (todas as tenants),
@@ -900,8 +900,9 @@ async def brain_audit(
             rows = (await db.execute(
                 select(
                     AuditLog.id, AuditLog.timestamp, AuditLog.action, AuditLog.user_id,
-                    AuditLog.resource_type, AuditLog.resource_id, AuditLog.success,
-                    AuditLog.ip_address, AuditLog.legal_basis, AuditLog.tenant_id,
+                    AuditLog.agent_name, AuditLog.resource_type, AuditLog.resource_id,
+                    AuditLog.success, AuditLog.contains_pii, AuditLog.ip_address,
+                    AuditLog.legal_basis, AuditLog.tenant_id,
                 ).order_by(desc(AuditLog.timestamp)).limit(limit)
             )).all()
         return {"ok": True, "eventos": [
@@ -910,9 +911,11 @@ async def brain_audit(
                 "timestamp": r.timestamp.isoformat() if r.timestamp else None,
                 "action": r.action,
                 "user_id": str(r.user_id) if r.user_id else None,
+                "agent_name": r.agent_name,
                 "resource_type": r.resource_type,
                 "resource_id": str(r.resource_id) if r.resource_id else None,
                 "success": bool(r.success),
+                "contains_pii": bool(r.contains_pii),
                 "ip_address": r.ip_address,
                 "legal_basis": r.legal_basis,
                 "tenant_id": str(r.tenant_id) if r.tenant_id else None,
