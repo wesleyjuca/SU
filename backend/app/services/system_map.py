@@ -38,6 +38,24 @@ def _providers_integracao() -> list[str]:
         return []
 
 
+def _fontes_captura() -> list[str]:
+    """Nomes das fontes processuais registradas (comunica, datajud, …)."""
+    try:
+        from app.integrations.fontes.registry import todas_as_fontes
+        return [getattr(f, "nome", "?") for f in todas_as_fontes()]
+    except Exception:
+        return []
+
+
+def _tribunais_count() -> int:
+    """Nº de tribunais na tabela de referência (fonte única, Fase 74)."""
+    try:
+        from app.services.tribunais_ref import linhas_seed
+        return len(linhas_seed())
+    except Exception:
+        return 0
+
+
 def construir_mapa() -> dict:
     """Retorna {nós, arestas} para renderizar o grafo do Cérebro.
 
@@ -46,6 +64,8 @@ def construir_mapa() -> dict:
     colorir o nó. Arestas são dependências/fluxos de dados."""
     agentes = _agentes()
     providers = _providers_integracao()
+    fontes = _fontes_captura()
+    tribunais = _tribunais_count()
 
     nos = [
         # Camada de API / núcleo
@@ -54,7 +74,7 @@ def construir_mapa() -> dict:
         {"id": "orchestrator", "label": "Orquestrador (LangGraph)", "grupo": "agentes",
          "meta": {"agentes": len(agentes)}},
         {"id": "captura", "label": "Captura Nacional", "grupo": "agentes",
-         "meta": {"fontes": ["Comunica/DJEN", "DataJud"]}},
+         "meta": {"fontes": fontes, "pdpj": "credenciado (por escritório)", "tribunais": tribunais}},
         # Infra
         {"id": "postgres", "label": "PostgreSQL", "grupo": "infra", "saude_key": "postgres_pool"},
         {"id": "redis", "label": "Redis", "grupo": "infra", "saude_key": "redis"},
@@ -71,6 +91,10 @@ def construir_mapa() -> dict:
     # Nós por provider de integração
     for p in providers:
         nos.append({"id": f"prov_{p}", "label": p, "grupo": "integracoes"})
+    # Nós por fonte da captura (comunica, datajud, …) + PDPJ credenciado
+    for f in fontes:
+        nos.append({"id": f"fonte_{f}", "label": f, "grupo": "integracoes"})
+    nos.append({"id": "fonte_pdpj", "label": "pdpj (credenciado)", "grupo": "integracoes"})
 
     arestas = [
         {"de": "api", "para": "postgres", "tipo": "dados"},
@@ -87,6 +111,10 @@ def construir_mapa() -> dict:
         arestas.append({"de": "orchestrator", "para": nome, "tipo": "roteia"})
     for p in providers:
         arestas.append({"de": "hub", "para": f"prov_{p}", "tipo": "conecta"})
+    for f in fontes:
+        arestas.append({"de": "captura", "para": f"fonte_{f}", "tipo": "fonte"})
+    arestas.append({"de": "captura", "para": "fonte_pdpj", "tipo": "fonte"})
 
     return {"nos": nos, "arestas": arestas,
-            "resumo": {"agentes": len(agentes), "providers": len(providers), "routers": _contar_routers()}}
+            "resumo": {"agentes": len(agentes), "providers": len(providers),
+                       "routers": _contar_routers(), "fontes": len(fontes), "tribunais": tribunais}}
