@@ -99,6 +99,36 @@ PROVIDERS: dict[str, dict] = {
         "obter": "Acesso via CNJ Corporativo (SSO). Cole o token Bearer emitido para "
                  "o PDPJ. Deixe a URL base em branco para usar o portal nacional.",
     },
+    "escavador": {
+        "nome": "Escavador — Partes & descoberta",
+        "desc": "Agregador comercial: descoberta de processos por OAB, detalhe, "
+                "partes/advogados e movimentos. Opcional e por escritório.",
+        "tipo": "api_key",
+        "fields": [
+            {"key": "token", "label": "Token de API (Bearer) do Escavador", "secret": True},
+            {"key": "base_url", "label": "URL base da API (opcional)", "secret": False},
+        ],
+        "ativa": [
+            "Descoberta por OAB e preenchimento de partes na captura",
+            "Botão \"Atualizar partes\" no processo (fallback além do PDPJ)",
+        ],
+        "obter": "Escavador → Painel → API → gerar token. Deixe a URL base em branco "
+                 "para usar o endpoint padrão.",
+    },
+    "judit": {
+        "nome": "Judit — Partes dos processos",
+        "desc": "Agregador comercial (judit.io): consulta de processo por número com "
+                "partes/advogados e movimentos. Opcional e por escritório.",
+        "tipo": "api_key",
+        "fields": [
+            {"key": "token", "label": "API key da Judit", "secret": True},
+            {"key": "base_url", "label": "URL base da API (opcional)", "secret": False},
+        ],
+        "ativa": [
+            "Preenchimento de partes na captura e no botão \"Atualizar partes\"",
+        ],
+        "obter": "Judit → Dashboard → API keys. Deixe a URL base em branco para o padrão.",
+    },
 }
 
 

@@ -558,7 +558,7 @@ async def atualizar_partes(
     (opt-in). Sem credencial → 422 orientando a conectar. O DataJud público não
     expõe partes, por isso este caminho é separado."""
     from fastapi import HTTPException
-    from app.integrations.fontes.pdpj_fonte import para_tenant
+    from app.integrations.fontes.credenciadas import fonte_partes_credenciada
     from app.services.partes_import import importar_partes
 
     process = (await db.execute(
@@ -570,13 +570,13 @@ async def atualizar_partes(
     if not process:
         raise NotFoundError("Processo", process_id)
     if not process.numero_cnj:
-        raise HTTPException(status_code=422, detail="Processo sem número CNJ — não é possível consultar o PDPJ.")
+        raise HTTPException(status_code=422, detail="Processo sem número CNJ — não é possível consultar a fonte de partes.")
 
-    fonte = await para_tenant(db, current_user.tenant_id)
+    fonte = await fonte_partes_credenciada(db, current_user.tenant_id)
     if not fonte:
         raise HTTPException(
             status_code=422,
-            detail="PDPJ não conectado. Conecte o provedor 'PJe / PDPJ' em Integrações para importar as partes.",
+            detail="Nenhuma fonte de partes conectada. Conecte PJe/PDPJ, Escavador ou Judit em Integrações.",
         )
 
     try:

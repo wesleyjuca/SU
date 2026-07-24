@@ -34,67 +34,10 @@ PDPJ_BASE_DEFAULT = "https://portaldeservicos.pdpj.jus.br"
 _TIMEOUT = 25.0
 
 
-def _first(item: dict, *keys: str):
-    for k in keys:
-        v = item.get(k)
-        if v not in (None, "", []):
-            return v
-    return None
-
-
-def _polo_para_tipo(polo: str | None) -> tuple[str, str | None]:
-    """Mapeia o polo bruto do PDPJ p/ (tipo, polo_normalizado) do ProcessParty."""
-    p = (polo or "").strip().upper()
-    if p.startswith(("AT", "ATIVO")) or p in {"A", "REQUERENTE", "AUTOR", "EXEQUENTE"}:
-        return "AUTOR", "ATIVO"
-    if p.startswith(("PA", "PASSIVO")) or p in {"P", "REQUERIDO", "REU", "RÉU", "EXECUTADO"}:
-        return "REU", "PASSIVO"
-    return "PARTE", (p or None)
-
-
 def parse_pdpj_partes(dados: dict) -> "list[ParteEntrada]":
-    """Extrai partes + advogados da resposta do PDPJ (tolerante a variações).
-
-    Aceita `partes` no topo ou dentro de `poloAtivo`/`poloPassivo`. Cada parte
-    pode trazer `advogados` (com OAB), que viram entradas tipo ADVOGADO."""
-    from app.services.partes_import import ParteEntrada
-
-    out: list[ParteEntrada] = []
-
-    def _consumir(lista, polo_hint: str | None):
-        for parte in lista or []:
-            if not isinstance(parte, dict):
-                continue
-            nome = _first(parte, "nome", "nomeParte", "razaoSocial")
-            polo = _first(parte, "polo", "tipoPolo", "poloProcessual") or polo_hint
-            tipo, polo_norm = _polo_para_tipo(polo)
-            doc = _first(parte, "documento", "cpfCnpj", "numeroDocumento", "cpf", "cnpj")
-            if nome:
-                out.append(ParteEntrada(
-                    tipo=tipo, nome=str(nome)[:500],
-                    cpf_cnpj=str(doc)[:18] if doc else None,
-                    oab=None, polo=polo_norm,
-                ))
-            for adv in (_first(parte, "advogados", "representantes") or []):
-                if not isinstance(adv, dict):
-                    continue
-                nome_adv = _first(adv, "nome", "nomeAdvogado")
-                if not nome_adv:
-                    continue
-                num_oab = _first(adv, "numeroOab", "oab", "inscricaoOab")
-                uf_oab = _first(adv, "ufOab", "uf")
-                oab_fmt = f"{num_oab}/{uf_oab}" if num_oab and uf_oab else (str(num_oab) if num_oab else None)
-                out.append(ParteEntrada(
-                    tipo="ADVOGADO", nome=str(nome_adv)[:500],
-                    cpf_cnpj=None, oab=(oab_fmt[:20] if oab_fmt else None),
-                    polo=polo_norm,
-                ))
-
-    if isinstance(dados.get("partes"), list):
-        _consumir(dados["partes"], None)
-    _consumir(dados.get("poloAtivo"), "ATIVO")
-    _consumir(dados.get("poloPassivo"), "PASSIVO")
-    return out
+    """Extrai partes + advogados da resposta do PDPJ (parser compartilhado)."""
+    from app.integrations.fontes._partes import extrair_partes
+    return extrair_partes(dados)
 
 
 class PdpjFonte(FonteProcessual):
