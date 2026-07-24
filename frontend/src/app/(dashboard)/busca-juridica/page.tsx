@@ -1,7 +1,9 @@
 "use client";
 import { useState } from "react";
-import { BookOpen, Search, Loader2, Copy, Check, AlertTriangle } from "lucide-react";
+import { BookOpen, Search, Loader2, Copy, Check, AlertTriangle, Upload, ChevronDown, ChevronUp } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
+import { useToast } from "@/components/ui/Toast";
+import { useUserStore } from "@/store";
 
 interface RagResult {
   id: string;
@@ -20,6 +22,125 @@ const COLECOES = [
   { value: "documentos_clientes", label: "Docs. Clientes", color: "bg-teal-100 text-teal-700" },
 ];
 
+// Coleções sem pipeline de ingestão automática — só estas podem ser populadas manualmente.
+const COLECOES_INDEXAVEIS = COLECOES.filter((c) =>
+  ["jurisprudencia", "legislacao", "doutrina", "memorias_afj"].includes(c.value)
+);
+
+const CAMPOS_METADADO = [
+  { key: "tribunal", label: "Tribunal" },
+  { key: "numero_processo", label: "Nº do processo" },
+  { key: "relator", label: "Relator" },
+  { key: "data", label: "Data" },
+  { key: "fonte", label: "Fonte" },
+  { key: "artigo", label: "Artigo" },
+] as const;
+
+function PainelIndexacao() {
+  const toast = useToast();
+  const [aberto, setAberto] = useState(false);
+  const [content, setContent] = useState("");
+  const [collection, setCollection] = useState(COLECOES_INDEXAVEIS[0].value);
+  const [metadata, setMetadata] = useState<Record<string, string>>({});
+  const [enviando, setEnviando] = useState(false);
+
+  async function indexar() {
+    if (!content.trim()) return;
+    setEnviando(true);
+    try {
+      const token = localStorage.getItem("afj_access_token");
+      const metadataLimpo = Object.fromEntries(
+        Object.entries(metadata).filter(([, v]) => v && v.trim())
+      );
+      const res = await fetch("/api/v1/rag/ingest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ content: content.trim(), collection, metadata: metadataLimpo }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast.error(data.detail || "Erro ao indexar documento.");
+        return;
+      }
+      toast.success(`Indexado (${data.chunks_created ?? 0} trecho(s)) em ${colecaoLabel(collection)}.`);
+      setContent("");
+      setMetadata({});
+    } catch {
+      toast.error("Erro de conexão ao indexar documento.");
+    } finally {
+      setEnviando(false);
+    }
+  }
+
+  return (
+    <div className="afj-card p-0 overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setAberto((v) => !v)}
+        className="w-full flex items-center justify-between px-5 py-3 text-left"
+      >
+        <span className="flex items-center gap-2 text-sm font-medium text-afj-black">
+          <Upload size={14} className="text-afj-gold" />
+          Indexar documento
+        </span>
+        {aberto ? <ChevronUp size={15} className="text-afj-black/40" /> : <ChevronDown size={15} className="text-afj-black/40" />}
+      </button>
+
+      {aberto && (
+        <div className="px-5 pb-5 space-y-3 border-t border-afj-cream-dark pt-4">
+          <textarea
+            value={content}
+            onChange={(e) => setContent(e.target.value)}
+            placeholder="Cole o texto do documento a indexar..."
+            rows={4}
+            className="w-full px-3 py-2.5 text-sm border border-afj-cream-dark rounded-sm focus:outline-none focus:border-afj-gold resize-none"
+          />
+
+          <div>
+            <p className="text-xs text-afj-black/50 mb-1.5">Base de conhecimento:</p>
+            <select
+              value={collection}
+              onChange={(e) => setCollection(e.target.value)}
+              className="w-full sm:w-64 px-3 py-2 text-sm border border-afj-cream-dark rounded-sm focus:outline-none focus:border-afj-gold"
+            >
+              {COLECOES_INDEXAVEIS.map((c) => (
+                <option key={c.value} value={c.value}>{c.label}</option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <p className="text-xs text-afj-black/50 mb-1.5">Metadados (opcional):</p>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+              {CAMPOS_METADADO.map((campo) => (
+                <input
+                  key={campo.key}
+                  value={metadata[campo.key] ?? ""}
+                  onChange={(e) => setMetadata((prev) => ({ ...prev, [campo.key]: e.target.value }))}
+                  placeholder={campo.label}
+                  className="px-2.5 py-1.5 text-xs border border-afj-cream-dark rounded-sm focus:outline-none focus:border-afj-gold"
+                />
+              ))}
+            </div>
+          </div>
+
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={indexar}
+              disabled={enviando || !content.trim()}
+              className="btn-afj-primary rounded-sm flex items-center gap-2 disabled:opacity-40"
+            >
+              {enviando ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
+              {enviando ? "Indexando..." : "Indexar"}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function scoreColor(score: number): string {
   if (score >= 0.85) return "bg-green-100 text-green-700";
   if (score >= 0.70) return "bg-amber-100 text-amber-700";
@@ -35,6 +156,7 @@ function colecaoLabel(col: string): string {
 }
 
 export default function BuscaJuridicaPage() {
+  const user = useUserStore((s) => s.user);
   const [query, setQuery] = useState("");
   const [selectedCols, setSelectedCols] = useState<string[]>(["jurisprudencia", "legislacao"]);
   const [loading, setLoading] = useState(false);
@@ -106,6 +228,8 @@ export default function BuscaJuridicaPage() {
           </p>
         </div>
       </div>
+
+      {user?.role === "ADMIN" && <PainelIndexacao />}
 
       {/* Formulário de busca */}
       <form onSubmit={buscar} className="afj-card p-5 space-y-4">
