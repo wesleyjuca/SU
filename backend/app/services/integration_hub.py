@@ -129,6 +129,21 @@ PROVIDERS: dict[str, dict] = {
         ],
         "obter": "Judit → Dashboard → API keys. Deixe a URL base em branco para o padrão.",
     },
+    "jusbrasil": {
+        "nome": "Jusbrasil — Partes & descoberta",
+        "desc": "Agregador comercial: monitoramento e descoberta de processos por OAB, "
+                "detalhe, partes/advogados e movimentos. Opcional e por escritório.",
+        "tipo": "api_key",
+        "fields": [
+            {"key": "token", "label": "Token de API (Bearer) do Jusbrasil", "secret": True},
+            {"key": "base_url", "label": "URL base da API (opcional)", "secret": False},
+        ],
+        "ativa": [
+            "Preenchimento de partes na captura e no botão \"Atualizar partes\" (fallback)",
+        ],
+        "obter": "Jusbrasil → Painel de API → gerar token. Deixe a URL base em branco "
+                 "para usar o endpoint padrão.",
+    },
 }
 
 
@@ -189,6 +204,8 @@ async def _fonte_credenciada_do_provider(db: AsyncSession, tenant_id, provider: 
         from app.integrations.fontes.escavador_fonte import para_tenant
     elif provider == "judit":
         from app.integrations.fontes.judit_fonte import para_tenant
+    elif provider == "jusbrasil":
+        from app.integrations.fontes.jusbrasil_fonte import para_tenant
     else:
         return None
     return await para_tenant(db, tenant_id)
