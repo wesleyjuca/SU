@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { BookOpen, Search, Loader2, Copy, Check, AlertTriangle, Upload, ChevronDown, ChevronUp } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
@@ -163,6 +163,22 @@ export default function BuscaJuridicaPage() {
   const [results, setResults] = useState<RagResult[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
+  const [coverage, setCoverage] = useState<Record<string, number>>({});
+
+  useEffect(() => {
+    const token = localStorage.getItem("afj_access_token");
+    fetch("/api/v1/rag/coverage", { headers: { Authorization: `Bearer ${token}` } })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!data?.colecoes) return;
+        const mapa: Record<string, number> = {};
+        for (const c of data.colecoes) {
+          if (typeof c.pontos === "number") mapa[c.collection] = c.pontos;
+        }
+        setCoverage(mapa);
+      })
+      .catch(() => {});
+  }, []);
 
   function toggleColecao(val: string) {
     setSelectedCols((prev) =>
@@ -262,6 +278,9 @@ export default function BuscaJuridicaPage() {
                 }`}
               >
                 {col.label}
+                {coverage[col.value] !== undefined && (
+                  <span className="opacity-60"> · {coverage[col.value]}</span>
+                )}
               </button>
             ))}
           </div>

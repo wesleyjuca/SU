@@ -72,6 +72,8 @@ def check_upcoming_deadlines(self):
                         dias=dias,
                         data_prazo=str(prazo.data_prazo),
                         process_id=str(prazo.process_id),
+                        db=db,
+                        sender_user_id=user.id,
                     )
                 if user:
                     from app.services.webpush import send_push_to_user

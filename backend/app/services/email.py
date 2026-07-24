@@ -112,9 +112,11 @@ async def send_prazo_alert(
     data_prazo: str,
     base_url: str = "https://afj.sistema.com.br",
     process_id: str = "",
+    db=None,
+    sender_user_id=None,
 ) -> bool:
     link = f"{base_url}/processos/{process_id}" if process_id else base_url
     subject = f"[AFJ CORE] {'🚨 URGENTE' if dias <= 3 else '⚠️ ATENÇÃO'} — Prazo em {dias} dia{'s' if dias != 1 else ''}: {descricao[:60]}"
     html = _build_html_prazo(descricao, dias, data_prazo, link)
     text = f"AFJ CORE — Prazo em {dias} dia(s)\n\n{descricao}\nData: {data_prazo}\nLink: {link}"
-    return await send_email(to_email, subject, html, text)
+    return await send_email(to_email, subject, html, text, db=db, sender_user_id=sender_user_id)
