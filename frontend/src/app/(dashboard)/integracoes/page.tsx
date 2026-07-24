@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect } from "react";
-import { Plug, MessageCircle, PenTool, Clock, CheckCircle2, Smartphone, Loader2, LogOut, Link2, CreditCard, Wallet, X } from "lucide-react";
+import { Plug, MessageCircle, PenTool, Clock, CheckCircle2, Smartphone, Loader2, LogOut, Link2, CreditCard, Wallet, X, RefreshCw, AlertTriangle, Scale, Search, ScrollText } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
 
@@ -204,7 +204,13 @@ const HUB_ICONS: Record<string, typeof CreditCard> = {
   mercadopago: Wallet,
   clicksign: PenTool,
   whatsapp: MessageCircle,
+  pdpj: Scale,
+  escavador: Search,
+  judit: ScrollText,
 };
+
+// Provedores com teste de credencial automático (fontes credenciadas).
+const TESTAVEIS = new Set(["pdpj", "escavador", "judit"]);
 
 function HubCards() {
   const toast = useToast();
@@ -213,6 +219,7 @@ function HubCards() {
   const [conectando, setConectando] = useState<HubIntegracao | null>(null);
   const [form, setForm] = useState<Record<string, string>>({});
   const [working, setWorking] = useState(false);
+  const [testando, setTestando] = useState<string | null>(null);
 
   async function fetchHub() {
     try {
@@ -250,6 +257,19 @@ function HubCards() {
     finally { setWorking(false); }
   }
 
+  async function testar(it: HubIntegracao) {
+    setTestando(it.provider);
+    try {
+      const res = await fetch(`/api/v1/integrations/hub/${it.provider}/test`, { method: "POST", headers: authH() });
+      const d = await res.json().catch(() => ({}));
+      if (res.ok && d.ok) toast.success(`Conexão OK — ${d.detail || "credencial válida"}.`);
+      else if (res.ok) toast.error(`Falha na credencial: ${d.detail || "verifique o token"}.`);
+      else toast.error(d.detail || "Erro ao testar a conexão.");
+      fetchHub();
+    } catch { toast.error("Falha de conexão."); }
+    finally { setTestando(null); }
+  }
+
   async function desconectar(it: HubIntegracao) {
     if (!confirm(`Desconectar ${it.nome}? As credenciais salvas serão removidas.`)) return;
     setWorking(true);
@@ -266,6 +286,8 @@ function HubCards() {
       {itens.map((it) => {
         const Icon = HUB_ICONS[it.provider] || Plug;
         const conectada = it.status === "CONECTADA";
+        const comErro = it.status === "ERRO";
+        const temCredencial = it.status !== "DESCONECTADA";
         return (
           <div key={it.provider} className="afj-card p-5">
             <div className="flex items-start justify-between gap-3 flex-wrap">
@@ -279,16 +301,18 @@ function HubCards() {
                 </div>
               </div>
               <span className={`inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-sm border flex-shrink-0 ${
-                conectada ? "bg-green-50 text-green-700 border-green-200" : "bg-gray-50 text-gray-500 border-gray-200"
+                comErro ? "bg-red-50 text-red-700 border-red-200"
+                : conectada ? "bg-green-50 text-green-700 border-green-200"
+                : "bg-gray-50 text-gray-500 border-gray-200"
               }`}>
-                {conectada ? <CheckCircle2 size={11} /> : <Clock size={11} />}
-                {conectada ? "Conectada" : "Desconectada"}
+                {comErro ? <AlertTriangle size={11} /> : conectada ? <CheckCircle2 size={11} /> : <Clock size={11} />}
+                {comErro ? "Com erro" : conectada ? "Conectada" : "Desconectada"}
               </span>
             </div>
 
             <div className="mt-4">
               <p className="text-[11px] font-semibold uppercase tracking-wider text-afj-black/40 mb-1.5">
-                {conectada ? "Habilitado com a conexão" : "O que a conexão habilita"}
+                {temCredencial ? "Habilitado com a conexão" : "O que a conexão habilita"}
               </p>
               <ul className="space-y-1">
                 {it.ativa.map((a) => (
@@ -301,13 +325,25 @@ function HubCards() {
               </ul>
             </div>
 
+            {comErro && (
+              <p className="mt-3 text-[11px] text-red-600 bg-red-50 border border-red-200 rounded-sm px-2.5 py-1.5">
+                A última verificação falhou (credencial inválida/expirada). Teste a conexão ou reconecte.
+              </p>
+            )}
+
             <div className="flex items-center gap-3 mt-4 flex-wrap">
-              {conectada ? (
+              {temCredencial ? (
                 <>
                   {it.connected_at && (
                     <span className="text-xs text-afj-black/55">
                       Conectada em {new Date(it.connected_at).toLocaleDateString("pt-BR")}
                     </span>
+                  )}
+                  {isAdmin && TESTAVEIS.has(it.provider) && (
+                    <button onClick={() => testar(it)} disabled={testando === it.provider}
+                      className="btn-afj-outline text-xs py-1.5 px-3 rounded-sm flex items-center gap-1.5 disabled:opacity-50">
+                      {testando === it.provider ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />} Testar conexão
+                    </button>
                   )}
                   {isAdmin && (
                     <button onClick={() => desconectar(it)} disabled={working}

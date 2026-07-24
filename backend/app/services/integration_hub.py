@@ -181,6 +181,47 @@ async def get_credentials(db: AsyncSession, tenant_id, provider: str) -> dict | 
         return None
 
 
+async def _fonte_credenciada_do_provider(db: AsyncSession, tenant_id, provider: str):
+    """Instância da fonte credenciada de um provider (ou None se não testável)."""
+    if provider == "pdpj":
+        from app.integrations.fontes.pdpj_fonte import para_tenant
+    elif provider == "escavador":
+        from app.integrations.fontes.escavador_fonte import para_tenant
+    elif provider == "judit":
+        from app.integrations.fontes.judit_fonte import para_tenant
+    else:
+        return None
+    return await para_tenant(db, tenant_id)
+
+
+async def testar_conexao(db: AsyncSession, tenant_id, provider: str) -> dict:
+    """Testa a credencial conectada e atualiza o `status` (CONECTADA/ERRO).
+
+    Para as fontes credenciadas (pdpj/escavador/judit) faz uma sonda autenticada
+    que distingue 401/403 (credencial inválida/expirada) de sucesso. Para os
+    demais provedores não há teste automático — retorna o status atual. Não faz
+    commit (o chamador comita). Detecção de expiração = este teste marcando ERRO."""
+    if provider not in PROVIDERS:
+        return {"ok": False, "status": "DESCONHECIDO", "detail": "provedor desconhecido"}
+    integ = await get_integration(db, tenant_id, provider)
+    if not integ or not integ.credentials_enc:
+        return {"ok": False, "status": "DESCONECTADA", "detail": "não conectado"}
+
+    fonte = await _fonte_credenciada_do_provider(db, tenant_id, provider)
+    if fonte is None:
+        return {"ok": True, "status": integ.status,
+                "detail": "teste automático não disponível para este provedor"}
+
+    try:
+        ok, detail = await fonte.testar()
+    except Exception as exc:
+        ok, detail = False, str(exc)[:120]
+    integ.status = "CONECTADA" if ok else "ERRO"
+    await db.flush()
+    log.info("integration_test", provider=provider, tenant_id=str(tenant_id), ok=ok)
+    return {"ok": ok, "status": integ.status, "detail": detail}
+
+
 async def disconnect(db: AsyncSession, tenant_id, provider: str) -> bool:
     integ = await get_integration(db, tenant_id, provider)
     if not integ:

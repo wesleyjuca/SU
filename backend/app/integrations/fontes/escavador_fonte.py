@@ -102,6 +102,22 @@ class EscavadorFonte(FonteProcessual):
             ))
         return out
 
+    async def testar(self) -> tuple[bool, str]:
+        """Sonda leve p/ validar a credencial (distingue 401/403)."""
+        if not self._token:
+            return (False, "sem token")
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.get(f"{self._base}/api/v2/processos/numero_cnj/0",
+                                        headers=self._headers())
+        except Exception as exc:
+            return (False, str(exc)[:120])
+        if resp.status_code in (401, 403):
+            return (False, f"credencial rejeitada (HTTP {resp.status_code})")
+        if resp.status_code >= 500:
+            return (False, f"fonte indisponível (HTTP {resp.status_code})")
+        return (True, f"ok (HTTP {resp.status_code})")
+
     async def detalhar(self, numero_cnj: str, tribunal: str | None = None) -> dict | None:
         return await self._processo(numero_cnj)
 

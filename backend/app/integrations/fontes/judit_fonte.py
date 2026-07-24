@@ -64,6 +64,23 @@ class JuditFonte(FonteProcessual):
             return None
         return await self._breaker.run(_f, default=None)
 
+    async def testar(self) -> tuple[bool, str]:
+        """Sonda leve p/ validar a credencial (distingue 401/403)."""
+        if not self._token:
+            return (False, "sem token")
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.get(f"{self._base}/responses",
+                                        headers={"api-key": self._token, "Accept": "application/json"},
+                                        params={"search_key": "0"})
+        except Exception as exc:
+            return (False, str(exc)[:120])
+        if resp.status_code in (401, 403):
+            return (False, f"credencial rejeitada (HTTP {resp.status_code})")
+        if resp.status_code >= 500:
+            return (False, f"fonte indisponível (HTTP {resp.status_code})")
+        return (True, f"ok (HTTP {resp.status_code})")
+
     async def detalhar(self, numero_cnj: str, tribunal: str | None = None) -> dict | None:
         return await self._processo(numero_cnj)
 
