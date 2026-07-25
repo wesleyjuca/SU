@@ -41,6 +41,7 @@ export default function AgentesPage() {
   const toast = useToast();
   const [taskType, setTaskType] = useState("generate_petition");
   const [taskDesc, setTaskDesc] = useState("");
+  const [arquivosInput, setArquivosInput] = useState("");
   const [result, setResult] = useState<string | null>(null);
   const [triggering, setTriggering] = useState<string | null>(null);
   const [lastRunId, setLastRunId] = useState<string | null>(null);
@@ -52,6 +53,10 @@ export default function AgentesPage() {
     setTriggering(agentName);
     try {
       const token = localStorage.getItem("afj_access_token");
+      const task_input: Record<string, unknown> = { descricao: taskDesc || `Tarefa via agente ${agentName}` };
+      if (taskType === "generate_code" && arquivosInput.trim()) {
+        task_input.arquivos = arquivosInput.split(",").map((s) => s.trim()).filter(Boolean);
+      }
       const res = await fetch("/api/v1/agents/trigger", {
         method: "POST",
         headers: {
@@ -60,7 +65,7 @@ export default function AgentesPage() {
         },
         body: JSON.stringify({
           task_type: taskType,
-          task_input: { descricao: taskDesc || `Tarefa via agente ${agentName}` },
+          task_input,
         }),
       });
       if (res.ok) {
@@ -173,6 +178,19 @@ export default function AgentesPage() {
               className="w-full border border-afj-cream-dark rounded-md px-3 py-2 text-sm focus:outline-none focus:border-afj-gold bg-white"
             />
           </div>
+          {taskType === "generate_code" && (
+            <div>
+              <label className="text-xs text-afj-black/60 block mb-1">
+                Arquivos de contexto (opcional, caminhos relativos separados por vírgula — ex: backend/app/agents/coding/coding_agent.py)
+              </label>
+              <input
+                value={arquivosInput}
+                onChange={(e) => setArquivosInput(e.target.value)}
+                placeholder="backend/app/..., frontend/src/..."
+                className="w-full border border-afj-cream-dark rounded-md px-3 py-2 text-sm focus:outline-none focus:border-afj-gold bg-white"
+              />
+            </div>
+          )}
         </div>
       </div>
 

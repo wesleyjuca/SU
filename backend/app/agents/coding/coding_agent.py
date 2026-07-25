@@ -4,6 +4,7 @@ from app.agents.base.agent import BaseAgent
 from app.agents.base.result import AgentResult, AgentStatus
 from app.agents.brain.context import AgentContext
 from app.integrations.anthropic_client import call_claude
+from app.agents.coding.repo_context import build_contexto
 import structlog
 
 log = structlog.get_logger()
@@ -24,6 +25,11 @@ class CodingAgent(BaseAgent):
         descricao = task.get("descricao", "")
         linguagem = task.get("linguagem", "python")
         contexto_codigo = task.get("contexto_codigo", "")
+
+        arquivos = task.get("arquivos") or []
+        if arquivos:
+            contexto_real = build_contexto(arquivos)
+            contexto_codigo = f"{contexto_codigo}\n\n{contexto_real}".strip() if contexto_codigo else contexto_real
 
         if not descricao:
             return AgentResult(status=AgentStatus.FAILED, agent_name=self.name, error="descricao obrigatória")
