@@ -57,7 +57,9 @@ class InnovationAgent(BaseAgent):
                     AgentRun.status,
                     func.count().label("total"),
                     func.avg(AgentRun.duration_ms).label("avg_duration"),
-                ).group_by(AgentRun.agent_name, AgentRun.status)
+                )
+                .where(AgentRun.tenant_id == ctx.tenant_id)
+                .group_by(AgentRun.agent_name, AgentRun.status)
             )
             rows = result.all()
             return {f"{r.agent_name}_{r.status}": {"total": r.total, "avg_ms": float(r.avg_duration or 0)} for r in rows}

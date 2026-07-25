@@ -37,15 +37,20 @@ class CourtMonitorAgent(BaseAgent):
             return AgentResult(status=AgentStatus.PARTIAL, agent_name=self.name, output={"message": "DB necessário"})
 
         from sqlalchemy import select
-        from app.models.process import ProcessDeadline
+        from app.models.process import ProcessDeadline, LegalProcess
         from datetime import date, timedelta
 
         hoje = date.today()
         em_7_dias = hoje + timedelta(days=7)
 
+        # ProcessDeadline não tem tenant_id próprio — isola via join com o
+        # processo, senão vaza prazos de outros escritórios (mesma classe de
+        # bug corrigida nas Fases 95-98).
         result = await self.db.execute(
             select(ProcessDeadline)
+            .join(LegalProcess, ProcessDeadline.process_id == LegalProcess.id)
             .where(
+                LegalProcess.tenant_id == ctx.tenant_id,
                 ProcessDeadline.data_prazo >= hoje,
                 ProcessDeadline.data_prazo <= em_7_dias,
                 ProcessDeadline.status == "PENDENTE",
