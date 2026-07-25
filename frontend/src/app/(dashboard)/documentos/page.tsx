@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect, useRef } from "react";
-import { FolderOpen, Search, FileText, Download, Upload, ScanLine, X, CloudUpload, Eye, Plus, Pencil, Trash2, Save, Loader2, History, RotateCcw } from "lucide-react";
+import { FolderOpen, Search, FileText, Download, Upload, ScanLine, X, CloudUpload, Eye, Plus, Pencil, Trash2, Save, Loader2, History, RotateCcw, Scale, CheckCircle2, AlertTriangle, HelpCircle } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
 
@@ -77,6 +77,11 @@ export default function DocumentosPage() {
   const [loadingEdit, setLoadingEdit] = useState(false);
   const [deleting, setDeleting] = useState<string | null>(null);
 
+  // Verificação de citações (Fase 93)
+  interface Citacao { referencia: string; status: string; titulo: string | null }
+  const [citacoes, setCitacoes] = useState<Citacao[] | null>(null);
+  const [verificando, setVerificando] = useState(false);
+
   const authH = () => ({
     "Content-Type": "application/json",
     Authorization: `Bearer ${typeof window !== "undefined" ? localStorage.getItem("afj_access_token") : ""}`,
@@ -97,9 +102,24 @@ export default function DocumentosPage() {
     finally { setSaving(false); }
   }
 
+  async function verificarCitacoes() {
+    if (!editDoc) return;
+    setVerificando(true);
+    try {
+      const res = await fetch(`/api/v1/documents/${editDoc.id}/verificar-citacoes`, { method: "POST", headers: authH() });
+      const d = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setCitacoes(d.citacoes || []);
+        if (!d.citacoes?.length) toast.success("Nenhuma citação de lei encontrada no texto.");
+      } else toast.error(d.detail || "Erro ao verificar citações.");
+    } catch { toast.error("Erro de conexão."); }
+    finally { setVerificando(false); }
+  }
+
   async function abrirEdicao(d: Documento) {
     setEditDoc(d);
     setEditForm({ titulo: d.titulo, tipo: d.tipo, status: d.status, conteudo_texto: "" });
+    setCitacoes(null);
     setLoadingEdit(true);
     try {
       const res = await fetch(`/api/v1/documents/${d.id}/content`, { headers: authH() });
@@ -569,6 +589,34 @@ export default function DocumentosPage() {
                 placeholder={loadingEdit ? "Carregando conteúdo..." : "Conteúdo do documento..."}
                 className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold resize-none disabled:opacity-60" />
             </div>
+
+            <div>
+              <button onClick={verificarCitacoes} disabled={verificando || loadingEdit}
+                className="btn-afj-outline rounded-sm text-xs py-1.5 px-3 flex items-center gap-1.5 disabled:opacity-50">
+                {verificando ? <Loader2 size={13} className="animate-spin" /> : <Scale size={13} />}
+                {verificando ? "Verificando..." : "Verificar citações"}
+              </button>
+              {citacoes && citacoes.length > 0 && (
+                <div className="mt-2 space-y-1.5">
+                  {citacoes.map((c) => {
+                    const cfg = c.status === "confirmada"
+                      ? { icon: CheckCircle2, cls: "bg-green-50 text-green-700 border-green-200", label: "Confirmada" }
+                      : c.status === "nao_encontrada"
+                      ? { icon: AlertTriangle, cls: "bg-amber-50 text-amber-700 border-amber-200", label: "Não encontrada" }
+                      : { icon: HelpCircle, cls: "bg-gray-50 text-gray-500 border-gray-200", label: "Não verificável" };
+                    const Icon = cfg.icon;
+                    return (
+                      <div key={c.referencia} className={`flex items-center gap-2 text-xs px-2.5 py-1.5 rounded-sm border ${cfg.cls}`}>
+                        <Icon size={13} className="flex-shrink-0" />
+                        <span className="font-medium">Lei {c.referencia}</span>
+                        <span className="opacity-70">— {cfg.label}{c.titulo ? `: ${c.titulo}` : ""}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
             <p className="text-[11px] text-afj-black/40">Aprovar/protocolar é restrito a advogados, sócios e administradores.</p>
             <div className="flex gap-2 justify-end">
               <button onClick={() => setEditDoc(null)} disabled={saving} className="btn-afj-outline rounded-sm text-sm py-2 px-4">Cancelar</button>

@@ -821,6 +821,29 @@ async def review_document(
     }
 
 
+@router.post("/{doc_id}/verificar-citacoes")
+async def verificar_citacoes_documento(
+    doc_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Extrai referências de lei do documento e confere cada uma no LexML
+    (fonte oficial) — sob demanda, não bloqueia edição/aprovação."""
+    result = await db.execute(
+        select(Document).where(
+            Document.id == uuid.UUID(doc_id),
+            Document.tenant_id == current_user.tenant_id,
+        )
+    )
+    doc = result.scalar_one_or_none()
+    if not doc:
+        raise NotFoundError("Documento", doc_id)
+
+    from app.services.citacao_check import verificar_citacoes
+    citacoes = await verificar_citacoes(doc.conteudo_texto or "")
+    return {"document_id": doc_id, "citacoes": citacoes}
+
+
 def _to_response(d: Document) -> DocumentResponse:
     ocr = (d.metadata_json or {}).get("ocr") if isinstance(d.metadata_json, dict) else None
     return DocumentResponse(
