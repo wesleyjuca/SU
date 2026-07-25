@@ -4,7 +4,7 @@ import {
   Activity, Database, Zap, Search, Bot, Globe, Mail, Shield, Lock,
   FileSearch, Bell, HardDrive, Archive, RefreshCw, CheckCircle, XCircle,
   AlertTriangle, Clock, Wrench, ChevronDown, ChevronRight, Newspaper,
-  Cpu, Layers, ListChecks, Boxes,
+  Cpu, Layers, ListChecks, Boxes, DollarSign, Link2,
 } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 
@@ -64,6 +64,17 @@ interface BrainInfra {
   postgres_pool: { ok: boolean; tamanho?: number; em_uso?: number; overflow?: number };
   jobs: { ok: boolean; agent_runs_24h_por_status?: Record<string, number>;
     sync_runs_recentes?: { fonte: string; tipo: string; status: string; started_at: string | null }[] };
+}
+
+// Snapshot tenant-scoped do próprio escritório (GET /system/health/tenant-infra) —
+// visível a ADMIN/SOCIO/SUPERADMIN, complementa o bloco acima (SUPERADMIN-only).
+interface TenantInfra {
+  integracoes_conectadas: { provider: string; nome: string; status: string }[];
+  custo_ia: { total_usd: number; execucoes: number; limite_usd: number | null; periodo_dias: number } | null;
+  captura: {
+    processos_monitorados: number;
+    ultima_sincronizacao: { fonte: string; tipo: string; status: string; started_at: string | null } | null;
+  } | null;
 }
 
 const MODULES: Module[] = [
@@ -282,9 +293,11 @@ export default function HealthPage() {
   const [showDiagnostic, setShowDiagnostic] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [infra, setInfra] = useState<BrainInfra | null>(null);
+  const [tenantInfra, setTenantInfra] = useState<TenantInfra | null>(null);
 
   // Infra profunda (Celery/Redis/Qdrant/pool/jobs) — só o SUPERADMIN é autorizado
-  // pelo endpoint; para os demais admins o 403 é silencioso (painel some).
+  // pelo endpoint; para os demais admins o 403 é silencioso (painel some, mas o
+  // bloco tenant-scoped abaixo cobre o que importa pro ADMIN de escritório).
   const fetchInfra = useCallback(async () => {
     try {
       const token = localStorage.getItem("afj_access_token");
@@ -294,6 +307,18 @@ export default function HealthPage() {
       if (res.ok) setInfra(await res.json());
       else setInfra(null);
     } catch { setInfra(null); }
+  }, []);
+
+  // Saúde do próprio escritório — ADMIN/SOCIO/SUPERADMIN.
+  const fetchTenantInfra = useCallback(async () => {
+    try {
+      const token = localStorage.getItem("afj_access_token");
+      const res = await fetch("/api/v1/system/health/tenant-infra", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) setTenantInfra(await res.json());
+      else setTenantInfra(null);
+    } catch { setTenantInfra(null); }
   }, []);
 
   const fetchHealth = useCallback(async () => {
@@ -318,13 +343,13 @@ export default function HealthPage() {
     }
   }, []);
 
-  useEffect(() => { fetchHealth(); fetchInfra(); }, [fetchHealth, fetchInfra]);
+  useEffect(() => { fetchHealth(); fetchInfra(); fetchTenantInfra(); }, [fetchHealth, fetchInfra, fetchTenantInfra]);
 
   useEffect(() => {
     if (!autoRefresh) return;
-    const interval = setInterval(() => { fetchHealth(); fetchInfra(); }, 15000);
+    const interval = setInterval(() => { fetchHealth(); fetchInfra(); fetchTenantInfra(); }, 15000);
     return () => clearInterval(interval);
-  }, [autoRefresh, fetchHealth, fetchInfra]);
+  }, [autoRefresh, fetchHealth, fetchInfra, fetchTenantInfra]);
 
   // 3 estados: operacional (verde), degradado (vermelho, só se o backend disse),
   // e não-verificado (âmbar) quando não há dado por erro de fetch.
@@ -444,6 +469,76 @@ export default function HealthPage() {
           </div>
         </div>
       ) : null}
+
+      {/* Saúde do meu escritório (ADMIN/SOCIO/SUPERADMIN — /system/health/tenant-infra) */}
+      {tenantInfra && (
+        <div className="afj-card p-5">
+          <h2 className="font-semibold text-sm text-afj-black mb-4 flex items-center gap-2">
+            <Activity size={15} className="text-afj-gold" />
+            Saúde do meu escritório
+          </h2>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {/* Integrações conectadas */}
+            <div className="rounded-sm border border-afj-cream-dark p-3">
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-afj-black/70 mb-2">
+                <Link2 size={12} className="text-afj-gold" /> Integrações conectadas
+              </div>
+              {tenantInfra.integracoes_conectadas.length > 0 ? (
+                <div className="flex flex-wrap gap-1.5">
+                  {tenantInfra.integracoes_conectadas.map((i) => (
+                    <span key={i.provider} className="text-[11px] px-2 py-0.5 rounded-full bg-green-50 text-green-700 border border-green-200">
+                      {i.nome}
+                    </span>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-[11px] text-afj-black/40">Nenhuma conectada — veja Integrações.</p>
+              )}
+            </div>
+            {/* Custo de IA do mês */}
+            <div className="rounded-sm border border-afj-cream-dark p-3">
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-afj-black/70 mb-2">
+                <DollarSign size={12} className="text-afj-gold" /> Custo de IA (30 dias)
+              </div>
+              {tenantInfra.custo_ia ? (
+                <>
+                  <p className="text-2xl font-bold text-afj-black">
+                    US$ {tenantInfra.custo_ia.total_usd.toFixed(2)}
+                    {tenantInfra.custo_ia.limite_usd ? (
+                      <span className="text-sm text-afj-black/40"> / {tenantInfra.custo_ia.limite_usd.toFixed(2)}</span>
+                    ) : null}
+                  </p>
+                  <p className="text-[11px] text-afj-black/50">{tenantInfra.custo_ia.execucoes} execução(ões)</p>
+                </>
+              ) : (
+                <p className="text-[11px] text-afj-black/40">Sem dados no período.</p>
+              )}
+            </div>
+            {/* Captura & monitoramento */}
+            <div className="rounded-sm border border-afj-cream-dark p-3">
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-afj-black/70 mb-2">
+                <RefreshCw size={12} className="text-afj-gold" /> Captura & monitoramento
+              </div>
+              {tenantInfra.captura ? (
+                <>
+                  <p className="text-2xl font-bold text-afj-black">{tenantInfra.captura.processos_monitorados}</p>
+                  <p className="text-[11px] text-afj-black/50">
+                    processo(s) monitorado(s)
+                    {tenantInfra.captura.ultima_sincronizacao ? (
+                      <> · última sync: <span className={
+                        tenantInfra.captura.ultima_sincronizacao.status === "OK" ? "text-green-600"
+                        : tenantInfra.captura.ultima_sincronizacao.status === "ERRO" ? "text-red-600" : "text-afj-black/40"
+                      }>{tenantInfra.captura.ultima_sincronizacao.status}</span></>
+                    ) : " · nenhuma sincronização ainda"}
+                  </p>
+                </>
+              ) : (
+                <p className="text-[11px] text-afj-black/40">Sem dados.</p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Infraestrutura em tempo real (SUPERADMIN — /system/brain/infra, F1) */}
       {infra && (
