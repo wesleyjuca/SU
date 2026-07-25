@@ -18,16 +18,20 @@ import structlog
 log = structlog.get_logger()
 
 
-def _parse_issues_from_claude(content: str) -> list[dict]:
-    """Extrai lista de issues do bloco JSON retornado por Claude."""
+def _parse_json_dict(content: str) -> dict:
+    """Extrai o objeto JSON retornado por Claude, tolerante a texto ao redor."""
     match = re.search(r'\{.*\}', content, re.DOTALL)
     if match:
         try:
-            data = json.loads(match.group())
-            return data.get("issues", [])
+            return json.loads(match.group())
         except json.JSONDecodeError:
             pass
-    return []
+    return {}
+
+
+def _parse_issues_from_claude(content: str) -> list[dict]:
+    """Extrai lista de issues do bloco JSON retornado por Claude."""
+    return _parse_json_dict(content).get("issues", [])
 
 
 REVIEW_SYSTEM_PROMPT = AFJ_LEGAL_SYSTEM_PROMPT + """
@@ -172,7 +176,15 @@ Retorne JSON: {{"nivel_risco": "ALTO|MEDIO|BAIXO", "riscos": [...], "teses_alter
             system=REVIEW_SYSTEM_PROMPT,
             max_tokens=2000,
         )
-        return {"resultado": content, "tokens": input_t + output_t, "cost": cost}
+        parsed = _parse_json_dict(content)
+        return {
+            "resultado": content,
+            "tokens": input_t + output_t,
+            "cost": cost,
+            "nivel_risco": parsed.get("nivel_risco"),
+            "riscos": parsed.get("riscos", []),
+            "teses_alternativas": parsed.get("teses_alternativas", []),
+        }
 
     async def _etapa_estilo(self, conteudo: str) -> dict:
         prompt = f"""Revise o ESTILO da peça jurídica.
@@ -189,15 +201,33 @@ Retorne JSON: {{"issues": [...], "sugestoes_estilo": [...], "nota_redacao": 0-10
             system=REVIEW_SYSTEM_PROMPT,
             max_tokens=1500,
         )
-        return {"resultado": content, "tokens": input_t + output_t, "cost": cost}
+        parsed = _parse_json_dict(content)
+        return {
+            "resultado": content,
+            "tokens": input_t + output_t,
+            "cost": cost,
+            "nota_redacao": parsed.get("nota_redacao"),
+            "issues": parsed.get("issues", []),
+            "sugestoes_estilo": parsed.get("sugestoes_estilo", []),
+        }
 
     def _calcular_score(self, formal, consistencia, risco, estilo) -> int:
         score = 100
         # Penalizar por bloqueadores conhecidos
         if "[NÃO VERIFICADO]" in str(consistencia.get("resultado", "")):
             score -= 30
-        if "ALTA" in str(risco.get("resultado", "")):
-            score -= 15
+
+        nivel_risco = risco.get("nivel_risco")
+        if nivel_risco is not None:
+            if nivel_risco == "ALTO":
+                score -= 15
+        elif "ALTA" in str(risco.get("resultado", "")):
+            score -= 15  # fail-soft: parse estruturado falhou, mantém heurística antiga
+
+        nota_redacao = estilo.get("nota_redacao")
+        if isinstance(nota_redacao, (int, float)) and 0 <= nota_redacao <= 10:
+            score -= round((10 - nota_redacao) * 1.5)
+
         if "issues" in formal and formal["issues"]:
             score -= len(formal["issues"]) * 5
         return max(0, min(100, score))
