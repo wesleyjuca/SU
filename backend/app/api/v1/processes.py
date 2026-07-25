@@ -60,6 +60,22 @@ class ProcessResponse(BaseModel):
     created_at: str
 
 
+async def _validar_client_id(db: AsyncSession, client_id: str | None, tenant_id) -> uuid.UUID | None:
+    """Garante que o client_id (se informado) pertence ao tenant — evita
+    vincular o processo ao cliente de outro escritório."""
+    if not client_id:
+        return None
+    from app.models.client import Client
+    from fastapi import HTTPException
+    cid = uuid.UUID(client_id)
+    existe = (await db.execute(
+        select(Client.id).where(Client.id == cid, Client.tenant_id == tenant_id)
+    )).scalar_one_or_none()
+    if not existe:
+        raise HTTPException(status_code=404, detail="Cliente não encontrado.")
+    return cid
+
+
 async def _validar_advogados_do_tenant(db: AsyncSession, tenant_id, user_ids: list[uuid.UUID]) -> dict:
     """Retorna {id: nome} dos usuários que pertencem ao tenant; 422 se algum não pertencer."""
     if not user_ids:
@@ -289,7 +305,7 @@ async def create_process(
         **body.model_dump(exclude_none=True, exclude={"client_id", "responsavel_id", "equipe"}),
         responsavel_id=responsavel,
         tenant_id=current_user.tenant_id,
-        client_id=uuid.UUID(body.client_id) if body.client_id else None,
+        client_id=await _validar_client_id(db, body.client_id, current_user.tenant_id),
         fonte="MANUAL",
     )
     db.add(process)
@@ -451,7 +467,7 @@ async def update_process(
         raise NotFoundError("Processo", process_id)
     for field, value in body.model_dump(exclude_none=True, exclude={"responsavel_id", "equipe"}).items():
         if field == "client_id" and value:
-            setattr(process, field, uuid.UUID(value))
+            setattr(process, field, await _validar_client_id(db, value, current_user.tenant_id))
         else:
             setattr(process, field, value)
     # Reatribuição de responsável/equipe (opcional no mesmo PUT)

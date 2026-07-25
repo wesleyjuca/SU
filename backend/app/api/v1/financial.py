@@ -11,8 +11,38 @@ from app.db.base import get_db
 from app.dependencies import require_role
 from app.models.user import User
 from app.models.financial import FinancialEntry
+from app.models.client import Client
+from app.models.process import LegalProcess
 
 router = APIRouter(prefix="/financial", tags=["financial"])
+
+
+async def _validar_client_id(db: AsyncSession, client_id: str | None, tenant_id) -> uuid.UUID | None:
+    """Garante que o client_id (se informado) pertence ao tenant — evita
+    vincular um lançamento financeiro ao cliente de outro escritório."""
+    if not client_id:
+        return None
+    cid = uuid.UUID(client_id)
+    existe = (await db.execute(
+        select(Client.id).where(Client.id == cid, Client.tenant_id == tenant_id)
+    )).scalar_one_or_none()
+    if not existe:
+        raise HTTPException(status_code=404, detail="Cliente não encontrado.")
+    return cid
+
+
+async def _validar_process_id(db: AsyncSession, process_id: str | None, tenant_id) -> uuid.UUID | None:
+    """Garante que o process_id (se informado) pertence ao tenant — evita
+    vincular um lançamento financeiro ao processo de outro escritório."""
+    if not process_id:
+        return None
+    pid = uuid.UUID(process_id)
+    existe = (await db.execute(
+        select(LegalProcess.id).where(LegalProcess.id == pid, LegalProcess.tenant_id == tenant_id)
+    )).scalar_one_or_none()
+    if not existe:
+        raise HTTPException(status_code=404, detail="Processo não encontrado.")
+    return pid
 
 
 class FinancialEntryCreate(BaseModel):
@@ -72,8 +102,8 @@ async def create_entry(
     entry = FinancialEntry(
         tipo=body.tipo,
         categoria=body.categoria,
-        client_id=uuid.UUID(body.client_id) if body.client_id else None,
-        process_id=uuid.UUID(body.process_id) if body.process_id else None,
+        client_id=await _validar_client_id(db, body.client_id, current_user.tenant_id),
+        process_id=await _validar_process_id(db, body.process_id, current_user.tenant_id),
         descricao=body.descricao,
         valor=Decimal(str(body.valor)),
         data_vencimento=body.data_vencimento,
