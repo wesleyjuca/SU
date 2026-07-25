@@ -28,13 +28,12 @@ def test_run_worker_coro_disposes_engine_and_uses_distinct_loops(monkeypatch):
     assert len(calls["loops"]) == 2        # cada task em loop distinto
 
 
-async def test_publication_monitor_partial_while_dje_not_implemented():
+async def test_publication_monitor_partial_sem_db():
     agent = PublicationMonitorAgent()  # sem db
     ctx = AgentContext(
         task_type="monitor_publications",
-        task_input={"oabs": ["OAB123"], "data": "2026-07-04"},
+        task_input={},
     )
     res = await agent.execute(ctx)
     assert res.status == AgentStatus.PARTIAL
-    assert res.output["publicacoes_encontradas"] == 0
-    assert "não implementada" in res.output.get("message", "")
+    assert "DB necessário" in res.output.get("message", "")
