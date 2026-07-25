@@ -1,15 +1,18 @@
 "use client";
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Send, Loader2, Sparkles, RefreshCw, Mic, MicOff, Volume2 } from "lucide-react";
+import { Send, Loader2, Sparkles, RefreshCw, Mic, MicOff, Volume2, Database } from "lucide-react";
 import { useVoice } from "@/hooks/useVoice";
+import { useToast } from "@/components/ui/Toast";
 
 interface Msg { role: "user" | "assistant"; content: string }
 
 export function BrainAssistant() {
+  const toast = useToast();
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [conversationId, setConversationId] = useState<string | null>(null);
+  const [reindexing, setReindexing] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   // Ref p/ evitar reentrância no envio (o hook de voz chama enviar via callback).
   const streamingRef = useRef(false);
@@ -90,6 +93,24 @@ export function BrainAssistant() {
   const voiceActiveRef = useRef(false);
   useEffect(() => { voiceActiveRef.current = voice.active; }, [voice.active]);
 
+  const reindexar = useCallback(async () => {
+    setReindexing(true);
+    try {
+      const token = localStorage.getItem("afj_access_token");
+      const res = await fetch("/api/v1/system/brain/assistant/reindex", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const d = await res.json().catch(() => ({}));
+      if (res.ok && d.ok) toast.success(`Documentação reindexada (${d.arquivos_indexados ?? 0} arquivo(s)).`);
+      else toast.error(d.motivo || d.detail || "Erro ao reindexar documentação.");
+    } catch {
+      toast.error("Erro de conexão ao reindexar.");
+    } finally {
+      setReindexing(false);
+    }
+  }, [toast]);
+
   const enviarTexto = useCallback(() => {
     const txt = input;
     enviar(txt).then((resposta) => {
@@ -125,6 +146,13 @@ export function BrainAssistant() {
               {voice.active ? <Mic size={15} className={voice.listening ? "animate-pulse" : ""} /> : <MicOff size={15} />}
             </button>
           )}
+          <button
+            onClick={reindexar}
+            disabled={reindexing}
+            className="text-afj-black/40 hover:text-afj-black p-1 disabled:opacity-40"
+            title="Reindexar documentação do sistema" aria-label="Reindexar documentação do sistema">
+            <Database size={14} className={reindexing ? "animate-pulse" : ""} />
+          </button>
           <button
             onClick={() => { voice.stop(); setMessages([]); setConversationId(null); }}
             className="text-afj-black/40 hover:text-afj-black p-1" title="Nova conversa" aria-label="Nova conversa">
