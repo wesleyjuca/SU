@@ -145,6 +145,11 @@ export default function AgentesPage() {
               <option value="monitor_process">Monitorar Processo</option>
               <option value="generate_strategy">Gerar Estratégia</option>
               <option value="analytics_report">Relatório Analytics</option>
+              <option value="audit_review">Revisão de Auditoria</option>
+              <option value="compliance_check">Verificação de Compliance</option>
+              <option value="innovation_proposal">Proposta de Inovação</option>
+              <option value="generate_code">Gerar Código</option>
+              <option value="marketing_campaign">Campanha de Marketing</option>
             </select>
             <button
               onClick={() => triggerAgent("orchestration_agent")}
