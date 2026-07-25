@@ -16,11 +16,27 @@ Respeite as normas do CFOAB (Código de Ética e Disciplina da OAB):
 - Foque em educação jurídica e expertise
 - Tom: profissional, acessível, confiável"""
 
+_TERMOS_PROIBIDOS_OAB = [
+    "garantimos", "garantia de vitória", "100% de sucesso", "100% de êxito",
+    "vitória certa", "resultado garantido", "o melhor advogado", "os melhores advogados",
+    "sem risco", "ganhe sua causa", "sucesso garantido", "nunca perdemos",
+]
+
 
 class MarketingAgent(BaseAgent):
     name: ClassVar[str] = "marketing_agent"
     description: ClassVar[str] = "Conteúdo para redes sociais, posts educativos e campanhas jurídicas"
     requires_human_approval: ClassVar[bool] = True  # conteúdo publicado requer revisão
+
+    async def validate(self, ctx: AgentContext, result: AgentResult) -> list[str]:
+        issues: list[str] = []
+        texto = (result.output.get("conteudo") or "").lower()
+        if not texto:
+            return issues
+        encontrados = [t for t in _TERMOS_PROIBIDOS_OAB if t in texto]
+        if encontrados:
+            issues.append(f"Possível violação do Provimento 205/2021 (OAB) — termos: {', '.join(encontrados)}")
+        return issues
 
     async def execute(self, ctx: AgentContext) -> AgentResult:
         task = ctx.task_input

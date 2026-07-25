@@ -13,11 +13,49 @@ Gere representações visuais claras e profissionais no formato solicitado.
 Use linguagem simples e acessível ao cliente, sem jargão excessivo.
 Para Mermaid: siga a sintaxe exata do Mermaid.js."""
 
+_DIAGRAM_KEYWORDS = ("flowchart", "graph", "sequencediagram", "classdiagram",
+                     "timeline", "gantt", "erdiagram", "statediagram", "journey", "pie")
+
+
+def _strip_fences(texto: str) -> str:
+    t = texto.strip()
+    if t.startswith("```"):
+        linhas = t.splitlines()[1:]
+        if linhas and linhas[-1].strip().startswith("```"):
+            linhas = linhas[:-1]
+        t = "\n".join(linhas).strip()
+    return t
+
 
 class VisualLawAgent(BaseAgent):
     name: ClassVar[str] = "visual_law_agent"
     description: ClassVar[str] = "Gera fluxogramas Mermaid, timelines e diagramas jurídicos"
     requires_human_approval: ClassVar[bool] = False
+    strict_validation: ClassVar[bool] = True
+
+    async def validate(self, ctx: AgentContext, result: AgentResult) -> list[str]:
+        issues: list[str] = []
+        if result.status != AgentStatus.SUCCESS:
+            return issues
+        formato = result.output.get("formato")
+        if formato == "mermaid":
+            texto = _strip_fences(result.output.get("mermaid", ""))
+            if not texto:
+                return ["Diagrama Mermaid vazio."]
+            primeira_linha = texto.splitlines()[0].strip().lower()
+            if not any(primeira_linha.startswith(kw) for kw in _DIAGRAM_KEYWORDS):
+                issues.append(f"Diagrama não inicia com tipo Mermaid reconhecido: '{primeira_linha[:30]}'")
+            abertos = texto.count("[") + texto.count("(") + texto.count("{")
+            fechados = texto.count("]") + texto.count(")") + texto.count("}")
+            if abertos != fechados:
+                issues.append(f"Colchetes/parênteses/chaves desbalanceados ({abertos} vs {fechados}) — possível truncamento.")
+            if len(texto) < 15:
+                issues.append("Conteúdo Mermaid suspeito de truncamento (muito curto).")
+        elif formato == "markdown":
+            texto = result.output.get("markdown", "")
+            if not texto.strip() or "|" not in texto:
+                issues.append("Quadro comparativo não parece conter tabela Markdown válida.")
+        return issues
 
     async def execute(self, ctx: AgentContext) -> AgentResult:
         task = ctx.task_input

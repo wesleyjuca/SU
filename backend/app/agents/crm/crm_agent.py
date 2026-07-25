@@ -1,5 +1,8 @@
 """crm_agent — Gestão de clientes, leads e interações."""
+import uuid
 from typing import ClassVar
+from datetime import datetime, timezone
+from sqlalchemy import select
 from app.agents.base.agent import BaseAgent
 from app.agents.base.result import AgentResult, AgentStatus
 from app.agents.brain.context import AgentContext
@@ -8,11 +11,32 @@ import structlog
 
 log = structlog.get_logger()
 
+_SEGMENTOS_VALIDOS = ("PLATINUM", "GOLD", "SILVER", "REGULAR")
+
 
 class CRMAgent(BaseAgent):
     name: ClassVar[str] = "crm_agent"
     description: ClassVar[str] = "Gestão de clientes, leads, follow-up e automação do CRM"
     requires_human_approval: ClassVar[bool] = False
+
+    async def _resolver_client_id_seguro(self, ctx: AgentContext, task: dict) -> uuid.UUID | None:
+        """Prioriza ctx.client_id (já validado no /agents/trigger — Fase 97);
+        se só vier em task_input, revalida pertencimento ao tenant antes de
+        usar — nunca confia em client_id não-validado do payload."""
+        if ctx.client_id:
+            return ctx.client_id
+        raw = task.get("client_id")
+        if not raw or not self.db:
+            return None
+        try:
+            cid = uuid.UUID(str(raw))
+        except ValueError:
+            return None
+        from app.models.client import Client
+        existe = (await self.db.execute(
+            select(Client.id).where(Client.id == cid, Client.tenant_id == ctx.tenant_id)
+        )).scalar_one_or_none()
+        return cid if existe else None
 
     async def execute(self, ctx: AgentContext) -> AgentResult:
         task = ctx.task_input
@@ -51,10 +75,26 @@ Retorne:
             max_tokens=1000,
         )
 
+        client_id = await self._resolver_client_id_seguro(ctx, task)
+        persistido = False
+        if client_id and self.db:
+            from app.models.client import ClientInteraction
+            self.db.add(ClientInteraction(
+                client_id=client_id,
+                tipo="SISTEMA",
+                descricao=content[:4000],
+                metadata_json={"canal": canal, "origem_agente": "crm_agent.analisar_lead", "lead_nome": nome},
+            ))
+            await self.db.flush()
+            persistido = True
+
         return AgentResult(
             status=AgentStatus.SUCCESS,
             agent_name=self.name,
-            output={"analise": content, "lead_nome": nome, "canal": canal},
+            output={
+                "analise": content, "lead_nome": nome, "canal": canal,
+                "persistido": persistido, "client_id": str(client_id) if client_id else None,
+            },
             tokens_used=input_t + output_t,
             cost_usd=cost,
         )
@@ -89,10 +129,34 @@ Tom: profissional, empático, objetivo. Máximo 5 linhas."""
             system=AFJ_LEGAL_SYSTEM_PROMPT,
             max_tokens=300,
         )
+
+        client_id = await self._resolver_client_id_seguro(ctx, task)
+        persistido = False
+        segmento_detectado = None
+        if client_id and self.db:
+            from app.models.client import Client
+            cliente = (await self.db.execute(
+                select(Client).where(Client.id == client_id, Client.tenant_id == ctx.tenant_id)
+            )).scalar_one_or_none()
+            if cliente:
+                for seg in _SEGMENTOS_VALIDOS:
+                    if seg in content.upper():
+                        segmento_detectado = seg
+                        break
+                if segmento_detectado:
+                    cliente.status = segmento_detectado
+                nota = f"[crm_agent classificação {datetime.now(timezone.utc).date().isoformat()}] {content[:500]}"
+                cliente.observacoes = f"{cliente.observacoes}\n{nota}" if cliente.observacoes else nota
+                await self.db.flush()
+                persistido = True
+
         return AgentResult(
             status=AgentStatus.SUCCESS,
             agent_name=self.name,
-            output={"classificacao": content},
+            output={
+                "classificacao": content, "persistido": persistido,
+                "segmento_detectado": segmento_detectado,
+            },
             tokens_used=input_t + output_t,
             cost_usd=cost,
         )
