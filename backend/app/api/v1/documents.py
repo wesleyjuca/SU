@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Depends, Query, UploadFile, File, Form, HTTPException, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Any
 import uuid
 
@@ -63,7 +63,7 @@ class GeneratePetitionRequest(BaseModel):
     tipo_peticao: str
     process_id: str | None = None
     client_id: str | None = None
-    instrucoes: str | None = None
+    instrucoes: str | None = Field(default=None, max_length=4000)
     processo: dict[str, Any] | None = None
     template_id: str | None = None   # modelo do escritório a usar como base
 
@@ -628,7 +628,7 @@ async def enviar_contrato_assinatura(
 
 
 class ContractGenerateRequest(BaseModel):
-    instrucoes: str | None = None
+    instrucoes: str | None = Field(default=None, max_length=4000)
 
 
 @router.post("/contracts/{doc_id}/generate")

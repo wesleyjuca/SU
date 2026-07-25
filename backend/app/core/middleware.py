@@ -16,12 +16,20 @@ RATE_LIMIT_RULES: dict[str, tuple[int, int]] = {
     "auth": (10, 60),          # 10 req/min por IP (brute-force protection)
     "agents_trigger": (20, 60), # 20 req/min por user
     "brain_assistant": (15, 60), # 15 msg/min por user (assistente do Cérebro / LLM)
+    "documents_generate": (10, 60), # 10 req/min por user (geração de peça/contrato via LLM)
     "default": (200, 60),       # 200 req/min por IP
 }
 
 AUTH_PATHS = {"/api/v1/auth/login", "/api/v1/auth/refresh"}
 AGENT_TRIGGER_PATH = "/api/v1/agents/trigger"
 BRAIN_ASSISTANT_PATH = "/api/v1/system/brain/assistant"
+PETITION_GENERATE_PATH = "/api/v1/documents/petitions/generate"
+
+
+def _is_contract_generate_path(path: str) -> bool:
+    """/api/v1/documents/contracts/{doc_id}/generate — segmento dinâmico,
+    não dá pra comparar por igualdade exata como os demais paths fixos."""
+    return path.startswith("/api/v1/documents/contracts/") and path.endswith("/generate")
 
 
 def _user_identifier(request: Request, fallback: str) -> str:
@@ -120,6 +128,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         elif path == BRAIN_ASSISTANT_PATH:
             # Assistente do Cérebro chama LLM (custo real) — limita por usuário.
             rule_key = "brain_assistant"
+            identifier = _user_identifier(request, client_ip)
+        elif path == PETITION_GENERATE_PATH or _is_contract_generate_path(path):
+            # Geração de petição/contrato chama LLM (custo real, sem gate de
+            # papel) — sem isso caía no "default" genérico por IP (200/min).
+            rule_key = "documents_generate"
             identifier = _user_identifier(request, client_ip)
         else:
             rule_key = "default"
