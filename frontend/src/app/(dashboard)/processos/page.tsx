@@ -162,8 +162,12 @@ export default function ProcessosPage() {
       if (!res.ok) return;
       const run = await res.json();
       if (run.status === "SUCCESS") {
-        const found = run.output?.processos_encontrados ?? 0;
-        const saved = run.output?.processos_salvos ?? 0;
+        // O orquestrador embrulha o retorno do agente em results[0].output
+        // (AgentResult.to_dict()) — e a chave é processos_criados, não
+        // processos_salvos (essa nunca existiu).
+        const resultado = run.output?.results?.[0]?.output ?? {};
+        const found = resultado.processos_encontrados ?? 0;
+        const saved = resultado.processos_criados ?? 0;
         if (found > 0) {
           toast.success(`${found} processo(s) encontrados, ${saved} novo(s) importado(s) para OAB ${oab}/${uf}.`);
           fetchProcessos();
