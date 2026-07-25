@@ -61,11 +61,27 @@ def _to_dict(o: Opportunity, cliente: str | None = None) -> dict:
     }
 
 
-async def _nomes_clientes(db: AsyncSession, opps: list[Opportunity]) -> dict:
+async def _nomes_clientes(db: AsyncSession, opps: list[Opportunity], tenant_id) -> dict:
     cids = [o.client_id for o in opps if o.client_id]
     if not cids:
         return {}
-    return {c.id: c.nome_completo for c in (await db.execute(select(Client).where(Client.id.in_(cids)))).scalars().all()}
+    return {c.id: c.nome_completo for c in (await db.execute(
+        select(Client).where(Client.id.in_(cids), Client.tenant_id == tenant_id)
+    )).scalars().all()}
+
+
+async def _validar_client_id(db: AsyncSession, client_id: str | None, tenant_id) -> uuid.UUID | None:
+    """Garante que o client_id (se informado) pertence ao tenant do usuário —
+    evita vazamento cross-tenant de nome de cliente no funil de vendas."""
+    if not client_id:
+        return None
+    cid = uuid.UUID(client_id)
+    existe = (await db.execute(
+        select(Client.id).where(Client.id == cid, Client.tenant_id == tenant_id)
+    )).scalar_one_or_none()
+    if not existe:
+        raise HTTPException(status_code=404, detail="Cliente não encontrado.")
+    return cid
 
 
 async def _get_opp(db: AsyncSession, opp_id: str, tenant_id) -> Opportunity:
@@ -84,7 +100,7 @@ async def funil(current_user: User = Depends(_STAFF), db: AsyncSession = Depends
         select(Opportunity).where(Opportunity.tenant_id == current_user.tenant_id)
         .order_by(Opportunity.created_at.desc())
     )).scalars().all()
-    nomes = await _nomes_clientes(db, opps)
+    nomes = await _nomes_clientes(db, opps, current_user.tenant_id)
 
     colunas = {e: [] for e in ESTAGIOS}
     totais = {e: {"count": 0, "valor": 0.0} for e in ESTAGIOS}
@@ -118,7 +134,7 @@ async def list_opps(
     if estagio:
         q = q.where(Opportunity.estagio == estagio)
     opps = (await db.execute(q.order_by(Opportunity.created_at.desc()))).scalars().all()
-    nomes = await _nomes_clientes(db, opps)
+    nomes = await _nomes_clientes(db, opps, current_user.tenant_id)
     return [_to_dict(o, nomes.get(o.client_id)) for o in opps]
 
 
@@ -134,7 +150,7 @@ async def create_opp(body: OppCreate, current_user: User = Depends(_STAFF), db: 
         estagio=body.estagio,
         probabilidade=body.probabilidade,
         origem=body.origem,
-        client_id=uuid.UUID(body.client_id) if body.client_id else None,
+        client_id=await _validar_client_id(db, body.client_id, current_user.tenant_id),
         responsavel_id=uuid.UUID(body.responsavel_id) if body.responsavel_id else current_user.id,
         expected_close=date.fromisoformat(body.expected_close) if body.expected_close else None,
     )
@@ -163,7 +179,7 @@ async def patch_opp(opp_id: str, body: OppPatch, current_user: User = Depends(_S
 
     for field, value in data.items():
         if field == "client_id":
-            o.client_id = uuid.UUID(value) if value else None
+            o.client_id = await _validar_client_id(db, value, current_user.tenant_id)
         elif field == "expected_close":
             o.expected_close = date.fromisoformat(value) if value else None
         else:
