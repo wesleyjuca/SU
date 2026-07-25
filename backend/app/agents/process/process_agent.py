@@ -95,7 +95,7 @@ class ProcessAgent(BaseAgent):
         process_id = ctx.process_id or (uuid.UUID(task["process_id"]) if task.get("process_id") else None)
         novos = 0
         if process_id and movimentos:
-            novos = await self._save_movements(process_id, movimentos, movimentos_com_resumo)
+            novos = await self._save_movements(process_id, movimentos, movimentos_com_resumo, ctx.tenant_id)
 
         ctx.set_state("novos_movimentos", novos)
         ctx.set_state("prazos_detectados", len(prazos_detectados))
@@ -114,9 +114,17 @@ class ProcessAgent(BaseAgent):
             cost_usd=total_cost,
         )
 
-    async def _save_movements(self, process_id: uuid.UUID, movimentos, movimentos_com_resumo: list[dict]) -> int:
+    async def _save_movements(
+        self, process_id: uuid.UUID, movimentos, movimentos_com_resumo: list[dict],
+        tenant_id: uuid.UUID | None = None,
+    ) -> int:
         """Persiste movimentos novos via importador ÚNICO (dedup canônico, Fase 72)
-        e notifica a equipe. Retorna a quantidade de andamentos NOVOS."""
+        e notifica a equipe. Retorna a quantidade de andamentos NOVOS.
+
+        `tenant_id` é defesa em profundidade: mesmo que `process_id` chegue de
+        uma fonte não validada (ex.: task_input controlado pelo chamador), o
+        processo só é encontrado/gravado se pertencer ao tenant do contexto —
+        nunca ao de outro escritório."""
         from sqlalchemy import select
         from app.models.process import LegalProcess
         from app.services.movements_import import importar_movimentos, MovimentoEntrada
@@ -124,9 +132,10 @@ class ProcessAgent(BaseAgent):
         db, owned = await self._get_db()
         novos = 0
         try:
-            proc = (await db.execute(
-                select(LegalProcess).where(LegalProcess.id == process_id)
-            )).scalar_one_or_none()
+            query = select(LegalProcess).where(LegalProcess.id == process_id)
+            if tenant_id:
+                query = query.where(LegalProcess.tenant_id == tenant_id)
+            proc = (await db.execute(query)).scalar_one_or_none()
             if not proc:
                 return 0
             entradas = [

@@ -1,5 +1,5 @@
 """Endpoints para triggar, consultar e gerenciar execuções de agentes."""
-from fastapi import APIRouter, Depends, BackgroundTasks
+from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
 from pydantic import BaseModel
@@ -10,11 +10,33 @@ from app.db.base import get_db
 from app.dependencies import get_current_user
 from app.models.user import User
 from app.models.agent_run import AgentRun
+from app.models.client import Client
+from app.models.process import LegalProcess
 from app.agents.brain.context import AgentContext
 from app.agents.brain.orchestrator import get_orchestrator_graph
 from app.core.exceptions import NotFoundError
 
 router = APIRouter(prefix="/agents", tags=["agents"])
+
+
+async def _validar_pertence_ao_tenant(
+    db: AsyncSession, tenant_id, process_id: uuid.UUID | None, client_id: uuid.UUID | None,
+) -> None:
+    """Garante que process_id/client_id (se informados) pertencem ao tenant do
+    usuário — sem isso, um agente disparado manualmente pode gravar/notificar
+    em processo/cliente de OUTRO escritório (ex.: process_agent.poll_process)."""
+    if process_id:
+        existe = (await db.execute(
+            select(LegalProcess.id).where(LegalProcess.id == process_id, LegalProcess.tenant_id == tenant_id)
+        )).scalar_one_or_none()
+        if not existe:
+            raise HTTPException(status_code=404, detail="Processo não encontrado.")
+    if client_id:
+        existe = (await db.execute(
+            select(Client.id).where(Client.id == client_id, Client.tenant_id == tenant_id)
+        )).scalar_one_or_none()
+        if not existe:
+            raise HTTPException(status_code=404, detail="Cliente não encontrado.")
 
 
 class TriggerAgentRequest(BaseModel):
@@ -53,6 +75,10 @@ async def trigger_agent(
     from app.services.ai_budget import enforce_budget
     await enforce_budget(db, current_user.id, current_user.tenant_id)
 
+    process_uuid = uuid.UUID(body.process_id) if body.process_id else None
+    client_uuid = uuid.UUID(body.client_id) if body.client_id else None
+    await _validar_pertence_ao_tenant(db, current_user.tenant_id, process_uuid, client_uuid)
+
     run_id = uuid.uuid4()
     # Inject tenant_id so agents can scope DB writes correctly
     task_input = {**body.task_input, "_tenant_id": str(current_user.tenant_id)} if current_user.tenant_id else body.task_input
@@ -63,8 +89,8 @@ async def trigger_agent(
         task_input=task_input,
         priority=body.priority,
         tenant_id=current_user.tenant_id,
-        process_id=uuid.UUID(body.process_id) if body.process_id else None,
-        client_id=uuid.UUID(body.client_id) if body.client_id else None,
+        process_id=process_uuid,
+        client_id=client_uuid,
     )
 
     # Criar registro inicial no DB
