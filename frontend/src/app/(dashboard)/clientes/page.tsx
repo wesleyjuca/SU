@@ -6,6 +6,14 @@ import { useToast } from "@/components/ui/Toast";
 import { ViewToggle } from "@/components/ui/ViewToggle";
 import Link from "next/link";
 
+interface Endereco {
+  cep?: string;
+  logradouro?: string;
+  bairro?: string;
+  cidade?: string;
+  uf?: string;
+}
+
 interface Cliente {
   id: string;
   tipo: string;
@@ -14,11 +22,17 @@ interface Cliente {
   email: string | null;
   telefone: string | null;
   whatsapp: string | null;
+  cpf: string | null;
+  cnpj: string | null;
+  endereco_json: Endereco | null;
+  observacoes: string | null;
   status: string;
   origem: string | null;
   lgpd_consent: boolean;
   created_at: string;
 }
+
+const ENDERECO_VAZIO: Endereco = { cep: "", logradouro: "", bairro: "", cidade: "", uf: "" };
 
 const STATUS_STYLE: Record<string, string> = {
   PROSPECTO: "badge-pendente",
@@ -41,7 +55,9 @@ export default function ClientesPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<Partial<Cliente>>({});
-  const [form, setForm] = useState({ tipo: "PF", nome_completo: "", email: "", telefone: "", whatsapp: "", status: "PROSPECTO", origem: "", lgpd_consent: false });
+  const [editEndereco, setEditEndereco] = useState<Endereco>(ENDERECO_VAZIO);
+  const [form, setForm] = useState({ tipo: "PF", nome_completo: "", email: "", telefone: "", whatsapp: "", cpf: "", cnpj: "", status: "PROSPECTO", origem: "", lgpd_consent: false });
+  const [endereco, setEndereco] = useState<Endereco>(ENDERECO_VAZIO);
   const [view, setView] = useState<"table" | "grid">(() => {
     if (typeof window !== "undefined") {
       return (localStorage.getItem("clientes_view") as "table" | "grid") ?? "grid";
@@ -84,7 +100,7 @@ export default function ClientesPage() {
       const res = await fetch(`/api/v1/clients/${editingId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify(editForm),
+        body: JSON.stringify({ ...editForm, endereco_json: editEndereco }),
       });
       if (res.ok) { setEditingId(null); fetchClientes(0, false); }
       else toast.error("Erro ao salvar cliente. Tente novamente.");
@@ -108,9 +124,14 @@ export default function ClientesPage() {
     const res = await fetch("/api/v1/clients", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify(form),
+      body: JSON.stringify({ ...form, endereco_json: endereco }),
     });
-    if (res.ok) { setShowModal(false); fetchClientes(0, false); }
+    if (res.ok) {
+      setShowModal(false);
+      setForm({ tipo: "PF", nome_completo: "", email: "", telefone: "", whatsapp: "", cpf: "", cnpj: "", status: "PROSPECTO", origem: "", lgpd_consent: false });
+      setEndereco(ENDERECO_VAZIO);
+      fetchClientes(0, false);
+    }
   }
 
   const filtrados = clientes.filter((c) =>
@@ -189,7 +210,7 @@ export default function ClientesPage() {
                 <div className="flex items-center gap-2">
                   {!c.lgpd_consent && <span className="text-xs text-amber-600">⚠ LGPD</span>}
                   <Link href={`/clientes/${c.id}`} className="text-afj-black/30 hover:text-afj-gold transition-colors" aria-label="Ver detalhes"><ExternalLink size={12} /></Link>
-                  <button onClick={() => { setEditingId(c.id); setEditForm({ nome_completo: c.nome_completo, email: c.email ?? "", telefone: c.telefone ?? "", whatsapp: c.whatsapp ?? "", razao_social: c.razao_social ?? "", status: c.status, lgpd_consent: c.lgpd_consent, tipo: c.tipo }); }} className="text-afj-black/30 hover:text-afj-gold transition-colors" aria-label="Editar cliente"><Pencil size={12} /></button>
+                  <button onClick={() => { setEditingId(c.id); setEditForm({ nome_completo: c.nome_completo, email: c.email ?? "", telefone: c.telefone ?? "", whatsapp: c.whatsapp ?? "", razao_social: c.razao_social ?? "", cpf: c.cpf ?? "", cnpj: c.cnpj ?? "", observacoes: c.observacoes ?? "", status: c.status, lgpd_consent: c.lgpd_consent, tipo: c.tipo }); setEditEndereco({ ...ENDERECO_VAZIO, ...(c.endereco_json ?? {}) }); }} className="text-afj-black/30 hover:text-afj-gold transition-colors" aria-label="Editar cliente"><Pencil size={12} /></button>
                   <button onClick={() => setDeletingId(c.id)} className="text-afj-black/30 hover:text-red-500 transition-colors" aria-label="Remover cliente"><Trash2 size={12} /></button>
                 </div>
               </div>
@@ -233,7 +254,7 @@ export default function ClientesPage() {
                       <div className="flex items-center gap-2">
                         {!c.lgpd_consent && <span className="text-xs text-amber-600">⚠</span>}
                         <Link href={`/clientes/${c.id}`} className="text-afj-black/30 hover:text-afj-gold transition-colors" aria-label="Ver detalhes"><ExternalLink size={12} /></Link>
-                        <button onClick={() => { setEditingId(c.id); setEditForm({ nome_completo: c.nome_completo, email: c.email ?? "", telefone: c.telefone ?? "", whatsapp: c.whatsapp ?? "", razao_social: c.razao_social ?? "", status: c.status, lgpd_consent: c.lgpd_consent, tipo: c.tipo }); }} className="text-afj-black/30 hover:text-afj-gold transition-colors" aria-label="Editar cliente"><Pencil size={12} /></button>
+                        <button onClick={() => { setEditingId(c.id); setEditForm({ nome_completo: c.nome_completo, email: c.email ?? "", telefone: c.telefone ?? "", whatsapp: c.whatsapp ?? "", razao_social: c.razao_social ?? "", cpf: c.cpf ?? "", cnpj: c.cnpj ?? "", observacoes: c.observacoes ?? "", status: c.status, lgpd_consent: c.lgpd_consent, tipo: c.tipo }); setEditEndereco({ ...ENDERECO_VAZIO, ...(c.endereco_json ?? {}) }); }} className="text-afj-black/30 hover:text-afj-gold transition-colors" aria-label="Editar cliente"><Pencil size={12} /></button>
                         <button onClick={() => setDeletingId(c.id)} className="text-afj-black/30 hover:text-red-500 transition-colors" aria-label="Remover cliente"><Trash2 size={12} /></button>
                       </div>
                     </td>
@@ -276,13 +297,43 @@ export default function ClientesPage() {
                     className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold" />
                 </div>
               ))}
-              {editForm.tipo === "PJ" && (
+              {editForm.tipo === "PJ" ? (
+                <>
+                  <div>
+                    <label className="text-xs text-afj-black/60 block mb-1">Razão Social</label>
+                    <input type="text" value={editForm.razao_social ?? ""} onChange={(e) => setEditForm({ ...editForm, razao_social: e.target.value })}
+                      className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold" />
+                  </div>
+                  <div>
+                    <label className="text-xs text-afj-black/60 block mb-1">CNPJ</label>
+                    <input type="text" value={editForm.cnpj ?? ""} onChange={(e) => setEditForm({ ...editForm, cnpj: e.target.value })}
+                      placeholder="00.000.000/0000-00"
+                      className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold" />
+                  </div>
+                </>
+              ) : (
                 <div>
-                  <label className="text-xs text-afj-black/60 block mb-1">Razão Social</label>
-                  <input type="text" value={editForm.razao_social ?? ""} onChange={(e) => setEditForm({ ...editForm, razao_social: e.target.value })}
+                  <label className="text-xs text-afj-black/60 block mb-1">CPF</label>
+                  <input type="text" value={editForm.cpf ?? ""} onChange={(e) => setEditForm({ ...editForm, cpf: e.target.value })}
+                    placeholder="000.000.000-00"
                     className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold" />
                 </div>
               )}
+              <div>
+                <label className="text-xs text-afj-black/60 block mb-2">Endereço</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <input type="text" value={editEndereco.cep ?? ""} onChange={(e) => setEditEndereco({ ...editEndereco, cep: e.target.value })}
+                    placeholder="CEP" className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold" />
+                  <input type="text" value={editEndereco.uf ?? ""} onChange={(e) => setEditEndereco({ ...editEndereco, uf: e.target.value.toUpperCase().slice(0, 2) })}
+                    placeholder="UF" maxLength={2} className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold" />
+                  <input type="text" value={editEndereco.logradouro ?? ""} onChange={(e) => setEditEndereco({ ...editEndereco, logradouro: e.target.value })}
+                    placeholder="Rua, número, complemento" className="col-span-2 w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold" />
+                  <input type="text" value={editEndereco.bairro ?? ""} onChange={(e) => setEditEndereco({ ...editEndereco, bairro: e.target.value })}
+                    placeholder="Bairro" className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold" />
+                  <input type="text" value={editEndereco.cidade ?? ""} onChange={(e) => setEditEndereco({ ...editEndereco, cidade: e.target.value })}
+                    placeholder="Cidade" className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold" />
+                </div>
+              </div>
               <div>
                 <label className="text-xs text-afj-black/60 block mb-1">Status</label>
                 <select value={editForm.status ?? ""} onChange={(e) => setEditForm({ ...editForm, status: e.target.value })}
@@ -353,6 +404,43 @@ export default function ClientesPage() {
                   <input type={type} value={(form as any)[key]} onChange={(e) => setForm({...form, [key]: e.target.value})} className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold" required={label.includes("*")} />
                 </div>
               ))}
+              {form.tipo === "PJ" ? (
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs text-afj-black/60 block mb-1">Razão Social</label>
+                    <input type="text" value={(form as any).razao_social ?? ""} onChange={(e) => setForm({...form, razao_social: e.target.value} as any)}
+                      className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold" />
+                  </div>
+                  <div>
+                    <label className="text-xs text-afj-black/60 block mb-1">CNPJ</label>
+                    <input type="text" value={form.cnpj} onChange={(e) => setForm({...form, cnpj: e.target.value})}
+                      placeholder="00.000.000/0000-00"
+                      className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold" />
+                  </div>
+                </div>
+              ) : (
+                <div>
+                  <label className="text-xs text-afj-black/60 block mb-1">CPF</label>
+                  <input type="text" value={form.cpf} onChange={(e) => setForm({...form, cpf: e.target.value})}
+                    placeholder="000.000.000-00"
+                    className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold" />
+                </div>
+              )}
+              <div>
+                <label className="text-xs text-afj-black/60 block mb-2">Endereço</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <input type="text" value={endereco.cep ?? ""} onChange={(e) => setEndereco({ ...endereco, cep: e.target.value })}
+                    placeholder="CEP" className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold" />
+                  <input type="text" value={endereco.uf ?? ""} onChange={(e) => setEndereco({ ...endereco, uf: e.target.value.toUpperCase().slice(0, 2) })}
+                    placeholder="UF" maxLength={2} className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold" />
+                  <input type="text" value={endereco.logradouro ?? ""} onChange={(e) => setEndereco({ ...endereco, logradouro: e.target.value })}
+                    placeholder="Rua, número, complemento" className="col-span-2 w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold" />
+                  <input type="text" value={endereco.bairro ?? ""} onChange={(e) => setEndereco({ ...endereco, bairro: e.target.value })}
+                    placeholder="Bairro" className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold" />
+                  <input type="text" value={endereco.cidade ?? ""} onChange={(e) => setEndereco({ ...endereco, cidade: e.target.value })}
+                    placeholder="Cidade" className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold" />
+                </div>
+              </div>
               <label className="flex items-center gap-2 text-sm">
                 <input type="checkbox" checked={form.lgpd_consent} onChange={(e) => setForm({...form, lgpd_consent: e.target.checked})} />
                 <span>Consentimento LGPD coletado</span>

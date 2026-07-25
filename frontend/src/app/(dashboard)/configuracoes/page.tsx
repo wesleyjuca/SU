@@ -72,7 +72,12 @@ export default function ConfiguracoesPage() {
       await fetch("/api/v1/users/me", {
         method: "PUT",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ full_name: perfil.full_name, telefone: perfil.telefone }),
+        body: JSON.stringify({
+          full_name: perfil.full_name,
+          telefone: perfil.telefone,
+          oab_number: perfil.oab_number || null,
+          oab_uf: perfil.oab_uf || null,
+        }),
       });
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
