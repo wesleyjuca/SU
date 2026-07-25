@@ -1,88 +1,63 @@
 ```markdown
 # SU Development Patterns
 
-> Auto-generated skill from repository analysis
+> Corrigido manualmente (Fase 108) — a versão anterior era auto-gerada por
+> uma ferramenta de terceiro a partir de 1 único commit e descrevia
+> convenções erradas (camelCase/JS) para este repositório, que é Python
+> (backend, snake_case/PEP 8) + TypeScript/React (frontend, PascalCase para
+> componentes).
 
 ## Overview
-This skill teaches you the core development patterns and conventions used in the SU Python repository. You'll learn about file naming, import/export styles, commit message conventions, and how to structure and run tests. The repository does not use a specific framework, so patterns are lightweight and Pythonic.
+AFJ CORE SYSTEM: backend FastAPI 3.12 (Python) em `backend/app/`, frontend
+Next.js 14 App Router (TypeScript/React) em `frontend/src/`. Ver `/CLAUDE.md`
+na raiz do repo para a arquitetura completa.
 
 ## Coding Conventions
 
 ### File Naming
-- Use **camelCase** for filenames.
-  - Example: `myModule.py`, `dataProcessor.py`
+- **Backend (Python)**: `snake_case.py` — ex.: `coding_agent.py`,
+  `repo_context.py`, `oab_capture.py`.
+- **Frontend (React/TSX)**: `PascalCase.tsx` para componentes (ex.:
+  `AgentStatusCard.tsx`), `camelCase.ts` para hooks/lib (ex.: `useVoice.ts`,
+  `websocket.ts`), rotas do App Router seguem a convenção do Next
+  (`page.tsx`, `layout.tsx` dentro de pastas em `kebab-case` ou
+  `(grupo)`).
 
 ### Import Style
-- Use **absolute imports** to reference modules.
-  - Example:
-    ```python
-    import myModule
-    from utils.helperFunctions import processData
-    ```
-
-### Export Style
-- Use **default exports** (i.e., define main classes/functions at the module level).
-  - Example:
-    ```python
-    # In dataProcessor.py
-    class DataProcessor:
-        ...
-    ```
+- Backend: imports absolutos a partir de `app.` (ex.:
+  `from app.agents.base.agent import BaseAgent`).
+- Frontend: alias `@/` para `src/` (ex.: `import { useToast } from
+  "@/components/ui/Toast"`).
 
 ### Commit Messages
-- Follow **conventional commit** style.
-- Use the `fix` prefix for bug fixes.
-  - Example:
-    ```
-    fix: correct data parsing in DataProcessor
-    ```
+Este repositório **não** usa Conventional Commits (`fix:`/`feat:`). O padrão
+real, visto em todo o histórico, é:
 
-## Workflows
+```
+Fase N (área): descrição curta do que mudou (#PR)
+```
 
-### Fix a Bug
-**Trigger:** When you need to correct a bug in the codebase  
-**Command:** `/fix-bug`
-
-1. Identify the bug and its location in the code.
-2. Create a new branch for the fix.
-3. Make the necessary code changes.
-4. Write or update tests in `*.test.*` files to cover the fix.
-5. Commit your changes using the `fix:` prefix.
-   - Example: `fix: handle NoneType in processData`
-6. Push your branch and open a pull request.
-
-### Add a New Module
-**Trigger:** When adding new functionality  
-**Command:** `/add-module`
-
-1. Create a new Python file using camelCase naming.
-   - Example: `newFeature.py`
-2. Implement your functionality, exporting the main class or function.
-3. Use absolute imports for any dependencies.
-4. Add or update tests in a corresponding `*.test.*` file.
-5. Commit your changes with a descriptive message.
-   - Example: `feat: add newFeature module`
-6. Push and open a pull request.
+Exemplo real: `Fase 107 (agentes): scoring estruturado, persistência do CRM, validate() hooks (#131)`.
 
 ## Testing Patterns
+- Backend: `pytest`/`pytest-asyncio`, arquivos em `backend/tests/test_unit/test_*.py`.
+  Padrão comum: `_FakeDB`/mocks leves em vez de banco real para testes de
+  lógica isolada (ver qualquer arquivo `test_*_tenant_isolation.py` como
+  referência).
+- Frontend: `vitest`, arquivos `*.test.tsx`/`*.test.ts` próximos ao que testam.
 
-- Test files follow the `*.test.*` naming pattern.
-  - Example: `dataProcessor.test.py`
-- The testing framework is **unknown**, so check existing test files for structure.
-- Place tests alongside or near the modules they test.
-- Example test file:
-  ```python
-  # dataProcessor.test.py
-  from dataProcessor import DataProcessor
+## Multi-tenant e HITL (invariantes do projeto)
+Todo model tem `tenant_id`; toda query deve filtrar por
+`current_user.tenant_id`. Ações críticas de agente (protocolar petição,
+assinar contrato, enviar comunicação) criam um registro `Approval`
+(`status=PENDENTE`) — a ação só executa após aprovação humana. Nunca
+contornar esses dois invariantes.
 
-  def test_process_data():
-      dp = DataProcessor()
-      assert dp.process([1, 2, 3]) == [2, 3, 4]
-  ```
-
-## Commands
-| Command      | Purpose                                  |
-|--------------|------------------------------------------|
-| /fix-bug     | Start the workflow to fix a bug          |
-| /add-module  | Add a new module to the codebase         |
+## Workflow real de mudança (observado no histórico do repo)
+1. Implementar a mudança num arquivo/conjunto pequeno e coeso.
+2. Rodar verificação: `ruff check` + `py_compile` (backend), `tsc --noEmit`
+   + `npm run build` (frontend), testes de lógica isolados quando aplicável.
+3. Commit com a mensagem no formato `Fase N (área): descrição`.
+4. Abrir PR (draft), aguardar CI (`✅ CI — Validate`) ficar verde, marcar
+   pronto e mesclar (squash).
 ```

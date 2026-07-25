@@ -125,10 +125,15 @@ After running migrations + seed:
 
 ## Deploy
 
-Push to `main` → GitHub Actions runs:
+Push a `main` ou PR → workflow **"✅ CI — Validate"** roda apenas validação (nunca deploy):
 1. TypeScript check + Next.js build
 2. Backend ruff lint + pytest
-3. Deploy backend to Railway (`RAILWAY_TOKEN` secret)
-4. Deploy frontend to Vercel (`VERCEL_TOKEN` secret)
+3. Scan de vulnerabilidade de dependências (`pip-audit`/`npm audit`, informativo, não bloqueia)
 
-Required GitHub Secrets: `RAILWAY_TOKEN`, `VERCEL_TOKEN`, `SECRET_KEY`, `ENCRYPTION_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`
+O deploy de produção em si **não** passa pelo GitHub Actions:
+- **Backend (Railway)** — integração nativa Railway↔GitHub (git-integration), auto-deploy no push para `main`. Configuração em `railway.toml`/`infra/railway.toml` + `Dockerfile`.
+- **Frontend (Vercel)** — workflow separado `deploy-frontend-auto.yml`, dispara no push para `main` que toque `frontend/**`, roda `vercel --prod`.
+
+Secrets do **GitHub Actions** (usados pelos workflows acima): `VERCEL_TOKEN`, `RAILWAY_URL` (não-secreta, só a URL do backend pra build do frontend).
+
+Secrets de **runtime da aplicação** (configurados direto na plataforma — Railway/Render dashboard ou `.env.prod` no self-host, NÃO no GitHub Actions): `SECRET_KEY`, `ENCRYPTION_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `DATABASE_URL`, `REDIS_URL`, `QDRANT_URL`/`QDRANT_API_KEY`.

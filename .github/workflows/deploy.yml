@@ -57,3 +57,10 @@ jobs:
           python -m pytest tests/ -v -x 2>&1 | head -80 || true
       - name: Frontend tests
         run: cd frontend && npm test -- --run 2>&1 | head -60 || true
+      - name: Backend dependency vulnerability scan (informativo, não bloqueia)
+        run: |
+          cd backend
+          pip install pip-audit 2>/dev/null || true
+          pip-audit -r requirements.txt 2>&1 | head -100 || true
+      - name: Frontend dependency vulnerability scan (informativo, não bloqueia)
+        run: cd frontend && npm audit --audit-level=high 2>&1 | head -100 || true
