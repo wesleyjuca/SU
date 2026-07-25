@@ -1,6 +1,7 @@
-"""publication_monitor_agent — Scan diário de Diários Oficiais e DJes."""
+"""publication_monitor_agent — Scan de Diários Oficiais/DJe sob demanda, via
+services.dje_monitor.scan_publicacoes (mesma varredura real usada pelo job
+diário do Celery Beat)."""
 from typing import ClassVar
-from datetime import datetime, timezone
 from app.agents.base.agent import BaseAgent
 from app.agents.base.result import AgentResult, AgentStatus
 from app.agents.brain.context import AgentContext
@@ -11,76 +12,43 @@ log = structlog.get_logger()
 
 class PublicationMonitorAgent(BaseAgent):
     name: ClassVar[str] = "publication_monitor_agent"
-    description: ClassVar[str] = "Scan diário de DJes e Diários Oficiais para OABs cadastradas"
+    description: ClassVar[str] = "Varredura sob demanda de DJes/Diários Oficiais para as OABs do escritório"
     requires_human_approval: ClassVar[bool] = False
-    # Vira True quando a varredura real de DJe (por tribunal) for implementada.
-    _dje_implementado: ClassVar[bool] = False
 
     async def execute(self, ctx: AgentContext) -> AgentResult:
+        if not self.db:
+            return AgentResult(
+                status=AgentStatus.PARTIAL,
+                agent_name=self.name,
+                output={"message": "DB necessário para varredura de DJe."},
+            )
+
         task = ctx.task_input
-        oabs = task.get("oabs", [])  # lista de OABs para monitorar
-        data_edicao = task.get("data", datetime.now(timezone.utc).date().isoformat())
+        dias_retro = int(task.get("dias_retro", 1) or 1)
 
-        if not oabs and self.db:
-            oabs = await self._obter_oabs_cadastradas()
+        from app.services.dje_monitor import scan_publicacoes
 
-        if not oabs:
+        try:
+            resumo = await scan_publicacoes(self.db, tenant_id=ctx.tenant_id, dias_retro=dias_retro)
+        except Exception as exc:
+            log.warning("dje_scan_manual_failed", tenant=str(ctx.tenant_id), error=str(exc))
             return AgentResult(
                 status=AgentStatus.PARTIAL,
                 agent_name=self.name,
-                output={"message": "Nenhuma OAB cadastrada para monitoramento. Adicione advogados com OAB no sistema."},
+                output={"message": f"Varredura parcial — falha na consulta à Comunica: {exc}"},
             )
-
-        # Honestidade de status: enquanto a varredura de DJe não estiver implementada,
-        # não reportar SUCCESS (que aparentaria uma busca real com zero resultados).
-        if not self._dje_implementado:
-            return AgentResult(
-                status=AgentStatus.PARTIAL,
-                agent_name=self.name,
-                output={
-                    "data_edicao": data_edicao,
-                    "oabs_monitoradas": len(oabs),
-                    "publicacoes_encontradas": 0,
-                    "resultados": [],
-                    "message": "Varredura de DJe ainda não implementada — integração por tribunal pendente. "
-                               "Nenhuma publicação foi efetivamente consultada.",
-                },
-            )
-
-        resultados = []
-        for oab in oabs:
-            matches = await self._scan_dje(oab, data_edicao)
-            if matches:
-                resultados.extend(matches)
 
         return AgentResult(
             status=AgentStatus.SUCCESS,
             agent_name=self.name,
             output={
-                "data_edicao": data_edicao,
-                "oabs_monitoradas": len(oabs),
-                "publicacoes_encontradas": len(resultados),
-                "resultados": resultados,
-                "proxima_execucao": "Agendada via Celery Beat diariamente às 07h",
+                "oabs_monitoradas": resumo.get("oabs_monitoradas", 0),
+                "publicacoes_encontradas": resumo.get("intimacoes_novas", 0),
+                "intimacoes_criadas": resumo.get("intimacoes_novas", 0),
+                "processos_casados": resumo.get("casadas_com_processo", 0),
+                "disparo": "manual (on-demand via /agents/trigger) — complementar ao job diário do Celery Beat (07h30)",
             },
         )
-
-    async def _obter_oabs_cadastradas(self) -> list[str]:
-        from sqlalchemy import select
-        from app.models.user import User
-        result = await self.db.execute(
-            select(User.oab_number).where(User.oab_number.isnot(None), User.is_active == True)
-        )
-        return [r[0] for r in result.all() if r[0]]
-
-    async def _scan_dje(self, oab: str, data: str) -> list[dict]:
-        """
-        Scan do DJe para uma OAB específica.
-        Implementação real: download PDF do DJe + OCR + busca textual.
-        Por ora retorna placeholder — implemente por tribunal.
-        """
-        log.info("publication_scan", oab=oab, data=data, status="placeholder")
-        return []  # expansão: integrar com APIs oficiais dos TJs
 
     async def _register_tools(self):
         return []
