@@ -25,6 +25,7 @@ class ClientCreate(BaseModel):
     whatsapp: str | None = None
     cpf: str | None = None
     cnpj: str | None = None
+    endereco_json: dict[str, Any] | None = None  # {cep, logradouro, bairro, cidade, uf}
     origem: str | None = None
     status: str = "PROSPECTO"
     observacoes: str | None = None
@@ -39,6 +40,10 @@ class ClientResponse(BaseModel):
     email: str | None
     telefone: str | None
     whatsapp: str | None
+    cpf: str | None = None
+    cnpj: str | None = None
+    endereco_json: dict[str, Any] | None = None
+    observacoes: str | None = None
     status: str
     origem: str | None
     lgpd_consent: bool
@@ -386,6 +391,10 @@ def _to_response(c: Client) -> ClientResponse:
         email=c.email,
         telefone=c.telefone,
         whatsapp=c.whatsapp,
+        cpf=c.cpf,
+        cnpj=c.cnpj,
+        endereco_json=c.endereco_json,
+        observacoes=c.observacoes,
         status=c.status,
         origem=c.origem,
         lgpd_consent=c.lgpd_consent,
