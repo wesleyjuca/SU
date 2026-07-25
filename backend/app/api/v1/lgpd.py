@@ -80,10 +80,14 @@ async def erase_client_data(
 @router.get("/clients/{client_id}/export")
 async def export_client_data(
     client_id: str,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role("ADMIN", "SOCIO")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Portabilidade de dados (LGPD art. 18 V) — exporta dados em formato legível."""
+    """Portabilidade de dados (LGPD art. 18 V) — exporta dados em formato legível.
+
+    Restrito a ADMIN/SOCIO (mesmo padrão de erase_client_data): devolve CPF/CNPJ,
+    e-mail, telefone e todo o histórico de interações do titular — um dump de PII
+    não deve ser acessível a qualquer papel autenticado do tenant."""
     result = await db.execute(
         select(Client).where(
             Client.id == uuid.UUID(client_id),
@@ -100,6 +104,16 @@ async def export_client_data(
         .order_by(desc(ClientInteraction.created_at))
     )
     interactions = interactions_result.scalars().all()
+
+    from app.models.audit_log import AuditLog
+    db.add(AuditLog(
+        user_id=current_user.id,
+        tenant_id=current_user.tenant_id,
+        action=f"LGPD:EXPORT:{client_id}",
+        success=True,
+        error_detail=None,
+    ))
+    await db.flush()
 
     return {
         "exportado_em": datetime.now(timezone.utc).isoformat(),
@@ -168,10 +182,14 @@ async def get_consent_history(
 async def register_consent(
     client_id: str,
     body: ConsentCreate,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role("ADMIN", "SOCIO")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Registra novo consentimento ou revogação LGPD."""
+    """Registra novo consentimento ou revogação LGPD.
+
+    Restrito a ADMIN/SOCIO: é o registro formal usado como base legal de
+    tratamento de dados perante a LGPD — não deve ser gravável por qualquer
+    papel autenticado do tenant, e precisa de trilha de auditoria."""
     result = await db.execute(
         select(Client).where(
             Client.id == uuid.UUID(client_id),
@@ -185,6 +203,16 @@ async def register_consent(
     client.lgpd_consent = body.aceito
     if body.aceito:
         client.lgpd_consent_at = datetime.now(timezone.utc)
+    await db.flush()
+
+    from app.models.audit_log import AuditLog
+    db.add(AuditLog(
+        user_id=current_user.id,
+        tenant_id=current_user.tenant_id,
+        action=f"LGPD:CONSENT:{client_id}:{body.aceito}",
+        success=True,
+        error_detail=None,
+    ))
     await db.flush()
 
     return {
