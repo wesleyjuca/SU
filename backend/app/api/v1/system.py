@@ -795,6 +795,85 @@ async def ai_costs_por_usuario(
     }
 
 
+@router.get("/health/tenant-infra")
+async def health_tenant_infra(
+    current_user: User = Depends(require_role("ADMIN", "SOCIO", "SUPERADMIN")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Saúde do PRÓPRIO escritório para a tela de Saúde do Sistema (ADMIN/SOCIO).
+
+    Complementa /system/brain/infra (visão de plataforma, SUPERADMIN-only, que
+    hoje 403 silenciosamente pra quem acessa a tela de Saúde sem ser
+    SUPERADMIN). Best-effort por seção — uma falha isolada não derruba as
+    demais."""
+    tenant_id = current_user.tenant_id
+
+    integracoes_conectadas: list[dict] = []
+    try:
+        from app.services import integration_hub
+        status_list = await integration_hub.list_status(db, tenant_id)
+        integracoes_conectadas = [
+            {"provider": i["provider"], "nome": i["nome"], "status": i["status"]}
+            for i in status_list if i["status"] == "CONECTADA"
+        ]
+    except Exception:
+        pass
+
+    custo_ia = None
+    try:
+        from app.models.agent_run import AgentRun
+        from app.models.user import AIBudgetLimit
+        cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+        custo_total, execucoes = (await db.execute(
+            select(
+                func.coalesce(func.sum(AgentRun.cost_usd), 0),
+                func.count(AgentRun.id),
+            ).where(AgentRun.tenant_id == tenant_id, AgentRun.started_at >= cutoff)
+        )).one()
+        limite_total = (await db.execute(
+            select(func.coalesce(func.sum(AIBudgetLimit.monthly_limit_usd), 0))
+            .where(AIBudgetLimit.tenant_id == tenant_id)
+        )).scalar_one()
+        custo_ia = {
+            "total_usd": round(float(custo_total), 4),
+            "execucoes": int(execucoes),
+            "limite_usd": float(limite_total) if limite_total else None,
+            "periodo_dias": 30,
+        }
+    except Exception:
+        pass
+
+    captura = None
+    try:
+        from app.models.process import LegalProcess
+        from app.models.sync_run import SyncRun
+        monitorados = (await db.execute(
+            select(func.count(LegalProcess.id)).where(
+                LegalProcess.tenant_id == tenant_id, LegalProcess.monitoring_active.is_(True),
+            )
+        )).scalar_one()
+        ultimo = (await db.execute(
+            select(SyncRun.fonte, SyncRun.tipo, SyncRun.status, SyncRun.started_at)
+            .where(SyncRun.tenant_id == tenant_id)
+            .order_by(SyncRun.started_at.desc()).limit(1)
+        )).first()
+        captura = {
+            "processos_monitorados": monitorados,
+            "ultima_sincronizacao": {
+                "fonte": ultimo.fonte, "tipo": ultimo.tipo, "status": ultimo.status,
+                "started_at": ultimo.started_at.isoformat() if ultimo.started_at else None,
+            } if ultimo else None,
+        }
+    except Exception:
+        pass
+
+    return {
+        "integracoes_conectadas": integracoes_conectadas,
+        "custo_ia": custo_ia,
+        "captura": captura,
+    }
+
+
 class AIBudgetUpdate(BaseModel):
     user_id: str
     monthly_limit_usd: float | None = None   # None/0 remove o limite
