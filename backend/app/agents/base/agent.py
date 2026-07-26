@@ -114,11 +114,19 @@ class BaseAgent(ABC):
         system = AFJ_LEGAL_SYSTEM_PROMPT + (("\n\n" + extra_system) if extra_system else "")
         msgs = messages if messages is not None else self.build_messages(prompt or "", few_shot)
 
+        call_start_ms = int(time.time() * 1000)
         content, tokens_in, tokens_out, cost = await call_claude(
             messages=msgs, system=system, model=model,
             max_tokens=max_tokens, temperature=temperature,
         )
+        duration_ms = int(time.time() * 1000) - call_start_ms
         ctx.add_tokens(tokens_in + tokens_out, cost)
+        ctx.add_audit_event("LLM_CALL", {
+            "model": model or "default",
+            "tokens": tokens_in + tokens_out,
+            "cost_usd": round(cost, 4),
+            "duration_ms": duration_ms,
+        })
         log.info("agent_llm_call", agent=self.name, tokens=tokens_in + tokens_out,
                  cost_usd=round(cost, 4), run_total_usd=round(ctx.total_cost_usd, 4))
         return content
