@@ -11,7 +11,24 @@ permitindo trocar/plugar múltiplas IAs sem alterar nenhum agente.
 Retorno padronizado: (content, input_tokens, output_tokens, cost_usd).
 """
 import contextvars
+import anthropic
+from openai import APIConnectionError, APITimeoutError, RateLimitError, InternalServerError
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 from app.config import settings
+
+# Exceções transientes (rede/timeout/rate-limit/5xx) — únicas que valem retry.
+# Erros de validação/auth (BadRequestError, AuthenticationError etc.) nunca se
+# resolvem tentando de novo, então NÃO entram aqui.
+_RETRYABLE_ANTHROPIC = (
+    anthropic.APIConnectionError, anthropic.APITimeoutError,
+    anthropic.RateLimitError, anthropic.InternalServerError,
+)
+_RETRYABLE_OPENAI = (APIConnectionError, APITimeoutError, RateLimitError, InternalServerError)
+
+# Retry raso de propósito: BaseAgent.run() já tem seu próprio loop de retry
+# (max_retries=2). Um retry profundo aqui componentizaria com aquele (até 3x3
+# tentativas numa falha persistente) — isso só absorve blips curtos de rede.
+_RETRY_KWARGS = dict(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=0.5, min=0.5, max=4), reraise=True)
 
 # Credenciais de IA por-requisição (BYOK). Setado pelo orquestrador com a IA do
 # usuário disparador; quando presente, sobrepõe as settings do sistema.
@@ -62,6 +79,7 @@ def _get_anthropic(api_key: str):
     return _client_cache[ck]
 
 
+@retry(retry=retry_if_exception_type(_RETRYABLE_ANTHROPIC), **_RETRY_KWARGS)
 async def _call_anthropic(api_key, messages, system, model, max_tokens, temperature):
     client = _get_anthropic(api_key)
     kwargs = {"model": model, "max_tokens": max_tokens, "temperature": temperature, "messages": messages}
@@ -81,6 +99,7 @@ def _get_gemini(api_key: str):
     return _client_cache[ck]
 
 
+@retry(retry=retry_if_exception_type(_RETRYABLE_OPENAI), **_RETRY_KWARGS)
 async def _call_gemini(api_key, messages, system, model, max_tokens, temperature):
     client = _get_gemini(api_key)
     # OpenAI-compat: system vira uma mensagem role=system no início
