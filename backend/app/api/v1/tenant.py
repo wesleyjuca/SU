@@ -466,8 +466,12 @@ async def capturar_processos_oabs(
     elif not resultado.get("fonte_respondeu"):
         # A fonte pública não respondeu: quase sempre é o ambiente sem acesso à
         # internet externa (egress/rede) ou a Comunica fora do ar — não é erro de dados.
-        msg = ("A fonte pública (Comunica/DJEN) não respondeu. Verifique se o ambiente "
-               "tem acesso à internet externa (egress) ou tente novamente mais tarde.")
+        # fonte_detalhe (se disponível) distingue "sem rede" (exceção de conexão)
+        # de "rede ok, mas a Comunica recusou" (HTTP 4xx/5xx) — antes era descartado.
+        detalhe = resultado.get("fonte_detalhe")
+        msg = ("A fonte pública (Comunica/DJEN) não respondeu"
+               + (f" ({detalhe})" if detalhe else "")
+               + ". Verifique se o ambiente tem acesso à internet externa (egress) ou tente novamente mais tarde.")
     else:
         msg = "A fonte respondeu, mas não há publicações no período para as OABs do escritório."
     return {**resultado, "message": msg}

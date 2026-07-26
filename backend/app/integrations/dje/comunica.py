@@ -156,6 +156,9 @@ async def buscar_comunicacoes(
                     stats["requests"] = stats.get("requests", 0) + 1
                 if resp.status_code != 200:
                     log.warning("comunica_http", status=resp.status_code, oab=numero, uf=oab_uf, pagina=pagina)
+                    if stats is not None:
+                        stats["status_code"] = resp.status_code
+                        stats["error"] = f"HTTP {resp.status_code} da Comunica/DJEN"
                     break
                 if stats is not None:
                     stats["ok"] = True

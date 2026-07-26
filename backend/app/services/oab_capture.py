@@ -228,7 +228,8 @@ async def capturar_por_oab(
     if not achados:
         resultado = {"oabs": len(oabs), "comunicacoes_encontradas": total_comunicacoes,
                      "processos_encontrados": 0, "processos_criados": 0,
-                     "fonte_respondeu": bool(stats.get("ok"))}
+                     "fonte_respondeu": bool(stats.get("ok")),
+                     "fonte_detalhe": stats.get("error")}
         await finalizar_sync(db, sync, "OK" if stats.get("ok") else "ERRO", resultado)
         await db.commit()
         return resultado
@@ -291,6 +292,7 @@ async def capturar_por_oab(
         "processos_encontrados": len(achados),
         "processos_criados": criados,
         "fonte_respondeu": bool(stats.get("ok")),
+        "fonte_detalhe": stats.get("error"),
     }
     await finalizar_sync(db, sync, "OK", resultado)
     await db.commit()
