@@ -134,6 +134,7 @@ async def _run_async(
                     "run_id": run_id,
                     "status": status,
                     "task_type": task_type,
+                    "agent_name": agent_run.agent_name if agent_run else None,
                 })
         except Exception:
             pass
