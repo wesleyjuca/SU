@@ -103,6 +103,10 @@ async def _run_async(
             error_msg = str(exc)
             log.error("orchestration_failed_in_worker", run_id=run_id, error=error_msg)
 
+        # Trilha de tempo por chamada de LLM (Fase 113) — ctx.audit_events já é
+        # preenchido por BaseAgent.run()/ask_llm(), só faltava persistir.
+        output["_trace"] = ctx.audit_events
+
         # Atualizar status no DB
         if agent_run:
             # Se o run foi CANCELADO enquanto executava, não sobrescrever o
