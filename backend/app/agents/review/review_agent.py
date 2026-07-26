@@ -6,6 +6,7 @@ Pipeline:
 
 Toda citação não encontrada no Qdrant → [Não Verificado] → bloqueia aprovação.
 """
+import asyncio
 import json
 import re
 from typing import ClassVar
@@ -68,11 +69,15 @@ class ReviewAgent(BaseAgent):
             k=5,
         )
 
-        # Executar as 4 etapas de revisão
-        resultado_formal = await self._etapa_formal(conteudo, tipo)
-        resultado_consistencia = await self._etapa_consistencia(conteudo, jurisprudencia_verificada, legislacao)
-        resultado_risco = await self._etapa_risco(conteudo, tipo)
-        resultado_estilo = await self._etapa_estilo(conteudo)
+        # Executar as 4 etapas de revisão em paralelo — são independentes
+        # entre si (nenhuma lê o resultado de outra), então rodar concorrente
+        # corta a latência de ~soma-das-4 pra ~a-mais-lenta-das-4.
+        resultado_formal, resultado_consistencia, resultado_risco, resultado_estilo = await asyncio.gather(
+            self._etapa_formal(conteudo, tipo),
+            self._etapa_consistencia(conteudo, jurisprudencia_verificada, legislacao),
+            self._etapa_risco(conteudo, tipo),
+            self._etapa_estilo(conteudo),
+        )
 
         total_tokens = (
             resultado_formal["tokens"] +
