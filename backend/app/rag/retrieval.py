@@ -1,7 +1,10 @@
 """RAG retrieval — busca semântica multi-collection no Qdrant."""
+import hashlib
+import json
 from qdrant_client.models import Filter, FieldCondition, MatchValue
 from app.rag.embeddings import embed_text
 from app.rag.collections import COLLECTIONS
+from app.db.redis import get_redis
 import structlog
 
 log = structlog.get_logger()
@@ -12,6 +15,25 @@ DEFAULT_COLLECTIONS = ["jurisprudencia", "peticoes_afj", "legislacao"]
 # busca DEVE filtrar por ele (senão um escritório enxerga dados de outro).
 # As demais (jurisprudencia, legislacao, doutrina) são bases públicas/compartilhadas.
 PRIVATE_COLLECTIONS = {"peticoes_afj", "memorias_afj", "documentos_clientes"}
+
+# Cache de resultado de busca — evita reembedar (OpenAI, pago) + rebuscar no
+# Qdrant a mesma query repetida pelo mesmo escritório em janela curta.
+CACHE_TTL_SECONDS = 300
+
+
+def _cache_key(query, collections, filters, k, score_threshold, tenant_id) -> str:
+    # tenant_id entra na chave: cache de collection privada nunca pode vazar
+    # entre escritórios diferentes.
+    payload = {
+        "query": query,
+        "collections": sorted(collections or []),
+        "filters": filters or {},
+        "k": k,
+        "score_threshold": score_threshold,
+        "tenant_id": str(tenant_id) if tenant_id else None,
+    }
+    raw = json.dumps(payload, sort_keys=True)
+    return f"rag:search:{hashlib.sha256(raw.encode()).hexdigest()}"
 
 
 async def retrieve(
@@ -35,6 +57,18 @@ async def retrieve(
         return []
 
     collections = collections or DEFAULT_COLLECTIONS
+
+    redis = await get_redis()
+    cache_key = None
+    if redis:
+        cache_key = _cache_key(query, collections, filters, k, score_threshold, tenant_id)
+        try:
+            cached = await redis.get(cache_key)
+            if cached:
+                return json.loads(cached)
+        except Exception as exc:
+            log.warning("rag_cache_read_failed", error=str(exc))
+
     query_vector = await embed_text(query)
 
     all_results = []
@@ -66,7 +100,15 @@ async def retrieve(
 
     # Ordenar por score decrescente, retornar top-k
     all_results.sort(key=lambda x: x["score"], reverse=True)
-    return all_results[:k]
+    top_k = all_results[:k]
+
+    if redis and cache_key:
+        try:
+            await redis.set(cache_key, json.dumps(top_k), ex=CACHE_TTL_SECONDS)
+        except Exception as exc:
+            log.warning("rag_cache_write_failed", error=str(exc))
+
+    return top_k
 
 
 def _build_filter(filters: dict | None, extra: dict | None = None) -> Filter | None:
