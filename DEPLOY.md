@@ -9,8 +9,10 @@
 - **Backend**: Railway (auto-deploy; build pelo `Dockerfile` da raiz, config em `railway.toml`).
   O `start.sh` sobe **uvicorn + Celery worker + beat no mesmo container** — sem worker,
   agentes de IA, OCR e alertas de prazo ficam enfileirados para sempre.
-- **Estado ideal futuro**: serviços dedicados `worker` e `scheduler` no Railway
-  (comandos de referência em `infra/railway.toml`), separando web de background.
+- **Estado ideal futuro**: serviços dedicados `worker` (`celery -A app.workers.worker worker
+  --loglevel=info --concurrency=4 -Q celery,agents`) e `scheduler` (`celery -A app.workers.worker
+  beat --loglevel=info --scheduler celery.beat:PersistentScheduler`) no Railway, separando web
+  de background.
 
 ## Variáveis obrigatórias no Railway (Backend → Variables)
 

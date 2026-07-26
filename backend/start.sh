@@ -2,8 +2,8 @@
 # Boot de produção (Railway single-service): sobe o worker Celery + beat em
 # background e o uvicorn em foreground. Sem isto, tarefas enfileiradas com
 # Redis ativo (agentes IA, OCR, alertas de prazo) nunca são consumidas.
-# Estado ideal futuro: serviços dedicados `worker` e `scheduler` no Railway
-# (ver infra/railway.toml); este script cobre o deploy de serviço único.
+# Estado ideal futuro: serviços dedicados `worker` e `scheduler` no Railway,
+# separando web de background; este script cobre o deploy de serviço único.
 set -e
 
 # Auto-migração best-effort: em bancos legados criados via create_all (sem
