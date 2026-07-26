@@ -10,6 +10,7 @@ import {
 import { navSections } from "@/lib/nav";
 import { useApprovalCount } from "@/hooks/useApprovals";
 import { useNotifications } from "@/hooks/useNotifications";
+import { useAgentStatus } from "@/hooks/useAgentStatus";
 import { useBilling } from "@/hooks/useBilling";
 import { AlertBanner } from "@/components/ui/AlertBanner";
 import { NotificationDropdown } from "@/components/layout/NotificationDropdown";
@@ -23,6 +24,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const pathname = usePathname();
   const { count: approvalCount } = useApprovalCount();
   const { unreadCount } = useNotifications();
+  // Ativa a conexão WS compartilhada (afjWS) pra toda a área logada — sem
+  // isso, os handlers de useNotifications/useApprovalCount nunca recebiam
+  // evento nenhum (a conexão nunca era aberta em lugar nenhum do app).
+  useAgentStatus();
   const { billing } = useBilling();
   const [notifOpen, setNotifOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);

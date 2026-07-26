@@ -3,7 +3,7 @@ import { useState, useEffect } from "react";
 import dynamic from "next/dynamic";
 import { Scale, AlertTriangle, CheckSquare, DollarSign, Bot, Activity, Loader2, BarChart2 } from "lucide-react";
 import Link from "next/link";
-import { useAgentWebSocket } from "@/hooks/useAgentWebSocket";
+import { useAgentStatus } from "@/hooks/useAgentStatus";
 import { OnboardingWizard } from "@/components/onboarding/OnboardingWizard";
 import { PushPermissionBanner } from "@/components/notifications/PushPermissionBanner";
 
@@ -88,7 +88,7 @@ export default function DashboardPage() {
   const [showOnboarding, setShowOnboarding] = useState(false);
 
   // Real-time agent status via WebSocket (falls back to polling-derived status)
-  const wsAgentStatus = useAgentWebSocket();
+  const { agentStatusMap: wsAgentStatus } = useAgentStatus();
   const [pollAgentStatus, setPollAgentStatus] = useState<Record<string, string>>({});
   // Merge: WebSocket updates take precedence
   const agentStatus = { ...pollAgentStatus, ...wsAgentStatus };

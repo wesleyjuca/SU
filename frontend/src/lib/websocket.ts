@@ -10,6 +10,16 @@ class AFJWebSocket {
   private intentionallyClosed = false;
 
   connect(userId: string): void {
+    // Idempotente: múltiplos consumidores (layout + páginas específicas) podem
+    // chamar connect() para o mesmo usuário — não abrir uma 2ª conexão se já
+    // há uma aberta/conectando para o mesmo userId.
+    if (
+      this.userId === userId &&
+      this.ws &&
+      (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)
+    ) {
+      return;
+    }
     this.userId = userId;
     this.intentionallyClosed = false;
     this._open();
