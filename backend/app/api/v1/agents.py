@@ -1,5 +1,5 @@
 """Endpoints para triggar, consultar e gerenciar execuções de agentes."""
-from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException
+from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
 from pydantic import BaseModel
@@ -131,13 +131,14 @@ async def trigger_agent(
 async def list_runs(
     agent_name: str | None = None,
     status: str | None = None,
-    limit: int = 50,
+    limit: int = Query(default=50, le=200),
+    offset: int = 0,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     query = select(AgentRun).where(
         AgentRun.tenant_id == current_user.tenant_id
-    ).order_by(desc(AgentRun.started_at)).limit(limit)
+    ).order_by(desc(AgentRun.started_at)).offset(offset).limit(limit)
     if agent_name:
         query = query.where(AgentRun.agent_name == agent_name)
     if status:

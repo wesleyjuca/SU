@@ -23,6 +23,9 @@ COLLECTIONS: dict[str, dict] = {
             "area": PayloadSchemaType.KEYWORD,
             "tribunal": PayloadSchemaType.KEYWORD,
             "outcome": PayloadSchemaType.KEYWORD,
+            # Coleção privada (retrieval.py::PRIVATE_COLLECTIONS) — todo filtro
+            # de isolamento multi-tenant usa este campo, precisa de índice.
+            "tenant_id": PayloadSchemaType.KEYWORD,
         },
     },
     "doutrina": {
@@ -50,6 +53,8 @@ COLLECTIONS: dict[str, dict] = {
         "payload_fields": {
             "tipo": PayloadSchemaType.KEYWORD,
             "agent_source": PayloadSchemaType.KEYWORD,
+            # Coleção privada — ver nota em peticoes_afj acima.
+            "tenant_id": PayloadSchemaType.KEYWORD,
         },
     },
     "documentos_clientes": {
@@ -60,6 +65,8 @@ COLLECTIONS: dict[str, dict] = {
             "client_id": PayloadSchemaType.KEYWORD,
             "document_id": PayloadSchemaType.KEYWORD,
             "tipo": PayloadSchemaType.KEYWORD,
+            # Coleção privada — ver nota em peticoes_afj acima.
+            "tenant_id": PayloadSchemaType.KEYWORD,
         },
     },
     "documentacao_sistema": {
@@ -93,3 +100,17 @@ async def ensure_collections(qdrant_client):
                     field_name=field_name,
                     field_schema=field_type,
                 )
+        else:
+            # Fase 116 — coleção já existia antes do payload_fields ganhar
+            # campos novos (ex.: tenant_id nas privadas). create_payload_index
+            # é idempotente no Qdrant (recria o índice se já existir com o
+            # mesmo schema); best-effort para não travar o boot por um campo.
+            for field_name, field_type in config.get("payload_fields", {}).items():
+                try:
+                    await qdrant_client.create_payload_index(
+                        collection_name=name,
+                        field_name=field_name,
+                        field_schema=field_type,
+                    )
+                except Exception:
+                    pass

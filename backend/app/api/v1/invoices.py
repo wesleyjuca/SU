@@ -87,6 +87,8 @@ async def _get_invoice(db: AsyncSession, invoice_id: str, tenant_id) -> BillingI
 async def list_invoices(
     status: str | None = Query(default=None),
     client_id: str | None = Query(default=None),
+    limit: int = Query(default=50, le=200),
+    offset: int = 0,
     current_user: User = Depends(require_role("ADMIN", "SOCIO", "GESTOR")),
     db: AsyncSession = Depends(get_db),
 ):
@@ -95,7 +97,8 @@ async def list_invoices(
         q = q.where(BillingInvoice.status == status)
     if client_id:
         q = q.where(BillingInvoice.client_id == uuid.UUID(client_id))
-    invoices = (await db.execute(q.order_by(BillingInvoice.created_at.desc()))).scalars().all()
+    q = q.order_by(BillingInvoice.created_at.desc()).offset(offset).limit(limit)
+    invoices = (await db.execute(q)).scalars().all()
     nomes = {}
     cids = [inv.client_id for inv in invoices if inv.client_id]
     if cids:
