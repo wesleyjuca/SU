@@ -149,8 +149,9 @@ async def scan_publicacoes(db, tenant_id: uuid.UUID | None = None, dias_retro: i
                 }
                 if responsavel_id:
                     equipe_ids.add(responsavel_id)
+                from app.services.notification_service import publish_notification_ws
                 for uid in equipe_ids:
-                    db.add(Notification(
+                    notif = Notification(
                         user_id=uid,
                         tenant_id=t_id,
                         tipo="NOVO_ANDAMENTO",
@@ -158,7 +159,9 @@ async def scan_publicacoes(db, tenant_id: uuid.UUID | None = None, dias_retro: i
                         corpo=(c.tipo_comunicacao or "Intimação") + (f" · {c.tribunal}" if c.tribunal else "") + " — revise e defina o prazo.",
                         priority="HIGH",
                         link="/publicacoes",
-                    ))
+                    )
+                    db.add(notif)
+                    await publish_notification_ws(notif)
                 # WhatsApp best-effort para quem tem telefone cadastrado
                 if equipe_ids:
                     from app.models.user import User as _User

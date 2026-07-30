@@ -22,6 +22,23 @@ TIPOS_VALIDOS = {
 }
 
 
+async def publish_notification_ws(notif: Notification) -> None:
+    """Publica a notificação via WebSocket (Fase 118) — o sino de notificação
+    atualiza em tempo real em vez de depender só do polling de 60s do frontend.
+    Fail-soft: `publish_event` já não propaga erro (Redis indisponível vira
+    no-op). Chame logo após `db.add(notif)` — se `notif.id` ainda não foi
+    atribuído (sem flush), o frontend usa um id local até o próximo fetch."""
+    from app.api.v1.ws import publish_event
+    await publish_event(str(notif.user_id), "NOTIFICATION", {
+        "id": str(notif.id) if notif.id else None,
+        "tipo": notif.tipo,
+        "titulo": notif.titulo,
+        "corpo": notif.corpo,
+        "priority": notif.priority,
+        "link": notif.link,
+    })
+
+
 async def create_notification(
     db: AsyncSession,
     user_id: uuid.UUID,
@@ -44,6 +61,7 @@ async def create_notification(
     db.add(notif)
     await db.commit()
     await db.refresh(notif)
+    await publish_notification_ws(notif)
     log.info("notification_created", user_id=str(user_id), tipo=tipo)
     return notif
 
@@ -69,6 +87,7 @@ async def create_batch(
             link=link,
         )
         db.add(notif)
+        await publish_notification_ws(notif)
         count += 1
     await db.commit()
     log.info("notifications_batch_created", count=count, tipo=tipo)
