@@ -1030,6 +1030,27 @@ async def brain_metrics(current_user: User = Depends(require_role("SUPERADMIN"))
     return await coletar_metricas()
 
 
+class EmbeddingsCompareRequest(BaseModel):
+    queries: list[str]
+    documentos: list[str]
+
+
+@router.post("/brain/embeddings-compare")
+async def brain_embeddings_compare(
+    body: EmbeddingsCompareRequest,
+    current_user: User = Depends(require_role("SUPERADMIN")),
+):
+    """Fase 4.2 — compara qualidade de busca entre OpenAI (motor real de
+    produção, intocado) e BGE-M3 local (candidato). Indexa a amostra numa
+    collection Qdrant descartável (`_test_bge_m3`, 1024-dim) — nunca toca
+    nas 7 collections reais. Ferramenta de avaliação manual do SUPERADMIN
+    antes de decidir avançar para a Fase 4.3 (reindexação real)."""
+    from app.services.embeddings_compare import comparar_embeddings
+
+    await _audit_brain(current_user.id, "BRAIN_EMBEDDINGS_COMPARE")
+    return await comparar_embeddings(body.queries, body.documentos)
+
+
 @router.post("/brain/insights")
 async def brain_insights(
     current_user: User = Depends(require_role("SUPERADMIN")),

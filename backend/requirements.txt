@@ -92,6 +92,9 @@ redis==5.3.1
 regex==2026.5.9
 reportlab==4.5.1
 requests-toolbelt==1.0.0
+# Fase 4.2 — BGE-M3 local (validação em paralelo à OpenAI, POST /system/brain/embeddings-compare).
+# Dependência pesada (torch transitivo, ~1-2GB de imagem Docker) — não usada no caminho de produção.
+sentence-transformers==3.3.1
 requests==2.34.2
 rsa==4.9.1
 six==1.17.0
