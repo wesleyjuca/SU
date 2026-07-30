@@ -7,6 +7,7 @@ de uma 2ª collection de teste (3072-dim) só para isso.
 """
 import math
 
+import structlog
 from qdrant_client.models import Distance, PointStruct, VectorParams
 
 from app.db.qdrant import get_qdrant
@@ -14,6 +15,8 @@ from app.rag.embeddings import embed_batch, embed_text
 from app.rag.embeddings_local import EMBEDDING_DIMENSIONS_LOCAL, embed_batch_local, embed_text_local
 
 TEST_COLLECTION = "_test_bge_m3"
+
+log = structlog.get_logger()
 
 
 async def comparar_embeddings(queries: list[str], documentos: list[str]) -> dict:
@@ -97,40 +100,47 @@ async def reindexar_amostra_teste(collection_real: str, limite: int = 200) -> di
     if limite <= 0:
         return {"ok": False, "detail": "limite deve ser positivo"}
 
-    qdrant = await get_qdrant()
-    pontos, _ = await qdrant.scroll(
-        collection_name=collection_real, limit=limite, with_payload=True, with_vectors=False,
-    )
-    textos = [p.payload.get("text") for p in pontos if p.payload and p.payload.get("text")]
-    if not textos:
-        return {
-            "ok": False,
-            "detail": f"Nenhum ponto com texto encontrado em '{collection_real}' "
-                      "(collection vazia ou sem o campo 'text').",
-        }
-
-    test_collection = _test_collection_name(collection_real)
-    existentes = {c.name for c in (await qdrant.get_collections()).collections}
-    if test_collection not in existentes:
-        await qdrant.create_collection(
-            collection_name=test_collection,
-            vectors_config=VectorParams(size=EMBEDDING_DIMENSIONS_LOCAL, distance=Distance.COSINE),
+    try:
+        qdrant = await get_qdrant()
+        pontos, _ = await qdrant.scroll(
+            collection_name=collection_real, limit=limite, with_payload=True, with_vectors=False,
         )
+        textos = [p.payload.get("text") for p in pontos if p.payload and p.payload.get("text")]
+        if not textos:
+            return {
+                "ok": False,
+                "detail": f"Nenhum ponto com texto encontrado em '{collection_real}' "
+                          "(collection vazia ou sem o campo 'text').",
+            }
 
-    vetores = await embed_batch_local(textos)
-    novos_pontos = [
-        PointStruct(id=i, vector=vetores[i], payload={"text": textos[i]})
-        for i in range(len(textos))
-    ]
-    await qdrant.upsert(collection_name=test_collection, points=novos_pontos)
+        test_collection = _test_collection_name(collection_real)
+        existentes = {c.name for c in (await qdrant.get_collections()).collections}
+        if test_collection not in existentes:
+            await qdrant.create_collection(
+                collection_name=test_collection,
+                vectors_config=VectorParams(size=EMBEDDING_DIMENSIONS_LOCAL, distance=Distance.COSINE),
+            )
 
-    return {
-        "ok": True,
-        "collection_origem": collection_real,
-        "collection_teste": test_collection,
-        "pontos_lidos": len(pontos),
-        "pontos_reindexados": len(textos),
-    }
+        # embed_batch_local carrega o BGE-M3 (~4,6GB de pesos) na 1ª chamada —
+        # pode falhar por memória/disco/rede no servidor; nunca deve virar 500
+        # genérico pro SUPERADMIN, e sim uma mensagem que dá pra agir.
+        vetores = await embed_batch_local(textos)
+        novos_pontos = [
+            PointStruct(id=i, vector=vetores[i], payload={"text": textos[i]})
+            for i in range(len(textos))
+        ]
+        await qdrant.upsert(collection_name=test_collection, points=novos_pontos)
+
+        return {
+            "ok": True,
+            "collection_origem": collection_real,
+            "collection_teste": test_collection,
+            "pontos_lidos": len(pontos),
+            "pontos_reindexados": len(textos),
+        }
+    except Exception as exc:
+        log.warning("reindex_test_collection_falhou", collection=collection_real, error=str(exc))
+        return {"ok": False, "detail": f"Falha ao reindexar: {exc}"[:500]}
 
 
 async def buscar_teste(collection_real: str, query: str, limite: int = 5) -> dict:
@@ -141,21 +151,25 @@ async def buscar_teste(collection_real: str, query: str, limite: int = 5) -> dic
         return {"ok": False, "detail": "Informe uma query."}
 
     test_collection = _test_collection_name(collection_real)
-    qdrant = await get_qdrant()
-    existentes = {c.name for c in (await qdrant.get_collections()).collections}
-    if test_collection not in existentes:
-        return {
-            "ok": False,
-            "detail": f"Collection de teste '{test_collection}' ainda não existe — "
-                      "rode reindexar-test-collection primeiro.",
-        }
+    try:
+        qdrant = await get_qdrant()
+        existentes = {c.name for c in (await qdrant.get_collections()).collections}
+        if test_collection not in existentes:
+            return {
+                "ok": False,
+                "detail": f"Collection de teste '{test_collection}' ainda não existe — "
+                          "rode reindexar-test-collection primeiro.",
+            }
 
-    query_vector = await embed_text_local(query)
-    hits = await qdrant.search(
-        collection_name=test_collection, query_vector=query_vector, limit=limite, with_payload=True,
-    )
-    return {
-        "ok": True,
-        "collection_teste": test_collection,
-        "resultados": [{"text": h.payload.get("text", ""), "score": h.score} for h in hits],
-    }
+        query_vector = await embed_text_local(query)
+        hits = await qdrant.search(
+            collection_name=test_collection, query_vector=query_vector, limit=limite, with_payload=True,
+        )
+        return {
+            "ok": True,
+            "collection_teste": test_collection,
+            "resultados": [{"text": h.payload.get("text", ""), "score": h.score} for h in hits],
+        }
+    except Exception as exc:
+        log.warning("buscar_teste_falhou", collection=collection_real, error=str(exc))
+        return {"ok": False, "detail": f"Falha ao buscar: {exc}"[:500]}

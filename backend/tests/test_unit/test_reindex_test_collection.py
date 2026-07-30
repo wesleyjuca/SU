@@ -214,3 +214,55 @@ def test_buscar_teste_busca_na_collection_de_teste_correta():
     assert result["collection_teste"] == "_test_bge_m3_documentos_clientes"
     assert len(result["resultados"]) == 3
     assert fake.search_calls == ["_test_bge_m3_documentos_clientes"]
+
+
+def test_reindexar_amostra_teste_fail_soft_quando_embed_falha():
+    """Achado real em produção: embed_batch_local carrega o BGE-M3 (~4,6GB) na
+    1ª chamada — se isso falhar (memória/disco/rede), o endpoint HTTP devolvia
+    um 500 genérico sem nenhuma pista. Confirma que agora vira um erro com
+    `detail` acionável, nunca uma exceção não tratada."""
+    from app.services import embeddings_compare as ec
+
+    pontos = [_FakePoint({"text": "texto A"})]
+    fake = _FakeQdrant(scroll_points=pontos, existing_collections=set())
+    original_get_qdrant = ec.get_qdrant
+    original_embed_batch = ec.embed_batch_local
+    _patch_qdrant(ec, fake)
+
+    async def fake_embed_batch_falha(texts):
+        raise RuntimeError("não foi possível carregar o modelo BAAI/bge-m3 (sem memória/disco)")
+
+    ec.embed_batch_local = fake_embed_batch_falha
+    try:
+        result = asyncio.run(ec.reindexar_amostra_teste("peticoes_afj", limite=10))
+    finally:
+        ec.get_qdrant = original_get_qdrant
+        ec.embed_batch_local = original_embed_batch
+
+    assert result["ok"] is False
+    assert "bge-m3" in result["detail"].lower()
+    # Nunca escreveu na collection de teste com vetores incompletos/quebrados.
+    assert fake.upsert_calls == []
+
+
+def test_buscar_teste_fail_soft_quando_embed_falha():
+    from app.services import embeddings_compare as ec
+
+    fake = _FakeQdrant(existing_collections={"_test_bge_m3_peticoes_afj"})
+    original_get_qdrant = ec.get_qdrant
+    original_embed_text = ec.embed_text_local
+    _patch_qdrant(ec, fake)
+
+    async def fake_embed_text_falha(text):
+        raise RuntimeError("timeout ao carregar o modelo")
+
+    ec.embed_text_local = fake_embed_text_falha
+    try:
+        result = asyncio.run(ec.buscar_teste("peticoes_afj", "prazo recursal"))
+    finally:
+        ec.get_qdrant = original_get_qdrant
+        ec.embed_text_local = original_embed_text
+
+    assert result["ok"] is False
+    assert "timeout" in result["detail"].lower()
+    assert fake.search_calls == []
