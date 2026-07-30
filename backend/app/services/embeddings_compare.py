@@ -26,7 +26,7 @@ async def comparar_embeddings(queries: list[str], documentos: list[str]) -> dict
 
     qdrant = await get_qdrant()
 
-    existing = {c.name for c in await qdrant.get_collections()}
+    existing = {c.name for c in (await qdrant.get_collections()).collections}
     if TEST_COLLECTION not in existing:
         await qdrant.create_collection(
             collection_name=TEST_COLLECTION,
@@ -75,3 +75,87 @@ def _rank_por_cosseno(query_vec: list[float], doc_vecs: list[list[float]], docum
     scored = [(cos_sim(query_vec, doc_vecs[i]), documentos[i]) for i in range(len(documentos))]
     scored.sort(key=lambda x: x[0], reverse=True)
     return [{"text": text, "score": score} for score, text in scored[:5]]
+
+
+# ─── Fase 4.3 Parte 1 — reindexar amostra REAL das 7 collections num espaço
+# de teste BGE-M3, para validar qualidade contra o corpus de verdade (não só
+# amostras digitadas à mão, como o comparar_embeddings acima permite). Nunca
+# escreve nas collections reais — só lê (`scroll`), e só grava nas
+# descartáveis `_test_bge_m3_{collection}`.
+def _test_collection_name(collection_real: str) -> str:
+    return f"_test_bge_m3_{collection_real}"
+
+
+async def reindexar_amostra_teste(collection_real: str, limite: int = 200) -> dict:
+    """Lê até `limite` pontos da collection real (só leitura — nunca upsert/
+    delete nela) e reindexa o texto via BGE-M3 numa collection de teste
+    descartável. Devolve contagem lida/reindexada."""
+    from app.rag.collections import COLLECTIONS
+
+    if collection_real not in COLLECTIONS:
+        return {"ok": False, "detail": f"Collection desconhecida: {collection_real}"}
+    if limite <= 0:
+        return {"ok": False, "detail": "limite deve ser positivo"}
+
+    qdrant = await get_qdrant()
+    pontos, _ = await qdrant.scroll(
+        collection_name=collection_real, limit=limite, with_payload=True, with_vectors=False,
+    )
+    textos = [p.payload.get("text") for p in pontos if p.payload and p.payload.get("text")]
+    if not textos:
+        return {
+            "ok": False,
+            "detail": f"Nenhum ponto com texto encontrado em '{collection_real}' "
+                      "(collection vazia ou sem o campo 'text').",
+        }
+
+    test_collection = _test_collection_name(collection_real)
+    existentes = {c.name for c in (await qdrant.get_collections()).collections}
+    if test_collection not in existentes:
+        await qdrant.create_collection(
+            collection_name=test_collection,
+            vectors_config=VectorParams(size=EMBEDDING_DIMENSIONS_LOCAL, distance=Distance.COSINE),
+        )
+
+    vetores = await embed_batch_local(textos)
+    novos_pontos = [
+        PointStruct(id=i, vector=vetores[i], payload={"text": textos[i]})
+        for i in range(len(textos))
+    ]
+    await qdrant.upsert(collection_name=test_collection, points=novos_pontos)
+
+    return {
+        "ok": True,
+        "collection_origem": collection_real,
+        "collection_teste": test_collection,
+        "pontos_lidos": len(pontos),
+        "pontos_reindexados": len(textos),
+    }
+
+
+async def buscar_teste(collection_real: str, query: str, limite: int = 5) -> dict:
+    """Busca `query` (embedada via BGE-M3) na collection de teste já
+    reindexada por `reindexar_amostra_teste` — é como o SUPERADMIN avalia a
+    qualidade do BGE-M3 contra conteúdo real, sem tocar produção."""
+    if not query or not query.strip():
+        return {"ok": False, "detail": "Informe uma query."}
+
+    test_collection = _test_collection_name(collection_real)
+    qdrant = await get_qdrant()
+    existentes = {c.name for c in (await qdrant.get_collections()).collections}
+    if test_collection not in existentes:
+        return {
+            "ok": False,
+            "detail": f"Collection de teste '{test_collection}' ainda não existe — "
+                      "rode reindexar-test-collection primeiro.",
+        }
+
+    query_vector = await embed_text_local(query)
+    hits = await qdrant.search(
+        collection_name=test_collection, query_vector=query_vector, limit=limite, with_payload=True,
+    )
+    return {
+        "ok": True,
+        "collection_teste": test_collection,
+        "resultados": [{"text": h.payload.get("text", ""), "score": h.score} for h in hits],
+    }
