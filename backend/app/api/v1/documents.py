@@ -74,6 +74,7 @@ async def list_documents(
     status: str | None = None,
     process_id: str | None = None,
     limit: int = Query(default=50, le=200),
+    offset: int = 0,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -81,6 +82,7 @@ async def list_documents(
         select(Document)
         .where(Document.tenant_id == current_user.tenant_id)
         .order_by(desc(Document.created_at))
+        .offset(offset)
         .limit(limit)
     )
     if tipo:

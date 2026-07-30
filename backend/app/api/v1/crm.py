@@ -127,13 +127,16 @@ async def funil(current_user: User = Depends(_STAFF), db: AsyncSession = Depends
 @router.get("/opportunities")
 async def list_opps(
     estagio: str | None = Query(default=None),
+    limit: int = Query(default=50, le=200),
+    offset: int = 0,
     current_user: User = Depends(_STAFF),
     db: AsyncSession = Depends(get_db),
 ):
     q = select(Opportunity).where(Opportunity.tenant_id == current_user.tenant_id)
     if estagio:
         q = q.where(Opportunity.estagio == estagio)
-    opps = (await db.execute(q.order_by(Opportunity.created_at.desc()))).scalars().all()
+    q = q.order_by(Opportunity.created_at.desc()).offset(offset).limit(limit)
+    opps = (await db.execute(q)).scalars().all()
     nomes = await _nomes_clientes(db, opps, current_user.tenant_id)
     return [_to_dict(o, nomes.get(o.client_id)) for o in opps]
 

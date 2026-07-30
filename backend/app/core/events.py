@@ -182,6 +182,12 @@ async def lifespan(app: FastAPI):
             "CREATE INDEX IF NOT EXISTS ix_legal_processes_fonte ON legal_processes (fonte)",
             "UPDATE legal_processes SET fonte = 'OAB' WHERE fonte IS NULL AND metadata_json->>'fonte_captura' = 'OAB'",
             "UPDATE legal_processes SET fonte = 'MANUAL' WHERE fonte IS NULL",
+            # Fase 116 — audit_logs cresce a cada request de escrita (bem mais
+            # rápido que legal_processes) e só tinha índice em timestamp; toda
+            # consulta tenant-scoped (GET /audit, /audit/summary) forçava Seq
+            # Scan na tabela inteira. Validado empiricamente: ~25ms/query já
+            # com 100k linhas (2 tenants), tendência a piorar linearmente.
+            "CREATE INDEX IF NOT EXISTS idx_audit_tenant ON audit_logs (tenant_id, timestamp)",
         ]:
             try:
                 async with engine.begin() as conn:

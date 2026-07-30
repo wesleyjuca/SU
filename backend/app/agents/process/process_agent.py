@@ -20,6 +20,17 @@ import structlog
 log = structlog.get_logger()
 
 
+def per_tenant_poll_cap(batch_size: int, num_tenants: int) -> int:
+    """Fatia máxima do lote de polling que um único tenant pode ocupar.
+
+    Ceil division com piso 1 — nunca deixa um tenant sem nenhuma fatia
+    (num_tenants>0) nem estoura o batch_size mesmo com 1 tenant só.
+    """
+    if num_tenants <= 0:
+        return batch_size
+    return max(1, -(-batch_size // num_tenants))
+
+
 class ProcessAgent(BaseAgent):
     name: ClassVar[str] = "process_agent"
     description: ClassVar[str] = "Monitora processos judiciais e detecta andamentos, prazos e intimações"
@@ -166,18 +177,51 @@ class ProcessAgent(BaseAgent):
         db, owned = await self._get_db()
 
         try:
-            from sqlalchemy import select
+            from sqlalchemy import select, func, and_
+            from sqlalchemy.orm import aliased
             from app.models.process import LegalProcess
             from app.config import settings
 
-            result = await db.execute(
-                select(LegalProcess)
-                .where(
-                    LegalProcess.monitoring_active == True,
-                    LegalProcess.situacao != "ARQUIVADO",
+            batch_size = settings.PROCESS_POLLING_BATCH_SIZE
+            base_filter = and_(
+                LegalProcess.monitoring_active == True,
+                LegalProcess.situacao != "ARQUIVADO",
+            )
+
+            # Fase 116 — antes o lote global era ordenado só por urgência, sem
+            # garantir fatia por tenant: um escritório com muitos prazos
+            # próximos podia consumir 100% do lote e atrasar o polling do
+            # outro (confirmado empiricamente numa simulação de volume — um
+            # tenant chegou a monopolizar 50/50 do lote). Particiona por
+            # tenant via ROW_NUMBER, cap proporcional ao nº de tenants ativos,
+            # e só então aplica o LIMIT global — garante uma fatia mínima por
+            # tenant sem abrir mão de priorizar urgência dentro dela.
+            num_tenants_result = await db.execute(
+                select(func.count(func.distinct(LegalProcess.tenant_id))).where(base_filter)
+            )
+            num_tenants = num_tenants_result.scalar() or 1
+            per_tenant_cap = per_tenant_poll_cap(batch_size, num_tenants)
+
+            ranked = (
+                select(
+                    LegalProcess,
+                    func.row_number()
+                    .over(
+                        partition_by=LegalProcess.tenant_id,
+                        order_by=LegalProcess.proximo_prazo_at.asc().nulls_last(),
+                    )
+                    .label("rn"),
                 )
-                .order_by(LegalProcess.proximo_prazo_at.asc().nulls_last())
-                .limit(settings.PROCESS_POLLING_BATCH_SIZE)
+                .where(base_filter)
+                .subquery()
+            )
+            ranked_process = aliased(LegalProcess, ranked)
+
+            result = await db.execute(
+                select(ranked_process)
+                .where(ranked.c.rn <= per_tenant_cap)
+                .order_by(ranked.c.proximo_prazo_at.asc().nulls_last())
+                .limit(batch_size)
             )
             processos = result.scalars().all()
         finally:

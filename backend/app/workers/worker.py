@@ -12,6 +12,7 @@ celery_app = Celery(
         "app.workers.tasks.deadline_check",
         "app.workers.tasks.agent_tasks",
         "app.workers.tasks.ocr_tasks",
+        "app.workers.tasks.session_cleanup",
     ],
 )
 
@@ -40,5 +41,10 @@ celery_app.conf.beat_schedule = {
     "scan-publications": {
         "task": "app.workers.tasks.deadline_check.scan_daily_publications",
         "schedule": crontab(hour=7, minute=30),
+    },
+    # Limpeza de sessões expiradas (semanal, madrugada de domingo — baixo custo)
+    "cleanup-sessions": {
+        "task": "app.workers.tasks.session_cleanup.cleanup_expired_sessions",
+        "schedule": crontab(hour=3, minute=0, day_of_week=0),
     },
 }

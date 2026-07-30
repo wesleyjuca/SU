@@ -137,3 +137,26 @@ O deploy de produção em si **não** passa pelo GitHub Actions:
 Secrets do **GitHub Actions** (usados pelos workflows acima): `VERCEL_TOKEN`, `RAILWAY_URL` (não-secreta, só a URL do backend pra build do frontend).
 
 Secrets de **runtime da aplicação** (configurados direto na plataforma — Railway dashboard ou `.env.prod` no self-host, NÃO no GitHub Actions): `SECRET_KEY`, `ENCRYPTION_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `DATABASE_URL`, `REDIS_URL`, `QDRANT_URL`/`QDRANT_API_KEY`.
+
+## Riscos conhecidos / débito técnico
+
+Achados de uma simulação de volume (2 escritórios, ~10 processos/dia, 1 ano —
+Fase 116) que exigem decisão de produto/jurídica antes de qualquer mudança
+de código, por isso ficam só documentados aqui, não implementados:
+
+- **Storage de documentos** — `Document.arquivo_url` grava o arquivo inteiro
+  como base64 dentro do Postgres (`Text`, via TOAST), sem object storage
+  (S3/MinIO). Em uso sustentado por 1+ ano isso pode chegar a dezenas de GB
+  no próprio banco (infla tamanho de tabela, tempo de `VACUUM`, tamanho de
+  backup/dump). Migrar para armazenamento de objeto é a solução padrão da
+  indústria pra esse padrão de uso, mas é mudança de contrato de API — fica
+  pra quando o volume real justificar, não antecipar sem necessidade.
+- **Retenção de auditoria (LGPD)** — `audit_logs` é imutável por trigger de
+  banco (`trg_audit_logs_immutable`) e cresce indefinidamente (1 linha por
+  request de escrita, não só por evento de negócio) — sem qualquer rotina de
+  expurgo/arquivamento. A LGPD pede retenção limitada de dados pessoais (o
+  payload pode conter IP, user_agent, `old_value`/`new_value` em JSONB), o
+  que tensiona com esse design. Definir um prazo de retenção e um mecanismo
+  de arquivamento (a tabela não aceita `DELETE` direto por causa do trigger)
+  é uma decisão que precisa de orientação jurídica do escritório antes de
+  qualquer implementação — não decidir um prazo arbitrário sem essa validação.
