@@ -44,7 +44,7 @@ class _FakeNotification:
 
 
 def test_publish_notification_ws_envia_evento_para_o_user_certo():
-    from app.services import notification_service as ns
+    from app.services import notification as ns
     _fake_ws_calls().clear()
 
     uid = uuid.uuid4()
@@ -66,7 +66,7 @@ def test_publish_notification_ws_envia_evento_para_o_user_certo():
 def test_publish_notification_ws_sem_id_flushed_manda_none():
     """Chamado logo após db.add(), antes do flush — id ainda não foi atribuído
     pelo Postgres. O evento sai com id=None; o frontend cai no fallback local."""
-    from app.services import notification_service as ns
+    from app.services import notification as ns
     _fake_ws_calls().clear()
 
     notif = _FakeNotification(user_id=uuid.uuid4(), id=None)
@@ -76,7 +76,7 @@ def test_publish_notification_ws_sem_id_flushed_manda_none():
 
 
 def test_create_notification_publica_apos_persistir():
-    from app.services import notification_service as ns
+    from app.services import notification as ns
     _fake_ws_calls().clear()
 
     class _FakeDB:
@@ -100,7 +100,7 @@ def test_create_notification_publica_apos_persistir():
 
 
 def test_create_batch_publica_uma_vez_por_usuario():
-    from app.services import notification_service as ns
+    from app.services import notification as ns
     _fake_ws_calls().clear()
 
     class _FakeDB:
@@ -124,7 +124,7 @@ def test_notify_tenant_of_approval_publica_para_cada_usuario_da_query():
     CLIENT and is_active) — aqui confirmamos que _notify_tenant_of_approval
     publica exatamente para quem a query devolver, um evento por usuário,
     com o approval_id/tipo/titulo/prioridade corretos."""
-    from app.services import approval_service as aps
+    from app.services import approval as aps
     _fake_ws_calls().clear()
 
     staff_ids = [uuid.uuid4(), uuid.uuid4()]
@@ -163,7 +163,7 @@ def test_notify_tenant_of_approval_publica_para_cada_usuario_da_query():
 
 
 def test_notify_tenant_of_approval_sem_staff_nao_publica_nada():
-    from app.services import approval_service as aps
+    from app.services import approval as aps
     _fake_ws_calls().clear()
 
     class _FakeScalarsResult:
@@ -193,7 +193,7 @@ def test_create_approval_from_state_chama_notify_tenant():
     """Guarda de regressão: create_approval_from_state (chamado após todo run de
     agente que termina em pending_approval) dispara a notificação em tempo real,
     sem alterar o retorno (approval.id) nem o invariante HITL (status=PENDENTE)."""
-    from app.services import approval_service as aps
+    from app.services import approval as aps
 
     notified = []
 
@@ -228,7 +228,7 @@ def test_create_approval_from_state_chama_notify_tenant():
 
 
 def test_create_approval_from_state_sem_pending_approval_nao_notifica():
-    from app.services import approval_service as aps
+    from app.services import approval as aps
     notified = []
 
     async def fake_notify(db, approval):

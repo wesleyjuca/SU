@@ -788,7 +788,7 @@ async def generate_petition(
     # petição gerada aqui nunca aparecia em /aprovacoes.
     approval_id = None
     if result.status.value == "AWAITING_APPROVAL" or result.needs_approval:
-        from app.services.approval_service import create_approval_from_state
+        from app.services.approval import create_approval_from_state
         approval_id = await create_approval_from_state(db, agent_run, {
             "pending_approval": {
                 "tipo": "PETICAO",

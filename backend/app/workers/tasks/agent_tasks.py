@@ -125,7 +125,7 @@ async def _run_async(
             agent_run.requires_approval = ctx.requires_approval
             # HITL: cria o Approval PENDENTE na mesma transação (não p/ run cancelado)
             if not canceled and status == "AWAITING_APPROVAL":
-                from app.services.approval_service import create_approval_from_state
+                from app.services.approval import create_approval_from_state
                 await create_approval_from_state(db, agent_run, final_state)
             await db.commit()
             status = agent_run.status  # reflete o status realmente persistido

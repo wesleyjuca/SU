@@ -16,7 +16,7 @@ def check_upcoming_deadlines(self):
         from app.db.base import AsyncSessionLocal
         from app.models.process import ProcessDeadline
         from app.models.notification import Notification
-        from app.services.notification_service import publish_notification_ws
+        from app.services.notification import publish_notification_ws
 
         async with AsyncSessionLocal() as db:
             today = date.today()

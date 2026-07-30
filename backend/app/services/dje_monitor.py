@@ -149,7 +149,7 @@ async def scan_publicacoes(db, tenant_id: uuid.UUID | None = None, dias_retro: i
                 }
                 if responsavel_id:
                     equipe_ids.add(responsavel_id)
-                from app.services.notification_service import publish_notification_ws
+                from app.services.notification import publish_notification_ws
                 for uid in equipe_ids:
                     notif = Notification(
                         user_id=uid,

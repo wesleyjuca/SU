@@ -33,7 +33,7 @@ async def notificar_equipe_andamento(db, process, qtd: int, com_prazo: bool = Fa
     corpo = (f"{qtd} novo(s) andamento(s) no processo — "
              + ("⚠ inclui possível prazo, verifique." if com_prazo
                 else "confira e verifique possíveis prazos."))
-    from app.services.notification_service import publish_notification_ws
+    from app.services.notification import publish_notification_ws
 
     for uid in equipe_ids:
         notif = Notification(

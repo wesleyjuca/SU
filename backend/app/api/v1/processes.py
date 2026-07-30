@@ -763,7 +763,7 @@ async def reatribuir_carteira(
 
     # 3. Notifica o advogado de destino
     if afetados:
-        from app.services.notification_service import publish_notification_ws
+        from app.services.notification import publish_notification_ws
         notif = Notification(
             user_id=para,
             tenant_id=current_user.tenant_id,

@@ -1,11 +1,19 @@
 """Unit tests para o serviço HITL (criação de Approval + execução aprovada)."""
 import uuid
-from app.services.approval_service import (
+from app.services.approval import (
     create_approval_from_state,
     execute_approved_action,
     mark_rejected_action,
 )
 from app.agents.base.result import AgentResult, AgentStatus
+
+
+class _FakeScalarsEmpty:
+    def scalars(self):
+        class _S:
+            def all(self_inner):
+                return []
+        return _S()
 
 
 class _FakeDBAdd:
@@ -14,6 +22,11 @@ class _FakeDBAdd:
 
     def add(self, o):
         self.added.append(o)
+
+    async def execute(self, stmt):
+        # create_approval_from_state (Fase 118) consulta os colaboradores do
+        # tenant pra notificar via WS — sem staff cadastrado aqui, no-op.
+        return _FakeScalarsEmpty()
 
     async def flush(self):
         pass

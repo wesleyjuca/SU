@@ -358,7 +358,7 @@ async def portal_send_message(
     # Notifica o advogado responsável; sem responsável, todos os ADMINs ativos.
     # Falha aqui não derruba o envio da mensagem.
     try:
-        from app.services.notification_service import create_notification
+        from app.services.notification import create_notification
         client = (await db.execute(select(Client).where(Client.id == client_id))).scalar_one_or_none()
         nome_cliente = (client.razao_social or client.nome_completo) if client else "Cliente"
         destinatarios: list[uuid.UUID] = []

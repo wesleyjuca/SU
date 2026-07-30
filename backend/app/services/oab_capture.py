@@ -276,7 +276,7 @@ async def capturar_por_oab(
     await _enriquecer_partes(db, tenant_id, novos[:40])
 
     if triggered_by and criados:
-        from app.services.notification_service import publish_notification_ws
+        from app.services.notification import publish_notification_ws
         notif = Notification(
             user_id=triggered_by,
             tenant_id=tenant_id,
