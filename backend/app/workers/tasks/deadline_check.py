@@ -16,6 +16,7 @@ def check_upcoming_deadlines(self):
         from app.db.base import AsyncSessionLocal
         from app.models.process import ProcessDeadline
         from app.models.notification import Notification
+        from app.services.notification_service import publish_notification_ws
 
         async with AsyncSessionLocal() as db:
             today = date.today()
@@ -54,6 +55,7 @@ def check_upcoming_deadlines(self):
                     link=f"/processos/{prazo.process_id}",
                 )
                 db.add(notif)
+                await publish_notification_ws(notif)
                 total_notificacoes += 1
                 # Marca TODAS as faixas já cruzadas (evita reenvio diário)
                 prazo.alertas_enviados = sorted(enviados | set(aplicaveis))
@@ -108,14 +110,16 @@ def check_upcoming_deadlines(self):
                     if not created_by:
                         continue
                     sufixo = " (renovação automática)" if contrato.renovacao_auto else ""
-                    db.add(Notification(
+                    notif_contrato = Notification(
                         user_id=created_by,
                         tipo="CONTRATO_VENCENDO",
                         titulo=f"Contrato vence em {dias} dias: {(titulo or 'Contrato')[:70]}",
                         corpo=f"Vencimento: {contrato.data_fim.date() if contrato.data_fim else '—'}{sufixo}",
                         priority="HIGH" if dias <= 7 else "NORMAL",
                         link="/contratos",
-                    ))
+                    )
+                    db.add(notif_contrato)
+                    await publish_notification_ws(notif_contrato)
                     contratos_notif += 1
             total_notificacoes += contratos_notif
 

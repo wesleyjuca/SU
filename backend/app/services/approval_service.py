@@ -46,7 +46,33 @@ async def create_approval_from_state(db, agent_run, final_state) -> "uuid.UUID |
     db.add(approval)
     await db.flush()
     log.info("approval_created", run_id=str(agent_run.id), tipo=approval.tipo, approval_id=str(approval.id))
+    await _notify_tenant_of_approval(db, approval)
     return approval.id
+
+
+async def _notify_tenant_of_approval(db, approval) -> None:
+    """Publica NEW_APPROVAL_PENDING (Fase 118) para todo colaborador do escritório
+    (mesmo escopo de visibilidade de `GET /approvals` — tenant inteiro, sem
+    filtro de papel; só a resolução exige ADVOGADO/SOCIO/ADMIN). Fail-soft:
+    `publish_event` já não propaga erro."""
+    from sqlalchemy import select
+    from app.models.user import User
+    from app.api.v1.ws import publish_event
+
+    user_ids = (await db.execute(
+        select(User.id).where(
+            User.tenant_id == approval.tenant_id,
+            User.role != "CLIENT",
+            User.is_active == True,  # noqa: E712
+        )
+    )).scalars().all()
+    for uid in user_ids:
+        await publish_event(str(uid), "NEW_APPROVAL_PENDING", {
+            "approval_id": str(approval.id),
+            "tipo": approval.tipo,
+            "titulo": approval.titulo,
+            "prioridade": approval.prioridade,
+        })
 
 
 async def execute_approved_action(db, approval, modifications: dict | None = None) -> dict:

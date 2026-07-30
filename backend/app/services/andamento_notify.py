@@ -33,8 +33,10 @@ async def notificar_equipe_andamento(db, process, qtd: int, com_prazo: bool = Fa
     corpo = (f"{qtd} novo(s) andamento(s) no processo — "
              + ("⚠ inclui possível prazo, verifique." if com_prazo
                 else "confira e verifique possíveis prazos."))
+    from app.services.notification_service import publish_notification_ws
+
     for uid in equipe_ids:
-        db.add(Notification(
+        notif = Notification(
             user_id=uid,
             tenant_id=process.tenant_id,
             tipo="NOVO_ANDAMENTO",
@@ -42,5 +44,7 @@ async def notificar_equipe_andamento(db, process, qtd: int, com_prazo: bool = Fa
             corpo=corpo,
             priority="HIGH",
             link=f"/processos/{process.id}",
-        ))
+        )
+        db.add(notif)
+        await publish_notification_ws(notif)
     return len(equipe_ids)

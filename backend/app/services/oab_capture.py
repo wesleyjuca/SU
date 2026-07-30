@@ -276,7 +276,8 @@ async def capturar_por_oab(
     await _enriquecer_partes(db, tenant_id, novos[:40])
 
     if triggered_by and criados:
-        db.add(Notification(
+        from app.services.notification_service import publish_notification_ws
+        notif = Notification(
             user_id=triggered_by,
             tenant_id=tenant_id,
             tipo="NOVO_ANDAMENTO",
@@ -284,7 +285,9 @@ async def capturar_por_oab(
             corpo=f"{criados} novo(s) processo(s) capturado(s) pelas OABs do escritório.",
             priority="NORMAL",
             link="/processos",
-        ))
+        )
+        db.add(notif)
+        await publish_notification_ws(notif)
 
     resultado = {
         "oabs": len(oabs),

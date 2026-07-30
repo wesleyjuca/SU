@@ -763,7 +763,8 @@ async def reatribuir_carteira(
 
     # 3. Notifica o advogado de destino
     if afetados:
-        db.add(Notification(
+        from app.services.notification_service import publish_notification_ws
+        notif = Notification(
             user_id=para,
             tenant_id=current_user.tenant_id,
             tipo="NOVO_ANDAMENTO",
@@ -773,7 +774,9 @@ async def reatribuir_carteira(
                    + f" foram transferidos de {nomes.get(de, 'outro advogado')}."),
             priority="HIGH",
             link="/minha-area",
-        ))
+        )
+        db.add(notif)
+        await publish_notification_ws(notif)
 
     await db.commit()
     return {
