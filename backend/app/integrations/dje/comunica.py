@@ -141,7 +141,17 @@ async def buscar_comunicacoes(
 
     out: list[Comunicacao] = []
     try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        async with httpx.AsyncClient(
+            timeout=_TIMEOUT,
+            headers={
+                # httpx exige header value ASCII/latin-1 por padrão (RFC 7230) —
+                # string acentuada aqui já quebrou silenciosamente em
+                # tribunais/base.py (mesmo bug, corrigido junto nesta fase).
+                "User-Agent": "AFJ-Core/1.0 (Sistema interno de escritorio de advocacia)",
+                "Accept": "application/json",
+            },
+            follow_redirects=True,
+        ) as client:
             for pagina in range(1, max(1, max_paginas) + 1):
                 params = {
                     "numeroOab": numero,
