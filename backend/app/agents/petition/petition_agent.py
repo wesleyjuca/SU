@@ -11,6 +11,7 @@ Fluxo:
   7. Cria Document + Petition no DB
   8. Seta requires_approval = True → aguarda validação humana
 """
+import time
 import uuid
 from typing import ClassVar
 
@@ -82,12 +83,19 @@ INSTRUÇÕES ESPECÍFICAS DO ADVOGADO:
 Gere a petição completa seguindo o template e as regras absolutas do sistema."""
 
         # 5. Chamar Claude
+        call_start_ms = int(time.time() * 1000)
         content, input_tokens, output_tokens, cost = await call_claude(
             messages=[{"role": "user", "content": prompt_usuario}],
             system=PETITION_SYSTEM_PROMPT,
             max_tokens=8000,
             temperature=0.2,  # baixíssima temperatura para consistência jurídica
         )
+        duration_ms = int(time.time() * 1000) - call_start_ms
+        ctx.add_tokens(input_tokens + output_tokens, cost)
+        ctx.add_audit_event("LLM_CALL", {
+            "model": "default", "tokens": input_tokens + output_tokens,
+            "cost_usd": round(cost, 4), "duration_ms": duration_ms,
+        })
 
         total_tokens = input_tokens + output_tokens
 

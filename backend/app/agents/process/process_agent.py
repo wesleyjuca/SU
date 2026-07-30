@@ -9,6 +9,7 @@ Polling agendado via Celery Beat. Detecta:
 """
 from typing import ClassVar
 from datetime import datetime, timezone
+import time
 import uuid
 
 from app.agents.base.agent import BaseAgent
@@ -87,7 +88,7 @@ class ProcessAgent(BaseAgent):
         for mov in movimentos:
             resumo = ""
             if settings.POLL_AI_SUMMARY:
-                resumo, tokens, _, cost = await self._resumir_movimento({"descricao": mov.descricao})
+                resumo, tokens, _, cost = await self._resumir_movimento(ctx, {"descricao": mov.descricao})
                 total_tokens += tokens
                 total_cost += cost
             movimentos_com_resumo.append({
@@ -331,17 +332,24 @@ class ProcessAgent(BaseAgent):
             output={"oab": oab, "uf": uf, **resultado},
         )
 
-    async def _resumir_movimento(self, movimento: dict) -> tuple[str, int, int, float]:
+    async def _resumir_movimento(self, ctx: AgentContext, movimento: dict) -> tuple[str, int, int, float]:
         """Gera resumo IA de um andamento processual (2-3 frases)."""
         descricao = movimento.get("descricao", "")
         if not descricao or len(descricao) < 50:
             return descricao, 0, 0, 0.0
 
+        call_start_ms = int(time.time() * 1000)
         content, input_t, output_t, cost = await call_claude(
             messages=[{"role": "user", "content": f"Resuma este andamento processual em 2-3 frases objetivas para um advogado:\n\n{descricao[:2000]}"}],
             system="Você é assistente jurídico. Seja objetivo e técnico. Destaque prazos e obrigações.",
             max_tokens=200,
         )
+        duration_ms = int(time.time() * 1000) - call_start_ms
+        ctx.add_tokens(input_t + output_t, cost)
+        ctx.add_audit_event("LLM_CALL", {
+            "model": "default", "tokens": input_t + output_t,
+            "cost_usd": round(cost, 4), "duration_ms": duration_ms,
+        })
         return content, input_t + output_t, output_t, cost
 
     async def _detectar_prazos(self, movimentos: list[dict]) -> list[dict]:

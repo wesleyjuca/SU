@@ -4,6 +4,7 @@ strategy_agent — Análise estratégica jurídica.
 Analisa o caso, identifica teses viáveis, avalia riscos e propõe
 a melhor linha de atuação baseada em dados reais do processo e jurisprudência.
 """
+import time
 from typing import ClassVar
 from app.agents.base.agent import BaseAgent
 from app.agents.base.result import AgentResult, AgentStatus
@@ -82,12 +83,19 @@ Produza uma análise estratégica completa com:
 5. Riscos e mitigações
 6. Documentos e provas prioritários"""
 
+        call_start_ms = int(time.time() * 1000)
         content, input_t, output_t, cost = await call_claude(
             messages=[{"role": "user", "content": prompt}],
             system=STRATEGY_SYSTEM,
             max_tokens=4000,
             temperature=0.4,
         )
+        duration_ms = int(time.time() * 1000) - call_start_ms
+        ctx.add_tokens(input_t + output_t, cost)
+        ctx.add_audit_event("LLM_CALL", {
+            "model": "default", "tokens": input_t + output_t,
+            "cost_usd": round(cost, 4), "duration_ms": duration_ms,
+        })
 
         # Salvar estratégia na memória institucional
         await self.remember(

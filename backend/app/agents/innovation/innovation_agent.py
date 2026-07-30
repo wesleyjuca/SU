@@ -1,4 +1,5 @@
 """innovation_agent — Detecta gargalos e propõe melhorias ao sistema AFJ."""
+import time
 from typing import ClassVar
 from datetime import datetime, timezone
 from app.agents.base.agent import BaseAgent
@@ -24,7 +25,7 @@ class InnovationAgent(BaseAgent):
         foco = task.get("foco", "geral")  # geral, agentes, ux, integrações, processos
 
         metricas = await self._coletar_metricas(ctx)
-        proposta = await self._gerar_proposta(ctx, foco, metricas)
+        proposta, tokens_used, cost_usd = await self._gerar_proposta(ctx, foco, metricas)
 
         await self.remember(
             ctx,
@@ -43,6 +44,8 @@ class InnovationAgent(BaseAgent):
                 "gerado_em": datetime.now(timezone.utc).isoformat(),
                 "aviso": "Proposta gerada automaticamente. Avalie antes de implementar.",
             },
+            tokens_used=tokens_used,
+            cost_usd=cost_usd,
         )
 
     async def _coletar_metricas(self, ctx: AgentContext) -> dict:
@@ -66,7 +69,7 @@ class InnovationAgent(BaseAgent):
         except Exception:
             return {}
 
-    async def _gerar_proposta(self, ctx: AgentContext, foco: str, metricas: dict) -> str:
+    async def _gerar_proposta(self, ctx: AgentContext, foco: str, metricas: dict) -> tuple[str, int, float]:
         metricas_str = "\n".join([f"  {k}: {v}" for k, v in list(metricas.items())[:15]]) or "Sem dados ainda"
 
         prompt = f"""Analise o AFJ CORE SYSTEM e proponha melhorias com foco em: {foco}
@@ -83,12 +86,19 @@ Baseado no estado atual do sistema (19 agentes, LangGraph, RAG, HITL), proponha:
 
 Priorize por: impacto no escritório × facilidade de implementação."""
 
-        content, _, _, _ = await call_claude(
+        call_start_ms = int(time.time() * 1000)
+        content, input_t, output_t, cost = await call_claude(
             messages=[{"role": "user", "content": prompt}],
             system=INNOVATION_SYSTEM,
             max_tokens=2000,
         )
-        return content
+        duration_ms = int(time.time() * 1000) - call_start_ms
+        ctx.add_tokens(input_t + output_t, cost)
+        ctx.add_audit_event("LLM_CALL", {
+            "model": "default", "tokens": input_t + output_t,
+            "cost_usd": round(cost, 4), "duration_ms": duration_ms,
+        })
+        return content, input_t + output_t, cost
 
     async def _register_tools(self):
         return []

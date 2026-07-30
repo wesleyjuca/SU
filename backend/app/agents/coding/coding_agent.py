@@ -1,4 +1,5 @@
 """coding_agent — Geração e revisão de código para o sistema AFJ."""
+import time
 from typing import ClassVar
 from app.agents.base.agent import BaseAgent
 from app.agents.base.result import AgentResult, AgentStatus
@@ -47,12 +48,19 @@ Retorne:
 3. Como integrar ao sistema existente
 4. Testes unitários sugeridos"""
 
+        call_start_ms = int(time.time() * 1000)
         content, input_t, output_t, cost = await call_claude(
             messages=[{"role": "user", "content": prompt}],
             system=CODING_SYSTEM,
             max_tokens=4000,
             temperature=0.1,
         )
+        duration_ms = int(time.time() * 1000) - call_start_ms
+        ctx.add_tokens(input_t + output_t, cost)
+        ctx.add_audit_event("LLM_CALL", {
+            "model": "default", "tokens": input_t + output_t,
+            "cost_usd": round(cost, 4), "duration_ms": duration_ms,
+        })
 
         return AgentResult(
             status=AgentStatus.AWAITING_APPROVAL,
