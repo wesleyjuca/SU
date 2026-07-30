@@ -1,0 +1,336 @@
+"""Fase 117 — OAuth genérico do hub de integrações (Stripe Connect / Mercado Pago).
+
+`app.core.crypto` importa `cryptography.fernet`, que neste sandbox derruba o
+interpretador (bug conhecido `cryptography`/PyO3 — mesma classe de problema que já
+bloqueia `pytest` direto neste ambiente, via `conftest.py` -> `app.main` -> ...
+-> `cryptography`). Injeta um `cryptography.fernet.Fernet` fake em `sys.modules`
+antes do import — testa a lógica real de OAuth (build_oauth_url/exchange/refresh/
+get_credentials) sem depender do pacote real, que segue instalado e funcional em
+produção/CI (só este sandbox tem o bug de import)."""
+import asyncio
+import sys
+import types
+from datetime import datetime, timedelta, timezone
+
+
+def setup_module(module):
+    if "cryptography" in sys.modules:
+        return
+    fake_crypto = types.ModuleType("cryptography")
+    fake_fernet_mod = types.ModuleType("cryptography.fernet")
+
+    class InvalidToken(Exception):
+        pass
+
+    class Fernet:
+        def __init__(self, key):
+            self.key = key
+
+        @staticmethod
+        def generate_key():
+            return b"0" * 32
+
+        def encrypt(self, data):
+            return b"ENC:" + data
+
+        def decrypt(self, token):
+            if not token.startswith(b"ENC:"):
+                raise InvalidToken()
+            return token[4:]
+
+    fake_fernet_mod.Fernet = Fernet
+    fake_fernet_mod.InvalidToken = InvalidToken
+    fake_crypto.fernet = fake_fernet_mod
+    sys.modules["cryptography"] = fake_crypto
+    sys.modules["cryptography.fernet"] = fake_fernet_mod
+
+
+class _FakeResponse:
+    def __init__(self, json_data, status_code=200):
+        self._json = json_data
+        self.status_code = status_code
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}")
+
+    def json(self):
+        return self._json
+
+
+class _FakeAsyncClient:
+    calls = []
+    next_response = None
+
+    def __init__(self, timeout=None):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def post(self, url, data=None):
+        _FakeAsyncClient.calls.append((url, data))
+        return _FakeAsyncClient.next_response
+
+
+def _limpar_settings_oauth():
+    from app.config import settings
+    for prefix in ("STRIPE_OAUTH_", "MERCADOPAGO_OAUTH_"):
+        for suffix in ("CLIENT_ID", "CLIENT_SECRET", "REDIRECT_URI"):
+            setattr(settings, f"{prefix}{suffix}", "")
+
+
+def test_is_oauth_configured_falso_sem_settings():
+    from app.services import integration_hub as ih
+    _limpar_settings_oauth()
+    assert ih.is_oauth_configured("stripe") is False
+    assert ih.is_oauth_configured("mercadopago") is False
+    assert ih.is_oauth_configured("provedor_inexistente") is False
+
+
+def test_is_oauth_configured_true_com_settings():
+    from app.services import integration_hub as ih
+    from app.config import settings
+    _limpar_settings_oauth()
+    settings.STRIPE_OAUTH_CLIENT_ID = "cid"
+    settings.STRIPE_OAUTH_CLIENT_SECRET = "csecret"
+    settings.STRIPE_OAUTH_REDIRECT_URI = "https://api.example.com/cb"
+    assert ih.is_oauth_configured("stripe") is True
+    _limpar_settings_oauth()
+
+
+def test_build_oauth_url_stripe():
+    from app.services import integration_hub as ih
+    from app.config import settings
+    _limpar_settings_oauth()
+    settings.STRIPE_OAUTH_CLIENT_ID = "cid123"
+    settings.STRIPE_OAUTH_REDIRECT_URI = "https://api.example.com/cb"
+    url = ih.build_oauth_url("stripe", "signed-state")
+    assert url.startswith("https://connect.stripe.com/oauth/authorize?")
+    assert "client_id=cid123" in url
+    assert "state=signed-state" in url
+    assert "scope=read_write" in url
+    _limpar_settings_oauth()
+
+
+def test_build_oauth_url_mercadopago_inclui_platform_id():
+    from app.services import integration_hub as ih
+    from app.config import settings
+    _limpar_settings_oauth()
+    settings.MERCADOPAGO_OAUTH_CLIENT_ID = "mpid"
+    settings.MERCADOPAGO_OAUTH_REDIRECT_URI = "https://api.example.com/cb"
+    url = ih.build_oauth_url("mercadopago", "state2")
+    assert "platform_id=mp" in url
+    assert "client_id=mpid" in url
+    _limpar_settings_oauth()
+
+
+def test_exchange_oauth_code_chama_token_url_correto():
+    from app.services import integration_hub as ih
+    _FakeAsyncClient.calls = []
+    _FakeAsyncClient.next_response = _FakeResponse({"access_token": "tok_abc", "refresh_token": "ref_abc"})
+    original_client = ih.httpx.AsyncClient
+    ih.httpx.AsyncClient = _FakeAsyncClient
+    try:
+        result = asyncio.run(ih.exchange_oauth_code("stripe", "auth_code_1"))
+    finally:
+        ih.httpx.AsyncClient = original_client
+
+    assert result["access_token"] == "tok_abc"
+    url, data = _FakeAsyncClient.calls[0]
+    assert url == "https://connect.stripe.com/oauth/token"
+    assert data["code"] == "auth_code_1"
+    assert data["grant_type"] == "authorization_code"
+
+
+def test_oauth_tokens_to_credentials_marca_oauth_e_usa_token_field_certo():
+    from app.services import integration_hub as ih
+    creds_stripe = ih._oauth_tokens_to_credentials("stripe", {"access_token": "sk_live_x"})
+    assert creds_stripe == {"__oauth__": True, "secret_key": "sk_live_x", "oauth_refresh_token": None}
+
+    creds_mp = ih._oauth_tokens_to_credentials(
+        "mercadopago", {"access_token": "APP_USR-x", "refresh_token": "r1", "expires_in": 3600},
+    )
+    assert creds_mp["__oauth__"] is True
+    assert creds_mp["access_token"] == "APP_USR-x"
+    assert creds_mp["oauth_refresh_token"] == "r1"
+    assert "oauth_expires_at" in creds_mp
+
+
+def test_refresh_oauth_if_needed_sem_expires_at_e_noop_stripe():
+    """Stripe nunca expõe oauth_expires_at (token não expira) — refresh vira no-op."""
+    from app.services import integration_hub as ih
+
+    class _FakeInteg:
+        tenant_id = "t1"
+
+    creds = {"__oauth__": True, "secret_key": "sk_x", "oauth_refresh_token": None}
+    result = asyncio.run(ih._refresh_oauth_if_needed(None, _FakeInteg(), "stripe", creds))
+    assert result == creds
+
+
+def test_refresh_oauth_if_needed_token_ainda_valido_nao_renova():
+    from app.services import integration_hub as ih
+
+    class _FakeInteg:
+        tenant_id = "t1"
+
+    futuro = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
+    creds = {"__oauth__": True, "access_token": "tok_atual", "oauth_refresh_token": "r1", "oauth_expires_at": futuro}
+    result = asyncio.run(ih._refresh_oauth_if_needed(None, _FakeInteg(), "mercadopago", creds))
+    assert result["access_token"] == "tok_atual"
+
+
+def test_refresh_oauth_if_needed_expirado_renova_e_recifra():
+    from app.services import integration_hub as ih
+
+    async def fake_refresh(provider, refresh_token):
+        assert refresh_token == "r1"
+        return {"access_token": "tok_novo", "refresh_token": "r2", "expires_in": 3600}
+
+    original = ih._exchange_oauth_refresh
+    ih._exchange_oauth_refresh = fake_refresh
+    try:
+        flushed = []
+
+        class _FakeDB:
+            async def flush(self):
+                flushed.append(True)
+
+        class _FakeInteg:
+            tenant_id = "t1"
+            credentials_enc = None
+            status = None
+
+        passado = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+        creds = {"__oauth__": True, "access_token": "tok_velho", "oauth_refresh_token": "r1", "oauth_expires_at": passado}
+        integ = _FakeInteg()
+        result = asyncio.run(ih._refresh_oauth_if_needed(_FakeDB(), integ, "mercadopago", creds))
+    finally:
+        ih._exchange_oauth_refresh = original
+
+    assert result["access_token"] == "tok_novo"
+    assert integ.status == "CONECTADA"
+    assert integ.credentials_enc is not None
+    assert flushed == [True]
+
+
+def test_refresh_oauth_if_needed_falha_de_rede_devolve_creds_antigas_fail_soft():
+    from app.services import integration_hub as ih
+
+    async def fake_refresh_falha(provider, refresh_token):
+        raise RuntimeError("timeout")
+
+    original = ih._exchange_oauth_refresh
+    ih._exchange_oauth_refresh = fake_refresh_falha
+    try:
+        class _FakeInteg:
+            tenant_id = "t1"
+
+        passado = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+        creds = {"__oauth__": True, "access_token": "tok_velho", "oauth_refresh_token": "r1", "oauth_expires_at": passado}
+        result = asyncio.run(ih._refresh_oauth_if_needed(None, _FakeInteg(), "mercadopago", creds))
+    finally:
+        ih._exchange_oauth_refresh = original
+
+    assert result == creds
+
+
+def test_get_credentials_marcador_oauth_ausente_cai_no_legado_sem_chamar_refresh():
+    """Chave colada manualmente (sem __oauth__) nunca aciona _refresh_oauth_if_needed."""
+    from app.services import integration_hub as ih
+
+    class _FakeScalarResult:
+        def __init__(self, value):
+            self._value = value
+
+        def scalar_one_or_none(self):
+            return self._value
+
+    encrypted = ih.encrypt('{"secret_key": "sk_manual"}')
+
+    class _FakeIntegRow:
+        credentials_enc = encrypted
+
+    class _FakeDB:
+        async def execute(self, query):
+            return _FakeScalarResult(_FakeIntegRow())
+
+    called = {"refresh": False}
+
+    async def fake_refresh(*a, **kw):
+        called["refresh"] = True
+        return {}
+
+    original = ih._refresh_oauth_if_needed
+    ih._refresh_oauth_if_needed = fake_refresh
+    try:
+        creds = asyncio.run(ih.get_credentials(_FakeDB(), "tenant1", "stripe"))
+    finally:
+        ih._refresh_oauth_if_needed = original
+
+    assert creds == {"secret_key": "sk_manual"}
+    assert called["refresh"] is False
+
+
+def test_get_credentials_marcador_oauth_presente_aciona_refresh():
+    from app.services import integration_hub as ih
+
+    class _FakeScalarResult:
+        def __init__(self, value):
+            self._value = value
+
+        def scalar_one_or_none(self):
+            return self._value
+
+    encrypted = ih.encrypt('{"__oauth__": true, "secret_key": "sk_oauth"}')
+
+    class _FakeIntegRow:
+        credentials_enc = encrypted
+
+    class _FakeDB:
+        async def execute(self, query):
+            return _FakeScalarResult(_FakeIntegRow())
+
+    called = {"refresh": False}
+
+    async def fake_refresh(db, integ, provider, creds):
+        called["refresh"] = True
+        return {**creds, "renovado": True}
+
+    original = ih._refresh_oauth_if_needed
+    ih._refresh_oauth_if_needed = fake_refresh
+    try:
+        creds = asyncio.run(ih.get_credentials(_FakeDB(), "tenant1", "stripe"))
+    finally:
+        ih._refresh_oauth_if_needed = original
+
+    assert called["refresh"] is True
+    assert creds["renovado"] is True
+
+
+def test_list_status_oauth_disponivel_false_sem_settings_configuradas():
+    """oauth_disponivel só fica True se a flag do provider E as settings existirem."""
+    from app.services import integration_hub as ih
+    _limpar_settings_oauth()
+
+    class _FakeScalarsResult:
+        def all(self):
+            return []
+
+    class _FakeResult:
+        def scalars(self):
+            return _FakeScalarsResult()
+
+    class _FakeDB:
+        async def execute(self, query):
+            return _FakeResult()
+
+    status = asyncio.run(ih.list_status(_FakeDB(), "tenant1"))
+    por_provider = {s["provider"]: s for s in status}
+    assert por_provider["stripe"]["oauth_disponivel"] is False
+    assert por_provider["mercadopago"]["oauth_disponivel"] is False
+    assert por_provider["clicksign"]["oauth_disponivel"] is False

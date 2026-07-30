@@ -8,6 +8,7 @@ para as chamadas reais aos provedores.
 import json
 from datetime import datetime, timedelta, timezone
 
+import httpx
 import structlog
 from fastapi import HTTPException
 from sqlalchemy import select
@@ -29,6 +30,9 @@ PROVIDERS: dict[str, dict] = {
         "nome": "Stripe — Pagamento online",
         "desc": "Cobrança de faturas e da assinatura do SaaS com cartão/Pix via Stripe.",
         "tipo": "api_key",
+        # Fase 117 — alternativa de login em 1 clique (Stripe Connect OAuth),
+        # em paralelo ao form de colar chave abaixo (fallback sempre disponível).
+        "oauth_disponivel": True,
         "fields": [
             {"key": "secret_key", "label": "Secret key (sk_live_… ou sk_test_…)", "secret": True},
         ],
@@ -42,6 +46,8 @@ PROVIDERS: dict[str, dict] = {
         "nome": "Mercado Pago — Pagamento online",
         "desc": "Cobrança por Pix/cartão/boleto via Mercado Pago (alternativa nacional).",
         "tipo": "api_key",
+        # Fase 117 — idem Stripe: login OAuth em paralelo ao form manual.
+        "oauth_disponivel": True,
         "fields": [
             {"key": "access_token", "label": "Access token de produção (APP_USR-…)", "secret": True},
         ],
@@ -183,7 +189,12 @@ async def save_credentials(
 
 
 async def get_credentials(db: AsyncSession, tenant_id, provider: str) -> dict | None:
-    """Credenciais decifradas do provedor, ou None se não conectado."""
+    """Credenciais decifradas do provedor, ou None se não conectado.
+
+    Transparente pra quem chama (`payment_gateway.py` etc.): se a credencial
+    veio do fluxo OAuth (marcador `__oauth__`) e está perto de expirar, renova
+    sozinha aqui e devolve o token já atualizado — nenhum outro código precisa
+    saber a diferença entre OAuth e chave colada manualmente."""
     integ = await get_integration(db, tenant_id, provider)
     if not integ or not integ.credentials_enc:
         return None
@@ -191,9 +202,12 @@ async def get_credentials(db: AsyncSession, tenant_id, provider: str) -> dict | 
     if not raw:
         return None
     try:
-        return json.loads(raw)
+        creds = json.loads(raw)
     except Exception:
         return None
+    if isinstance(creds, dict) and creds.get("__oauth__"):
+        creds = await _refresh_oauth_if_needed(db, integ, provider, creds)
+    return creds
 
 
 async def _fonte_credenciada_do_provider(db: AsyncSession, tenant_id, provider: str):
@@ -266,10 +280,177 @@ async def list_status(db: AsyncSession, tenant_id) -> list[dict]:
             "fields": meta["fields"],
             "ativa": meta["ativa"],
             "obter": meta["obter"],
+            "oauth_disponivel": bool(meta.get("oauth_disponivel")) and is_oauth_configured(key),
             "status": integ.status if integ else "DESCONECTADA",
             "connected_at": integ.connected_at.isoformat() if integ and integ.connected_at else None,
         })
     return out
+
+
+# ─── OAuth "Conectar conta" — Fase 117 (Stripe Connect, Mercado Pago) ─────────
+# Config de cada provedor OAuth. `token_field` é a MESMA chave já usada pelo
+# form de colar chave manualmente (`fields` em PROVIDERS acima) — assim o
+# token OAuth fica no lugar exato que payment_gateway.py já lê hoje
+# (`creds["secret_key"]`/`creds["access_token"]`), sem precisar tocar em
+# nenhum consumidor existente.
+#
+# Nota honesta (a validar contra credenciais reais na implementação — não
+# verificável neste ambiente sem client_id/secret de verdade cadastrados):
+# os nomes de parâmetro abaixo seguem a documentação pública de cada
+# provedor (Stripe Connect OAuth / Mercado Pago OAuth Marketplace), mas só
+# um teste ponta a ponta com credenciais reais confirma 100%.
+OAUTH_PROVIDERS: dict[str, dict] = {
+    "stripe": {
+        "authorize_url": "https://connect.stripe.com/oauth/authorize",
+        "token_url": "https://connect.stripe.com/oauth/token",
+        "scope": "read_write",
+        "client_id_setting": "STRIPE_OAUTH_CLIENT_ID",
+        "client_secret_setting": "STRIPE_OAUTH_CLIENT_SECRET",
+        "redirect_uri_setting": "STRIPE_OAUTH_REDIRECT_URI",
+        "token_field": "secret_key",
+        # Tokens do Stripe Connect OAuth não expiram (documentado pelo
+        # provedor) — sem expires_in na resposta, então nunca precisam de
+        # renovação; _refresh_oauth_if_needed vira no-op pra este provider.
+    },
+    "mercadopago": {
+        "authorize_url": "https://auth.mercadopago.com.br/authorization",
+        "token_url": "https://api.mercadopago.com/oauth/token",
+        "scope": None,
+        "client_id_setting": "MERCADOPAGO_OAUTH_CLIENT_ID",
+        "client_secret_setting": "MERCADOPAGO_OAUTH_CLIENT_SECRET",
+        "redirect_uri_setting": "MERCADOPAGO_OAUTH_REDIRECT_URI",
+        "token_field": "access_token",
+        # Expira em 180 dias (confirmado na pesquisa) — precisa renovar via
+        # refresh_token, tratado em _refresh_oauth_if_needed.
+    },
+}
+
+
+def is_oauth_configured(provider: str) -> bool:
+    cfg = OAUTH_PROVIDERS.get(provider)
+    if not cfg:
+        return False
+    return bool(
+        getattr(settings, cfg["client_id_setting"], "")
+        and getattr(settings, cfg["client_secret_setting"], "")
+        and getattr(settings, cfg["redirect_uri_setting"], "")
+    )
+
+
+def build_oauth_url(provider: str, state: str) -> str:
+    from urllib.parse import urlencode
+    cfg = OAUTH_PROVIDERS[provider]
+    params = {
+        "client_id": getattr(settings, cfg["client_id_setting"]),
+        "redirect_uri": getattr(settings, cfg["redirect_uri_setting"]),
+        "response_type": "code",
+        "state": state,
+    }
+    if provider == "mercadopago":
+        params["platform_id"] = "mp"
+    if cfg.get("scope"):
+        params["scope"] = cfg["scope"]
+    return f"{cfg['authorize_url']}?{urlencode(params)}"
+
+
+async def exchange_oauth_code(provider: str, code: str) -> dict:
+    """Troca o authorization code por tokens (1ª conexão)."""
+    cfg = OAUTH_PROVIDERS[provider]
+    data = {
+        "client_secret": getattr(settings, cfg["client_secret_setting"]),
+        "code": code,
+        "grant_type": "authorization_code",
+    }
+    if provider == "mercadopago":
+        data["client_id"] = getattr(settings, cfg["client_id_setting"])
+        data["redirect_uri"] = getattr(settings, cfg["redirect_uri_setting"])
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.post(cfg["token_url"], data=data)
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def _exchange_oauth_refresh(provider: str, refresh_token: str) -> dict:
+    cfg = OAUTH_PROVIDERS[provider]
+    data = {
+        "client_id": getattr(settings, cfg["client_id_setting"]),
+        "client_secret": getattr(settings, cfg["client_secret_setting"]),
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token,
+    }
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.post(cfg["token_url"], data=data)
+        resp.raise_for_status()
+        return resp.json()
+
+
+def _oauth_tokens_to_credentials(provider: str, tokens: dict, fallback_refresh: str | None = None) -> dict:
+    """Monta o dict salvo em `credentials_enc` a partir da resposta do provedor.
+
+    `token_field` é a mesma chave do form manual (ver OAUTH_PROVIDERS acima) —
+    é isso que torna a leitura transparente pros consumidores existentes."""
+    cfg = OAUTH_PROVIDERS[provider]
+    creds = {
+        "__oauth__": True,
+        cfg["token_field"]: tokens["access_token"],
+        "oauth_refresh_token": tokens.get("refresh_token") or fallback_refresh,
+    }
+    expires_in = tokens.get("expires_in")
+    if expires_in:
+        creds["oauth_expires_at"] = (
+            datetime.now(timezone.utc) + timedelta(seconds=int(expires_in))
+        ).isoformat()
+    return creds
+
+
+async def save_oauth_tokens(
+    db: AsyncSession, tenant_id, provider: str, tokens: dict, connected_by=None,
+) -> TenantIntegration:
+    creds = _oauth_tokens_to_credentials(provider, tokens)
+    integ = await get_integration(db, tenant_id, provider)
+    if not integ:
+        integ = TenantIntegration(tenant_id=tenant_id, provider=provider, extra_data={})
+        db.add(integ)
+    integ.credentials_enc = encrypt(json.dumps(creds))
+    integ.status = "CONECTADA"
+    integ.connected_by = connected_by
+    integ.connected_at = datetime.now(timezone.utc)
+    await db.flush()
+    log.info("integration_connected_oauth", provider=provider, tenant_id=str(tenant_id))
+    return integ
+
+
+async def _refresh_oauth_if_needed(db: AsyncSession, integ: TenantIntegration, provider: str, creds: dict) -> dict:
+    """Renova o token OAuth se estiver perto de expirar. No-op se o provider
+    não expõe `oauth_expires_at` (ex.: Stripe, cujo token não expira)."""
+    expires_at_raw = creds.get("oauth_expires_at")
+    if not expires_at_raw:
+        return creds
+    try:
+        expires_at = datetime.fromisoformat(expires_at_raw)
+    except ValueError:
+        return creds
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at > datetime.now(timezone.utc) + timedelta(seconds=60):
+        return creds
+
+    refresh_token = creds.get("oauth_refresh_token")
+    if not refresh_token:
+        log.warning("oauth_credential_expired_no_refresh", provider=provider, tenant_id=str(integ.tenant_id))
+        return creds
+    try:
+        tokens = await _exchange_oauth_refresh(provider, refresh_token)
+    except Exception as exc:
+        log.warning("oauth_refresh_failed", provider=provider, error=str(exc))
+        return creds
+
+    new_creds = _oauth_tokens_to_credentials(provider, tokens, fallback_refresh=refresh_token)
+    integ.credentials_enc = encrypt(json.dumps(new_creds))
+    integ.status = "CONECTADA"
+    await db.flush()
+    log.info("oauth_token_refreshed", provider=provider, tenant_id=str(integ.tenant_id))
+    return new_creds
 
 
 # ─── Estado OAuth genérico (reuso do padrão Google, para fases futuras) ───────
