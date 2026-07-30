@@ -197,7 +197,12 @@ interface HubIntegracao {
   provider: string; nome: string; desc: string; tipo: string;
   fields: HubField[]; ativa: string[]; obter: string;
   status: string; connected_at: string | null;
+  oauth_disponivel: boolean;
 }
+
+// Fase 117 — nomes curtos pro toast de retorno do OAuth (?hub_oauth=stripe_ok etc.),
+// antes mesmo da lista de integrações carregar.
+const HUB_OAUTH_LABELS: Record<string, string> = { stripe: "Stripe", mercadopago: "Mercado Pago" };
 
 const HUB_ICONS: Record<string, typeof CreditCard> = {
   stripe: CreditCard,
@@ -220,6 +225,7 @@ function HubCards() {
   const [form, setForm] = useState<Record<string, string>>({});
   const [working, setWorking] = useState(false);
   const [testando, setTestando] = useState<string | null>(null);
+  const [oauthConectando, setOauthConectando] = useState<string | null>(null);
 
   async function fetchHub() {
     try {
@@ -234,12 +240,33 @@ function HubCards() {
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => setIsAdmin(d?.role === "ADMIN" || d?.role === "SUPERADMIN"))
       .catch(() => {});
+    // Feedback do retorno OAuth do hub (?hub_oauth=stripe_ok|stripe_erro etc.)
+    const p = new URLSearchParams(window.location.search);
+    const hubOauth = p.get("hub_oauth");
+    if (hubOauth) {
+      const ok = hubOauth.endsWith("_ok");
+      const provider = hubOauth.replace(/_ok$|_erro$/, "");
+      const nome = HUB_OAUTH_LABELS[provider] || provider;
+      if (ok) toast.success(`${nome} conectado com sucesso!`);
+      else toast.error(`Falha ao conectar ${nome}. Tente novamente ou cole a chave manualmente.`);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   function abrirConectar(it: HubIntegracao) {
     setForm({});
     setConectando(it);
+  }
+
+  async function conectarOAuth(it: HubIntegracao) {
+    setOauthConectando(it.provider);
+    try {
+      const res = await fetch(`/api/v1/integrations/hub/${it.provider}/oauth/connect`, { headers: authH() });
+      const d = await res.json().catch(() => ({}));
+      if (res.ok && d.auth_url) window.location.href = d.auth_url;
+      else toast.error(d.detail || "Login por conta não disponível no momento.");
+    } catch { toast.error("Falha de conexão."); }
+    finally { setOauthConectando(null); }
   }
 
   async function conectar() {
@@ -351,6 +378,17 @@ function HubCards() {
                       <LogOut size={12} /> Desconectar
                     </button>
                   )}
+                </>
+              ) : isAdmin && it.oauth_disponivel ? (
+                <>
+                  <button onClick={() => conectarOAuth(it)} disabled={oauthConectando === it.provider}
+                    className="btn-afj-primary text-sm py-2 px-4 rounded-sm flex items-center gap-2 disabled:opacity-50">
+                    {oauthConectando === it.provider ? <Loader2 size={14} className="animate-spin" /> : <Link2 size={14} />} Conectar com login
+                  </button>
+                  <button onClick={() => abrirConectar(it)} disabled={working}
+                    className="text-xs text-afj-black/45 hover:text-afj-black/70 underline underline-offset-2">
+                    ou colar chave manualmente
+                  </button>
                 </>
               ) : isAdmin ? (
                 <button onClick={() => abrirConectar(it)} disabled={working}
