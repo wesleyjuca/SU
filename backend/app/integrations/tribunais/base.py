@@ -46,7 +46,7 @@ class BaseTribunalClient(ABC):
         if not self._http_client:
             self._http_client = httpx.AsyncClient(
                 timeout=30.0,
-                headers={"User-Agent": "AFJ-Core/1.0 (Sistema interno de escritório de advocacia)"},
+                headers={"User-Agent": "AFJ-Core/1.0 (Sistema interno de escritorio de advocacia)"},
                 follow_redirects=True,
             )
         return self._http_client
