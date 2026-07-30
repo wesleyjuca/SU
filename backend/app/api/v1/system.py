@@ -1051,6 +1051,45 @@ async def brain_embeddings_compare(
     return await comparar_embeddings(body.queries, body.documentos)
 
 
+class ReindexTestRequest(BaseModel):
+    collection: str
+    limite: int = 200
+
+
+@router.post("/brain/reindex-test-collection")
+async def brain_reindex_test_collection(
+    body: ReindexTestRequest,
+    current_user: User = Depends(require_role("SUPERADMIN")),
+):
+    """Fase 4.3 Parte 1 — reindexa uma amostra REAL de uma das 7 collections
+    de produção (só leitura nela) numa collection de teste BGE-M3 descartável
+    (`_test_bge_m3_{collection}`), pra validar qualidade contra conteúdo de
+    verdade antes de decidir migrar produção de vez."""
+    from app.services.embeddings_compare import reindexar_amostra_teste
+
+    await _audit_brain(current_user.id, "BRAIN_REINDEX_TEST_COLLECTION")
+    return await reindexar_amostra_teste(body.collection, body.limite)
+
+
+class SearchTestRequest(BaseModel):
+    collection: str
+    query: str
+    limite: int = 5
+
+
+@router.post("/brain/search-test-collection")
+async def brain_search_test_collection(
+    body: SearchTestRequest,
+    current_user: User = Depends(require_role("SUPERADMIN")),
+):
+    """Busca na collection de teste BGE-M3 já reindexada — avaliação manual
+    do SUPERADMIN da qualidade de busca contra conteúdo real (Fase 4.3)."""
+    from app.services.embeddings_compare import buscar_teste
+
+    await _audit_brain(current_user.id, "BRAIN_SEARCH_TEST_COLLECTION")
+    return await buscar_teste(body.collection, body.query, body.limite)
+
+
 @router.post("/brain/insights")
 async def brain_insights(
     current_user: User = Depends(require_role("SUPERADMIN")),
