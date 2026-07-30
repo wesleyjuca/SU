@@ -75,6 +75,17 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""
     GOOGLE_REDIRECT_URI: str = ""
+
+    # Fase 117 — OAuth do hub de integrações (Stripe Connect / Mercado Pago),
+    # mesmo padrão do Google acima: sem credenciais, o provedor continua
+    # oferecendo só o fluxo de colar chave manualmente (fallback existente).
+    # Redirect deve apontar para /api/v1/integrations/hub/{provider}/oauth/callback.
+    STRIPE_OAUTH_CLIENT_ID: str = ""
+    STRIPE_OAUTH_CLIENT_SECRET: str = ""
+    STRIPE_OAUTH_REDIRECT_URI: str = ""
+    MERCADOPAGO_OAUTH_CLIENT_ID: str = ""
+    MERCADOPAGO_OAUTH_CLIENT_SECRET: str = ""
+    MERCADOPAGO_OAUTH_REDIRECT_URI: str = ""
     DEFAULT_EMBEDDING_MODEL: str = "text-embedding-3-large"
     EMBEDDING_DIMENSIONS: int = 3072
 
