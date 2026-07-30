@@ -115,7 +115,7 @@ async def resolve_approval(
 
     # Executa a ação de forma síncrona (substitui a retomada por checkpoint LangGraph,
     # que era código morto). A ação crítica só ocorre AQUI, após decisão humana.
-    from app.services.approval_service import execute_approved_action, mark_rejected_action
+    from app.services.approval import execute_approved_action, mark_rejected_action
     execution: dict | None = None
     if body.approved:
         execution = await execute_approved_action(db, approval, body.modifications)

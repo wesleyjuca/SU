@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.base import get_db
 from app.dependencies import get_current_user
 from app.models.user import User
-from app.services import notification_service
+from app.services import notification
 
 router = APIRouter(prefix="/notifications", tags=["notifications"])
 
@@ -33,10 +33,10 @@ async def list_notifications(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    notifications = await notification_service.get_user_notifications(
+    notifications = await notification.get_user_notifications(
         db, current_user.id, unread_only=unread_only, limit=limit
     )
-    unread_count = await notification_service.get_unread_count(db, current_user.id)
+    unread_count = await notification.get_unread_count(db, current_user.id)
     return {
         "unread_count": unread_count,
         "total": len(notifications),
@@ -50,7 +50,7 @@ async def mark_read(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    notif = await notification_service.mark_read(db, notification_id, current_user.id)
+    notif = await notification.mark_read(db, notification_id, current_user.id)
     if not notif:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Notificação não encontrada")
     return _serialize(notif)
@@ -61,7 +61,7 @@ async def mark_all_read(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    count = await notification_service.mark_all_read(db, current_user.id)
+    count = await notification.mark_all_read(db, current_user.id)
     return {"updated": count}
 
 
@@ -71,6 +71,6 @@ async def delete_notification(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    deleted = await notification_service.delete_notification(db, notification_id, current_user.id)
+    deleted = await notification.delete_notification(db, notification_id, current_user.id)
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Notificação não encontrada")

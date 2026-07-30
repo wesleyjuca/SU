@@ -90,7 +90,7 @@ async def _alert_once_per_month(db: AsyncSession, user_id, status: dict) -> None
         )).scalar_one_or_none()
         if existing:
             return
-        from app.services.notification_service import create_notification
+        from app.services.notification import create_notification
         await create_notification(
             db,
             user_id=user_id if isinstance(user_id, uuid.UUID) else uuid.UUID(str(user_id)),
