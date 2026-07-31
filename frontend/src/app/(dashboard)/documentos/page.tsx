@@ -78,7 +78,7 @@ export default function DocumentosPage() {
   const [deleting, setDeleting] = useState<string | null>(null);
 
   // Verificação de citações (Fase 93)
-  interface Citacao { referencia: string; status: string; titulo: string | null }
+  interface Citacao { referencia: string; tipo: string; status: string; titulo: string | null }
   const [citacoes, setCitacoes] = useState<Citacao[] | null>(null);
   const [verificando, setVerificando] = useState(false);
 
@@ -110,7 +110,7 @@ export default function DocumentosPage() {
       const d = await res.json().catch(() => ({}));
       if (res.ok) {
         setCitacoes(d.citacoes || []);
-        if (!d.citacoes?.length) toast.success("Nenhuma citação de lei encontrada no texto.");
+        if (!d.citacoes?.length) toast.success("Nenhuma citação de lei ou processo encontrada no texto.");
       } else toast.error(d.detail || "Erro ao verificar citações.");
     } catch { toast.error("Erro de conexão."); }
     finally { setVerificando(false); }
@@ -608,7 +608,7 @@ export default function DocumentosPage() {
                     return (
                       <div key={c.referencia} className={`flex items-center gap-2 text-xs px-2.5 py-1.5 rounded-sm border ${cfg.cls}`}>
                         <Icon size={13} className="flex-shrink-0" />
-                        <span className="font-medium">Lei {c.referencia}</span>
+                        <span className="font-medium">{c.tipo === "PROCESSO" ? "Processo" : "Lei"} {c.referencia}</span>
                         <span className="opacity-70">— {cfg.label}{c.titulo ? `: ${c.titulo}` : ""}</span>
                       </div>
                     );
