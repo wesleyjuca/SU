@@ -4,16 +4,19 @@ from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel, Field
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 import uuid
 import secrets
+import structlog
 
 from app.db.base import get_db
 from app.dependencies import require_role
 from app.models.user import User
 from app.models.financial import BillingInvoice
 from app.models.client import Client
+
+log = structlog.get_logger()
 
 router = APIRouter(prefix="/financial/invoices", tags=["invoices"])
 
@@ -71,13 +74,18 @@ def _to_dict(inv: BillingInvoice, cliente_nome: str | None = None) -> dict:
     }
 
 
-async def _get_invoice(db: AsyncSession, invoice_id: str, tenant_id) -> BillingInvoice:
-    inv = (await db.execute(
-        select(BillingInvoice).where(
-            BillingInvoice.id == uuid.UUID(invoice_id),
-            BillingInvoice.tenant_id == tenant_id,  # isolamento multi-tenant
-        )
-    )).scalar_one_or_none()
+async def _get_invoice(db: AsyncSession, invoice_id: str, tenant_id, for_update: bool = False) -> BillingInvoice:
+    query = select(BillingInvoice).where(
+        BillingInvoice.id == uuid.UUID(invoice_id),
+        BillingInvoice.tenant_id == tenant_id,  # isolamento multi-tenant
+    )
+    if for_update:
+        # Fase 129 — lock de linha: serializa 2 chamadas concorrentes de geração
+        # de link de pagamento pra mesma fatura (a segunda espera a primeira
+        # terminar/commitar e então vê o payment_link já setado, em vez de
+        # criar uma segunda sessão Stripe/MP órfã).
+        query = query.with_for_update()
+    inv = (await db.execute(query)).scalar_one_or_none()
     if not inv:
         raise HTTPException(status_code=404, detail="Fatura não encontrada.")
     return inv
@@ -123,13 +131,39 @@ async def create_invoice(
         raise HTTPException(status_code=404, detail="Cliente não encontrado.")
 
     total = sum((it.valor for it in body.itens), Decimal("0"))
+
+    # Fase 129 — idempotência: bloqueia duplicata óbvia (mesmo cliente + mesmo
+    # valor, fatura ainda ativa, criada há pouco) — protege contra double-click
+    # ou reenvio de rede criando 2 faturas/links de pagamento pro mesmo trabalho.
+    janela = datetime.now(timezone.utc) - timedelta(minutes=5)
+    duplicata = (await db.execute(
+        select(BillingInvoice).where(
+            BillingInvoice.tenant_id == current_user.tenant_id,
+            BillingInvoice.client_id == cliente.id,
+            BillingInvoice.valor_total == total,
+            BillingInvoice.status.in_(("RASCUNHO", "EMITIDA")),
+            BillingInvoice.created_at >= janela,
+        )
+    )).scalar_one_or_none()
+    if duplicata:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Já existe uma fatura recente ({duplicata.numero}) pro mesmo cliente e valor — "
+                   "confira antes de criar outra.",
+        )
+
+    if body.data_vencimento and date.fromisoformat(body.data_vencimento) < datetime.now(timezone.utc).date():
+        log.warning("fatura_vencimento_no_passado", client_id=body.client_id, data=body.data_vencimento)
+
     inv = BillingInvoice(
         tenant_id=current_user.tenant_id,
         client_id=cliente.id,
         process_id=uuid.UUID(body.process_id) if body.process_id else None,
         numero=_gerar_numero(),
         descricao=body.descricao,
-        itens=[{"descricao": it.descricao, "valor": float(it.valor)} for it in body.itens],
+        # Fase 129 — preserva precisão Decimal na serialização (antes gravava
+        # float, divergindo em centavos de valor_total pra certos valores).
+        itens=[{"descricao": it.descricao, "valor": str(it.valor)} for it in body.itens],
         periodo_inicio=date.fromisoformat(body.periodo_inicio) if body.periodo_inicio else None,
         periodo_fim=date.fromisoformat(body.periodo_fim) if body.periodo_fim else None,
         data_vencimento=date.fromisoformat(body.data_vencimento) if body.data_vencimento else None,
@@ -139,7 +173,13 @@ async def create_invoice(
     )
     db.add(inv)
     await db.commit()
-    return _to_dict(inv, cliente.nome_completo)
+    aviso = None
+    if body.data_vencimento and date.fromisoformat(body.data_vencimento) < datetime.now(timezone.utc).date():
+        aviso = "Atenção: a data de vencimento informada já passou."
+    resposta = _to_dict(inv, cliente.nome_completo)
+    if aviso:
+        resposta["aviso"] = aviso
+    return resposta
 
 
 @router.patch("/{invoice_id}")
@@ -179,7 +219,13 @@ async def gerar_link_pagamento(
     PAGA automaticamente (verificação server-side na API do provedor)."""
     from app.services.payment_gateway import criar_link_pagamento
 
-    inv = await _get_invoice(db, invoice_id, current_user.tenant_id)
+    # Fase 129 — lock de linha: sem isso, 2 chamadas concorrentes (double-click)
+    # liam payment_link=None ao mesmo tempo e criavam 2 sessões Stripe/MP
+    # separadas — uma delas ficava órfã, e se o cliente pagasse por ela o
+    # pagamento não batia com a fatura (rejeitado como "session não
+    # corresponde"). Com FOR UPDATE, a 2ª requisição espera a 1ª terminar e
+    # já encontra o payment_link setado.
+    inv = await _get_invoice(db, invoice_id, current_user.tenant_id, for_update=True)
     if inv.payment_link and inv.status == "EMITIDA":
         return {"message": "Link já gerado.", "payment_link": inv.payment_link, "provider": inv.payment_provider}
     result = await criar_link_pagamento(db, current_user.tenant_id, inv)

@@ -6,6 +6,7 @@ a confirmação real é feita buscando o pagamento NA API do provedor com as
 credenciais do escritório (nunca se marca PAGA só porque o POST chegou).
 """
 from datetime import datetime, timezone
+from decimal import Decimal
 
 import httpx
 import structlog
@@ -14,7 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models.financial import BillingInvoice
+from app.models.financial import BillingInvoice, FinancialEntry
 from app.services import integration_hub
 
 log = structlog.get_logger()
@@ -142,14 +143,77 @@ async def _load_invoice(db: AsyncSession, invoice_id: str) -> BillingInvoice | N
     return inv
 
 
+def _criar_entrada_financeira(inv: BillingInvoice, provider: str, nota: str | None = None) -> FinancialEntry:
+    """Fase 129 — conecta o pagamento confirmado ao financeiro (`FinancialEntry`)
+    do escritório; sem isso a receita real nunca aparecia em `/financial/summary`
+    nem `/financial/overdue` (o dashboard e as faturas viviam desconectados)."""
+    descricao = f"Fatura {inv.numero or inv.id} paga via {provider}"
+    if nota:
+        descricao += f" — {nota}"
+    return FinancialEntry(
+        tipo="RECEITA",
+        categoria="HONORARIOS",
+        client_id=inv.client_id,
+        process_id=inv.process_id,
+        descricao=descricao,
+        valor=inv.valor_total or Decimal("0"),
+        data_pagamento=datetime.now(timezone.utc).date(),
+        status="PAGO",
+        tenant_id=inv.tenant_id,
+    )
+
+
+async def _notificar_pagamento_a_reconciliar(db: AsyncSession, inv: BillingInvoice) -> None:
+    """Fase 129 — dinheiro real foi capturado pelo provedor mas a fatura não
+    estava mais EMITIDA (ex.: cancelada antes do webhook chegar). Em vez de só
+    logar e descartar (o pagamento sumia do sistema), avisa ADMIN/SOCIO do
+    escritório pra reconciliar manualmente."""
+    if not inv.tenant_id:
+        return
+    from app.models.user import User
+    from app.models.notification import Notification
+    from app.services.notification import publish_notification_ws
+
+    user_ids = (await db.execute(
+        select(User.id).where(
+            User.tenant_id == inv.tenant_id,
+            User.role.in_(("ADMIN", "SOCIO")),
+            User.is_active == True,  # noqa: E712
+        )
+    )).scalars().all()
+    for uid in user_ids:
+        notif = Notification(
+            user_id=uid,
+            tenant_id=inv.tenant_id,
+            tipo="SISTEMA",
+            titulo="Pagamento recebido em fatura não emitida — reconciliar",
+            corpo=(
+                f"Fatura {inv.numero or inv.id} (R$ {float(inv.valor_total or 0):.2f}) "
+                f"foi paga pelo cliente, mas o status atual é {inv.status}. "
+                "Verifique manualmente em Financeiro."
+            ),
+            priority="HIGH",
+            link="/financeiro/faturas",
+        )
+        db.add(notif)
+        await publish_notification_ws(notif)
+
+
 async def _marcar_paga(db: AsyncSession, inv: BillingInvoice, provider: str) -> dict:
     if inv.status == "PAGA":
         return {"processed": True, "reason": "já estava paga (idempotente)"}
     if inv.status != "EMITIDA":
         log.warning("webhook_pagamento_status_invalido", invoice=str(inv.id), status=inv.status)
-        return {"processed": False, "reason": f"fatura em {inv.status} — só EMITIDA→PAGA é válido"}
+        db.add(_criar_entrada_financeira(
+            inv, provider,
+            nota=f"fatura estava {inv.status} no momento do pagamento — reconciliar manualmente",
+        ))
+        await _notificar_pagamento_a_reconciliar(db, inv)
+        await db.flush()
+        return {"processed": False, "reason": f"fatura em {inv.status} — pagamento registrado pra reconciliação manual"}
     inv.status = "PAGA"
     inv.pago_em = datetime.now(timezone.utc)
+    db.add(_criar_entrada_financeira(inv, provider))
     await db.flush()
     log.info("fatura_paga_via_webhook", invoice=str(inv.id), provider=provider)
     return {"processed": True, "reason": "fatura marcada como PAGA"}
