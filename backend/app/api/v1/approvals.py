@@ -92,11 +92,18 @@ async def resolve_approval(
     Regra: rejeição EXIGE justificativa.
     Após resolução, retoma o workflow LangGraph se aplicável.
     """
+    # Fase 132 — SELECT ... FOR UPDATE: sem lock de linha, 2 requisições
+    # concorrentes na mesma Approval (2 pessoas clicando aprovar/rejeitar
+    # quase ao mesmo tempo) podiam ambas passar pela checagem de status
+    # PENDENTE antes de qualquer uma commitar — a 2ª sobrescrevia a decisão
+    # da 1ª silenciosamente, e ambas execute_approved_action/mark_rejected_action
+    # rodavam. Com o lock, a 2ª requisição bloqueia até a 1ª commitar e então
+    # vê o status já resolvido, falhando explicitamente em vez de duplicar a ação.
     result = await db.execute(
         select(Approval).where(
             Approval.id == uuid.UUID(approval_id),
             Approval.tenant_id == current_user.tenant_id,
-        )
+        ).with_for_update()
     )
     approval = result.scalar_one_or_none()
     if not approval:

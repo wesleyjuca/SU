@@ -17,13 +17,29 @@ async def create_approval_from_state(db, agent_run, final_state) -> "uuid.UUID |
     """Cria um Approval(status=PENDENTE) se o grafo terminou aguardando aprovação.
 
     Usa a MESMA sessão que atualiza o AgentRun (commit é responsabilidade do caller).
-    Retorna o id do Approval criado, ou None se não havia aprovação pendente.
+    Retorna o id do Approval criado (ou já existente — ver nota de idempotência),
+    ou None se não havia aprovação pendente.
     """
     pend = final_state.get("pending_approval") if final_state else None
     if not pend or not agent_run:
         return None
 
+    from sqlalchemy import select
     from app.models.agent_run import Approval
+
+    # Fase 132 — idempotência por run_id: se o Celery reentregar uma task já
+    # processada (acks_late=True, worker cai depois do commit mas antes do
+    # ack), o agente reroda do zero (mesmo agent_run.id, já existente) e
+    # chegaria aqui de novo — sem essa checagem criaria uma 2ª Approval (e,
+    # no caso de petition_agent/contract_agent, um 2º Document) pro mesmo
+    # run lógico. Qualquer Approval pré-existente pra esse run_id (em
+    # qualquer status) é sinal de que já processamos — não duplicar.
+    existente = (await db.execute(
+        select(Approval.id).where(Approval.run_id == agent_run.id)
+    )).scalar_one_or_none()
+    if existente is not None:
+        log.warning("approval_ja_existe_para_run", run_id=str(agent_run.id), approval_id=str(existente))
+        return existente
 
     results = final_state.get("agent_results") or []
     last = results[-1] if results else None
