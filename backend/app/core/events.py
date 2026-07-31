@@ -200,6 +200,12 @@ async def lifespan(app: FastAPI):
             # "Descrição" sem coluna nenhuma por trás: o usuário digitava,
             # salvava, e o texto era descartado silenciosamente.
             "ALTER TABLE legal_processes ADD COLUMN IF NOT EXISTS descricao TEXT",
+            # Fase 134 — audit_logs.action (VARCHAR 100) estourava em rotas com
+            # 2 UUIDs no path (ex. PUT .../processes/{uuid}/partes/{uuid}),
+            # derrubando silenciosamente aquela linha de auditoria. Aumentar o
+            # VARCHAR não reescreve linhas nem dispara trg_audit_logs_immutable
+            # (que só age em UPDATE/DELETE) — seguro mesmo com a tabela imutável.
+            "ALTER TABLE audit_logs ALTER COLUMN action TYPE VARCHAR(255)",
         ]:
             try:
                 async with engine.begin() as conn:
