@@ -1,4 +1,5 @@
 """crm_agent — Gestão de clientes, leads e interações."""
+import time
 import uuid
 from typing import ClassVar
 from datetime import datetime, timezone
@@ -69,11 +70,18 @@ Retorne:
 4. Próximos passos recomendados
 5. Perguntas a fazer na triagem"""
 
+        call_start_ms = int(time.time() * 1000)
         content, input_t, output_t, cost = await call_claude(
             messages=[{"role": "user", "content": prompt}],
             system=AFJ_LEGAL_SYSTEM_PROMPT,
             max_tokens=1000,
         )
+        duration_ms = int(time.time() * 1000) - call_start_ms
+        ctx.add_tokens(input_t + output_t, cost)
+        ctx.add_audit_event("LLM_CALL", {
+            "model": "default", "tokens": input_t + output_t,
+            "cost_usd": round(cost, 4), "duration_ms": duration_ms,
+        })
 
         client_id = await self._resolver_client_id_seguro(ctx, task)
         persistido = False
@@ -108,11 +116,18 @@ Retorne:
 Contexto: {contexto}
 Tom: profissional, empático, objetivo. Máximo 5 linhas."""
 
+        call_start_ms = int(time.time() * 1000)
         content, input_t, output_t, cost = await call_claude(
             messages=[{"role": "user", "content": prompt}],
             system="Você é assistente do escritório AFJ Advogados. Escreva com cordialidade e profissionalismo.",
             max_tokens=300,
         )
+        duration_ms = int(time.time() * 1000) - call_start_ms
+        ctx.add_tokens(input_t + output_t, cost)
+        ctx.add_audit_event("LLM_CALL", {
+            "model": "default", "tokens": input_t + output_t,
+            "cost_usd": round(cost, 4), "duration_ms": duration_ms,
+        })
 
         return AgentResult(
             status=AgentStatus.SUCCESS,
@@ -124,11 +139,18 @@ Tom: profissional, empático, objetivo. Máximo 5 linhas."""
 
     async def _classificar_cliente(self, ctx: AgentContext, task: dict) -> AgentResult:
         historico = task.get("historico", "")
+        call_start_ms = int(time.time() * 1000)
         content, input_t, output_t, cost = await call_claude(
             messages=[{"role": "user", "content": f"Classifique este cliente AFJ com base no histórico:\n{historico}\n\nRetorne: segmento (PLATINUM/GOLD/SILVER/REGULAR), frequência estimada de demanda, área predominante."}],
             system=AFJ_LEGAL_SYSTEM_PROMPT,
             max_tokens=300,
         )
+        duration_ms = int(time.time() * 1000) - call_start_ms
+        ctx.add_tokens(input_t + output_t, cost)
+        ctx.add_audit_event("LLM_CALL", {
+            "model": "default", "tokens": input_t + output_t,
+            "cost_usd": round(cost, 4), "duration_ms": duration_ms,
+        })
 
         client_id = await self._resolver_client_id_seguro(ctx, task)
         persistido = False

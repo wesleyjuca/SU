@@ -1,4 +1,5 @@
 """compliance_agent — Verificações de conformidade LGPD e regulatória."""
+import time
 from typing import ClassVar
 from app.agents.base.agent import BaseAgent
 from app.agents.base.result import AgentResult, AgentStatus
@@ -56,11 +57,18 @@ class ComplianceAgent(BaseAgent):
         if not documento:
             return AgentResult(status=AgentStatus.FAILED, agent_name=self.name, error="documento obrigatório")
 
+        call_start_ms = int(time.time() * 1000)
         content, input_t, output_t, cost = await call_claude(
             messages=[{"role": "user", "content": f"Verifique se este documento de marketing jurídico está em conformidade com o Código de Ética da OAB:\n\n{documento[:2000]}\n\nIdentifique: violações (se houver), sugestões de adequação."}],
             system="Você é especialista em ética da OAB e marketing jurídico conforme CFOAB.",
             max_tokens=800,
         )
+        duration_ms = int(time.time() * 1000) - call_start_ms
+        ctx.add_tokens(input_t + output_t, cost)
+        ctx.add_audit_event("LLM_CALL", {
+            "model": "default", "tokens": input_t + output_t,
+            "cost_usd": round(cost, 4), "duration_ms": duration_ms,
+        })
         return AgentResult(
             status=AgentStatus.SUCCESS,
             agent_name=self.name,

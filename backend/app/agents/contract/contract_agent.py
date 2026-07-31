@@ -1,4 +1,5 @@
 """contract_agent — Geração e análise de contratos. Requer aprovação humana."""
+import time
 from typing import ClassVar
 from app.agents.base.agent import BaseAgent
 from app.agents.base.result import AgentResult, AgentStatus
@@ -40,12 +41,19 @@ confidencialidade, foro de eleição (Fortaleza/CE).
 
 Use linguagem jurídica clara e proteja os interesses do escritório."""
 
+        call_start_ms = int(time.time() * 1000)
         content, input_t, output_t, cost = await call_claude(
             messages=[{"role": "user", "content": prompt}],
             system=CONTRACT_SYSTEM,
             max_tokens=4000,
             temperature=0.1,
         )
+        duration_ms = int(time.time() * 1000) - call_start_ms
+        ctx.add_tokens(input_t + output_t, cost)
+        ctx.add_audit_event("LLM_CALL", {
+            "model": "default", "tokens": input_t + output_t,
+            "cost_usd": round(cost, 4), "duration_ms": duration_ms,
+        })
 
         doc_id = str(uuid.uuid4())
         if self.db:

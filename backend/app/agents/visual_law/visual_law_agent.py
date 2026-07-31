@@ -1,4 +1,5 @@
 """visual_law_agent — Gera fluxogramas, timelines e resumos visuais jurídicos."""
+import time
 from typing import ClassVar
 from app.agents.base.agent import BaseAgent
 from app.agents.base.result import AgentResult, AgentStatus
@@ -85,11 +86,18 @@ Retorne APENAS o código Mermaid válido, começando com 'flowchart TD' ou 'grap
 Use nós com descrições em português, curtos (máx 30 chars por nó).
 Inclua cores: verde para aprovações, vermelho para rejeições, amarelo para aguardando."""
 
+        call_start_ms = int(time.time() * 1000)
         content, input_t, output_t, cost = await call_claude(
             messages=[{"role": "user", "content": prompt}],
             system=VISUAL_SYSTEM,
             max_tokens=1500,
         )
+        duration_ms = int(time.time() * 1000) - call_start_ms
+        ctx.add_tokens(input_t + output_t, cost)
+        ctx.add_audit_event("LLM_CALL", {
+            "model": "default", "tokens": input_t + output_t,
+            "cost_usd": round(cost, 4), "duration_ms": duration_ms,
+        })
 
         return AgentResult(
             status=AgentStatus.SUCCESS,
@@ -111,11 +119,18 @@ Formato: timeline
   section Fase
     Evento : data"""
 
+        call_start_ms = int(time.time() * 1000)
         content, input_t, output_t, cost = await call_claude(
             messages=[{"role": "user", "content": prompt}],
             system=VISUAL_SYSTEM,
             max_tokens=1000,
         )
+        duration_ms = int(time.time() * 1000) - call_start_ms
+        ctx.add_tokens(input_t + output_t, cost)
+        ctx.add_audit_event("LLM_CALL", {
+            "model": "default", "tokens": input_t + output_t,
+            "cost_usd": round(cost, 4), "duration_ms": duration_ms,
+        })
 
         return AgentResult(
             status=AgentStatus.SUCCESS,
@@ -133,11 +148,18 @@ ITENS PARA COMPARAR: {conteudo}
 
 Retorne uma tabela Markdown com colunas relevantes. Use ✅ e ❌ para facilitarvisiulização."""
 
+        call_start_ms = int(time.time() * 1000)
         content, input_t, output_t, cost = await call_claude(
             messages=[{"role": "user", "content": prompt}],
             system=VISUAL_SYSTEM,
             max_tokens=800,
         )
+        duration_ms = int(time.time() * 1000) - call_start_ms
+        ctx.add_tokens(input_t + output_t, cost)
+        ctx.add_audit_event("LLM_CALL", {
+            "model": "default", "tokens": input_t + output_t,
+            "cost_usd": round(cost, 4), "duration_ms": duration_ms,
+        })
 
         return AgentResult(
             status=AgentStatus.SUCCESS,

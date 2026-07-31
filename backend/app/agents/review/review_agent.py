@@ -9,6 +9,7 @@ Toda citação não encontrada no Qdrant → [Não Verificado] → bloqueia apro
 import asyncio
 import json
 import re
+import time
 from typing import ClassVar
 from app.agents.base.agent import BaseAgent
 from app.agents.base.result import AgentResult, AgentStatus
@@ -73,10 +74,10 @@ class ReviewAgent(BaseAgent):
         # entre si (nenhuma lê o resultado de outra), então rodar concorrente
         # corta a latência de ~soma-das-4 pra ~a-mais-lenta-das-4.
         resultado_formal, resultado_consistencia, resultado_risco, resultado_estilo = await asyncio.gather(
-            self._etapa_formal(conteudo, tipo),
-            self._etapa_consistencia(conteudo, jurisprudencia_verificada, legislacao),
-            self._etapa_risco(conteudo, tipo),
-            self._etapa_estilo(conteudo),
+            self._etapa_formal(ctx, conteudo, tipo),
+            self._etapa_consistencia(ctx, conteudo, jurisprudencia_verificada, legislacao),
+            self._etapa_risco(ctx, conteudo, tipo),
+            self._etapa_estilo(ctx, conteudo),
         )
 
         total_tokens = (
@@ -126,7 +127,7 @@ class ReviewAgent(BaseAgent):
             cost_usd=total_cost,
         )
 
-    async def _etapa_formal(self, conteudo: str, tipo: str) -> dict:
+    async def _etapa_formal(self, ctx: AgentContext, conteudo: str, tipo: str) -> dict:
         prompt = f"""Faça uma revisão FORMAL da peça abaixo.
 Verifique: estrutura (seções obrigatórias presentes), formatação, citações de artigos (formato correto),
 numeração de pedidos, endereçamento ao juízo, qualificação das partes.
@@ -138,14 +139,21 @@ Retorne um JSON com:
 {{"issues": [{{"descricao": "...", "gravidade": "ALTA|MEDIA|BAIXA", "localizacao": "...", "sugestao": "..."}}],
  "aprovado": true/false, "observacoes": "..."}}"""
 
+        call_start_ms = int(time.time() * 1000)
         content, input_t, output_t, cost = await call_claude(
             messages=[{"role": "user", "content": prompt}],
             system=REVIEW_SYSTEM_PROMPT,
             max_tokens=2000,
         )
+        duration_ms = int(time.time() * 1000) - call_start_ms
+        ctx.add_tokens(input_t + output_t, cost)
+        ctx.add_audit_event("LLM_CALL", {
+            "model": "default", "tokens": input_t + output_t,
+            "cost_usd": round(cost, 4), "duration_ms": duration_ms,
+        })
         return {"resultado": content, "tokens": input_t + output_t, "cost": cost, "issues": _parse_issues_from_claude(content)}
 
-    async def _etapa_consistencia(self, conteudo: str, jurisprudencia: list, legislacao: list) -> dict:
+    async def _etapa_consistencia(self, ctx: AgentContext, conteudo: str, jurisprudencia: list, legislacao: list) -> dict:
         juris_str = "\n".join([f"- {j.get('numero', 'N/A')} ({j.get('tribunal', 'N/A')})" for j in jurisprudencia])
         prompt = f"""Verifique a CONSISTÊNCIA JURÍDICA da peça.
 Confronte cada citação de jurisprudência com a lista de acórdãos VERIFICADOS abaixo.
@@ -159,14 +167,21 @@ DOCUMENTO:
 
 Retorne JSON: {{"issues": [...], "citacoes_nao_verificadas": [...], "aprovado": true/false}}"""
 
+        call_start_ms = int(time.time() * 1000)
         content, input_t, output_t, cost = await call_claude(
             messages=[{"role": "user", "content": prompt}],
             system=REVIEW_SYSTEM_PROMPT,
             max_tokens=2000,
         )
+        duration_ms = int(time.time() * 1000) - call_start_ms
+        ctx.add_tokens(input_t + output_t, cost)
+        ctx.add_audit_event("LLM_CALL", {
+            "model": "default", "tokens": input_t + output_t,
+            "cost_usd": round(cost, 4), "duration_ms": duration_ms,
+        })
         return {"resultado": content, "tokens": input_t + output_t, "cost": cost, "issues": _parse_issues_from_claude(content)}
 
-    async def _etapa_risco(self, conteudo: str, tipo: str) -> dict:
+    async def _etapa_risco(self, ctx: AgentContext, conteudo: str, tipo: str) -> dict:
         prompt = f"""Faça uma análise de RISCO da peça jurídica.
 Identifique: argumentos fracos, pedidos com baixa probabilidade de êxito, ausência de teses alternativas,
 riscos processuais (preclusão, intempestividade potencial, falta de provas mencionadas).
@@ -176,11 +191,18 @@ DOCUMENTO:
 
 Retorne JSON: {{"nivel_risco": "ALTO|MEDIO|BAIXO", "riscos": [...], "teses_alternativas": [...], "pontos_fortes": [...]}}"""
 
+        call_start_ms = int(time.time() * 1000)
         content, input_t, output_t, cost = await call_claude(
             messages=[{"role": "user", "content": prompt}],
             system=REVIEW_SYSTEM_PROMPT,
             max_tokens=2000,
         )
+        duration_ms = int(time.time() * 1000) - call_start_ms
+        ctx.add_tokens(input_t + output_t, cost)
+        ctx.add_audit_event("LLM_CALL", {
+            "model": "default", "tokens": input_t + output_t,
+            "cost_usd": round(cost, 4), "duration_ms": duration_ms,
+        })
         parsed = _parse_json_dict(content)
         return {
             "resultado": content,
@@ -191,7 +213,7 @@ Retorne JSON: {{"nivel_risco": "ALTO|MEDIO|BAIXO", "riscos": [...], "teses_alter
             "teses_alternativas": parsed.get("teses_alternativas", []),
         }
 
-    async def _etapa_estilo(self, conteudo: str) -> dict:
+    async def _etapa_estilo(self, ctx: AgentContext, conteudo: str) -> dict:
         prompt = f"""Revise o ESTILO da peça jurídica.
 Verifique: adequação da linguagem (formal jurídica), clareza, concisão, redundâncias,
 erros gramaticais (norma culta), uso correto de termos técnicos jurídicos em português.
@@ -201,11 +223,18 @@ DOCUMENTO (primeiros 2000 chars):
 
 Retorne JSON: {{"issues": [...], "sugestoes_estilo": [...], "nota_redacao": 0-10}}"""
 
+        call_start_ms = int(time.time() * 1000)
         content, input_t, output_t, cost = await call_claude(
             messages=[{"role": "user", "content": prompt}],
             system=REVIEW_SYSTEM_PROMPT,
             max_tokens=1500,
         )
+        duration_ms = int(time.time() * 1000) - call_start_ms
+        ctx.add_tokens(input_t + output_t, cost)
+        ctx.add_audit_event("LLM_CALL", {
+            "model": "default", "tokens": input_t + output_t,
+            "cost_usd": round(cost, 4), "duration_ms": duration_ms,
+        })
         parsed = _parse_json_dict(content)
         return {
             "resultado": content,

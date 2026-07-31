@@ -5,6 +5,7 @@ REGRA ABSOLUTA: nunca fabrica ou infere precedentes.
 Toda citação retornada contém: tribunal, relator, número, data, ementa, fonte.
 Resultados sem confirmação são marcados [NÃO VERIFICADO].
 """
+import time
 from typing import ClassVar
 from app.agents.base.agent import BaseAgent
 from app.agents.base.result import AgentResult, AgentStatus
@@ -99,6 +100,7 @@ class JurisprudenceAgent(BaseAgent):
                 f"[{i+1}] {r['tribunal']} — {r['numero_processo']}\nRelator: {r['relator']} | Data: {r['data_julgamento']}\nEmenta: {r['ementa']}"
                 for i, r in enumerate(resultados[:5])
             ])
+            call_start_ms = int(time.time() * 1000)
             content, input_t, output_t, cost = await call_claude(
                 messages=[{
                     "role": "user",
@@ -107,6 +109,12 @@ class JurisprudenceAgent(BaseAgent):
                 system=JURISPRUDENCE_SYSTEM,
                 max_tokens=2000,
             )
+            duration_ms = int(time.time() * 1000) - call_start_ms
+            ctx.add_tokens(input_t + output_t, cost)
+            ctx.add_audit_event("LLM_CALL", {
+                "model": "default", "tokens": input_t + output_t,
+                "cost_usd": round(cost, 4), "duration_ms": duration_ms,
+            })
             analise = content
             total_tokens = input_t + output_t
             total_cost = cost

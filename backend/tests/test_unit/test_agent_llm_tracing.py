@@ -86,3 +86,123 @@ def test_output_trace_e_o_mesmo_ctx_audit_events():
     assert len(output["_trace"]) == 2
     assert output["_trace"][1]["action"] == "LLM_CALL"
     assert output["resumo"] == "tudo certo"  # dado original preservado
+
+
+# ─── Fase 125 — agentes que bypassam ask_llm (call_claude direto) ──────────
+# Cada um desses módulos importa `call_claude` no nível do módulo
+# (`from app.integrations.anthropic_client import call_claude`), diferente
+# de ask_llm() que importa localmente a cada chamada — por isso o monkeypatch
+# aqui precisa mirar o nome dentro do módulo do agente, não anthropic_client.
+
+
+@pytest.mark.asyncio
+async def test_strategy_agent_grava_llm_call_trivial(monkeypatch):
+    """Padrão trivial: 1 call site direto em execute(), ctx já em escopo."""
+    import app.agents.strategy.strategy_agent as strategy_mod
+
+    async def fake_call_claude(messages, system, model=None, max_tokens=8096, temperature=0.3):
+        return "estratégia gerada", 50, 100, 0.02
+
+    monkeypatch.setattr(strategy_mod, "call_claude", fake_call_claude)
+
+    agent = strategy_mod.StrategyAgent()
+    ctx = AgentContext(task_type="test", task_input={"area": "civel", "tipo_acao": "cobranca"})
+    result = await agent.execute(ctx)
+
+    assert result.status == AgentStatus.SUCCESS
+    llm_events = [e for e in ctx.audit_events if e["action"] == "LLM_CALL"]
+    assert len(llm_events) == 1
+    assert llm_events[0]["details"]["tokens"] == 150
+    assert llm_events[0]["details"]["cost_usd"] == 0.02
+    assert ctx.total_tokens == 150
+    assert ctx.total_cost_usd == 0.02
+
+
+@pytest.mark.asyncio
+async def test_review_agent_4_etapas_geram_4_eventos_llm_call(monkeypatch):
+    """Padrão estrutural: ctx precisou ser thread-ado pros 4 helpers
+    _etapa_formal/_etapa_consistencia/_etapa_risco/_etapa_estilo — confirma
+    que cada um grava seu próprio evento (4 chamadas paralelas via gather)."""
+    import app.agents.review.review_agent as review_mod
+
+    chamadas = 0
+
+    async def fake_call_claude(messages, system, model=None, max_tokens=8096, temperature=0.3):
+        nonlocal chamadas
+        chamadas += 1
+        return '{"issues": [], "aprovado": true}', 10, 10, 0.001
+
+    monkeypatch.setattr(review_mod, "call_claude", fake_call_claude)
+
+    agent = review_mod.ReviewAgent()
+    ctx = AgentContext(task_type="test")
+
+    r_formal = await agent._etapa_formal(ctx, "conteúdo de teste", "PETICAO_INICIAL")
+    r_consistencia = await agent._etapa_consistencia(ctx, "conteúdo de teste", [], [])
+    r_risco = await agent._etapa_risco(ctx, "conteúdo de teste", "PETICAO_INICIAL")
+    r_estilo = await agent._etapa_estilo(ctx, "conteúdo de teste")
+
+    assert chamadas == 4
+    assert all(r["tokens"] == 20 for r in (r_formal, r_consistencia, r_risco, r_estilo))
+    llm_events = [e for e in ctx.audit_events if e["action"] == "LLM_CALL"]
+    assert len(llm_events) == 4
+    assert ctx.total_tokens == 80  # 4 × 20
+    assert ctx.total_cost_usd == pytest.approx(0.004)  # 4 × 0.001
+
+
+@pytest.mark.asyncio
+async def test_process_agent_gera_1_evento_llm_call_por_movimento(monkeypatch):
+    """Padrão estrutural: _resumir_movimento não recebia ctx — agora recebe.
+    Roda em loop no polling real (_poll_single_process), então cada movimento
+    resumido deve gerar seu próprio evento (granularidade intencional)."""
+    import app.agents.process.process_agent as process_mod
+
+    async def fake_call_claude(messages, system, model=None, max_tokens=8096, temperature=0.3):
+        return "resumo do andamento", 15, 25, 0.003
+
+    monkeypatch.setattr(process_mod, "call_claude", fake_call_claude)
+
+    agent = process_mod.ProcessAgent()
+    ctx = AgentContext(task_type="test")
+
+    descricao_longa = "Andamento processual detalhado " * 5  # > 50 chars
+    for _ in range(3):
+        content, tokens, _, cost = await agent._resumir_movimento(ctx, {"descricao": descricao_longa})
+        assert content == "resumo do andamento"
+        assert tokens == 40
+        assert cost == 0.003
+
+    llm_events = [e for e in ctx.audit_events if e["action"] == "LLM_CALL"]
+    assert len(llm_events) == 3
+    assert ctx.total_tokens == 120  # 3 × 40
+
+    # descrição curta (<50 chars) não chama call_claude nem gera evento
+    content_curto, tokens_curto, _, cost_curto = await agent._resumir_movimento(ctx, {"descricao": "curto"})
+    assert (content_curto, tokens_curto, cost_curto) == ("curto", 0, 0.0)
+    assert len([e for e in ctx.audit_events if e["action"] == "LLM_CALL"]) == 3  # inalterado
+
+
+@pytest.mark.asyncio
+async def test_innovation_agent_nao_descarta_mais_tokens_e_custo(monkeypatch):
+    """Regressão do bug encontrado junto com o mapeamento desta fase:
+    _gerar_proposta descartava tokens/custo (`content, _, _, _ = ...`) e
+    execute() nunca setava tokens_used/cost_usd no AgentResult — agente
+    reportava custo zero sempre, mesmo gastando IA de verdade."""
+    import app.agents.innovation.innovation_agent as innovation_mod
+
+    async def fake_call_claude(messages, system, model=None, max_tokens=8096, temperature=0.3):
+        return "proposta de melhoria", 80, 200, 0.05
+
+    monkeypatch.setattr(innovation_mod, "call_claude", fake_call_claude)
+
+    agent = innovation_mod.InnovationAgent()
+    ctx = AgentContext(task_type="test", task_input={"foco": "geral"})
+    result = await agent.execute(ctx)
+
+    assert result.status == AgentStatus.SUCCESS
+    assert result.tokens_used == 280
+    assert result.cost_usd == 0.05
+    llm_events = [e for e in ctx.audit_events if e["action"] == "LLM_CALL"]
+    assert len(llm_events) == 1
+    assert llm_events[0]["details"]["tokens"] == 280
+    assert llm_events[0]["details"]["cost_usd"] == 0.05

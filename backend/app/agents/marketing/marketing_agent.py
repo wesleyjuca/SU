@@ -1,4 +1,5 @@
 """marketing_agent — Geração de conteúdo para captação e campanhas jurídicas."""
+import time
 from typing import ClassVar
 from app.agents.base.agent import BaseAgent
 from app.agents.base.result import AgentResult, AgentStatus
@@ -69,11 +70,18 @@ Formato:
 - Máximo 2200 caracteres
 - Tom educativo, não comercial"""
 
+        call_start_ms = int(time.time() * 1000)
         content, input_t, output_t, cost = await call_claude(
             messages=[{"role": "user", "content": prompt}],
             system=MARKETING_SYSTEM,
             max_tokens=800,
         )
+        duration_ms = int(time.time() * 1000) - call_start_ms
+        ctx.add_tokens(input_t + output_t, cost)
+        ctx.add_audit_event("LLM_CALL", {
+            "model": "default", "tokens": input_t + output_t,
+            "cost_usd": round(cost, 4), "duration_ms": duration_ms,
+        })
         return AgentResult(
             status=AgentStatus.AWAITING_APPROVAL,
             agent_name=self.name,
@@ -88,11 +96,18 @@ Formato:
 Formato: Cena por cena com narração e sugestão de visual.
 Regras OAB: educativo, sem prometer resultados."""
 
+        call_start_ms = int(time.time() * 1000)
         content, input_t, output_t, cost = await call_claude(
             messages=[{"role": "user", "content": prompt}],
             system=MARKETING_SYSTEM,
             max_tokens=800,
         )
+        duration_ms = int(time.time() * 1000) - call_start_ms
+        ctx.add_tokens(input_t + output_t, cost)
+        ctx.add_audit_event("LLM_CALL", {
+            "model": "default", "tokens": input_t + output_t,
+            "cost_usd": round(cost, 4), "duration_ms": duration_ms,
+        })
         return AgentResult(
             status=AgentStatus.AWAITING_APPROVAL,
             agent_name=self.name,
@@ -107,11 +122,18 @@ Regras OAB: educativo, sem prometer resultados."""
 Extensão: 600-900 palavras. Tom: autoridade técnica, acessível.
 Estrutura: introdução impactante, desenvolvimento com subtítulos, conclusão com reflexão."""
 
+        call_start_ms = int(time.time() * 1000)
         content, input_t, output_t, cost = await call_claude(
             messages=[{"role": "user", "content": prompt}],
             system=MARKETING_SYSTEM,
             max_tokens=1500,
         )
+        duration_ms = int(time.time() * 1000) - call_start_ms
+        ctx.add_tokens(input_t + output_t, cost)
+        ctx.add_audit_event("LLM_CALL", {
+            "model": "default", "tokens": input_t + output_t,
+            "cost_usd": round(cost, 4), "duration_ms": duration_ms,
+        })
         return AgentResult(
             status=AgentStatus.AWAITING_APPROVAL,
             agent_name=self.name,
