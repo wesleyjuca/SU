@@ -1,16 +1,33 @@
 "use client";
 import { useEffect, useState } from "react";
-import { Bot, KeyRound, CheckCircle2, XCircle, Loader2, Sparkles, Eye, EyeOff, SlidersHorizontal, ChevronDown } from "lucide-react";
+import {
+  Bot, KeyRound, CheckCircle2, XCircle, Loader2, Sparkles, Eye, EyeOff,
+  SlidersHorizontal, ChevronDown, Plus, Star, FlaskConical, Copy, Pencil, Trash2, X,
+} from "lucide-react";
 
-type Settings = { provider: string; model: string; enabled: boolean; has_key: boolean };
-
-const MODEL_HINTS: Record<string, string> = {
-  gemini: "ex.: gemini-2.5-flash (recomendado) · gemini-2.5-pro",
-  anthropic: "ex.: claude-sonnet-5 · claude-opus-4-8",
+type ProviderInfo = {
+  nome: string;
+  auth_methods: string[];
+  base_url: string | null;
+  requires_key: boolean;
+  oauth_disponivel: boolean;
+  modelo_sugerido: string;
+  obter: string;
 };
-const KEY_HELP: Record<string, { label: string; url: string }> = {
-  gemini: { label: "Google AI Studio", url: "https://aistudio.google.com/apikey" },
-  anthropic: { label: "Anthropic Console", url: "https://console.anthropic.com" },
+
+type AIConfig = {
+  id: string;
+  provider: string;
+  display_name: string;
+  auth_method: string;
+  model: string;
+  base_url: string | null;
+  enabled: boolean;
+  is_default: boolean;
+  status: string;
+  has_credential: boolean;
+  last_tested_at: string | null;
+  last_error: string | null;
 };
 
 // Áreas com override de modelo (devem casar com OVERRIDABLE_TASKS do backend)
@@ -23,21 +40,47 @@ const TASK_LABELS: { task: string; label: string }[] = [
   { task: "analytics_report", label: "Relatórios / Analytics" },
 ];
 
+function authH(): HeadersInit {
+  const t = typeof window !== "undefined" ? localStorage.getItem("afj_access_token") : null;
+  return { "Content-Type": "application/json", ...(t ? { Authorization: `Bearer ${t}` } : {}) };
+}
+
 export default function MinhaIAPage() {
-  const [provider, setProvider] = useState("gemini");
-  const [model, setModel] = useState("");
-  const [apiKey, setApiKey] = useState("");
-  const [enabled, setEnabled] = useState(false);
-  const [hasKey, setHasKey] = useState(false);
+  const [configs, setConfigs] = useState<AIConfig[]>([]);
+  const [providers, setProviders] = useState<Record<string, ProviderInfo>>({});
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [testing, setTesting] = useState(false);
-  const [showKey, setShowKey] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [testingId, setTestingId] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [modal, setModal] = useState<{ mode: "add" | "edit"; config: AIConfig | null } | null>(null);
   const [overrides, setOverrides] = useState<Record<string, string>>({});
   const [showOverrides, setShowOverrides] = useState(false);
 
+  async function carregar() {
+    setLoading(true);
+    try {
+      const [rProv, rCfg] = await Promise.all([
+        fetch("/api/v1/users/me/ai-providers", { headers: authH() }),
+        fetch("/api/v1/users/me/ai-configs", { headers: authH() }),
+      ]);
+      if (rCfg.status === 401) {
+        if (typeof window !== "undefined") {
+          localStorage.removeItem("afj_access_token");
+          window.location.href = "/login";
+        }
+        return;
+      }
+      if (rProv.ok) setProviders((await rProv.json()).providers || {});
+      if (rCfg.ok) setConfigs((await rCfg.json()).configs || []);
+    } catch {
+      setMsg({ ok: false, text: "Falha ao carregar suas IAs." });
+    } finally {
+      setLoading(false);
+    }
+  }
+
   useEffect(() => {
+    carregar();
     fetch("/api/v1/users/me/ai-settings/overrides", { headers: authH() })
       .then((r) => (r.ok ? r.json() : null))
       .then((d: { overrides: { task_type: string; model: string }[] } | null) => {
@@ -49,190 +92,308 @@ export default function MinhaIAPage() {
         }
       })
       .catch(() => {});
-    fetch("/api/v1/users/me/ai-settings", { headers: authH() })
-      .then((r) => {
-        // Sessão expirada (SECRET_KEY do servidor mudou / token vencido):
-        // volta ao login em vez de mostrar tela vazia.
-        if (r.status === 401) {
-          if (typeof window !== "undefined") {
-            localStorage.removeItem("afj_access_token");
-            window.location.href = "/login";
-          }
-          return null;
-        }
-        return r.ok ? r.json() : null;
-      })
-      .then((d: Settings | null) => {
-        if (d) {
-          setProvider(d.provider || "gemini");
-          setModel(d.model || "");
-          setEnabled(d.enabled);
-          setHasKey(d.has_key);
-        }
-      })
-      .finally(() => setLoading(false));
   }, []);
 
-  function authH(): HeadersInit {
-    const t = typeof window !== "undefined" ? localStorage.getItem("afj_access_token") : null;
-    return { "Content-Type": "application/json", ...(t ? { Authorization: `Bearer ${t}` } : {}) };
+  async function testar(id: string) {
+    setTestingId(id); setMsg(null);
+    try {
+      const res = await fetch(`/api/v1/users/me/ai-configs/${id}/test`, { method: "POST", headers: authH() });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.ok) setMsg({ ok: true, text: `Conexão OK. Resposta: "${data.sample || "…"}"` });
+      else setMsg({ ok: false, text: data.error || data.detail || "Falha no teste — verifique a chave." });
+      await carregar();
+    } catch { setMsg({ ok: false, text: "Falha de conexão." }); }
+    finally { setTestingId(null); }
   }
 
-  async function save() {
-    setSaving(true); setMsg(null);
+  async function tornarPadrao(id: string) {
+    setBusyId(id); setMsg(null);
     try {
-      const body: Record<string, unknown> = { provider, model, enabled };
-      if (apiKey.trim()) body.api_key = apiKey.trim();
-      const res = await fetch("/api/v1/users/me/ai-settings", { method: "PUT", headers: authH(), body: JSON.stringify(body) });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) { setMsg({ ok: false, text: data.detail || "Erro ao salvar" }); return; }
-      setHasKey(data.has_key); setApiKey("");
+      const res = await fetch(`/api/v1/users/me/ai-configs/${id}/set-default`, { method: "POST", headers: authH() });
+      if (!res.ok) { const d = await res.json().catch(() => ({})); setMsg({ ok: false, text: d.detail || "Erro ao definir como padrão" }); return; }
+      await carregar();
+    } catch { setMsg({ ok: false, text: "Falha de conexão." }); }
+    finally { setBusyId(null); }
+  }
 
-      // Salva os ajustes por área (campos vazios = usa o modelo global)
-      const list = Object.entries(overrides)
-        .map(([task_type, m]) => ({ task_type, model: m.trim() }))
-        .filter((o) => o.model);
-      const resOv = await fetch("/api/v1/users/me/ai-settings/overrides", {
+  async function duplicar(id: string) {
+    setBusyId(id); setMsg(null);
+    try {
+      const res = await fetch(`/api/v1/users/me/ai-configs/${id}/duplicate`, { method: "POST", headers: authH() });
+      if (!res.ok) { const d = await res.json().catch(() => ({})); setMsg({ ok: false, text: d.detail || "Erro ao duplicar" }); return; }
+      await carregar();
+    } catch { setMsg({ ok: false, text: "Falha de conexão." }); }
+    finally { setBusyId(null); }
+  }
+
+  async function remover(id: string) {
+    if (!confirm("Remover esta IA? Essa ação não pode ser desfeita.")) return;
+    setBusyId(id); setMsg(null);
+    try {
+      const res = await fetch(`/api/v1/users/me/ai-configs/${id}`, { method: "DELETE", headers: authH() });
+      if (!res.ok && res.status !== 204) { const d = await res.json().catch(() => ({})); setMsg({ ok: false, text: d.detail || "Erro ao remover" }); return; }
+      await carregar();
+    } catch { setMsg({ ok: false, text: "Falha de conexão." }); }
+    finally { setBusyId(null); }
+  }
+
+  async function salvarOverrides() {
+    const list = Object.entries(overrides)
+      .map(([task_type, m]) => ({ task_type, model: m.trim() }))
+      .filter((o) => o.model);
+    try {
+      const res = await fetch("/api/v1/users/me/ai-settings/overrides", {
         method: "PUT", headers: authH(), body: JSON.stringify({ overrides: list }),
       });
-      if (!resOv.ok) {
-        const dOv = await resOv.json().catch(() => ({}));
-        setMsg({ ok: false, text: dOv.detail || "Configuração salva, mas houve erro nos ajustes por área." });
-        return;
-      }
-      setMsg({ ok: true, text: "Configuração salva com sucesso." });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) { setMsg({ ok: false, text: d.detail || "Erro ao salvar ajustes por área" }); return; }
+      setMsg({ ok: true, text: "Ajustes por área salvos." });
     } catch { setMsg({ ok: false, text: "Falha de conexão." }); }
-    finally { setSaving(false); }
-  }
-
-  async function test() {
-    setTesting(true); setMsg(null);
-    try {
-      const res = await fetch("/api/v1/users/me/ai-settings/test", { method: "POST", headers: authH() });
-      const data = await res.json().catch(() => ({}));
-      if (res.ok && data.ok) setMsg({ ok: true, text: `Conexão OK com ${provider}. Resposta: "${data.sample || "…"}"` });
-      else setMsg({ ok: false, text: data.error || data.detail || "Falha no teste — verifique a chave." });
-    } catch { setMsg({ ok: false, text: "Falha de conexão." }); }
-    finally { setTesting(false); }
   }
 
   if (loading) return <div className="p-8 flex justify-center"><Loader2 className="animate-spin text-afj-gold" /></div>;
 
-  const help = KEY_HELP[provider];
-
   return (
-    <div className="max-w-2xl mx-auto p-6">
+    <div className="max-w-3xl mx-auto p-6">
       <div className="afj-page-header">
         <div>
-          <h1 className="afj-page-title flex items-center gap-2"><Bot size={20} className="text-afj-gold" /> Minha IA</h1>
-          <p className="text-afj-black/45 text-sm mt-1">Use sua própria IA (grátis ou paga) — os tokens saem da sua conta e o crédito do sistema é preservado.</p>
+          <h1 className="afj-page-title flex items-center gap-2"><Bot size={20} className="text-afj-gold" /> Minhas IAs</h1>
+          <p className="text-afj-black/45 text-sm mt-1">Cadastre uma ou mais IAs (grátis ou pagas) — os tokens saem da sua conta e o crédito do sistema é preservado.</p>
         </div>
+        <button onClick={() => setModal({ mode: "add", config: null })} className="btn-afj-primary py-2.5 flex items-center gap-2">
+          <Plus size={16} /> Adicionar IA
+        </button>
       </div>
 
-      <div className="afj-card p-6 space-y-5">
-        {/* Campos-isca ocultos: absorvem o autofill do navegador (email/senha de login)
-            para que ele não preencha os campos reais de modelo/chave. */}
+      {msg && (
+        <div className={`flex items-start gap-2 text-xs rounded-sm px-3 py-2.5 mb-4 ${msg.ok ? "text-green-700 bg-green-50 border border-green-200" : "text-red-700 bg-red-50 border border-red-200"}`}>
+          {msg.ok ? <CheckCircle2 size={14} className="flex-shrink-0 mt-0.5" /> : <XCircle size={14} className="flex-shrink-0 mt-0.5" />}
+          <span className="leading-relaxed">{msg.text}</span>
+        </div>
+      )}
+
+      {configs.length === 0 ? (
+        <div className="afj-card p-8 text-center text-sm text-afj-black/45">
+          <Sparkles size={22} className="text-afj-gold mx-auto mb-2" />
+          Nenhuma IA cadastrada ainda. Clique em &quot;Adicionar IA&quot; para usar sua própria chave (Anthropic, OpenAI, Gemini, Grok, DeepSeek, OpenRouter ou um modelo local via Ollama).
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {configs.map((c) => {
+            const info = providers[c.provider];
+            return (
+              <div key={c.id} className="afj-card p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-medium text-sm text-afj-black">{c.display_name}</span>
+                      {c.is_default && (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-afj-gold/15 text-afj-gold font-semibold flex items-center gap-1">
+                          <Star size={10} fill="currentColor" /> Padrão
+                        </span>
+                      )}
+                      <span className={`text-[10px] px-2 py-0.5 rounded-full ${c.status === "ERRO" ? "bg-red-50 text-red-600" : "bg-green-50 text-green-600"}`}>
+                        {c.status === "ERRO" ? "Erro" : "Ativa"}
+                      </span>
+                      {!c.enabled && <span className="text-[10px] px-2 py-0.5 rounded-full bg-afj-cream text-afj-black/40">Desativada</span>}
+                    </div>
+                    <p className="text-xs text-afj-black/45 mt-1">
+                      {info?.nome || c.provider} {c.model && `· ${c.model}`}
+                    </p>
+                    {c.last_error && <p className="text-[11px] text-red-500 mt-1">{c.last_error}</p>}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 mt-3 flex-wrap">
+                  <button onClick={() => testar(c.id)} disabled={testingId === c.id || (!c.has_credential && c.auth_method !== "none")}
+                    className="btn-afj-outline text-xs px-3 py-1.5 flex items-center gap-1.5 disabled:opacity-40">
+                    {testingId === c.id ? <Loader2 size={12} className="animate-spin" /> : <FlaskConical size={12} />} Testar
+                  </button>
+                  <button onClick={() => setModal({ mode: "edit", config: c })} className="btn-afj-outline text-xs px-3 py-1.5 flex items-center gap-1.5">
+                    <Pencil size={12} /> Editar
+                  </button>
+                  <button onClick={() => duplicar(c.id)} disabled={busyId === c.id} className="btn-afj-outline text-xs px-3 py-1.5 flex items-center gap-1.5 disabled:opacity-40">
+                    <Copy size={12} /> Duplicar
+                  </button>
+                  {!c.is_default && (
+                    <button onClick={() => tornarPadrao(c.id)} disabled={busyId === c.id} className="btn-afj-outline text-xs px-3 py-1.5 flex items-center gap-1.5 disabled:opacity-40">
+                      <Star size={12} /> Tornar padrão
+                    </button>
+                  )}
+                  <button onClick={() => remover(c.id)} disabled={busyId === c.id} className="text-xs px-3 py-1.5 flex items-center gap-1.5 text-red-500 hover:bg-red-50 rounded-sm disabled:opacity-40">
+                    <Trash2 size={12} /> Remover
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Ajuste por área: modelo diferente por tipo de tarefa (opcional) */}
+      <div className="afj-card mt-4 border border-afj-cream-dark rounded-sm overflow-hidden">
+        <button type="button" onClick={() => setShowOverrides((v) => !v)}
+          className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-afj-cream/40 transition-colors">
+          <span className="flex items-center gap-2 text-sm text-afj-black/75">
+            <SlidersHorizontal size={14} className="text-afj-gold" />
+            Ajuste por área <span className="text-afj-black/35 text-xs">(opcional — modelo diferente por tarefa, mesma IA padrão)</span>
+          </span>
+          <ChevronDown size={15} className={`text-afj-black/30 transition-transform ${showOverrides ? "rotate-180" : ""}`} />
+        </button>
+        {showOverrides && (
+          <div className="px-4 pb-4 pt-1 border-t border-afj-cream-dark space-y-2.5">
+            <p className="text-[11px] text-afj-black/45 leading-relaxed">
+              Use um modelo específico em cada área (ex.: um premium para petições, um rápido para relatórios).
+              Em branco = usa o modelo da sua IA padrão.
+            </p>
+            {TASK_LABELS.map(({ task, label }) => (
+              <div key={task} className="flex items-center gap-3">
+                <span className="text-xs text-afj-black/60 w-44 flex-shrink-0">{label}</span>
+                <input
+                  value={overrides[task] || ""}
+                  onChange={(e) => setOverrides((o) => ({ ...o, [task]: e.target.value }))}
+                  placeholder="modelo da IA padrão"
+                  name={`afj-ai-override-${task}`} autoComplete="off" data-lpignore="true" data-1p-ignore
+                  className="flex-1 bg-afj-cream border border-afj-cream-dark rounded-sm px-3 py-1.5 text-xs placeholder:text-afj-black/25 focus:outline-none focus:border-afj-gold"
+                />
+              </div>
+            ))}
+            <button onClick={salvarOverrides} className="btn-afj-primary text-xs py-1.5 mt-1">Salvar ajustes por área</button>
+          </div>
+        )}
+      </div>
+
+      {modal && (
+        <AIConfigModal
+          mode={modal.mode}
+          config={modal.config}
+          providers={providers}
+          onClose={() => setModal(null)}
+          onSaved={() => { setModal(null); carregar(); }}
+          onError={(text) => setMsg({ ok: false, text })}
+        />
+      )}
+    </div>
+  );
+}
+
+function AIConfigModal({
+  mode, config, providers, onClose, onSaved, onError,
+}: {
+  mode: "add" | "edit";
+  config: AIConfig | null;
+  providers: Record<string, ProviderInfo>;
+  onClose: () => void;
+  onSaved: () => void;
+  onError: (text: string) => void;
+}) {
+  const providerKeys = Object.keys(providers);
+  const [provider, setProvider] = useState(config?.provider || providerKeys[0] || "anthropic");
+  const [displayName, setDisplayName] = useState(config?.display_name || "");
+  const [apiKey, setApiKey] = useState("");
+  const [model, setModel] = useState(config?.model || "");
+  const [baseUrl, setBaseUrl] = useState(config?.base_url || "");
+  const [enabled, setEnabled] = useState(config?.enabled ?? true);
+  const [showKey, setShowKey] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  const info = providers[provider];
+  const precisaUrlPropria = info && !info.base_url; // hoje só ollama
+
+  async function salvar() {
+    setSaving(true);
+    try {
+      const body: Record<string, unknown> = mode === "add"
+        ? { provider, display_name: displayName.trim() || undefined, model: model.trim() || undefined, base_url: baseUrl.trim() || undefined, enabled }
+        : { display_name: displayName.trim() || undefined, model: model.trim() || undefined, base_url: baseUrl.trim() || undefined, enabled };
+      if (apiKey.trim()) body.api_key = apiKey.trim();
+
+      const url = mode === "add" ? "/api/v1/users/me/ai-configs" : `/api/v1/users/me/ai-configs/${config!.id}`;
+      const method = mode === "add" ? "POST" : "PATCH";
+      const res = await fetch(url, { method, headers: authH(), body: JSON.stringify(body) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { onError(data.detail || "Erro ao salvar"); return; }
+      onSaved();
+    } catch { onError("Falha de conexão."); }
+    finally { setSaving(false); }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div className="afj-card w-full max-w-md p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <h2 className="font-semibold text-afj-black">{mode === "add" ? "Adicionar IA" : "Editar IA"}</h2>
+          <button onClick={onClose} className="text-afj-black/40 hover:text-afj-black/70"><X size={18} /></button>
+        </div>
+
+        {/* Campos-isca ocultos: absorvem o autofill do navegador */}
         <input type="text" name="username" autoComplete="username" tabIndex={-1} aria-hidden="true"
           style={{ position: "absolute", opacity: 0, height: 0, width: 0, pointerEvents: "none" }} />
         <input type="password" name="password" autoComplete="current-password" tabIndex={-1} aria-hidden="true"
           style={{ position: "absolute", opacity: 0, height: 0, width: 0, pointerEvents: "none" }} />
 
-        <div className="flex items-start gap-2 text-xs text-afj-black/55 bg-afj-cream/60 border border-afj-cream-dark rounded-sm p-3">
-          <Sparkles size={14} className="text-afj-gold flex-shrink-0 mt-0.5" />
-          <span>Quando ativado, seus agentes usam a chave configurada aqui. Se desativar, o sistema usa a IA padrão do escritório.</span>
-        </div>
+        {mode === "add" && (
+          <div>
+            <label className="text-[10px] font-semibold text-afj-black/55 uppercase tracking-widest block mb-1.5">Provedor</label>
+            <select value={provider} onChange={(e) => { setProvider(e.target.value); setModel(""); }}
+              className="w-full bg-afj-cream border border-afj-cream-dark rounded-sm px-3 py-2.5 text-sm focus:outline-none focus:border-afj-gold">
+              {providerKeys.map((k) => <option key={k} value={k}>{providers[k].nome}</option>)}
+            </select>
+          </div>
+        )}
 
         <div>
-          <label className="text-[10px] font-semibold text-afj-black/55 uppercase tracking-widest block mb-1.5">Provedor</label>
-          <select value={provider} onChange={(e) => setProvider(e.target.value)}
-            className="w-full bg-afj-cream border border-afj-cream-dark rounded-sm px-3 py-2.5 text-sm focus:outline-none focus:border-afj-gold">
-            <option value="gemini">Google Gemini</option>
-            <option value="anthropic">Anthropic Claude</option>
-          </select>
-        </div>
-
-        <div>
-          <label className="text-[10px] font-semibold text-afj-black/55 uppercase tracking-widest block mb-1.5">Modelo (opcional)</label>
-          <input value={model} onChange={(e) => setModel(e.target.value)} placeholder={MODEL_HINTS[provider]}
-            name="afj-ai-model" autoComplete="off" data-lpignore="true" data-1p-ignore data-form-type="other"
+          <label className="text-[10px] font-semibold text-afj-black/55 uppercase tracking-widest block mb-1.5">Nome de exibição (opcional)</label>
+          <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder={info?.nome || "ex.: minha conta pessoal"}
+            name="afj-ai-display-name" autoComplete="off" data-lpignore="true" data-1p-ignore
             className="w-full bg-afj-cream border border-afj-cream-dark rounded-sm px-3 py-2.5 text-sm placeholder:text-afj-black/25 focus:outline-none focus:border-afj-gold" />
         </div>
 
         <div>
-          <label className="text-[10px] font-semibold text-afj-black/55 uppercase tracking-widest flex items-center gap-1.5 mb-1.5">
-            <KeyRound size={12} /> Chave de API {hasKey && <span className="text-green-600 normal-case tracking-normal font-normal">· chave configurada</span>}
-          </label>
-          <div className="relative">
-            <input type={showKey ? "text" : "password"} value={apiKey} onChange={(e) => setApiKey(e.target.value)}
-              placeholder={hasKey ? "•••••••••• (deixe em branco para manter)" : "cole sua chave de API aqui"}
-              name="afj-ai-secret" autoComplete="new-password" data-lpignore="true" data-1p-ignore data-form-type="other"
-              spellCheck={false}
-              className="w-full bg-afj-cream border border-afj-cream-dark rounded-sm px-3 py-2.5 pr-11 text-sm placeholder:text-afj-black/25 focus:outline-none focus:border-afj-gold" />
-            <button type="button" onClick={() => setShowKey((v) => !v)}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-afj-black/30 hover:text-afj-black/60"
-              aria-label={showKey ? "Ocultar chave" : "Mostrar chave"}>
-              {showKey ? <EyeOff size={15} /> : <Eye size={15} />}
-            </button>
+          <label className="text-[10px] font-semibold text-afj-black/55 uppercase tracking-widest block mb-1.5">Modelo (opcional)</label>
+          <input value={model} onChange={(e) => setModel(e.target.value)} placeholder={info?.modelo_sugerido || ""}
+            name="afj-ai-model" autoComplete="off" data-lpignore="true" data-1p-ignore data-form-type="other"
+            className="w-full bg-afj-cream border border-afj-cream-dark rounded-sm px-3 py-2.5 text-sm placeholder:text-afj-black/25 focus:outline-none focus:border-afj-gold" />
+        </div>
+
+        {precisaUrlPropria ? (
+          <div>
+            <label className="text-[10px] font-semibold text-afj-black/55 uppercase tracking-widest block mb-1.5">URL do servidor</label>
+            <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="http://localhost:11434/v1"
+              name="afj-ai-base-url" autoComplete="off"
+              className="w-full bg-afj-cream border border-afj-cream-dark rounded-sm px-3 py-2.5 text-sm placeholder:text-afj-black/25 focus:outline-none focus:border-afj-gold" />
+            <p className="text-[11px] text-afj-black/40 mt-1.5">Modelo local — sem autenticação, só a URL do seu servidor Ollama.</p>
           </div>
-          {help && (
-            <p className="text-[11px] text-afj-black/40 mt-1.5">
-              Obtenha a chave em{" "}
-              <a href={help.url} target="_blank" rel="noreferrer" className="text-afj-gold hover:underline">{help.label}</a>.
-            </p>
-          )}
-        </div>
-
-        <label className="flex items-center gap-2.5 cursor-pointer">
-          <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} className="accent-afj-gold w-4 h-4" />
-          <span className="text-sm text-afj-black/75">Usar minha IA nas execuções dos agentes</span>
-        </label>
-
-        {/* Ajuste por área: modelo diferente por tipo de tarefa (opcional) */}
-        <div className="border border-afj-cream-dark rounded-sm">
-          <button type="button" onClick={() => setShowOverrides((v) => !v)}
-            className="w-full flex items-center justify-between px-3 py-2.5 text-left hover:bg-afj-cream/40 transition-colors">
-            <span className="flex items-center gap-2 text-sm text-afj-black/75">
-              <SlidersHorizontal size={14} className="text-afj-gold" />
-              Ajuste por área <span className="text-afj-black/35 text-xs">(opcional — modelo diferente por tarefa)</span>
-            </span>
-            <ChevronDown size={15} className={`text-afj-black/30 transition-transform ${showOverrides ? "rotate-180" : ""}`} />
-          </button>
-          {showOverrides && (
-            <div className="px-3 pb-3 pt-1 border-t border-afj-cream-dark space-y-2.5">
-              <p className="text-[11px] text-afj-black/45 leading-relaxed">
-                Use um modelo específico em cada área (ex.: um premium para petições, um rápido para relatórios).
-                Em branco = usa o modelo global acima. Mesmo provedor e chave.
-              </p>
-              {TASK_LABELS.map(({ task, label }) => (
-                <div key={task} className="flex items-center gap-3">
-                  <span className="text-xs text-afj-black/60 w-44 flex-shrink-0">{label}</span>
-                  <input
-                    value={overrides[task] || ""}
-                    onChange={(e) => setOverrides((o) => ({ ...o, [task]: e.target.value }))}
-                    placeholder={model || "modelo global"}
-                    name={`afj-ai-override-${task}`} autoComplete="off" data-lpignore="true" data-1p-ignore
-                    className="flex-1 bg-afj-cream border border-afj-cream-dark rounded-sm px-3 py-1.5 text-xs placeholder:text-afj-black/25 focus:outline-none focus:border-afj-gold"
-                  />
-                </div>
-              ))}
+        ) : (
+          <div>
+            <label className="text-[10px] font-semibold text-afj-black/55 uppercase tracking-widest flex items-center gap-1.5 mb-1.5">
+              <KeyRound size={12} /> Chave de API {config?.has_credential && <span className="text-green-600 normal-case tracking-normal font-normal">· chave configurada</span>}
+            </label>
+            <div className="relative">
+              <input type={showKey ? "text" : "password"} value={apiKey} onChange={(e) => setApiKey(e.target.value)}
+                placeholder={config?.has_credential ? "•••••••••• (deixe em branco para manter)" : "cole sua chave de API aqui"}
+                name="afj-ai-secret" autoComplete="new-password" data-lpignore="true" data-1p-ignore data-form-type="other"
+                spellCheck={false}
+                className="w-full bg-afj-cream border border-afj-cream-dark rounded-sm px-3 py-2.5 pr-11 text-sm placeholder:text-afj-black/25 focus:outline-none focus:border-afj-gold" />
+              <button type="button" onClick={() => setShowKey((v) => !v)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-afj-black/30 hover:text-afj-black/60"
+                aria-label={showKey ? "Ocultar chave" : "Mostrar chave"}>
+                {showKey ? <EyeOff size={15} /> : <Eye size={15} />}
+              </button>
             </div>
-          )}
-        </div>
-
-        {msg && (
-          <div className={`flex items-start gap-2 text-xs rounded-sm px-3 py-2.5 ${msg.ok ? "text-green-700 bg-green-50 border border-green-200" : "text-red-700 bg-red-50 border border-red-200"}`}>
-            {msg.ok ? <CheckCircle2 size={14} className="flex-shrink-0 mt-0.5" /> : <XCircle size={14} className="flex-shrink-0 mt-0.5" />}
-            <span className="leading-relaxed">{msg.text}</span>
+            {info?.obter && <p className="text-[11px] text-afj-black/40 mt-1.5">Obtenha a chave em {info.obter}</p>}
           </div>
         )}
 
+        <label className="flex items-center gap-2.5 cursor-pointer">
+          <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} className="accent-afj-gold w-4 h-4" />
+          <span className="text-sm text-afj-black/75">Ativa</span>
+        </label>
+
         <div className="flex items-center gap-3 pt-1">
-          <button onClick={save} disabled={saving} className="btn-afj-primary py-2.5 disabled:opacity-50 flex items-center gap-2">
+          <button onClick={salvar} disabled={saving} className="btn-afj-primary py-2.5 disabled:opacity-50 flex items-center gap-2">
             {saving && <Loader2 size={14} className="animate-spin" />} Salvar
           </button>
-          <button onClick={test} disabled={testing || !hasKey} className="btn-afj-outline py-2.5 disabled:opacity-40 flex items-center gap-2" title={!hasKey ? "Salve uma chave primeiro" : "Testar conexão"}>
-            {testing && <Loader2 size={14} className="animate-spin" />} Testar conexão
-          </button>
+          <button onClick={onClose} className="btn-afj-outline py-2.5">Cancelar</button>
         </div>
       </div>
     </div>

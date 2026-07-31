@@ -125,12 +125,12 @@ async def test_call_anthropic_nao_retenta_erro_nao_transiente(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_call_gemini_retenta_uma_vez_em_erro_transiente(monkeypatch):
+async def test_call_openai_compatible_retenta_uma_vez_em_erro_transiente(monkeypatch):
     fake_client = _FakeOpenAIClient(fails_then_succeeds=1)
-    monkeypatch.setattr(llm_client, "_get_gemini", lambda api_key: fake_client)
+    monkeypatch.setattr(llm_client, "_get_openai_compatible", lambda base_url, api_key: fake_client)
 
-    content, in_t, out_t, finish_reason = await llm_client._call_gemini(
-        "key", [{"role": "user", "content": "oi"}], "", "gemini-2.5-flash", 100, 0.1
+    content, in_t, out_t, finish_reason = await llm_client._call_openai_compatible(
+        "https://example.invalid/v1", "key", [{"role": "user", "content": "oi"}], "", "gemini-2.5-flash", 100, 0.1
     )
     assert content == "ok"
     assert finish_reason == "stop"
@@ -138,13 +138,13 @@ async def test_call_gemini_retenta_uma_vez_em_erro_transiente(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_call_gemini_nao_retenta_erro_nao_transiente(monkeypatch):
+async def test_call_openai_compatible_nao_retenta_erro_nao_transiente(monkeypatch):
     fake_client = _FakeOpenAIClient(fails_then_succeeds=5, error_cls=openai.AuthenticationError)
-    monkeypatch.setattr(llm_client, "_get_gemini", lambda api_key: fake_client)
+    monkeypatch.setattr(llm_client, "_get_openai_compatible", lambda base_url, api_key: fake_client)
 
     with pytest.raises(openai.AuthenticationError):
-        await llm_client._call_gemini(
-            "key", [{"role": "user", "content": "oi"}], "", "gemini-2.5-flash", 100, 0.1
+        await llm_client._call_openai_compatible(
+            "https://example.invalid/v1", "key", [{"role": "user", "content": "oi"}], "", "gemini-2.5-flash", 100, 0.1
         )
     assert fake_client.chat.completions.calls == 1
 
@@ -178,9 +178,19 @@ async def test_call_llm_nao_sinaliza_truncamento_quando_completo(monkeypatch):
 @pytest.mark.asyncio
 async def test_call_llm_sinaliza_truncamento_gemini(monkeypatch):
     fake_client = _FakeOpenAIClient(finish_reason="length")
-    monkeypatch.setattr(llm_client, "_get_gemini", lambda api_key: fake_client)
+    monkeypatch.setattr(llm_client, "_get_openai_compatible", lambda base_url, api_key: fake_client)
     monkeypatch.setattr(llm_client.settings, "AI_PROVIDER", "gemini")
     monkeypatch.setattr(llm_client.settings, "GEMINI_API_KEY", "key")
 
     await llm_client.call_llm(messages=[{"role": "user", "content": "oi"}])
     assert llm_client.last_call_truncated_ctx.get() is True
+
+
+@pytest.mark.asyncio
+async def test_resolve_provider_reconhece_os_7_nomes():
+    """Fase 137.1 — resolve_provider() passou de 2 pra 7 provedores conhecidos,
+    com fallback seguro (não silencioso: loga) pra nome desconhecido."""
+    for nome in ("anthropic", "openai", "gemini", "grok", "deepseek", "openrouter", "ollama"):
+        assert llm_client.resolve_provider(nome) == nome
+    assert llm_client.resolve_provider("google") == "gemini"  # alias
+    assert llm_client.resolve_provider("nome-que-nao-existe") == "anthropic"  # fallback seguro

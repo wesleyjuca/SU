@@ -1,12 +1,14 @@
-"""Camada multi-provider de LLM (Anthropic Claude + Google Gemini).
+"""Camada multi-provider de LLM.
 
 Todos os agentes chamam `call_claude`, que delega para `call_llm`. O provider
-ativo é escolhido por `settings.AI_PROVIDER` (ou pelo argumento `provider`),
-permitindo trocar/plugar múltiplas IAs sem alterar nenhum agente.
+ativo é escolhido por `settings.AI_PROVIDER` (ou pelo argumento `provider`,
+ou pela IA própria do usuário via BYOK — `ai_creds_ctx`), permitindo trocar/
+plugar múltiplas IAs sem alterar nenhum agente.
 
 - anthropic: SDK oficial Anthropic.
-- gemini:   endpoint OpenAI-compatível do Google (reusa o SDK `openai` já
-            instalado; sem dependência nova).
+- todos os demais (openai/gemini/grok/deepseek/openrouter/ollama): endpoint
+  compatível com a API da OpenAI (reusa o SDK `openai` já instalado) — só
+  muda `base_url` e se exige chave. Ver `app.services.ai_providers`.
 
 Retorno padronizado: (content, input_tokens, output_tokens, cost_usd).
 """
@@ -32,7 +34,9 @@ _RETRY_KWARGS = dict(stop=stop_after_attempt(2), wait=wait_exponential(multiplie
 
 # Credenciais de IA por-requisição (BYOK). Setado pelo orquestrador com a IA do
 # usuário disparador; quando presente, sobrepõe as settings do sistema.
-# Formato: {"provider": str, "api_key": str, "model": str | None}
+# Formato: {"provider": str, "api_key": str, "model": str | None, "base_url": str | None}
+# `base_url` só é usado pra provedores sem URL fixa no registro (hoje só
+# Ollama, self-hosted) — Fase 137.1.
 ai_creds_ctx: "contextvars.ContextVar[dict | None]" = contextvars.ContextVar("ai_creds", default=None)
 
 # Fase 130 — sinaliza se a ÚLTIMA chamada de `call_llm` foi cortada por
@@ -60,7 +64,14 @@ MODEL_PRICING = {
 
 GEMINI_OPENAI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 
-# Cache de clientes por (provider, api_key) — chaves diferem por usuário (BYOK)
+# Fase 137.1 — provedores conhecidos (nome canônico + apelidos aceitos). Só
+# "anthropic" usa SDK próprio (_call_anthropic); todos os demais passam pelo
+# endpoint OpenAI-compatível genérico (_call_openai_compatible).
+_KNOWN_PROVIDERS = {"anthropic", "openai", "gemini", "grok", "deepseek", "openrouter", "ollama"}
+_PROVIDER_ALIASES = {"google": "gemini", "claude": "anthropic", "xai": "grok"}
+
+# Cache de clientes por (provider, api_key, base_url) — chaves diferem por
+# usuário (BYOK) e por provedor (base_url diferente por provedor).
 _client_cache: dict = {}
 
 
@@ -70,12 +81,44 @@ def _cost(model: str, input_tokens: int, output_tokens: int) -> float:
 
 
 def resolve_provider(provider: str | None) -> str:
+    """Normaliza o nome do provider. Nome desconhecido cai em 'anthropic'
+    (fail-soft, com log) — nunca derruba a chamada por um nome errado."""
     p = (provider or settings.AI_PROVIDER or "anthropic").lower()
-    return "gemini" if p in ("gemini", "google") else "anthropic"
+    p = _PROVIDER_ALIASES.get(p, p)
+    if p in _KNOWN_PROVIDERS:
+        return p
+    import structlog
+    structlog.get_logger().warning("llm_provider_desconhecido", provider=p)
+    return "anthropic"
 
 
 def _default_model(provider: str) -> str:
-    return settings.DEFAULT_GEMINI_MODEL if provider == "gemini" else settings.DEFAULT_CLAUDE_MODEL
+    from app.services.ai_providers import get_provider
+    if provider == "anthropic":
+        return settings.DEFAULT_CLAUDE_MODEL
+    if provider == "gemini":
+        return settings.DEFAULT_GEMINI_MODEL
+    info = get_provider(provider)
+    return (info or {}).get("modelo_sugerido") or settings.DEFAULT_CLAUDE_MODEL
+
+
+def _system_api_key(provider: str) -> str:
+    """Chave do sistema (sem BYOK) — só configurada pra anthropic/gemini hoje.
+    Provedores novos (openai/grok/deepseek/openrouter/ollama) são BYOK-only
+    nesta fase — sem chave própria do usuário, a chamada falha com erro de
+    auth (esperado, não é um bug: não há chave central pra esses provedores)."""
+    if provider == "gemini":
+        return settings.GEMINI_API_KEY or settings.OPENAI_API_KEY
+    if provider == "anthropic":
+        return settings.ANTHROPIC_API_KEY
+    return ""
+
+
+def _provider_base_url(provider: str, custom_base_url: str | None) -> str | None:
+    if provider == "gemini":
+        return GEMINI_OPENAI_BASE_URL
+    from app.services.ai_providers import resolve_base_url
+    return resolve_base_url(provider, custom_base_url)
 
 
 # ─── Anthropic ───────────────────────────────────────────────────────────────
@@ -98,18 +141,21 @@ async def _call_anthropic(api_key, messages, system, model, max_tokens, temperat
     return content, resp.usage.input_tokens, resp.usage.output_tokens, resp.stop_reason
 
 
-# ─── Gemini (via endpoint OpenAI-compatível) ─────────────────────────────────
-def _get_gemini(api_key: str):
-    ck = ("gemini", api_key)
+# ─── Endpoint OpenAI-compatível genérico (gemini/openai/grok/deepseek/ ───────
+# ─── openrouter/ollama — todos expõem essa API, só muda base_url/chave) ──────
+def _get_openai_compatible(base_url: str, api_key: str):
+    ck = ("openai_compat", base_url, api_key)
     if ck not in _client_cache:
         from openai import AsyncOpenAI
-        _client_cache[ck] = AsyncOpenAI(api_key=api_key, base_url=GEMINI_OPENAI_BASE_URL)
+        # Ollama (auth_method="none") não exige chave — o SDK openai exige uma
+        # string não-vazia pra instanciar o client; qualquer valor serve.
+        _client_cache[ck] = AsyncOpenAI(api_key=api_key or "not-needed", base_url=base_url)
     return _client_cache[ck]
 
 
 @retry(retry=retry_if_exception_type(_RETRYABLE_OPENAI), **_RETRY_KWARGS)
-async def _call_gemini(api_key, messages, system, model, max_tokens, temperature):
-    client = _get_gemini(api_key)
+async def _call_openai_compatible(base_url, api_key, messages, system, model, max_tokens, temperature):
+    client = _get_openai_compatible(base_url, api_key)
     # OpenAI-compat: system vira uma mensagem role=system no início
     oai_messages = ([{"role": "system", "content": system}] if system else []) + list(messages)
     resp = await client.chat.completions.create(
@@ -147,30 +193,33 @@ async def call_llm(
         prov = resolve_provider(provider or creds.get("provider"))
         api_key = creds["api_key"]
         mdl = model or creds.get("model") or _default_model(prov)
+        base_url = _provider_base_url(prov, creds.get("base_url"))
     else:
         prov = resolve_provider(provider)
-        api_key = (settings.GEMINI_API_KEY or settings.OPENAI_API_KEY) if prov == "gemini" else settings.ANTHROPIC_API_KEY
+        api_key = _system_api_key(prov)
         mdl = model or _default_model(prov)
+        base_url = _provider_base_url(prov, None)
 
-    if prov == "gemini":
-        content, in_t, out_t, finish_reason = await _call_gemini(api_key, messages, system, mdl, max_tokens, temperature)
-        last_call_truncated_ctx.set(finish_reason == "length")
-    else:
+    if prov == "anthropic":
         content, in_t, out_t, finish_reason = await _call_anthropic(api_key, messages, system, mdl, max_tokens, temperature)
         last_call_truncated_ctx.set(finish_reason == "max_tokens")
+    else:
+        content, in_t, out_t, finish_reason = await _call_openai_compatible(base_url, api_key, messages, system, mdl, max_tokens, temperature)
+        last_call_truncated_ctx.set(finish_reason == "length")
 
     return content, in_t, out_t, _cost(mdl, in_t, out_t)
 
 
 def _resolve_creds(provider, model):
-    """Resolve (prov, api_key, mdl) considerando BYOK — igual ao call_llm."""
+    """Resolve (prov, api_key, mdl, base_url) considerando BYOK — igual ao call_llm."""
     creds = ai_creds_ctx.get()
     if creds and creds.get("api_key"):
         prov = resolve_provider(provider or creds.get("provider"))
-        return prov, creds["api_key"], model or creds.get("model") or _default_model(prov)
+        mdl = model or creds.get("model") or _default_model(prov)
+        return prov, creds["api_key"], mdl, _provider_base_url(prov, creds.get("base_url"))
     prov = resolve_provider(provider)
-    api_key = (settings.GEMINI_API_KEY or settings.OPENAI_API_KEY) if prov == "gemini" else settings.ANTHROPIC_API_KEY
-    return prov, api_key, model or _default_model(prov)
+    mdl = model or _default_model(prov)
+    return prov, _system_api_key(prov), mdl, _provider_base_url(prov, None)
 
 
 async def call_llm_stream(
@@ -187,11 +236,11 @@ async def call_llm_stream(
     ("done", {input_tokens, output_tokens, cost_usd}). Se o provider falhar
     ANTES de emitir qualquer token, cai para uma chamada não-streaming
     (evita resposta vazia); se falhar no meio, encerra com o que já saiu."""
-    prov, api_key, mdl = _resolve_creds(provider, model)
+    prov, api_key, mdl, base_url = _resolve_creds(provider, model)
     emitido = False
     try:
-        if prov == "gemini":
-            client = _get_gemini(api_key)
+        if prov != "anthropic":
+            client = _get_openai_compatible(base_url, api_key)
             oai_messages = ([{"role": "system", "content": system}] if system else []) + list(messages)
             stream = await client.chat.completions.create(
                 model=mdl, messages=oai_messages, max_tokens=max_tokens,
