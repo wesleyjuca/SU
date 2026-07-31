@@ -5,7 +5,7 @@ from app.api.v1 import (
     auth, approvals, processes, clients, documents,
     financial, ws, audit, rag, notifications, tenant, system, lgpd, push, portal,
     petition_templates, integrity, google_integration, tenants_admin, billing,
-    reports_admin, invoices, crm, publications, integrations_hub,
+    reports_admin, invoices, crm, publications, integrations_hub, ai_oauth,
 )
 from app.dependencies import require_active_tenant, get_current_staff
 
@@ -47,6 +47,10 @@ api_router.include_router(petition_templates.router, dependencies=_BLOCK_STAFF)
 api_router.include_router(integrity.router, dependencies=_BLOCK_STAFF)
 api_router.include_router(google_integration.router, dependencies=_BLOCK_STAFF)
 api_router.include_router(integrations_hub.router, dependencies=_BLOCK_STAFF)
+# Sem dependencies aqui de propósito: /callback é o navegador do usuário sendo
+# redirecionado pelo OpenRouter (sem header Authorization), precisa ficar
+# público; /connect exige auth no próprio parâmetro do endpoint (ai_oauth.py).
+api_router.include_router(ai_oauth.router)
 # Webhooks de provedores: público (provedores não têm JWT); validação por
 # assinatura específica do provedor nas fases de cada integração.
 api_router.include_router(integrations_hub.webhooks_router)

@@ -92,6 +92,14 @@ export default function MinhaIAPage() {
         }
       })
       .catch(() => {});
+    // Feedback do retorno OAuth do OpenRouter (?oauth=openrouter_ok|openrouter_erro), Fase 137.2
+    const p = new URLSearchParams(window.location.search);
+    const oauth = p.get("oauth");
+    if (oauth) {
+      if (oauth.endsWith("_ok")) setMsg({ ok: true, text: "OpenRouter conectado com sucesso!" });
+      else setMsg({ ok: false, text: "Falha ao conectar com o OpenRouter. Tente novamente ou cole a chave manualmente." });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function testar(id: string) {
@@ -298,6 +306,19 @@ function AIConfigModal({
 
   const info = providers[provider];
   const precisaUrlPropria = info && !info.base_url; // hoje só ollama
+  const [conectandoOAuth, setConectandoOAuth] = useState(false);
+  const podeOAuth = mode === "add" && info?.oauth_disponivel;
+
+  async function conectarComLogin() {
+    setConectandoOAuth(true);
+    try {
+      const res = await fetch(`/api/v1/me/ai-configs/oauth/${provider}/connect`, { headers: authH() });
+      const d = await res.json().catch(() => ({}));
+      if (res.ok && d.auth_url) window.location.href = d.auth_url;
+      else onError(d.detail || "Login por conta não disponível no momento.");
+    } catch { onError("Falha de conexão."); }
+    finally { setConectandoOAuth(false); }
+  }
 
   async function salvar() {
     setSaving(true);
@@ -354,6 +375,21 @@ function AIConfigModal({
             name="afj-ai-model" autoComplete="off" data-lpignore="true" data-1p-ignore data-form-type="other"
             className="w-full bg-afj-cream border border-afj-cream-dark rounded-sm px-3 py-2.5 text-sm placeholder:text-afj-black/25 focus:outline-none focus:border-afj-gold" />
         </div>
+
+        {podeOAuth && (
+          <div>
+            <button type="button" onClick={conectarComLogin} disabled={conectandoOAuth}
+              className="btn-afj-primary w-full py-2.5 flex items-center justify-center gap-2 disabled:opacity-50">
+              {conectandoOAuth ? <Loader2 size={14} className="animate-spin" /> : <KeyRound size={14} />}
+              Conectar com login ({info?.nome})
+            </button>
+            <div className="flex items-center gap-2 my-3">
+              <div className="flex-1 h-px bg-afj-cream-dark" />
+              <span className="text-[10px] text-afj-black/35 uppercase tracking-widest">ou cole a chave manualmente</span>
+              <div className="flex-1 h-px bg-afj-cream-dark" />
+            </div>
+          </div>
+        )}
 
         {precisaUrlPropria ? (
           <div>
