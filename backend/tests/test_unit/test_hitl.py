@@ -123,3 +123,46 @@ async def test_mark_rejected():
     doc, pet = _Doc(tid), _Pet()
     await mark_rejected_action(_FakeDBDocs(doc, pet), _Appr(tid, str(uuid.uuid4())))
     assert doc.status == "REJEITADO" and pet.review_status == "REJEITADA"
+
+
+# ─── Fase 130 — modifications era aceito pela API mas nunca lido: o revisor
+# editava o texto na hora de aprovar e a edição sumia, documento ficava
+# aprovado com o rascunho original ────────────────────────────────────────
+
+class _DocComConteudo(_Doc):
+    def __init__(self, tid):
+        super().__init__(tid)
+        self.conteudo_texto = "rascunho original"
+        self.conteudo_html = "<p>rascunho original</p>"
+
+
+async def test_execute_approved_aplica_modifications():
+    tid = uuid.uuid4()
+    doc, pet = _DocComConteudo(tid), _Pet()
+    await execute_approved_action(
+        _FakeDBDocs(doc, pet), _Appr(tid, str(uuid.uuid4())),
+        modifications={"conteudo_texto": "texto corrigido pelo revisor"},
+    )
+    assert doc.status == "APROVADO"
+    assert doc.conteudo_texto == "texto corrigido pelo revisor"
+    assert doc.conteudo_html == "<p>rascunho original</p>"  # não enviado, intacto
+
+
+async def test_execute_approved_sem_modifications_mantem_conteudo_original():
+    tid = uuid.uuid4()
+    doc, pet = _DocComConteudo(tid), _Pet()
+    await execute_approved_action(_FakeDBDocs(doc, pet), _Appr(tid, str(uuid.uuid4())))
+    assert doc.status == "APROVADO"
+    assert doc.conteudo_texto == "rascunho original"
+
+
+async def test_execute_approved_contract_aplica_modifications():
+    tid = uuid.uuid4()
+    doc, pet = _DocComConteudo(tid), _Pet()
+    await execute_approved_action(
+        _FakeDBDocs(doc, pet), _Appr(tid, str(uuid.uuid4()), tipo="CONTRACT_REVIEW"),
+        modifications={"conteudo_html": "<p>cláusula corrigida</p>"},
+    )
+    assert doc.status == "APROVADO"
+    assert doc.conteudo_html == "<p>cláusula corrigida</p>"
+    assert doc.conteudo_texto == "rascunho original"  # não enviado, intacto

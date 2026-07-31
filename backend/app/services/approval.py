@@ -75,6 +75,21 @@ async def _notify_tenant_of_approval(db, approval) -> None:
         })
 
 
+def _aplicar_modificacoes(doc, modifications: dict | None) -> None:
+    """Fase 130 — `modifications` já era aceito pela API (`ResolveApprovalRequest`)
+    mas nunca era lido: se o revisor editasse o texto na hora de aprovar, a
+    edição era descartada silenciosamente e o documento ficava marcado
+    APROVADO com o rascunho original (possivelmente com o problema que
+    motivou a edição). Só aplica os 2 campos de conteúdo — o revisor não
+    deveria conseguir mudar outros campos (client_id, tipo etc.) por essa via."""
+    if not modifications:
+        return
+    if modifications.get("conteudo_texto"):
+        doc.conteudo_texto = modifications["conteudo_texto"]
+    if modifications.get("conteudo_html"):
+        doc.conteudo_html = modifications["conteudo_html"]
+
+
 async def execute_approved_action(db, approval, modifications: dict | None = None) -> dict:
     """Executa a ação associada a um Approval que acabou de ser APROVADO.
 
@@ -91,6 +106,7 @@ async def execute_approved_action(db, approval, modifications: dict | None = Non
     if tipo in ("PETITION_REVIEW", "PETITION_FILING") and doc_id:
         doc = await db.get(Document, uuid.UUID(doc_id))
         if doc and doc.tenant_id == approval.tenant_id:
+            _aplicar_modificacoes(doc, modifications)
             doc.status = "APROVADO"
         pet = (await db.execute(
             select(Petition).where(Petition.document_id == uuid.UUID(doc_id))
@@ -104,6 +120,7 @@ async def execute_approved_action(db, approval, modifications: dict | None = Non
     if tipo in ("CONTRACT_REVIEW", "CONTRACT_SIGN") and doc_id:
         doc = await db.get(Document, uuid.UUID(doc_id))
         if doc and doc.tenant_id == approval.tenant_id:
+            _aplicar_modificacoes(doc, modifications)
             doc.status = "APROVADO"
         con = (await db.execute(
             select(Contract).where(Contract.document_id == uuid.UUID(doc_id))
