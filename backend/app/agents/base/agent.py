@@ -163,7 +163,11 @@ class BaseAgent(ABC):
                 result = await self.execute(ctx)
                 result.duration_ms = int(time.time() * 1000) - start_ms
 
-                ctx.add_tokens(result.tokens_used, result.cost_usd)
+                # Fase 131 — NÃO chamar ctx.add_tokens() aqui: execute() já
+                # contabiliza cada chamada de LLM (via ask_llm() ou o bloco
+                # manual ctx.add_tokens()+ctx.add_audit_event() da Fase 125).
+                # Somar de novo aqui dobrava ctx.total_cost_usd (persistido em
+                # AgentRun.cost_usd), estourando o teto mensal de IA cedo demais.
 
                 # Validação de saída (hook) — nunca derruba o run por si só
                 try:
