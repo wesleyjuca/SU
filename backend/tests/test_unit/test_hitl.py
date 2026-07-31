@@ -15,6 +15,13 @@ class _FakeScalarsEmpty:
                 return []
         return _S()
 
+    def scalar_one_or_none(self):
+        # Fase 132 — create_approval_from_state agora também consulta (mesmo
+        # db.execute) se já existe uma Approval pra esse run_id antes de
+        # criar; None aqui = "não existe ainda", comportamento idêntico ao
+        # já testado nesta classe antes da Fase 132.
+        return None
+
 
 class _FakeDBAdd:
     def __init__(self):
@@ -166,3 +173,47 @@ async def test_execute_approved_contract_aplica_modifications():
     assert doc.status == "APROVADO"
     assert doc.conteudo_html == "<p>cláusula corrigida</p>"
     assert doc.conteudo_texto == "rascunho original"  # não enviado, intacto
+
+
+# ─── Fase 132 — idempotência por run_id (redelivery do Celery) ────────────
+# Sem essa checagem, uma task reentregue (acks_late=True, worker cai depois
+# do commit mas antes do ack) rerodava o agente do zero e criava uma 2ª
+# Approval (e, pra petition_agent/contract_agent, um 2º Document) pro mesmo
+# run_id lógico.
+
+class _FakeResultComScalar:
+    def __init__(self, scalar_value):
+        self._scalar_value = scalar_value
+
+    def scalar_one_or_none(self):
+        return self._scalar_value
+
+    def scalars(self):
+        class _S:
+            def all(self_inner):
+                return []
+        return _S()
+
+
+class _FakeDBApprovalJaExiste(_FakeDBAdd):
+    def __init__(self, existing_approval_id):
+        super().__init__()
+        self._existing_id = existing_approval_id
+
+    async def execute(self, stmt):
+        return _FakeResultComScalar(self._existing_id)
+
+
+async def test_create_approval_from_state_idempotente_por_run_id():
+    existing_id = uuid.uuid4()
+    db = _FakeDBApprovalJaExiste(existing_id)
+    run = _FakeRun()
+    final_state = {
+        "pending_approval": {"tipo": "PETITION_REVIEW", "titulo": "Revisar", "descricao": "d"},
+        "agent_results": [],
+    }
+
+    result = await create_approval_from_state(db, run, final_state)
+
+    assert result == existing_id
+    assert db.added == []  # nenhuma 2ª Approval criada

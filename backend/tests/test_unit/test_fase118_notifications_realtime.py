@@ -203,9 +203,19 @@ def test_create_approval_from_state_chama_notify_tenant():
     original = aps._notify_tenant_of_approval
     aps._notify_tenant_of_approval = fake_notify
     try:
+        class _FakeResult:
+            def scalar_one_or_none(self):
+                # Fase 132 — create_approval_from_state consulta antes de
+                # criar se já existe uma Approval pra esse run_id; None aqui
+                # = nenhuma ainda, segue o fluxo original deste teste.
+                return None
+
         class _FakeDB:
             def add(self, obj):
                 self._added = obj
+
+            async def execute(self, query):
+                return _FakeResult()
 
             async def flush(self):
                 # Simula o que o INSERT real faria: atribuir o default de id.
