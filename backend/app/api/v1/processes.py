@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 import uuid
 
 from app.db.base import get_db
@@ -30,8 +30,46 @@ class ProcessCreate(BaseModel):
     oab_responsavel: str | None = None
     monitoring_active: bool = True
     desfecho: str | None = None  # EXITO, PARCIAL, ACORDO, DERROTA
+    descricao: str | None = None
     responsavel_id: str | None = None       # advogado principal (default: quem cria)
     equipe: list[str] | None = None         # demais advogados do processo
+
+
+_SITUACOES_VALIDAS = {"ATIVO", "SUSPENSO", "ARQUIVADO", "ENCERRADO"}
+
+
+class ProcessUpdate(BaseModel):
+    """Fase 133 — schema próprio pro PUT, separado de `ProcessCreate`: antes o
+    endpoint reaproveitava `ProcessCreate` (que exige `tribunal` e não tem
+    `situacao`) — qualquer edição parcial que só quisesse mudar `situacao`
+    era silenciosamente ignorada pelo Pydantic (campo não existia no schema),
+    e uma edição legítima que omitisse `tribunal` quebraria com 422."""
+    numero_cnj: str | None = None
+    tribunal: str | None = None
+    vara: str | None = None
+    comarca: str | None = None
+    uf: str | None = None
+    tipo_acao: str | None = None
+    area_direito: str | None = None
+    fase: str | None = None
+    situacao: str | None = None
+    valor_causa: float | None = None
+    client_id: str | None = None
+    parte_contraria: str | None = None
+    polo: str | None = None
+    oab_responsavel: str | None = None
+    monitoring_active: bool | None = None
+    desfecho: str | None = None
+    descricao: str | None = None
+    responsavel_id: str | None = None
+    equipe: list[str] | None = None
+
+    @field_validator("situacao")
+    @classmethod
+    def _validar_situacao(cls, v):
+        if v is not None and v not in _SITUACOES_VALIDAS:
+            raise ValueError(f"situacao inválida. Use: {', '.join(sorted(_SITUACOES_VALIDAS))}")
+        return v
 
 
 class TeamMemberOut(BaseModel):
@@ -45,11 +83,19 @@ class ProcessResponse(BaseModel):
     numero_cnj: str | None
     tribunal: str
     vara: str | None
+    comarca: str | None = None
+    uf: str | None = None
+    tipo_acao: str | None = None
     area_direito: str | None
+    fase: str | None = None
     situacao: str
     desfecho: str | None
     valor_causa: float | None
     client_id: str | None
+    parte_contraria: str | None = None
+    polo: str | None = None
+    oab_responsavel: str | None = None
+    descricao: str | None = None
     responsavel_id: str | None
     responsavel_nome: str | None = None
     equipe: list[TeamMemberOut] = []
@@ -560,7 +606,7 @@ async def get_deadlines(
 @router.put("/{process_id}", response_model=ProcessResponse)
 async def update_process(
     process_id: str,
-    body: ProcessCreate,
+    body: ProcessUpdate,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -1140,11 +1186,19 @@ def _to_response(p: LegalProcess) -> ProcessResponse:
         numero_cnj=p.numero_cnj,
         tribunal=p.tribunal,
         vara=p.vara,
+        comarca=p.comarca,
+        uf=p.uf,
+        tipo_acao=p.tipo_acao,
         area_direito=p.area_direito,
+        fase=p.fase,
         situacao=p.situacao,
         desfecho=p.desfecho,
         valor_causa=float(p.valor_causa) if p.valor_causa else None,
         client_id=str(p.client_id) if p.client_id else None,
+        parte_contraria=p.parte_contraria,
+        polo=p.polo,
+        oab_responsavel=p.oab_responsavel,
+        descricao=p.descricao,
         responsavel_id=str(p.responsavel_id) if p.responsavel_id else None,
         proximo_prazo_at=p.proximo_prazo_at.isoformat() if p.proximo_prazo_at else None,
         ultimo_andamento_at=p.ultimo_andamento_at.isoformat() if p.ultimo_andamento_at else None,

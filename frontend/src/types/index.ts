@@ -42,11 +42,13 @@ export interface Processo {
   area_direito: string | null;
   fase: string | null;
   situacao: "ATIVO" | "SUSPENSO" | "ARQUIVADO" | "ENCERRADO";
+  desfecho?: string | null;
   valor_causa: number | null;
   client_id: string | null;
   polo: string | null;
   parte_contraria: string | null;
   oab_responsavel: string | null;
+  descricao?: string | null;
   distribuicao_data: string | null;
   ultimo_andamento_at: string | null;
   proximo_prazo_at: string | null;

@@ -25,7 +25,70 @@ async def test_create_process(client: AsyncClient, auth_headers: dict):
     assert res.status_code == 201
     data = res.json()
     assert data["numero_cnj"] == payload["numero_cnj"]
+    # Fase 133 — "descricao" era um campo fantasma: a UI de criar processo já
+    # coletava, mas não existia coluna nenhuma por trás — era descartado.
+    assert data["descricao"] == payload["descricao"]
     return data["id"]
+
+
+async def test_update_process_situacao_e_campos_antes_sem_editor(client: AsyncClient, auth_headers: dict):
+    """Fase 133 — antes desta fase, o PUT reaproveitava o schema de criação
+    (sem campo `situacao`) — o dropdown "Situação" da lista enviava o valor e
+    o backend descartava silenciosamente, sem erro nenhum."""
+    create_res = await client.post(
+        "/api/v1/processes",
+        json={"numero_cnj": "0000005-00.2024.8.26.0100", "tribunal": "TJSP"},
+        headers=auth_headers,
+    )
+    if create_res.status_code != 201:
+        pytest.skip("Could not create process")
+    process_id = create_res.json()["id"]
+
+    res = await client.put(
+        f"/api/v1/processes/{process_id}",
+        json={
+            "situacao": "SUSPENSO",
+            "comarca": "Fortaleza",
+            "uf": "CE",
+            "valor_causa": 12345.67,
+            "parte_contraria": "Empresa X LTDA",
+            "polo": "ATIVO",
+            "oab_responsavel": "999/CE",
+            "descricao": "Atualizado via teste",
+        },
+        headers=auth_headers,
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert data["situacao"] == "SUSPENSO"
+    assert data["comarca"] == "Fortaleza"
+    assert data["uf"] == "CE"
+    assert data["valor_causa"] == 12345.67
+    assert data["parte_contraria"] == "Empresa X LTDA"
+    assert data["polo"] == "ATIVO"
+    assert data["oab_responsavel"] == "999/CE"
+    assert data["descricao"] == "Atualizado via teste"
+
+    # Tribunal não foi enviado — deve permanecer intacto (PUT parcial, não exige mais todos os campos)
+    assert data["tribunal"] == "TJSP"
+
+
+async def test_update_process_situacao_invalida_rejeitada(client: AsyncClient, auth_headers: dict):
+    create_res = await client.post(
+        "/api/v1/processes",
+        json={"numero_cnj": "0000006-00.2024.8.26.0100", "tribunal": "TJSP"},
+        headers=auth_headers,
+    )
+    if create_res.status_code != 201:
+        pytest.skip("Could not create process")
+    process_id = create_res.json()["id"]
+
+    res = await client.put(
+        f"/api/v1/processes/{process_id}",
+        json={"situacao": "NAO_EXISTE"},
+        headers=auth_headers,
+    )
+    assert res.status_code == 422
 
 
 async def test_list_processes_with_filters(client: AsyncClient, auth_headers: dict):

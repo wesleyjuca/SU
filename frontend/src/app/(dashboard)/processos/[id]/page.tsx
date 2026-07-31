@@ -23,6 +23,13 @@ const TIPOS_MOVIMENTO = [
 const TIPOS_PARTE = ["AUTOR", "REU", "ADVOGADO", "JUIZ", "MP", "PARTE"];
 const PARTE_FORM_VAZIO = { nome: "", tipo: "AUTOR", polo: "", cpf_cnpj: "", oab: "" };
 
+const SITUACOES_PROCESSO = ["ATIVO", "SUSPENSO", "ARQUIVADO", "ENCERRADO"];
+const PROCESSO_FORM_VAZIO = {
+  numero_cnj: "", tribunal: "", vara: "", comarca: "", uf: "", tipo_acao: "",
+  area_direito: "", fase: "", situacao: "ATIVO", desfecho: "", valor_causa: "",
+  parte_contraria: "", polo: "", oab_responsavel: "", descricao: "", monitoring_active: true,
+};
+
 function diasPara(data: string | null): number | null {
   if (!data) return null;
   return Math.ceil((new Date(data).getTime() - Date.now()) / 86400000);
@@ -61,6 +68,71 @@ export default function ProcessoDetailPage() {
   const [editingParteId, setEditingParteId] = useState<string | null>(null);
   const [parteForm, setParteForm] = useState(PARTE_FORM_VAZIO);
   const [excluindoParteId, setExcluindoParteId] = useState<string | null>(null);
+  const [showProcessoModal, setShowProcessoModal] = useState(false);
+  const [savingProcesso, setSavingProcesso] = useState(false);
+  const [processoForm, setProcessoForm] = useState(PROCESSO_FORM_VAZIO);
+
+  function abrirEditorProcesso() {
+    if (!processo) return;
+    setProcessoForm({
+      numero_cnj: processo.numero_cnj ?? "",
+      tribunal: processo.tribunal ?? "",
+      vara: processo.vara ?? "",
+      comarca: processo.comarca ?? "",
+      uf: processo.uf ?? "",
+      tipo_acao: processo.tipo_acao ?? "",
+      area_direito: processo.area_direito ?? "",
+      fase: processo.fase ?? "",
+      situacao: processo.situacao ?? "ATIVO",
+      desfecho: processo.desfecho ?? "",
+      valor_causa: processo.valor_causa != null ? String(processo.valor_causa) : "",
+      parte_contraria: processo.parte_contraria ?? "",
+      polo: processo.polo ?? "",
+      oab_responsavel: processo.oab_responsavel ?? "",
+      descricao: processo.descricao ?? "",
+      monitoring_active: processo.monitoring_active,
+    });
+    setShowProcessoModal(true);
+  }
+
+  async function salvarProcesso(e: React.FormEvent) {
+    e.preventDefault();
+    setSavingProcesso(true);
+    try {
+      const token = localStorage.getItem("afj_access_token");
+      const res = await fetch(`/api/v1/processes/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          numero_cnj: processoForm.numero_cnj || undefined,
+          tribunal: processoForm.tribunal || undefined,
+          vara: processoForm.vara || undefined,
+          comarca: processoForm.comarca || undefined,
+          uf: processoForm.uf || undefined,
+          tipo_acao: processoForm.tipo_acao || undefined,
+          area_direito: processoForm.area_direito || undefined,
+          fase: processoForm.fase || undefined,
+          situacao: processoForm.situacao || undefined,
+          desfecho: processoForm.desfecho || undefined,
+          valor_causa: processoForm.valor_causa ? Number(processoForm.valor_causa) : undefined,
+          parte_contraria: processoForm.parte_contraria || undefined,
+          polo: processoForm.polo || undefined,
+          oab_responsavel: processoForm.oab_responsavel || undefined,
+          descricao: processoForm.descricao || undefined,
+          monitoring_active: processoForm.monitoring_active,
+        }),
+      });
+      if (res.ok) {
+        toast.success("Processo atualizado.");
+        setShowProcessoModal(false);
+        fetchAll();
+      } else {
+        const d = await res.json().catch(() => ({}));
+        toast.error(d.detail || "Erro ao salvar o processo.");
+      }
+    } catch { toast.error("Erro de conexão."); }
+    finally { setSavingProcesso(false); }
+  }
 
   async function atualizarPartes() {
     setAtualizandoPartes(true);
@@ -403,7 +475,12 @@ export default function ProcessoDetailPage() {
         <div className="space-y-4">
           {/* Dados básicos */}
           <div className="afj-card p-4">
-            <h2 className="font-semibold text-afj-black text-sm mb-3">Informações do Processo</h2>
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="font-semibold text-afj-black text-sm">Informações do Processo</h2>
+              <button onClick={abrirEditorProcesso} className="tap-target text-afj-black/30 hover:text-afj-gold" title="Editar processo" aria-label="Editar processo">
+                <Edit3 size={14} />
+              </button>
+            </div>
             <div className="space-y-2 text-sm">
               {[
                 { label: "Área do Direito", value: processo.area_direito },
@@ -413,6 +490,7 @@ export default function ProcessoDetailPage() {
                 { label: "Parte Contrária", value: processo.parte_contraria },
                 { label: "OAB Responsável", value: processo.oab_responsavel },
                 { label: "Comarca / UF", value: processo.comarca ? `${processo.comarca} / ${processo.uf}` : processo.uf },
+                { label: "Desfecho", value: processo.desfecho },
                 {
                   label: "Origem",
                   value: processo.fonte === "OAB" ? "Captura automática (OAB)"
@@ -437,6 +515,12 @@ export default function ProcessoDetailPage() {
                   <span className="text-afj-black text-right font-medium text-xs">{value}</span>
                 </div>
               ))}
+              {processo.descricao && (
+                <div className="pt-1 border-t border-afj-cream-dark/60">
+                  <span className="text-afj-black/50 text-xs block mb-1">Descrição</span>
+                  <p className="text-afj-black text-xs whitespace-pre-wrap">{processo.descricao}</p>
+                </div>
+              )}
             </div>
           </div>
 
@@ -837,6 +921,129 @@ export default function ProcessoDetailPage() {
                 {salvandoEquipe ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle size={14} />} Salvar equipe
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Editar Processo (Fase 133 — antes só tribunal/situação/área eram editáveis, num modal escondido na lista) */}
+      {showProcessoModal && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-sm shadow-xl w-full max-w-2xl max-h-[85vh] overflow-y-auto">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-afj-cream-dark">
+              <h2 className="font-semibold text-afj-black">Editar Processo</h2>
+              <button onClick={() => setShowProcessoModal(false)} className="text-afj-black/40 hover:text-afj-black">
+                <X size={18} />
+              </button>
+            </div>
+            <form onSubmit={salvarProcesso} className="p-5 space-y-4">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs text-afj-black/60 block mb-1">Número CNJ</label>
+                  <input value={processoForm.numero_cnj} onChange={(e) => setProcessoForm({ ...processoForm, numero_cnj: e.target.value })}
+                    className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold" />
+                </div>
+                <div>
+                  <label className="text-xs text-afj-black/60 block mb-1">Tribunal *</label>
+                  <input required value={processoForm.tribunal} onChange={(e) => setProcessoForm({ ...processoForm, tribunal: e.target.value })}
+                    className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold" />
+                </div>
+              </div>
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="text-xs text-afj-black/60 block mb-1">Vara</label>
+                  <input value={processoForm.vara} onChange={(e) => setProcessoForm({ ...processoForm, vara: e.target.value })}
+                    className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold" />
+                </div>
+                <div>
+                  <label className="text-xs text-afj-black/60 block mb-1">Comarca</label>
+                  <input value={processoForm.comarca} onChange={(e) => setProcessoForm({ ...processoForm, comarca: e.target.value })}
+                    className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold" />
+                </div>
+                <div>
+                  <label className="text-xs text-afj-black/60 block mb-1">UF</label>
+                  <input maxLength={2} value={processoForm.uf} onChange={(e) => setProcessoForm({ ...processoForm, uf: e.target.value.toUpperCase() })}
+                    className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold" />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs text-afj-black/60 block mb-1">Área do Direito</label>
+                  <input value={processoForm.area_direito} onChange={(e) => setProcessoForm({ ...processoForm, area_direito: e.target.value })}
+                    className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold" />
+                </div>
+                <div>
+                  <label className="text-xs text-afj-black/60 block mb-1">Tipo de Ação</label>
+                  <input value={processoForm.tipo_acao} onChange={(e) => setProcessoForm({ ...processoForm, tipo_acao: e.target.value })}
+                    className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold" />
+                </div>
+              </div>
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="text-xs text-afj-black/60 block mb-1">Fase</label>
+                  <input value={processoForm.fase} onChange={(e) => setProcessoForm({ ...processoForm, fase: e.target.value })}
+                    className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold" />
+                </div>
+                <div>
+                  <label className="text-xs text-afj-black/60 block mb-1">Situação</label>
+                  <select value={processoForm.situacao} onChange={(e) => setProcessoForm({ ...processoForm, situacao: e.target.value })}
+                    className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm bg-white focus:outline-none focus:border-afj-gold">
+                    {SITUACOES_PROCESSO.map((s) => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs text-afj-black/60 block mb-1">Desfecho</label>
+                  <select value={processoForm.desfecho} onChange={(e) => setProcessoForm({ ...processoForm, desfecho: e.target.value })}
+                    className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm bg-white focus:outline-none focus:border-afj-gold">
+                    <option value="">—</option>
+                    <option value="EXITO">Êxito</option>
+                    <option value="PARCIAL">Parcial</option>
+                    <option value="ACORDO">Acordo</option>
+                    <option value="DERROTA">Derrota</option>
+                  </select>
+                </div>
+              </div>
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="text-xs text-afj-black/60 block mb-1">Valor da Causa (R$)</label>
+                  <input type="number" min="0" step="0.01" value={processoForm.valor_causa} onChange={(e) => setProcessoForm({ ...processoForm, valor_causa: e.target.value })}
+                    className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold" />
+                </div>
+                <div>
+                  <label className="text-xs text-afj-black/60 block mb-1">Polo</label>
+                  <select value={processoForm.polo} onChange={(e) => setProcessoForm({ ...processoForm, polo: e.target.value })}
+                    className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm bg-white focus:outline-none focus:border-afj-gold">
+                    <option value="">—</option>
+                    <option value="ATIVO">Ativo</option>
+                    <option value="PASSIVO">Passivo</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs text-afj-black/60 block mb-1">OAB Responsável</label>
+                  <input value={processoForm.oab_responsavel} onChange={(e) => setProcessoForm({ ...processoForm, oab_responsavel: e.target.value })}
+                    placeholder="123/CE" className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold" />
+                </div>
+              </div>
+              <div>
+                <label className="text-xs text-afj-black/60 block mb-1">Parte Contrária</label>
+                <input value={processoForm.parte_contraria} onChange={(e) => setProcessoForm({ ...processoForm, parte_contraria: e.target.value })}
+                  className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold" />
+              </div>
+              <div>
+                <label className="text-xs text-afj-black/60 block mb-1">Descrição</label>
+                <textarea rows={3} value={processoForm.descricao} onChange={(e) => setProcessoForm({ ...processoForm, descricao: e.target.value })}
+                  className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold" />
+              </div>
+              <label className="flex items-center gap-2 text-sm text-afj-black/70 cursor-pointer">
+                <input type="checkbox" checked={processoForm.monitoring_active} onChange={(e) => setProcessoForm({ ...processoForm, monitoring_active: e.target.checked })} className="accent-afj-gold" />
+                Monitoramento automático ativo
+              </label>
+              <div className="flex gap-2 justify-end pt-2">
+                <button type="button" onClick={() => setShowProcessoModal(false)} disabled={savingProcesso} className="btn-afj-outline text-sm py-2 px-4 rounded-sm">Cancelar</button>
+                <button type="submit" disabled={savingProcesso} className="btn-afj-primary text-sm py-2 px-4 rounded-sm flex items-center gap-2">
+                  {savingProcesso ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle size={14} />} Salvar
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
