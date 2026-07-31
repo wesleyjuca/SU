@@ -90,7 +90,11 @@ class AuditMiddleware(BaseHTTPMiddleware):
 
             user_id = getattr(request.state, "user_id", None)
             tenant_id = getattr(request.state, "tenant_id", None)
-            action = f"{request.method}:{request.url.path}"
+            # Fase 134 — truncamento defensivo: audit_logs.action é VARCHAR(255)
+            # (Fase 134 também alargou de 100); path::path aninhado o bastante
+            # (ex. 2+ UUIDs) não pode voltar a derrubar sua própria linha de
+            # auditoria, por mais fundo que uma rota futura fique.
+            action = f"{request.method}:{request.url.path}"[:255]
 
             async with AsyncSessionLocal() as audit_session:
                 entry = AuditLog(

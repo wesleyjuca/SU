@@ -20,7 +20,10 @@ class AuditLog(Base):
     user_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True))   # NULL = evento de sistema
     agent_name: Mapped[str | None] = mapped_column(String(100))
     run_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True))
-    action: Mapped[str] = mapped_column(String(100), nullable=False)  # CREATE_PETITION, APPROVE_CONTRACT
+    # Fase 134 — 100 chars estourava em rotas com 2 UUIDs no path
+    # (ex. PUT:/api/v1/processes/{uuid}/partes/{uuid}), derrubando
+    # silenciosamente aquela linha de auditoria (AuditMiddleware é fail-soft).
+    action: Mapped[str] = mapped_column(String(255), nullable=False)  # CREATE_PETITION, APPROVE_CONTRACT
     resource_type: Mapped[str | None] = mapped_column(String(50))
     resource_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True))
     old_value: Mapped[dict | None] = mapped_column(JSONB)
