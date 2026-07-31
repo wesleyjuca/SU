@@ -137,11 +137,16 @@ export function BrainInfra() {
           {(jobs.sync_runs_recentes?.length ?? 0) > 0 && (
             <div className="space-y-0.5">
               {jobs.sync_runs_recentes!.map((s, i) => (
-                <div key={i} className="text-[11px] flex justify-between gap-2 border-t border-afj-cream-dark pt-1">
-                  <span className="text-afj-black/60">{s.fonte} · {s.tipo}</span>
-                  <span className={s.status === "ERRO" ? "text-red-600" : s.status === "OK" ? "text-green-600" : "text-afj-black/50"}>
-                    {s.status}{s.started_at ? ` · ${new Date(s.started_at).toLocaleString("pt-BR")}` : ""}
-                  </span>
+                <div key={i} className="text-[11px] border-t border-afj-cream-dark pt-1">
+                  <div className="flex justify-between gap-2">
+                    <span className="text-afj-black/60">{s.fonte} · {s.tipo}</span>
+                    <span className={s.status === "ERRO" ? "text-red-600" : s.status === "OK" ? "text-green-600" : "text-afj-black/50"}>
+                      {s.status}{s.started_at ? ` · ${new Date(s.started_at).toLocaleString("pt-BR")}` : ""}
+                    </span>
+                  </div>
+                  {s.status === "ERRO" && s.detalhe && (
+                    <div className="text-afj-black/50 truncate" title={s.detalhe}>{s.detalhe}</div>
+                  )}
                 </div>
               ))}
             </div>

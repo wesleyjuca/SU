@@ -13,7 +13,7 @@ export interface FonteSaude { nome: string; capabilities: string[]; breaker: str
 export interface CeleryWorker { nome: string; ativas: number; agendadas: number; concorrencia?: number | null }
 export interface BeatItem { nome: string; task?: string; schedule?: string }
 export interface QdrantColecao { nome: string; pontos: number | null }
-export interface SyncRun { fonte: string; tipo: string; status: string; started_at: string | null }
+export interface SyncRun { fonte: string; tipo: string; status: string; started_at: string | null; detalhe?: string | null }
 
 export interface Infra {
   timestamp?: string;

@@ -46,6 +46,60 @@ async def test_celery_sem_broker_degrada():
 
 
 @pytest.mark.asyncio
+async def test_jobs_expoe_detalhe_do_erro_de_sync_run(monkeypatch):
+    """Fase 136 — SyncRun.stats já gravava o erro real (fonte_detalhe), mas
+    _jobs() só selecionava fonte/tipo/status/started_at — o painel Cérebro
+    mostrava "ERRO" sem nenhuma pista do que aconteceu."""
+    import datetime as dt_mod
+
+    class _Row:
+        def __init__(self, fonte, tipo, status, started_at, stats):
+            self.fonte = fonte
+            self.tipo = tipo
+            self.status = status
+            self.started_at = started_at
+            self.stats = stats
+
+    started = dt_mod.datetime(2026, 7, 31, 8, 42, 28, tzinfo=dt_mod.timezone.utc)
+
+    class _AgentRunResult:
+        def all(self_inner):
+            return []  # sem AgentRun nas últimas 24h, irrelevante pro teste
+
+    class _SyncRunResult:
+        def all(self_inner):
+            return [
+                _Row("comunica+datajud", "CAPTURA", "ERRO", started,
+                     {"fonte_detalhe": "HTTP 403 da Comunica/DJEN"}),
+                _Row("datajud", "POLLING", "OK", started, {}),
+            ]
+
+    class _FakeSession:
+        def __init__(self):
+            self._calls = 0
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def execute(self, stmt):
+            self._calls += 1
+            return _AgentRunResult() if self._calls == 1 else _SyncRunResult()
+
+    import app.db.base as dbbase
+    monkeypatch.setattr(dbbase, "AsyncSessionLocal", lambda: _FakeSession())
+
+    jobs = await bi._jobs()
+
+    assert jobs["ok"] is True
+    runs = jobs["sync_runs_recentes"]
+    assert runs[0]["detalhe"] == "HTTP 403 da Comunica/DJEN"
+    assert runs[1]["detalhe"] is None  # sem fonte_detalhe → None, não quebra
+
+
+@pytest.mark.asyncio
 async def test_coletar_infra_agrega_sem_lancar():
     snap = await bi.coletar_infra()
     assert {"celery", "redis", "qdrant", "postgres_pool", "jobs", "coleta_ms"} <= set(snap)

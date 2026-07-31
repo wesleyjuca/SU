@@ -152,12 +152,13 @@ async def _jobs() -> dict:
             por_status = {status: n for status, n in rows}
             # SyncRun recentes (captura/scan/polling)
             syncs = (await db.execute(
-                select(SyncRun.fonte, SyncRun.tipo, SyncRun.status, SyncRun.started_at)
+                select(SyncRun.fonte, SyncRun.tipo, SyncRun.status, SyncRun.started_at, SyncRun.stats)
                 .order_by(SyncRun.started_at.desc()).limit(10)
             )).all()
             sync_list = [
                 {"fonte": s.fonte, "tipo": s.tipo, "status": s.status,
-                 "started_at": s.started_at.isoformat() if s.started_at else None}
+                 "started_at": s.started_at.isoformat() if s.started_at else None,
+                 "detalhe": (s.stats or {}).get("fonte_detalhe")}
                 for s in syncs
             ]
         return {"ok": True, "agent_runs_24h_por_status": por_status, "sync_runs_recentes": sync_list}
