@@ -1,10 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, or_, func
+from sqlalchemy import select, or_, func, update
 from pydantic import BaseModel, EmailStr
+from datetime import datetime, timezone
 from app.dependencies import get_current_user, get_db
 from app.models.user import User
+from app.models.ai_config import AIProviderConfig  # import no topo: garante registro no Base.metadata antes do create_all
 from app.core.security import hash_password
+from app.services.ai_providers import AI_PROVIDERS, get_provider
 import uuid
 import secrets
 import string
@@ -81,97 +84,250 @@ class UserUpdate(BaseModel):
     oab_uf: str | None = None
 
 
-class AISettingsUpdate(BaseModel):
-    provider: str | None = None          # anthropic | gemini
+class AIConfigCreate(BaseModel):
+    provider: str
+    display_name: str | None = None
+    auth_method: str = "api_key"
+    api_key: str | None = None
     model: str | None = None
+    base_url: str | None = None          # obrigatório só pra ollama (self-hosted)
+    enabled: bool = True
+    is_default: bool = False
+
+
+class AIConfigUpdate(BaseModel):
+    display_name: str | None = None
     api_key: str | None = None           # se omitido, mantém a chave atual
+    model: str | None = None
+    base_url: str | None = None
     enabled: bool | None = None
 
 
-@router.get("/me/ai-settings")
-async def get_my_ai_settings(current_user: User = Depends(get_current_user)):
-    """Configuração de IA própria (BYOK) do usuário. Nunca retorna a chave."""
+def _config_to_dict(c: AIProviderConfig) -> dict:
+    """Nunca inclui a chave/credencial — só `has_credential` (bool)."""
     return {
-        "provider": current_user.ai_provider or "gemini",
-        "model": current_user.ai_model or "",
-        "enabled": bool(getattr(current_user, "ai_enabled", False)),
-        "has_key": bool(current_user.ai_api_key_enc),
+        "id": str(c.id),
+        "provider": c.provider,
+        "display_name": c.display_name,
+        "auth_method": c.auth_method,
+        "model": c.model or "",
+        "base_url": c.base_url,
+        "enabled": c.enabled,
+        "is_default": c.is_default,
+        "status": c.status,
+        "has_credential": bool(c.credentials_enc),
+        "last_tested_at": c.last_tested_at.isoformat() if c.last_tested_at else None,
+        "last_error": c.last_error,
     }
 
 
-@router.put("/me/ai-settings")
-async def update_my_ai_settings(
-    body: AISettingsUpdate,
+@router.get("/me/ai-providers")
+async def list_ai_providers():
+    """Registro estático dos provedores suportados (Fase 137.1) — o frontend
+    monta o formulário de "Adicionar IA" a partir disto."""
+    return {"providers": AI_PROVIDERS}
+
+
+@router.get("/me/ai-configs")
+async def list_my_ai_configs(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Lista as IAs cadastradas pelo usuário (BYOK multi-provedor, Fase 137.1)."""
+    rows = (await db.execute(
+        select(AIProviderConfig)
+        .where(AIProviderConfig.user_id == current_user.id)
+        .order_by(AIProviderConfig.created_at)
+    )).scalars().all()
+    return {"configs": [_config_to_dict(c) for c in rows]}
+
+
+@router.post("/me/ai-configs", status_code=201)
+async def create_my_ai_config(
+    body: AIConfigCreate,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     from app.core.crypto import encrypt
+    import json
 
-    if body.provider is not None:
-        prov = body.provider.lower()
-        if prov not in ("anthropic", "gemini"):
-            raise HTTPException(status_code=422, detail="Provider inválido (anthropic | gemini)")
-        current_user.ai_provider = prov
-    if body.model is not None:
-        model = body.model.strip() or None
-        if model:
-            prov = (body.provider or current_user.ai_provider or "gemini").lower()
-            err = _validate_model_format(prov, model)
-            if err:
-                raise HTTPException(status_code=422, detail=err)
-        current_user.ai_model = model
-    if body.api_key:  # só atualiza a chave se enviada
-        enc = encrypt(body.api_key.strip())
-        if not enc:
-            raise HTTPException(status_code=422, detail="Não foi possível salvar a chave")
-        current_user.ai_api_key_enc = enc
-    if body.enabled is not None:
-        current_user.ai_enabled = body.enabled
+    prov = body.provider.lower().strip()
+    info = get_provider(prov)
+    if not info:
+        raise HTTPException(status_code=422, detail=f"Provedor desconhecido: {prov}")
 
-    if current_user.ai_enabled and not current_user.ai_api_key_enc:
-        raise HTTPException(status_code=422, detail="Configure uma chave de API antes de ativar")
+    auth_method = body.auth_method if body.auth_method in info["auth_methods"] else info["auth_methods"][0]
+    if info["requires_key"] and auth_method == "api_key" and not (body.api_key and body.api_key.strip()):
+        raise HTTPException(status_code=422, detail="Configure uma chave de API")
+    base_url = (body.base_url or info.get("base_url") or "").strip() or None
+    if not info["base_url"] and not base_url:  # só provedores sem URL fixa exigem (hoje: ollama)
+        raise HTTPException(status_code=422, detail="Informe a URL do servidor")
 
-    await db.flush()
-    return {
-        "provider": current_user.ai_provider or "gemini",
-        "model": current_user.ai_model or "",
-        "enabled": bool(current_user.ai_enabled),
-        "has_key": bool(current_user.ai_api_key_enc),
-        "message": "Configuração de IA salva",
-    }
-
-
-@router.post("/me/ai-settings/test")
-async def test_my_ai_settings(current_user: User = Depends(get_current_user)):
-    """Faz uma chamada mínima com a IA do usuário para validar a chave."""
-    from app.core.crypto import decrypt
-    from app.integrations.llm_client import call_llm, ai_creds_ctx
-
-    if not current_user.ai_api_key_enc:
-        raise HTTPException(status_code=422, detail="Nenhuma chave configurada")
-    key = decrypt(current_user.ai_api_key_enc)
-    if not key:
-        # Token existe mas não decifra: a ENCRYPTION_KEY do servidor mudou
-        # (ex.: reinício com chave efêmera). O usuário precisa re-salvar.
-        raise HTTPException(
-            status_code=422,
-            detail="Sua chave precisa ser salva novamente (a configuração de segurança do servidor mudou).",
-        )
-
-    prov = current_user.ai_provider or "gemini"
-    model = current_user.ai_model or None
-
+    model = (body.model or "").strip() or info.get("modelo_sugerido")
     if model:
         err = _validate_model_format(prov, model)
         if err:
             raise HTTPException(status_code=422, detail=err)
 
-    suggested = ", ".join(SUGGESTED_MODELS.get(prov, [])[:2]) or "ver documentação"
+    creds_enc = None
+    if body.api_key and body.api_key.strip():
+        creds_enc = encrypt(json.dumps({"api_key": body.api_key.strip()}))
 
+    # A 1ª IA cadastrada sempre vira a padrão, mesmo sem marcar explicitamente
+    # — sem isso o usuário cadastraria uma IA e ela nunca seria usada.
+    existentes = (await db.execute(
+        select(AIProviderConfig.id).where(AIProviderConfig.user_id == current_user.id)
+    )).scalars().all()
+    is_default = body.is_default or not existentes
+    if is_default:
+        await db.execute(
+            update(AIProviderConfig).where(AIProviderConfig.user_id == current_user.id).values(is_default=False)
+        )
+
+    config = AIProviderConfig(
+        user_id=current_user.id, tenant_id=current_user.tenant_id,
+        provider=prov, display_name=(body.display_name or info["nome"]).strip(),
+        auth_method=auth_method, credentials_enc=creds_enc, model=model, base_url=base_url,
+        enabled=body.enabled, is_default=is_default,
+    )
+    db.add(config)
+    await db.flush()
+    return _config_to_dict(config)
+
+
+@router.patch("/me/ai-configs/{config_id}")
+async def update_my_ai_config(
+    config_id: str,
+    body: AIConfigUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.core.crypto import encrypt
+    import json
+
+    config = await db.get(AIProviderConfig, uuid.UUID(config_id))
+    if not config or config.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Configuração não encontrada")
+
+    if body.display_name is not None and body.display_name.strip():
+        config.display_name = body.display_name.strip()
+    if body.model is not None:
+        model = body.model.strip() or None
+        if model:
+            err = _validate_model_format(config.provider, model)
+            if err:
+                raise HTTPException(status_code=422, detail=err)
+        config.model = model
+    if body.base_url is not None:
+        config.base_url = body.base_url.strip() or None
+    if body.api_key and body.api_key.strip():
+        config.credentials_enc = encrypt(json.dumps({"api_key": body.api_key.strip()}))
+    if body.enabled is not None:
+        config.enabled = body.enabled
+
+    await db.flush()
+    return _config_to_dict(config)
+
+
+@router.delete("/me/ai-configs/{config_id}", status_code=204)
+async def delete_my_ai_config(
+    config_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    config = await db.get(AIProviderConfig, uuid.UUID(config_id))
+    if not config or config.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Configuração não encontrada")
+    era_default = config.is_default
+    await db.delete(config)
+    await db.flush()
+    if era_default:
+        # Promove a config mais recente restante a padrão — sem isso o
+        # usuário ficaria sem IA ativa nenhuma sem perceber.
+        proxima = (await db.execute(
+            select(AIProviderConfig).where(AIProviderConfig.user_id == current_user.id)
+            .order_by(AIProviderConfig.created_at.desc()).limit(1)
+        )).scalar_one_or_none()
+        if proxima:
+            proxima.is_default = True
+            await db.flush()
+
+
+@router.post("/me/ai-configs/{config_id}/duplicate", status_code=201)
+async def duplicate_my_ai_config(
+    config_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    original = await db.get(AIProviderConfig, uuid.UUID(config_id))
+    if not original or original.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Configuração não encontrada")
+    copia = AIProviderConfig(
+        user_id=current_user.id, tenant_id=current_user.tenant_id,
+        provider=original.provider, display_name=f"{original.display_name} (cópia)",
+        auth_method=original.auth_method, credentials_enc=original.credentials_enc,
+        model=original.model, base_url=original.base_url, enabled=original.enabled,
+        is_default=False,
+    )
+    db.add(copia)
+    await db.flush()
+    return _config_to_dict(copia)
+
+
+@router.post("/me/ai-configs/{config_id}/set-default")
+async def set_default_my_ai_config(
+    config_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    config = await db.get(AIProviderConfig, uuid.UUID(config_id))
+    if not config or config.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Configuração não encontrada")
+    await db.execute(
+        update(AIProviderConfig).where(AIProviderConfig.user_id == current_user.id).values(is_default=False)
+    )
+    config.is_default = True
+    config.enabled = True  # padrão desativada nunca seria usada — força ativa
+    await db.flush()
+    return _config_to_dict(config)
+
+
+@router.post("/me/ai-configs/{config_id}/test")
+async def test_my_ai_config(
+    config_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Faz uma chamada mínima com a IA cadastrada para validar a credencial."""
+    from app.core.crypto import decrypt
+    from app.integrations.llm_client import call_llm, ai_creds_ctx
+    import json
+
+    config = await db.get(AIProviderConfig, uuid.UUID(config_id))
+    if not config or config.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Configuração não encontrada")
+
+    api_key = None
+    if config.credentials_enc:
+        raw = decrypt(config.credentials_enc)
+        if raw:
+            try:
+                api_key = (json.loads(raw) or {}).get("api_key")
+            except Exception:
+                api_key = None
+
+    if config.auth_method != "none" and not api_key:
+        raise HTTPException(
+            status_code=422,
+            detail="Sua chave precisa ser salva novamente (a configuração de segurança do servidor mudou).",
+        )
+
+    suggested = ", ".join(SUGGESTED_MODELS.get(config.provider, [])[:2]) or "ver documentação"
     token = ai_creds_ctx.set({
-        "provider": prov,
-        "api_key": key,
-        "model": model,
+        "provider": config.provider,
+        "api_key": api_key or "",
+        "model": config.model,
+        "base_url": config.base_url,
     })
     try:
         # max_tokens generoso: os modelos "thinking" (ex.: Gemini 2.5, Claude com
@@ -184,15 +340,27 @@ async def test_my_ai_settings(current_user: User = Depends(get_current_user)):
             temperature=0,
         )
         sample = (content or "").strip()
+        config.last_tested_at = datetime.now(timezone.utc)
         if not sample:
+            config.status = "ERRO"
+            config.last_error = "Modelo retornou vazio"
+            await db.flush()
             return {
                 "ok": False,
                 "error": "Conexão feita, mas o modelo retornou vazio. Tente um modelo estável como "
-                         f"'{SUGGESTED_MODELS.get(prov, ['gemini-2.5-flash'])[0]}'.",
+                         f"'{config.model or suggested}'.",
             }
-        return {"ok": True, "provider": prov, "model": model, "sample": sample[:40]}
+        config.status = "ATIVA"
+        config.last_error = None
+        await db.flush()
+        return {"ok": True, "provider": config.provider, "model": config.model, "sample": sample[:40]}
     except Exception as exc:
-        return {"ok": False, "error": _friendly_ai_error(exc, prov, model, suggested)}
+        msg = _friendly_ai_error(exc, config.provider, config.model, suggested)
+        config.status = "ERRO"
+        config.last_error = msg[:255]
+        config.last_tested_at = datetime.now(timezone.utc)
+        await db.flush()
+        return {"ok": False, "error": msg}
     finally:
         ai_creds_ctx.reset(token)
 

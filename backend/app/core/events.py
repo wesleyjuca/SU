@@ -94,6 +94,47 @@ async def _carregar_cache_tribunais(engine) -> None:
     log.info("tribunais_cache_carregado", tribunais=len(cache))
 
 
+async def _backfill_ai_provider_configs(engine) -> None:
+    """Fase 137.1 — usuários com BYOK no desenho antigo (colunas
+    User.ai_provider/ai_api_key_enc/ai_model/ai_enabled) ganham uma
+    AIProviderConfig equivalente (is_default=True), sem perder o dado nem
+    exigir reconfiguração. Idempotente: só cria pra quem ainda não tem
+    nenhuma config; as colunas antigas do User continuam intactas (fallback
+    em byok.py::user_ai_creds, caso este backfill não tenha rodado ainda)."""
+    from sqlalchemy.ext.asyncio import AsyncSession
+    from sqlalchemy import select
+    from app.models.user import User
+    from app.models.ai_config import AIProviderConfig
+    from app.core.crypto import decrypt, encrypt
+    import json
+
+    criados = 0
+    async with AsyncSession(engine) as session:
+        usuarios = (await session.execute(
+            select(User).where(User.ai_provider.isnot(None), User.ai_api_key_enc.isnot(None))
+        )).scalars().all()
+        for user in usuarios:
+            ja_tem = (await session.execute(
+                select(AIProviderConfig.id).where(AIProviderConfig.user_id == user.id)
+            )).scalar_one_or_none()
+            if ja_tem:
+                continue
+            chave = decrypt(user.ai_api_key_enc)
+            if not chave:
+                continue  # indecifrável (ENCRYPTION_KEY mudou) — usuário precisa re-salvar, mesmo hoje
+            creds_enc = encrypt(json.dumps({"api_key": chave}))
+            session.add(AIProviderConfig(
+                user_id=user.id, tenant_id=user.tenant_id,
+                provider=user.ai_provider, display_name=f"{(user.ai_provider or '').title()} (migrado)",
+                auth_method="api_key", credentials_enc=creds_enc,
+                model=user.ai_model, enabled=bool(user.ai_enabled), is_default=True,
+            ))
+            criados += 1
+        if criados:
+            await session.commit()
+    log.info("ai_provider_configs_backfill_complete", criados=criados)
+
+
 async def _background_warmup() -> None:
     """Optional warmup that runs after the app is already serving requests."""
     await asyncio.sleep(2)
@@ -227,6 +268,11 @@ async def lifespan(app: FastAPI):
             await _carregar_cache_tribunais(engine)
         except Exception as exc:
             log.warning("tribunais_cache_warning", error=str(exc))
+
+        try:
+            await _backfill_ai_provider_configs(engine)
+        except Exception as exc:
+            log.warning("ai_provider_configs_backfill_warning", error=str(exc))
     else:
         log.warning("database_skipped", reason="DATABASE_URL not configured — running in degraded mode")
 
