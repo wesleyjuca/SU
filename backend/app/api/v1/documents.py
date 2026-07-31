@@ -861,8 +861,9 @@ async def verificar_citacoes_documento(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Extrai referências de lei do documento e confere cada uma no LexML
-    (fonte oficial) — sob demanda, não bloqueia edição/aprovação."""
+    """Extrai referências de lei e de processo do documento e confere cada
+    uma na fonte oficial (LexML / DataJud) — sob demanda, não bloqueia
+    edição/aprovação."""
     result = await db.execute(
         select(Document).where(
             Document.id == uuid.UUID(doc_id),
@@ -873,8 +874,17 @@ async def verificar_citacoes_documento(
     if not doc:
         raise NotFoundError("Documento", doc_id)
 
+    tribunal = None
+    if doc.process_id:
+        tribunal = (await db.execute(
+            select(LegalProcess.tribunal).where(
+                LegalProcess.id == doc.process_id,
+                LegalProcess.tenant_id == current_user.tenant_id,
+            )
+        )).scalar_one_or_none()
+
     from app.services.citacao_check import verificar_citacoes
-    citacoes = await verificar_citacoes(doc.conteudo_texto or "")
+    citacoes = await verificar_citacoes(doc.conteudo_texto or "", tribunal=tribunal)
     return {"document_id": doc_id, "citacoes": citacoes}
 
 
