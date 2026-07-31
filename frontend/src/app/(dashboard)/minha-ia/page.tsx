@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import {
   Bot, KeyRound, CheckCircle2, XCircle, Loader2, Sparkles, Eye, EyeOff,
-  SlidersHorizontal, ChevronDown, Plus, Star, FlaskConical, Copy, Pencil, Trash2, X,
+  SlidersHorizontal, ChevronDown, ChevronUp, Plus, Star, FlaskConical, Copy, Pencil, Trash2, X,
 } from "lucide-react";
 
 type ProviderInfo = {
@@ -24,6 +24,7 @@ type AIConfig = {
   base_url: string | null;
   enabled: boolean;
   is_default: boolean;
+  priority: number | null;
   status: string;
   has_credential: boolean;
   last_tested_at: string | null;
@@ -134,6 +135,26 @@ export default function MinhaIAPage() {
     finally { setBusyId(null); }
   }
 
+  async function moverPrioridade(id: string, direcao: "up" | "down") {
+    // Ordem de fallback = tudo que não é padrão, ativo, na ordem já retornada
+    // pelo backend (Fase 137.3). Reordenar normaliza a prioridade de todo mundo
+    // pra posição 1..N — funciona mesmo partindo de prioridades nulas/repetidas.
+    const fila = configs.filter((c) => !c.is_default && c.enabled);
+    const idx = fila.findIndex((c) => c.id === id);
+    const alvo = direcao === "up" ? idx - 1 : idx + 1;
+    if (idx === -1 || alvo < 0 || alvo >= fila.length) return;
+    setBusyId(id); setMsg(null);
+    try {
+      const [a, b] = [fila[idx], fila[alvo]];
+      await Promise.all([
+        fetch(`/api/v1/users/me/ai-configs/${a.id}`, { method: "PATCH", headers: authH(), body: JSON.stringify({ priority: alvo + 1 }) }),
+        fetch(`/api/v1/users/me/ai-configs/${b.id}`, { method: "PATCH", headers: authH(), body: JSON.stringify({ priority: idx + 1 }) }),
+      ]);
+      await carregar();
+    } catch { setMsg({ ok: false, text: "Falha de conexão." }); }
+    finally { setBusyId(null); }
+  }
+
   async function remover(id: string) {
     if (!confirm("Remover esta IA? Essa ação não pode ser desfeita.")) return;
     setBusyId(id); setMsg(null);
@@ -187,8 +208,16 @@ export default function MinhaIAPage() {
         </div>
       ) : (
         <div className="space-y-3">
+          {configs.filter((c) => !c.is_default && c.enabled).length > 1 && (
+            <p className="text-[11px] text-afj-black/40 -mt-1 mb-1">
+              Se a IA padrão falhar, o sistema tenta automaticamente a próxima desta lista, na ordem abaixo.
+            </p>
+          )}
           {configs.map((c) => {
             const info = providers[c.provider];
+            const fila = configs.filter((x) => !x.is_default && x.enabled);
+            const posicao = fila.findIndex((x) => x.id === c.id);
+            const mostrarOrdem = !c.is_default && c.enabled && fila.length > 1;
             return (
               <div key={c.id} className="afj-card p-4">
                 <div className="flex items-start justify-between gap-3">
@@ -198,6 +227,21 @@ export default function MinhaIAPage() {
                       {c.is_default && (
                         <span className="text-[10px] px-2 py-0.5 rounded-full bg-afj-gold/15 text-afj-gold font-semibold flex items-center gap-1">
                           <Star size={10} fill="currentColor" /> Padrão
+                        </span>
+                      )}
+                      {mostrarOrdem && (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-afj-cream text-afj-black/50 font-medium flex items-center gap-1.5">
+                          Fallback #{posicao + 1}
+                          <span className="flex items-center gap-0.5">
+                            <button type="button" onClick={() => moverPrioridade(c.id, "up")} disabled={busyId === c.id || posicao === 0}
+                              className="hover:text-afj-gold disabled:opacity-30 disabled:hover:text-inherit" aria-label="Subir prioridade">
+                              <ChevronUp size={11} />
+                            </button>
+                            <button type="button" onClick={() => moverPrioridade(c.id, "down")} disabled={busyId === c.id || posicao === fila.length - 1}
+                              className="hover:text-afj-gold disabled:opacity-30 disabled:hover:text-inherit" aria-label="Descer prioridade">
+                              <ChevronDown size={11} />
+                            </button>
+                          </span>
                         </span>
                       )}
                       <span className={`text-[10px] px-2 py-0.5 rounded-full ${c.status === "ERRO" ? "bg-red-50 text-red-600" : "bg-green-50 text-green-600"}`}>
