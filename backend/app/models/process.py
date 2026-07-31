@@ -119,5 +119,6 @@ class ProcessParty(Base):
     cpf_cnpj: Mapped[str | None] = mapped_column(String(18))
     oab: Mapped[str | None] = mapped_column(String(20))
     polo: Mapped[str | None] = mapped_column(String(10))
+    origem: Mapped[str | None] = mapped_column(String(20))  # MANUAL, PDPJ, ESCAVADOR, JUDIT, JUSBRASIL, IMPORTADO
 
     process: Mapped["LegalProcess"] = relationship(back_populates="parties")

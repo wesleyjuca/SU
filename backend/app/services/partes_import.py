@@ -35,8 +35,12 @@ def _chave(tipo: str | None, nome: str | None, oab: str | None) -> str:
     return f"{(tipo or '').upper()}|{n}|{(oab or '').lower()}"
 
 
-async def importar_partes(db, process, partes: list[ParteEntrada]) -> dict:
+async def importar_partes(db, process, partes: list[ParteEntrada], origem: str = "IMPORTADO") -> dict:
     """Grava as partes NOVAS de um processo (dedup por tipo+nome+oab).
+
+    `origem` (Fase 127) rotula de qual provedor as partes vieram (ex. "PDPJ",
+    "ESCAVADOR") — o chamador automático passa o nome real do provedor;
+    default genérico só existe pra chamadores que não o conheçam.
 
     NÃO faz commit. Retorna {"novas": int, "total": int}."""
     from app.models.process import ProcessParty
@@ -65,6 +69,7 @@ async def importar_partes(db, process, partes: list[ParteEntrada]) -> dict:
             cpf_cnpj=(p.cpf_cnpj or None),
             oab=(p.oab or None),
             polo=(p.polo or None),
+            origem=origem[:20],
         ))
         novas += 1
 

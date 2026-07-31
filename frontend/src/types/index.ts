@@ -92,6 +92,7 @@ export interface Parte {
   cpf_cnpj: string | null;
   oab: string | null;
   polo: string | null;     // ATIVO, PASSIVO
+  origem: string | null;   // MANUAL, PDPJ, ESCAVADOR, JUDIT, JUSBRASIL, IMPORTADO
 }
 
 // ─── Documentos ──────────────────────────────────────────────────────────────
