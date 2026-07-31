@@ -1,3 +1,12 @@
+"""AgentContext — estado compartilhado de um run de agente.
+
+Instanciado uma vez por execução (por `agents/orchestration/orchestration_agent.py`
+ou diretamente por quem dispara um agente) e passado adiante por todo o grafo
+LangGraph em `agents/brain/orchestrator.py`. Todo agente que herda `BaseAgent`
+lê e enriquece este mesmo objeto (nunca o substitui) — é aqui que tokens/custo
+acumulados (`add_tokens`), eventos de auditoria (`add_audit_event`) e memória
+recuperada via RAG (`retrieved_memory`) vivem durante o run inteiro.
+"""
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
