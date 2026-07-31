@@ -8,7 +8,7 @@ import uuid
 from app.db.base import get_db
 from app.dependencies import get_current_user, require_role
 from app.models.user import User
-from app.models.process import LegalProcess, ProcessMovement, ProcessDeadline, ProcessTeamMember
+from app.models.process import LegalProcess, ProcessMovement, ProcessDeadline, ProcessTeamMember, ProcessParty
 from app.core.exceptions import NotFoundError
 
 router = APIRouter(prefix="/processes", tags=["processes"])
@@ -367,7 +367,7 @@ async def get_movements(
     return [
         {
             "id": str(m.id),
-            "data": m.data_movimento.isoformat(),
+            "data_movimento": m.data_movimento.isoformat(),
             "descricao": m.descricao,
             "tipo": m.tipo,
             "ai_summary": m.ai_summary,
@@ -385,8 +385,8 @@ async def get_partes(
     db: AsyncSession = Depends(get_db),
 ):
     """Lista as partes do processo (autor, réu, advogados) — populadas pela fonte
-    credenciada PDPJ (Fase 75). Vazio até o processo ter partes importadas."""
-    from app.models.process import ProcessParty
+    credenciada PDPJ/Escavador/Judit/Jusbrasil (Fase 75) ou cadastradas
+    manualmente (Fase 127). Vazio até o processo ter partes."""
     proc_check = await db.execute(
         select(LegalProcess.id).where(
             LegalProcess.id == uuid.UUID(process_id),
@@ -408,9 +408,117 @@ async def get_partes(
             "cpf_cnpj": p.cpf_cnpj,
             "oab": p.oab,
             "polo": p.polo,
+            "origem": p.origem,
         }
         for p in rows
     ]
+
+
+class PartyCreate(BaseModel):
+    nome: str
+    tipo: str  # AUTOR, REU, ADVOGADO, JUIZ, MP, PARTE
+    polo: str | None = None
+    cpf_cnpj: str | None = None
+    oab: str | None = None
+
+
+@router.post("/{process_id}/partes", status_code=201)
+async def create_parte(
+    process_id: str,
+    body: PartyCreate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Cadastro manual de parte (Fase 127) — alternativa ao sync automático
+    (PJe/PDPJ, Escavador, Judit, Jusbrasil) quando nenhum provedor está
+    conectado, ou pra corrigir/completar dados importados."""
+    proc_check = await db.execute(
+        select(LegalProcess.id).where(
+            LegalProcess.id == uuid.UUID(process_id),
+            LegalProcess.tenant_id == current_user.tenant_id,
+        )
+    )
+    if not proc_check.scalar_one_or_none():
+        raise NotFoundError("Processo", process_id)
+
+    party = ProcessParty(
+        process_id=uuid.UUID(process_id),
+        tipo=body.tipo[:20],
+        nome=body.nome[:500],
+        polo=body.polo,
+        cpf_cnpj=body.cpf_cnpj,
+        oab=body.oab,
+        origem="MANUAL",
+    )
+    db.add(party)
+    await db.flush()
+    return {
+        "id": str(party.id),
+        "tipo": party.tipo,
+        "nome": party.nome,
+        "cpf_cnpj": party.cpf_cnpj,
+        "oab": party.oab,
+        "polo": party.polo,
+        "origem": party.origem,
+    }
+
+
+async def _get_parte_do_tenant(db: AsyncSession, process_id: str, parte_id: str, tenant_id) -> ProcessParty:
+    """Confirma que a parte pertence ao processo E que o processo pertence
+    ao tenant do usuário — evita IDOR (editar/excluir parte de outro escritório
+    passando um process_id qualquer)."""
+    row = (await db.execute(
+        select(ProcessParty)
+        .join(LegalProcess, LegalProcess.id == ProcessParty.process_id)
+        .where(
+            ProcessParty.id == uuid.UUID(parte_id),
+            ProcessParty.process_id == uuid.UUID(process_id),
+            LegalProcess.tenant_id == tenant_id,
+        )
+    )).scalar_one_or_none()
+    if not row:
+        raise NotFoundError("Parte", parte_id)
+    return row
+
+
+@router.put("/{process_id}/partes/{parte_id}")
+async def update_parte(
+    process_id: str,
+    parte_id: str,
+    body: PartyCreate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Edita uma parte (manual ou importada — corrigir um dado errado da
+    importação é um caso de uso legítimo, não só cadastro manual)."""
+    party = await _get_parte_do_tenant(db, process_id, parte_id, current_user.tenant_id)
+    party.tipo = body.tipo[:20]
+    party.nome = body.nome[:500]
+    party.polo = body.polo
+    party.cpf_cnpj = body.cpf_cnpj
+    party.oab = body.oab
+    await db.flush()
+    return {
+        "id": str(party.id),
+        "tipo": party.tipo,
+        "nome": party.nome,
+        "cpf_cnpj": party.cpf_cnpj,
+        "oab": party.oab,
+        "polo": party.polo,
+        "origem": party.origem,
+    }
+
+
+@router.delete("/{process_id}/partes/{parte_id}", status_code=204)
+async def delete_parte(
+    process_id: str,
+    parte_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    party = await _get_parte_do_tenant(db, process_id, parte_id, current_user.tenant_id)
+    await db.delete(party)
+    await db.flush()
 
 
 @router.get("/{process_id}/deadlines")
@@ -594,7 +702,7 @@ async def atualizar_partes(
     if not fonte:
         raise HTTPException(
             status_code=422,
-            detail="Nenhuma fonte de partes conectada. Conecte PJe/PDPJ, Escavador ou Judit em Integrações.",
+            detail="Nenhuma fonte de partes conectada. Conecte PJe/PDPJ, Escavador, Judit ou Jusbrasil em Integrações.",
         )
 
     try:
@@ -603,9 +711,9 @@ async def atualizar_partes(
         partes = []
     if not partes:
         return {"novas": 0, "fonte_respondeu": False,
-                "message": "O PDPJ não retornou partes (token expirado/sem acesso ao processo, ou fora do ar)."}
+                "message": f"{fonte.nome.upper()} não retornou partes (token expirado/sem acesso ao processo, ou fora do ar)."}
 
-    resultado = await importar_partes(db, process, partes)
+    resultado = await importar_partes(db, process, partes, origem=fonte.nome.upper())
     await db.commit()
     novas = resultado["novas"]
     return {
@@ -852,7 +960,7 @@ async def create_movement(
         "process_id": process_id,
         "descricao": movement.descricao,
         "tipo": movement.tipo,
-        "data": movement.data_movimento.isoformat(),
+        "data_movimento": movement.data_movimento.isoformat(),
     }
 
 

@@ -52,6 +52,66 @@ async def test_add_movement(client: AsyncClient, auth_headers: dict):
     )
     assert mov_res.status_code == 201
     assert mov_res.json()["descricao"] == "Juntada de documentos"
+    # Fase 127 — a resposta usa a chave "data_movimento" (não mais "data"),
+    # alinhada com o nome real da coluna e o que o frontend espera.
+    assert "data_movimento" in mov_res.json()
+    assert "data" not in mov_res.json()
+
+    list_res = await client.get(f"/api/v1/processes/{process_id}/movements", headers=auth_headers)
+    assert list_res.status_code == 200
+    assert all("data_movimento" in m for m in list_res.json())
+
+
+async def test_partes_manual_crud_e_tenant_isolation(client: AsyncClient, auth_headers: dict, tenant_b_process_id: str):
+    create_res = await client.post(
+        "/api/v1/processes",
+        json={"numero_cnj": "0000004-00.2024.8.26.0100", "tribunal": "TJSP"},
+        headers=auth_headers,
+    )
+    if create_res.status_code != 201:
+        pytest.skip("Could not create process")
+    process_id = create_res.json()["id"]
+
+    # Criar
+    create_parte_res = await client.post(
+        f"/api/v1/processes/{process_id}/partes",
+        json={"nome": "João da Silva", "tipo": "AUTOR", "polo": "ATIVO"},
+        headers=auth_headers,
+    )
+    assert create_parte_res.status_code == 201
+    parte = create_parte_res.json()
+    assert parte["nome"] == "João da Silva"
+    assert parte["origem"] == "MANUAL"
+    parte_id = parte["id"]
+
+    # Aparece na listagem
+    list_res = await client.get(f"/api/v1/processes/{process_id}/partes", headers=auth_headers)
+    assert list_res.status_code == 200
+    assert any(p["id"] == parte_id for p in list_res.json())
+
+    # Editar
+    update_res = await client.put(
+        f"/api/v1/processes/{process_id}/partes/{parte_id}",
+        json={"nome": "João da Silva Filho", "tipo": "AUTOR", "polo": "ATIVO", "oab": "123/SP"},
+        headers=auth_headers,
+    )
+    assert update_res.status_code == 200
+    assert update_res.json()["nome"] == "João da Silva Filho"
+    assert update_res.json()["oab"] == "123/SP"
+
+    # Isolamento de tenant: processo de outro tenant não existe pra esse usuário → 404
+    other_tenant_res = await client.post(
+        f"/api/v1/processes/{tenant_b_process_id}/partes",
+        json={"nome": "Invasor", "tipo": "AUTOR"},
+        headers=auth_headers,
+    )
+    assert other_tenant_res.status_code == 404
+
+    # Excluir
+    delete_res = await client.delete(f"/api/v1/processes/{process_id}/partes/{parte_id}", headers=auth_headers)
+    assert delete_res.status_code == 204
+    list_after_res = await client.get(f"/api/v1/processes/{process_id}/partes", headers=auth_headers)
+    assert not any(p["id"] == parte_id for p in list_after_res.json())
 
 
 async def test_create_deadline_direct(client: AsyncClient, auth_headers: dict):

@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { ArrowLeft, Scale, AlertTriangle, Calendar, Clock, Plus, CheckCircle, Loader2, Edit3, X, RefreshCw, Users } from "lucide-react";
+import { ArrowLeft, Scale, AlertTriangle, Calendar, Clock, Plus, CheckCircle, Loader2, Edit3, X, RefreshCw, Users, Trash2 } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
 import { ProcessTimelineCard } from "@/components/processes/ProcessTimeline";
@@ -19,6 +19,9 @@ const TIPOS_MOVIMENTO = [
   "Petição", "Juntada", "Citação", "Intimação", "Audiência",
   "Perícia", "Outro",
 ];
+
+const TIPOS_PARTE = ["AUTOR", "REU", "ADVOGADO", "JUIZ", "MP", "PARTE"];
+const PARTE_FORM_VAZIO = { nome: "", tipo: "AUTOR", polo: "", cpf_cnpj: "", oab: "" };
 
 function diasPara(data: string | null): number | null {
   if (!data) return null;
@@ -53,6 +56,11 @@ export default function ProcessoDetailPage() {
   const [atualizandoAndamentos, setAtualizandoAndamentos] = useState(false);
   const [partes, setPartes] = useState<Parte[]>([]);
   const [atualizandoPartes, setAtualizandoPartes] = useState(false);
+  const [showParteModal, setShowParteModal] = useState(false);
+  const [savingParte, setSavingParte] = useState(false);
+  const [editingParteId, setEditingParteId] = useState<string | null>(null);
+  const [parteForm, setParteForm] = useState(PARTE_FORM_VAZIO);
+  const [excluindoParteId, setExcluindoParteId] = useState<string | null>(null);
 
   async function atualizarPartes() {
     setAtualizandoPartes(true);
@@ -68,6 +76,66 @@ export default function ProcessoDetailPage() {
       } else toast.error(d.detail || "Erro ao atualizar partes.");
     } catch { toast.error("Erro de conexão."); }
     finally { setAtualizandoPartes(false); }
+  }
+
+  function abrirModalParte(parte?: Parte) {
+    if (parte) {
+      setEditingParteId(parte.id);
+      setParteForm({ nome: parte.nome, tipo: parte.tipo, polo: parte.polo ?? "", cpf_cnpj: parte.cpf_cnpj ?? "", oab: parte.oab ?? "" });
+    } else {
+      setEditingParteId(null);
+      setParteForm(PARTE_FORM_VAZIO);
+    }
+    setShowParteModal(true);
+  }
+
+  async function salvarParte(e: React.FormEvent) {
+    e.preventDefault();
+    if (!parteForm.nome.trim()) return;
+    setSavingParte(true);
+    try {
+      const token = localStorage.getItem("afj_access_token");
+      const url = editingParteId
+        ? `/api/v1/processes/${id}/partes/${editingParteId}`
+        : `/api/v1/processes/${id}/partes`;
+      const res = await fetch(url, {
+        method: editingParteId ? "PUT" : "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          nome: parteForm.nome,
+          tipo: parteForm.tipo,
+          polo: parteForm.polo || undefined,
+          cpf_cnpj: parteForm.cpf_cnpj || undefined,
+          oab: parteForm.oab || undefined,
+        }),
+      });
+      if (res.ok) {
+        toast.success(editingParteId ? "Parte atualizada." : "Parte cadastrada.");
+        setShowParteModal(false);
+        setParteForm(PARTE_FORM_VAZIO);
+        setEditingParteId(null);
+        fetchAll();
+      } else {
+        const d = await res.json().catch(() => ({}));
+        toast.error(d.detail || "Erro ao salvar a parte.");
+      }
+    } catch { toast.error("Erro de conexão."); }
+    finally { setSavingParte(false); }
+  }
+
+  async function excluirParte(parteId: string) {
+    if (!confirm("Excluir esta parte?")) return;
+    setExcluindoParteId(parteId);
+    try {
+      const token = localStorage.getItem("afj_access_token");
+      const res = await fetch(`/api/v1/processes/${id}/partes/${parteId}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) { toast.success("Parte excluída."); fetchAll(); }
+      else toast.error("Erro ao excluir a parte.");
+    } catch { toast.error("Erro de conexão."); }
+    finally { setExcluindoParteId(null); }
   }
 
   async function atualizarAndamentos() {
@@ -400,31 +468,46 @@ export default function ProcessoDetailPage() {
             )}
           </div>
 
-          {/* Partes do processo (PJe/PDPJ) */}
+          {/* Partes do processo (manual ou importada — PJe/PDPJ/Escavador/Judit/Jusbrasil) */}
           <div className="afj-card p-4">
             <div className="flex items-center justify-between mb-3">
               <h2 className="font-semibold text-afj-black text-sm flex items-center gap-1.5">
                 <Users size={14} className="text-afj-gold" /> Partes
+                {partes.length > 0 && (
+                  <span className="text-[10px] uppercase tracking-wider text-afj-black/35">{partes.length}</span>
+                )}
               </h2>
-              {partes.length > 0 && (
-                <span className="text-[10px] uppercase tracking-wider text-afj-black/35">{partes.length}</span>
-              )}
+              <button
+                onClick={() => abrirModalParte()}
+                className="text-xs text-afj-gold hover:underline flex items-center gap-1"
+              >
+                <Plus size={11} /> Adicionar
+              </button>
             </div>
             {partes.length > 0 ? (
               <div className="space-y-1.5 text-sm">
                 {partes.map((p) => (
-                  <div key={p.id} className="flex justify-between gap-2">
+                  <div key={p.id} className="flex justify-between gap-2 group">
                     <span className="text-afj-black/80 text-xs">
                       {p.nome}
                       {p.oab && <span className="text-afj-black/40"> · OAB {p.oab}</span>}
+                      {p.origem === "MANUAL" && <span className="text-afj-black/30"> · manual</span>}
                     </span>
-                    <span className="text-[10px] uppercase tracking-wider text-afj-black/35 flex-shrink-0">{p.tipo}</span>
+                    <div className="flex items-center gap-1.5 flex-shrink-0">
+                      <span className="text-[10px] uppercase tracking-wider text-afj-black/35">{p.tipo}</span>
+                      <button onClick={() => abrirModalParte(p)} className="tap-target text-afj-black/25 hover:text-afj-gold opacity-0 group-hover:opacity-100" title="Editar parte" aria-label="Editar parte">
+                        <Edit3 size={11} />
+                      </button>
+                      <button onClick={() => excluirParte(p.id)} disabled={excluindoParteId === p.id} className="tap-target text-afj-black/25 hover:text-red-600 opacity-0 group-hover:opacity-100 disabled:opacity-50" title="Excluir parte" aria-label="Excluir parte">
+                        {excluindoParteId === p.id ? <Loader2 size={11} className="animate-spin" /> : <Trash2 size={11} />}
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
             ) : (
               <p className="text-xs text-afj-black/40">
-                Nenhuma parte importada. Use &quot;Atualizar partes&quot; (requer o PJe/PDPJ conectado em Integrações).
+                Nenhuma parte cadastrada. Cadastre manualmente (&quot;+ Adicionar&quot;) ou use &quot;Atualizar partes&quot; (requer PJe/PDPJ, Escavador, Judit ou Jusbrasil conectado em Integrações).
               </p>
             )}
           </div>
@@ -754,6 +837,81 @@ export default function ProcessoDetailPage() {
                 {salvandoEquipe ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle size={14} />} Salvar equipe
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Adicionar/Editar Parte */}
+      {showParteModal && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-sm shadow-xl w-full max-w-md max-h-[85vh] overflow-y-auto">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-afj-cream-dark">
+              <h2 className="font-semibold text-afj-black">{editingParteId ? "Editar Parte" : "Adicionar Parte"}</h2>
+              <button onClick={() => setShowParteModal(false)} className="text-afj-black/40 hover:text-afj-black">
+                <X size={18} />
+              </button>
+            </div>
+            <form onSubmit={salvarParte} className="p-5 space-y-4">
+              <div>
+                <label className="text-xs text-afj-black/60 block mb-1">Nome *</label>
+                <input
+                  required
+                  value={parteForm.nome}
+                  onChange={(e) => setParteForm({ ...parteForm, nome: e.target.value })}
+                  placeholder="Nome completo ou razão social"
+                  className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs text-afj-black/60 block mb-1">Tipo *</label>
+                  <select
+                    value={parteForm.tipo}
+                    onChange={(e) => setParteForm({ ...parteForm, tipo: e.target.value })}
+                    className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm bg-white focus:outline-none focus:border-afj-gold"
+                  >
+                    {TIPOS_PARTE.map((t) => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs text-afj-black/60 block mb-1">Polo</label>
+                  <select
+                    value={parteForm.polo}
+                    onChange={(e) => setParteForm({ ...parteForm, polo: e.target.value })}
+                    className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm bg-white focus:outline-none focus:border-afj-gold"
+                  >
+                    <option value="">—</option>
+                    <option value="ATIVO">Ativo</option>
+                    <option value="PASSIVO">Passivo</option>
+                  </select>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs text-afj-black/60 block mb-1">CPF/CNPJ</label>
+                  <input
+                    value={parteForm.cpf_cnpj}
+                    onChange={(e) => setParteForm({ ...parteForm, cpf_cnpj: e.target.value })}
+                    className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-afj-black/60 block mb-1">OAB</label>
+                  <input
+                    value={parteForm.oab}
+                    onChange={(e) => setParteForm({ ...parteForm, oab: e.target.value })}
+                    placeholder="123/CE"
+                    className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold"
+                  />
+                </div>
+              </div>
+              <div className="flex gap-2 justify-end pt-2">
+                <button type="button" onClick={() => setShowParteModal(false)} disabled={savingParte} className="btn-afj-outline text-sm py-2 px-4 rounded-sm">Cancelar</button>
+                <button type="submit" disabled={savingParte} className="btn-afj-primary text-sm py-2 px-4 rounded-sm flex items-center gap-2">
+                  {savingParte ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle size={14} />} Salvar
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

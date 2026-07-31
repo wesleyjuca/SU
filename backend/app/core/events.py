@@ -188,6 +188,14 @@ async def lifespan(app: FastAPI):
             # Scan na tabela inteira. Validado empiricamente: ~25ms/query já
             # com 100k linhas (2 tenants), tendência a piorar linearmente.
             "CREATE INDEX IF NOT EXISTS idx_audit_tenant ON audit_logs (tenant_id, timestamp)",
+            # Fase 127 — origem da parte (MANUAL vs importada de PDPJ/Escavador/
+            # Judit/Jusbrasil). Backfill idempotente: até aqui só existia o
+            # caminho de sync automático (importar_partes via atualizar-partes),
+            # então toda linha pré-existente veio de importação — não dá pra
+            # saber de qual provedor especificamente sem mais contexto, por
+            # isso o rótulo genérico pros dados antigos.
+            "ALTER TABLE process_parties ADD COLUMN IF NOT EXISTS origem VARCHAR(20)",
+            "UPDATE process_parties SET origem = 'IMPORTADO' WHERE origem IS NULL",
         ]:
             try:
                 async with engine.begin() as conn:
