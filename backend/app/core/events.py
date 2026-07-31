@@ -196,6 +196,10 @@ async def lifespan(app: FastAPI):
             # isso o rótulo genérico pros dados antigos.
             "ALTER TABLE process_parties ADD COLUMN IF NOT EXISTS origem VARCHAR(20)",
             "UPDATE process_parties SET origem = 'IMPORTADO' WHERE origem IS NULL",
+            # Fase 133 — a página de criar processo já tinha um textarea
+            # "Descrição" sem coluna nenhuma por trás: o usuário digitava,
+            # salvava, e o texto era descartado silenciosamente.
+            "ALTER TABLE legal_processes ADD COLUMN IF NOT EXISTS descricao TEXT",
         ]:
             try:
                 async with engine.begin() as conn:
