@@ -298,14 +298,18 @@ async def update_document(
         raise NotFoundError("Documento", doc_id)
 
     updates = body.model_dump(exclude_none=True)
-    # Aprovar/protocolar é ato jurídico (invariante HITL): restrito a papéis
-    # com poder de decisão — impede que qualquer usuário "aprove" via PUT.
-    if updates.get("status") in ("APROVADO", "PROTOCOLADO") and current_user.role not in (
-        "ADVOGADO", "SOCIO", "ADMIN", "SUPERADMIN"
-    ):
+    # Fase 130 — invariante HITL (CLAUDE.md: "a ação não é executada até
+    # aprovação humana... nunca bypassar"). Documento gerado por IA só pode
+    # sair de RASCUNHO/PENDENTE via /approvals/{id}/resolve — essa rota
+    # genérica de PUT permitia qualquer ADVOGADO/SOCIO/ADMIN aprovar direto,
+    # pulando a fila de revisão inteira (verificação de citação, aviso de
+    # truncamento, justificativa de rejeição). Documentos NÃO gerados por IA
+    # (upload manual) continuam livres — não há ação de IA nenhuma a proteger.
+    if updates.get("status") in ("APROVADO", "PROTOCOLADO") and doc.gerado_por_ia:
         raise HTTPException(
             status_code=403,
-            detail="Aprovar ou protocolar documentos é restrito a advogados, sócios e administradores.",
+            detail="Documentos gerados por IA só podem ser aprovados/protocolados pelo fluxo de "
+                   "aprovação (Aprovações pendentes) — não é permitido via edição direta.",
         )
 
     # Se o conteúdo vai mudar, guarda o estado ANTERIOR como versão (histórico),

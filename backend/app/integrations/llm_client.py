@@ -35,6 +35,14 @@ _RETRY_KWARGS = dict(stop=stop_after_attempt(2), wait=wait_exponential(multiplie
 # Formato: {"provider": str, "api_key": str, "model": str | None}
 ai_creds_ctx: "contextvars.ContextVar[dict | None]" = contextvars.ContextVar("ai_creds", default=None)
 
+# Fase 130 — sinaliza se a ÚLTIMA chamada de `call_llm` foi cortada por
+# limite de tokens (`stop_reason`/`finish_reason` descartado antes desta
+# fase — uma petição truncada no meio nunca era detectada, passava pra
+# aprovação parecendo completa). Contextvar em vez de mudar a assinatura de
+# `call_llm` (usada em dezenas de call sites) — quem se importa lê depois
+# do await, sem quebrar ninguém que não olhe pra isso.
+last_call_truncated_ctx: "contextvars.ContextVar[bool]" = contextvars.ContextVar("last_call_truncated", default=False)
+
 # ─── Preços aproximados por 1M tokens (input/output) ─────────────────────────
 MODEL_PRICING = {
     # Anthropic
@@ -87,7 +95,7 @@ async def _call_anthropic(api_key, messages, system, model, max_tokens, temperat
         kwargs["system"] = system
     resp = await client.messages.create(**kwargs)
     content = resp.content[0].text if resp.content else ""
-    return content, resp.usage.input_tokens, resp.usage.output_tokens
+    return content, resp.usage.input_tokens, resp.usage.output_tokens, resp.stop_reason
 
 
 # ─── Gemini (via endpoint OpenAI-compatível) ─────────────────────────────────
@@ -114,7 +122,8 @@ async def _call_gemini(api_key, messages, system, model, max_tokens, temperature
     usage = resp.usage
     in_t = getattr(usage, "prompt_tokens", 0) if usage else 0
     out_t = getattr(usage, "completion_tokens", 0) if usage else 0
-    return content, in_t, out_t
+    finish_reason = resp.choices[0].finish_reason if resp.choices else None
+    return content, in_t, out_t, finish_reason
 
 
 # ─── Entrada unificada ───────────────────────────────────────────────────────
@@ -144,9 +153,11 @@ async def call_llm(
         mdl = model or _default_model(prov)
 
     if prov == "gemini":
-        content, in_t, out_t = await _call_gemini(api_key, messages, system, mdl, max_tokens, temperature)
+        content, in_t, out_t, finish_reason = await _call_gemini(api_key, messages, system, mdl, max_tokens, temperature)
+        last_call_truncated_ctx.set(finish_reason == "length")
     else:
-        content, in_t, out_t = await _call_anthropic(api_key, messages, system, mdl, max_tokens, temperature)
+        content, in_t, out_t, finish_reason = await _call_anthropic(api_key, messages, system, mdl, max_tokens, temperature)
+        last_call_truncated_ctx.set(finish_reason == "max_tokens")
 
     return content, in_t, out_t, _cost(mdl, in_t, out_t)
 

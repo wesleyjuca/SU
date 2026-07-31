@@ -19,6 +19,7 @@ from app.agents.base.agent import BaseAgent
 from app.agents.base.result import AgentResult, AgentStatus
 from app.agents.brain.context import AgentContext
 from app.integrations.anthropic_client import call_claude, AFJ_LEGAL_SYSTEM_PROMPT
+from app.integrations.llm_client import last_call_truncated_ctx
 from app.agents.petition.templates.base_template import get_template
 import structlog
 from app.config import settings
@@ -102,6 +103,31 @@ Gere a petição completa seguindo o template e as regras absolutas do sistema."
         # 6. Validar — nenhuma citação sem fonte
         warnings = self._validar_citacoes(content, jurisprudencia_ctx)
 
+        # Fase 130 — truncamento por limite de tokens passava despercebido: a
+        # petição saía cortada no meio, sem fechamento nem seção de pedidos,
+        # e ia pra aprovação parecendo completa (preview de 500 chars nunca
+        # mostra o final cortado).
+        if last_call_truncated_ctx.get():
+            warnings.append(
+                "Conteúdo pode estar truncado (limite de tokens atingido) — "
+                "revise o final da petição antes de aprovar."
+            )
+
+        # Fase 130 — verificação automática de citações (LEI/PROCESSO, Fase
+        # 93/126) contra a fonte oficial. Antes só existia como ação manual
+        # separada (POST /documents/{id}/verificar-citacoes) que o revisor
+        # podia simplesmente esquecer de clicar — uma citação plausível mas
+        # fabricada passava pra aprovação sem nenhuma checagem automática.
+        citacoes = []
+        try:
+            from app.services.citacao_check import verificar_citacoes
+            citacoes = await verificar_citacoes(content, tribunal=processo_dados.get("tribunal"))
+            for c in citacoes:
+                if c["status"] != "confirmada":
+                    warnings.append(f"Citação {c['tipo']} {c['referencia']}: {c['status']}")
+        except Exception as exc:
+            log.warning("petition_verificar_citacoes_falhou", error=str(exc))
+
         # 7. Criar documento no DB (se DB disponível)
         document_id = str(uuid.uuid4())
         if self.db:
@@ -119,6 +145,7 @@ Gere a petição completa seguindo o template e as regras absolutas do sistema."
                 "tipo_peticao": tipo_peticao,
                 "conteudo": content,
                 "warnings": warnings,
+                "citacoes": citacoes,
                 "tokens_input": input_tokens,
                 "tokens_output": output_tokens,
             },
