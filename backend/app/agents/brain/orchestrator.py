@@ -5,6 +5,11 @@ Fluxo:
   classify_intent → retrieve_memory → execute_agent → check_approval
   → [INTERRUPT para aprovação humana, se necessário]
   → post_process → audit_close
+
+Chamador padrão: `agents/orchestration/orchestration_agent.py` (API
+`/agents/trigger`, worker Celery) — monta o `AgentContext` e delega a
+execução real do grafo pra cá. Este módulo é o motor; aquele é só o adaptador
+de entrada.
 """
 from typing import TypedDict
 from langgraph.graph import StateGraph, END
