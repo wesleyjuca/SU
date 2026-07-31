@@ -57,10 +57,10 @@ AI_PROVIDERS: dict[str, dict] = {
     },
     "openrouter": {
         "nome": "OpenRouter",
-        "auth_methods": ["api_key"],  # "oauth" chega na Fase 137.2 (PKCE genuíno, único provedor viável)
+        "auth_methods": ["api_key", "oauth"],  # OAuth PKCE genuíno desde a Fase 137.2
         "base_url": "https://openrouter.ai/api/v1",
         "requires_key": True,
-        "oauth_disponivel": True,  # sinaliza a intenção; endpoint OAuth ainda não existe (137.2)
+        "oauth_disponivel": True,  # GET /me/ai-configs/oauth/openrouter/connect (Fase 137.2)
         "modelo_sugerido": "openai/gpt-4.1",
         "obter": "openrouter.ai/keys.",
     },
