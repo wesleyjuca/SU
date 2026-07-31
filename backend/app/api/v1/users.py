@@ -101,6 +101,7 @@ class AIConfigUpdate(BaseModel):
     model: str | None = None
     base_url: str | None = None
     enabled: bool | None = None
+    priority: int | None = None          # ordem no fallback (menor = tentada antes) — Fase 137.3
 
 
 def _config_to_dict(c: AIProviderConfig) -> dict:
@@ -114,6 +115,7 @@ def _config_to_dict(c: AIProviderConfig) -> dict:
         "base_url": c.base_url,
         "enabled": c.enabled,
         "is_default": c.is_default,
+        "priority": c.priority,
         "status": c.status,
         "has_credential": bool(c.credentials_enc),
         "last_tested_at": c.last_tested_at.isoformat() if c.last_tested_at else None,
@@ -133,11 +135,17 @@ async def list_my_ai_configs(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Lista as IAs cadastradas pelo usuário (BYOK multi-provedor, Fase 137.1)."""
+    """Lista as IAs cadastradas pelo usuário (BYOK multi-provedor, Fase 137.1).
+    Ordem = ordem real de fallback (Fase 137.3): padrão primeiro, depois por
+    prioridade, mesmo `ORDER BY` usado em `byok.user_ai_creds()`."""
     rows = (await db.execute(
         select(AIProviderConfig)
         .where(AIProviderConfig.user_id == current_user.id)
-        .order_by(AIProviderConfig.created_at)
+        .order_by(
+            AIProviderConfig.is_default.desc(),
+            AIProviderConfig.priority.asc().nullslast(),
+            AIProviderConfig.created_at.asc(),
+        )
     )).scalars().all()
     return {"configs": [_config_to_dict(c) for c in rows]}
 
@@ -160,7 +168,13 @@ async def create_my_ai_config(
     if info["requires_key"] and auth_method == "api_key" and not (body.api_key and body.api_key.strip()):
         raise HTTPException(status_code=422, detail="Configure uma chave de API")
     base_url = (body.base_url or info.get("base_url") or "").strip() or None
-    if not info["base_url"] and not base_url:  # só provedores sem URL fixa exigem (hoje: ollama)
+    # Só provedores openai-compatíveis SEM URL fixa (hoje: ollama, self-hosted)
+    # exigem que o usuário informe uma — Anthropic usa o SDK próprio e nunca lê
+    # `base_url` (também tem `info["base_url"] is None`, mas por outro motivo:
+    # não roteia por URL nenhuma, não é "self-hosted sem URL fixa"). Bug real
+    # corrigido na Fase 137.3: a checagem antiga usava só `not info["base_url"]`,
+    # que também dava True pra Anthropic — bloqueava cadastrar BYOK Anthropic.
+    if prov != "anthropic" and not info["base_url"] and not base_url:
         raise HTTPException(status_code=422, detail="Informe a URL do servidor")
 
     model = (body.model or "").strip() or info.get("modelo_sugerido")
@@ -224,6 +238,8 @@ async def update_my_ai_config(
         config.credentials_enc = encrypt(json.dumps({"api_key": body.api_key.strip()}))
     if body.enabled is not None:
         config.enabled = body.enabled
+    if body.priority is not None:
+        config.priority = body.priority
 
     await db.flush()
     return _config_to_dict(config)
