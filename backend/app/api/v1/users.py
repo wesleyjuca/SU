@@ -1,11 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, or_, func, update
+from sqlalchemy import select, or_, func, update, Integer
 from pydantic import BaseModel, EmailStr
 from datetime import datetime, timezone
 from app.dependencies import get_current_user, get_db
 from app.models.user import User
 from app.models.ai_config import AIProviderConfig  # import no topo: garante registro no Base.metadata antes do create_all
+from app.models.ai_call_log import AICallLog  # idem — Fase 137.7
 from app.core.security import hash_password
 from app.services.ai_providers import AI_PROVIDERS, get_provider
 import uuid
@@ -429,6 +430,7 @@ async def compare_my_ai_configs(
         creds_list.append({
             "provider": config.provider, "api_key": api_key or "",
             "model": config.model, "base_url": config.base_url,
+            "config_id": str(config.id),
         })
 
     resultados = await call_llm_parallel(
@@ -455,6 +457,66 @@ async def compare_my_ai_configs(
             for config, r in zip(configs, resultados)
         ],
     }
+
+
+@router.get("/me/ai-configs/stats")
+async def get_my_ai_configs_stats(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Resumo agregado de uso por IA cadastrada (Fase 137.7 — monitoramento):
+    nº de chamadas, taxa de sucesso, custo total, latência média, último uso
+    e último erro. Só configs do usuário atual, 1 query agregada + 1 query
+    pro último erro — sem N+1."""
+    rows = (await db.execute(
+        select(
+            AICallLog.config_id,
+            func.count().label("total_calls"),
+            func.sum(func.cast(AICallLog.success, Integer)).label("total_success"),
+            func.avg(AICallLog.latency_ms).label("avg_latency_ms"),
+            func.sum(AICallLog.cost_usd).label("total_cost_usd"),
+            func.sum(AICallLog.input_tokens + AICallLog.output_tokens).label("total_tokens"),
+            func.max(AICallLog.created_at).label("last_used_at"),
+        )
+        .join(AIProviderConfig, AIProviderConfig.id == AICallLog.config_id)
+        .where(AIProviderConfig.user_id == current_user.id)
+        .group_by(AICallLog.config_id)
+    )).all()
+
+    stats = {}
+    for row in rows:
+        total_calls = row.total_calls or 0
+        total_success = row.total_success or 0
+        stats[str(row.config_id)] = {
+            "total_calls": total_calls,
+            "success_rate": round(total_success / total_calls, 4) if total_calls else 0.0,
+            "avg_latency_ms": round(float(row.avg_latency_ms), 1) if row.avg_latency_ms is not None else 0.0,
+            "total_cost_usd": round(float(row.total_cost_usd or 0), 6),
+            "total_tokens": row.total_tokens or 0,
+            "last_used_at": row.last_used_at.isoformat() if row.last_used_at else None,
+            "last_error": None,
+        }
+
+    if stats:
+        erro_rows = (await db.execute(
+            select(AICallLog.config_id, AICallLog.error, AICallLog.created_at)
+            .join(AIProviderConfig, AIProviderConfig.id == AICallLog.config_id)
+            .where(
+                AIProviderConfig.user_id == current_user.id,
+                AICallLog.success == False,  # noqa: E712
+                AICallLog.config_id.in_([uuid.UUID(cid) for cid in stats]),
+            )
+            .order_by(AICallLog.created_at.desc())
+        )).all()
+        seen = set()
+        for row in erro_rows:
+            cid = str(row.config_id)
+            if cid in seen:
+                continue
+            seen.add(cid)
+            stats[cid]["last_error"] = row.error
+
+    return {"stats": stats}
 
 
 def _friendly_ai_error(exc: Exception, provider: str, model: str | None, suggested: str) -> str:

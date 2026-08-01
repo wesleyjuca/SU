@@ -195,10 +195,12 @@ async def _call_openai_compatible(base_url, api_key, messages, system, model, ma
 
 
 def _resolve_call_params(creds: dict | None, provider: str | None, model: str | None):
-    """Resolve (prov, api_key, mdl, base_url) a partir de um dict de credenciais
-    (formato de `ai_creds_ctx`/entradas de `ai_fallback_ctx`) ou das settings do
-    sistema quando `creds` é `None`. Reusado pelo candidato principal e por cada
-    entrada da cadeia de fallback (Fase 137.3).
+    """Resolve (prov, api_key, mdl, base_url, config_id) a partir de um dict de
+    credenciais (formato de `ai_creds_ctx`/entradas de `ai_fallback_ctx`) ou das
+    settings do sistema quando `creds` é `None`. Reusado pelo candidato
+    principal e por cada entrada da cadeia de fallback (Fase 137.3).
+    `config_id` (Fase 137.7 — monitoramento por IA) vem do próprio dict de
+    credenciais (setado por `byok.py`); `None` quando não há BYOK/config.
 
     `creds is not None` (não `creds.get("api_key")`) decide se há BYOK: uma
     config Ollama (`auth_method="none"`) tem `api_key=""` de propósito — checar
@@ -207,10 +209,10 @@ def _resolve_call_params(creds: dict | None, provider: str | None, model: str | 
         prov = resolve_provider(provider or creds.get("provider"))
         api_key = creds.get("api_key") or ""
         mdl = model or creds.get("model") or _default_model(prov)
-        return prov, api_key, mdl, _provider_base_url(prov, creds.get("base_url"))
+        return prov, api_key, mdl, _provider_base_url(prov, creds.get("base_url")), creds.get("config_id")
     prov = resolve_provider(provider)
     mdl = model or _default_model(prov)
-    return prov, _system_api_key(prov), mdl, _provider_base_url(prov, None)
+    return prov, _system_api_key(prov), mdl, _provider_base_url(prov, None), None
 
 
 # ─── Entrada unificada ───────────────────────────────────────────────────────
@@ -232,15 +234,21 @@ async def call_llm(
     timeout/rate-limit/5xx/auth) e houver outras IAs do usuário em
     `ai_fallback_ctx` (setado por `byok.user_ai_creds()`, ordenadas por
     prioridade), tenta a próxima automaticamente antes de desistir.
+
+    Monitoramento (Fase 137.7): cada tentativa com uma `AIProviderConfig`
+    conhecida (sucesso ou a falha que disparou o próximo fallback) vira uma
+    linha em `AICallLog`, fail-soft — nunca afeta o resultado desta função.
     """
     candidates = [_resolve_call_params(ai_creds_ctx.get(), provider, model)]
     for fb_creds in (ai_fallback_ctx.get() or []):
         candidates.append(_resolve_call_params(fb_creds, provider, model))
 
     import structlog
+    from app.services.ai_monitoring import registrar_chamada_ia
     log = structlog.get_logger()
 
-    for i, (prov, api_key, mdl, base_url) in enumerate(candidates):
+    for i, (prov, api_key, mdl, base_url, config_id) in enumerate(candidates):
+        inicio = time.monotonic()
         try:
             if prov == "anthropic":
                 content, in_t, out_t, finish_reason = await _call_anthropic(api_key, messages, system, mdl, max_tokens, temperature)
@@ -248,8 +256,17 @@ async def call_llm(
             else:
                 content, in_t, out_t, finish_reason = await _call_openai_compatible(base_url, api_key, messages, system, mdl, max_tokens, temperature)
                 last_call_truncated_ctx.set(finish_reason == "length")
-            return content, in_t, out_t, _cost(mdl, in_t, out_t)
-        except _RETRYABLE_FOR_FALLBACK:
+            cost = _cost(mdl, in_t, out_t)
+            await registrar_chamada_ia(
+                config_id, prov, mdl, True, None, in_t, out_t, cost,
+                int((time.monotonic() - inicio) * 1000),
+            )
+            return content, in_t, out_t, cost
+        except _RETRYABLE_FOR_FALLBACK as exc:
+            await registrar_chamada_ia(
+                config_id, prov, mdl, False, str(exc), 0, 0, 0.0,
+                int((time.monotonic() - inicio) * 1000),
+            )
             if i < len(candidates) - 1:
                 log.warning("llm_fallback_provider", de=prov, para=candidates[i + 1][0])
                 continue
@@ -267,27 +284,33 @@ async def _call_with_config(
     `call_llm_parallel`, onde não existe "a config ativa da requisição":
     existem N configs concorrentes de propósito. Nunca propaga exceção —
     devolve `error` preenchido na própria entrada, pra 1 config falhando
-    não derrubar as outras do `asyncio.gather`."""
+    não derrubar as outras do `asyncio.gather`. Também loga em `AICallLog`
+    (Fase 137.7), fail-soft, se `config` tiver um `config_id`."""
+    from app.services.ai_monitoring import registrar_chamada_ia
+
     inicio = time.monotonic()
-    prov, api_key, mdl, base_url = _resolve_call_params(config, None, None)
+    prov, api_key, mdl, base_url, config_id = _resolve_call_params(config, None, None)
     try:
         if prov == "anthropic":
             content, in_t, out_t, _finish = await _call_anthropic(api_key, messages, system, mdl, max_tokens, temperature)
         else:
             content, in_t, out_t, _finish = await _call_openai_compatible(base_url, api_key, messages, system, mdl, max_tokens, temperature)
+        latency_ms = int((time.monotonic() - inicio) * 1000)
+        cost = _cost(mdl, in_t, out_t)
+        await registrar_chamada_ia(config_id, prov, mdl, True, None, in_t, out_t, cost, latency_ms)
         return {
             "provider": prov, "model": mdl, "content": content,
             "input_tokens": in_t, "output_tokens": out_t,
-            "cost_usd": _cost(mdl, in_t, out_t),
-            "latency_ms": int((time.monotonic() - inicio) * 1000),
-            "error": None,
+            "cost_usd": cost, "latency_ms": latency_ms, "error": None,
         }
     except Exception as exc:
+        latency_ms = int((time.monotonic() - inicio) * 1000)
+        erro = str(exc)[:300]
+        await registrar_chamada_ia(config_id, prov, mdl, False, erro, 0, 0, 0.0, latency_ms)
         return {
             "provider": prov, "model": mdl, "content": None,
             "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0,
-            "latency_ms": int((time.monotonic() - inicio) * 1000),
-            "error": str(exc)[:300],
+            "latency_ms": latency_ms, "error": erro,
         }
 
 
@@ -307,9 +330,11 @@ async def call_llm_parallel(
 
 def _resolve_creds(provider, model):
     """Resolve (prov, api_key, mdl, base_url) considerando BYOK — usado só por
-    `call_llm_stream`, que fica de fora do fallback da Fase 137.3 (trocar de
-    provedor no meio de um stream já em andamento é outro problema)."""
-    return _resolve_call_params(ai_creds_ctx.get(), provider, model)
+    `call_llm_stream`, que fica de fora do fallback da Fase 137.3 e do
+    monitoramento por IA da Fase 137.7 (trocar de provedor/logar no meio de um
+    stream já em andamento é outro problema) — por isso descarta `config_id`."""
+    prov, api_key, mdl, base_url, _config_id = _resolve_call_params(ai_creds_ctx.get(), provider, model)
+    return prov, api_key, mdl, base_url
 
 
 async def call_llm_stream(
