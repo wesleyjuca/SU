@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import {
   Bot, KeyRound, CheckCircle2, XCircle, Loader2, Sparkles, Eye, EyeOff,
-  SlidersHorizontal, ChevronDown, ChevronUp, Plus, Star, FlaskConical, Copy, Pencil, Trash2, X,
+  SlidersHorizontal, ChevronDown, ChevronUp, Plus, Star, FlaskConical, Copy, Pencil, Trash2, X, Scale,
 } from "lucide-react";
 
 type ProviderInfo = {
@@ -31,6 +31,19 @@ type AIConfig = {
   last_error: string | null;
 };
 
+type CompareResult = {
+  config_id: string;
+  display_name: string;
+  provider: string;
+  model: string;
+  content: string | null;
+  input_tokens: number;
+  output_tokens: number;
+  cost_usd: number;
+  latency_ms: number;
+  error: string | null;
+};
+
 // Áreas com override de modelo (devem casar com OVERRIDABLE_TASKS do backend)
 const TASK_LABELS: { task: string; label: string }[] = [
   { task: "generate_petition", label: "Gerar Petições" },
@@ -56,6 +69,11 @@ export default function MinhaIAPage() {
   const [modal, setModal] = useState<{ mode: "add" | "edit"; config: AIConfig | null } | null>(null);
   const [overrides, setOverrides] = useState<Record<string, string>>({});
   const [showOverrides, setShowOverrides] = useState(false);
+  const [showComparar, setShowComparar] = useState(false);
+  const [compararSelecionadas, setCompararSelecionadas] = useState<string[]>([]);
+  const [compararPrompt, setCompararPrompt] = useState("");
+  const [comparando, setComparando] = useState(false);
+  const [compararResultados, setCompararResultados] = useState<CompareResult[] | null>(null);
 
   async function carregar() {
     setLoading(true);
@@ -178,6 +196,27 @@ export default function MinhaIAPage() {
       if (!res.ok) { setMsg({ ok: false, text: d.detail || "Erro ao salvar ajustes por área" }); return; }
       setMsg({ ok: true, text: "Ajustes por área salvos." });
     } catch { setMsg({ ok: false, text: "Falha de conexão." }); }
+  }
+
+  function alternarSelecaoComparar(id: string) {
+    setCompararSelecionadas((sel) => (
+      sel.includes(id) ? sel.filter((x) => x !== id) : sel.length < 5 ? [...sel, id] : sel
+    ));
+  }
+
+  async function compararIAs() {
+    if (!compararPrompt.trim() || compararSelecionadas.length < 2) return;
+    setComparando(true); setMsg(null); setCompararResultados(null);
+    try {
+      const res = await fetch("/api/v1/users/me/ai-configs/compare", {
+        method: "POST", headers: authH(),
+        body: JSON.stringify({ prompt: compararPrompt.trim(), config_ids: compararSelecionadas }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) { setMsg({ ok: false, text: d.detail || "Erro ao comparar" }); return; }
+      setCompararResultados(d.results || []);
+    } catch { setMsg({ ok: false, text: "Falha de conexão." }); }
+    finally { setComparando(false); }
   }
 
   if (loading) return <div className="p-8 flex justify-center"><Loader2 className="animate-spin text-afj-gold" /></div>;
@@ -317,6 +356,66 @@ export default function MinhaIAPage() {
           </div>
         )}
       </div>
+
+      {/* Comparar IAs: mesma pergunta pra 2-5 IAs em paralelo, lado a lado (opcional) */}
+      {configs.filter((c) => c.enabled).length > 1 && (
+        <div className="afj-card mt-4 border border-afj-cream-dark rounded-sm overflow-hidden">
+          <button type="button" onClick={() => setShowComparar((v) => !v)}
+            className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-afj-cream/40 transition-colors">
+            <span className="flex items-center gap-2 text-sm text-afj-black/75">
+              <Scale size={14} className="text-afj-gold" />
+              Comparar IAs <span className="text-afj-black/35 text-xs">(opcional — mesma pergunta pra várias IAs, lado a lado)</span>
+            </span>
+            <ChevronDown size={15} className={`text-afj-black/30 transition-transform ${showComparar ? "rotate-180" : ""}`} />
+          </button>
+          {showComparar && (
+            <div className="px-4 pb-4 pt-1 border-t border-afj-cream-dark space-y-2.5">
+              <p className="text-[11px] text-afj-black/45 leading-relaxed">
+                Escolha de 2 a 5 IAs cadastradas e faça a mesma pergunta pra todas ao mesmo tempo — útil pra
+                decidir qual IA usar em cada tipo de tarefa. Não salva nada, é só uma consulta.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {configs.filter((c) => c.enabled).map((c) => (
+                  <label key={c.id} className={`flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-sm border cursor-pointer ${compararSelecionadas.includes(c.id) ? "border-afj-gold bg-afj-gold/10 text-afj-black" : "border-afj-cream-dark text-afj-black/60"}`}>
+                    <input type="checkbox" checked={compararSelecionadas.includes(c.id)}
+                      onChange={() => alternarSelecaoComparar(c.id)} className="accent-afj-gold" />
+                    {c.display_name}
+                  </label>
+                ))}
+              </div>
+              <textarea
+                value={compararPrompt} onChange={(e) => setCompararPrompt(e.target.value)}
+                placeholder="Digite a pergunta que será enviada a todas as IAs selecionadas..."
+                rows={3} maxLength={4000}
+                className="w-full bg-afj-cream border border-afj-cream-dark rounded-sm px-3 py-2 text-xs placeholder:text-afj-black/25 focus:outline-none focus:border-afj-gold resize-y"
+              />
+              <button onClick={compararIAs} disabled={comparando || compararSelecionadas.length < 2 || !compararPrompt.trim()}
+                className="btn-afj-primary text-xs py-1.5 mt-1 flex items-center gap-2 disabled:opacity-50">
+                {comparando ? <Loader2 size={12} className="animate-spin" /> : <Scale size={12} />}
+                Comparar ({compararSelecionadas.length}/5)
+              </button>
+
+              {compararResultados && (
+                <div className="grid gap-3 mt-3" style={{ gridTemplateColumns: `repeat(${Math.min(compararResultados.length, 2)}, minmax(0, 1fr))` }}>
+                  {compararResultados.map((r) => (
+                    <div key={r.config_id} className="border border-afj-cream-dark rounded-sm p-3 bg-white">
+                      <div className="flex items-center justify-between gap-2 mb-1.5">
+                        <span className="text-xs font-medium text-afj-black">{r.display_name}</span>
+                        {!r.error && <span className="text-[10px] text-afj-black/40">{r.latency_ms}ms · ${r.cost_usd.toFixed(4)}</span>}
+                      </div>
+                      {r.error ? (
+                        <p className="text-[11px] text-red-500">{r.error}</p>
+                      ) : (
+                        <p className="text-xs text-afj-black/75 whitespace-pre-wrap leading-relaxed">{r.content}</p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {modal && (
         <AIConfigModal

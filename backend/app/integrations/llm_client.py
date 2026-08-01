@@ -12,7 +12,9 @@ plugar múltiplas IAs sem alterar nenhum agente.
 
 Retorno padronizado: (content, input_tokens, output_tokens, cost_usd).
 """
+import asyncio
 import contextvars
+import time
 import anthropic
 from openai import (
     APIConnectionError, APITimeoutError, RateLimitError, InternalServerError,
@@ -254,6 +256,53 @@ async def call_llm(
             if len(candidates) > 1:
                 log.warning("ai_fallback_config_esgotado", tentativas=len(candidates))
             raise
+
+
+# ─── Comparação/consenso entre configs (Fase 137.5) ──────────────────────────
+async def _call_with_config(
+    config: dict, messages: list[dict], system: str = "",
+    max_tokens: int = 2048, temperature: float = 0.3,
+) -> dict:
+    """Chama UMA config explicitamente (sem contextvar) — usada por
+    `call_llm_parallel`, onde não existe "a config ativa da requisição":
+    existem N configs concorrentes de propósito. Nunca propaga exceção —
+    devolve `error` preenchido na própria entrada, pra 1 config falhando
+    não derrubar as outras do `asyncio.gather`."""
+    inicio = time.monotonic()
+    prov, api_key, mdl, base_url = _resolve_call_params(config, None, None)
+    try:
+        if prov == "anthropic":
+            content, in_t, out_t, _finish = await _call_anthropic(api_key, messages, system, mdl, max_tokens, temperature)
+        else:
+            content, in_t, out_t, _finish = await _call_openai_compatible(base_url, api_key, messages, system, mdl, max_tokens, temperature)
+        return {
+            "provider": prov, "model": mdl, "content": content,
+            "input_tokens": in_t, "output_tokens": out_t,
+            "cost_usd": _cost(mdl, in_t, out_t),
+            "latency_ms": int((time.monotonic() - inicio) * 1000),
+            "error": None,
+        }
+    except Exception as exc:
+        return {
+            "provider": prov, "model": mdl, "content": None,
+            "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0,
+            "latency_ms": int((time.monotonic() - inicio) * 1000),
+            "error": str(exc)[:300],
+        }
+
+
+async def call_llm_parallel(
+    configs: list[dict], messages: list[dict], system: str = "",
+    max_tokens: int = 2048, temperature: float = 0.3,
+) -> list[dict]:
+    """Chama N configs em paralelo pra comparação/consenso (Fase 137.5) — cada
+    `config` é um dict no formato de `ai_creds_ctx`. Devolve a lista na MESMA
+    ordem recebida; cada entrada nunca lança — `_call_with_config` já captura
+    o próprio erro, então 1 config falhando não derruba as demais."""
+    return await asyncio.gather(*[
+        _call_with_config(config, messages, system, max_tokens, temperature)
+        for config in configs
+    ])
 
 
 def _resolve_creds(provider, model):
