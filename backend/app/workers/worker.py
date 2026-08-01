@@ -13,6 +13,7 @@ celery_app = Celery(
         "app.workers.tasks.agent_tasks",
         "app.workers.tasks.ocr_tasks",
         "app.workers.tasks.session_cleanup",
+        "app.workers.tasks.jurisprudencia_sync",
     ],
 )
 
@@ -46,5 +47,11 @@ celery_app.conf.beat_schedule = {
     "cleanup-sessions": {
         "task": "app.workers.tasks.session_cleanup.cleanup_expired_sessions",
         "schedule": crontab(hour=3, minute=0, day_of_week=0),
+    },
+    # Sincronização diária de jurisprudência do STJ (Fase 138.1) — casa com a
+    # cadência de atualização incremental do próprio portal.
+    "sync-stj-jurisprudencia": {
+        "task": "app.workers.tasks.jurisprudencia_sync.sync_stj_diario",
+        "schedule": crontab(hour=4, minute=0),
     },
 }
