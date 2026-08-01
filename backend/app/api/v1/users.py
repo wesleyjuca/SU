@@ -381,6 +381,82 @@ async def test_my_ai_config(
         ai_creds_ctx.reset(token)
 
 
+class AICompareRequest(BaseModel):
+    prompt: str
+    config_ids: list[str]
+
+
+@router.post("/me/ai-configs/compare")
+async def compare_my_ai_configs(
+    body: AICompareRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Chama 2-5 IAs cadastradas em paralelo com o mesmo prompt, pra comparar
+    as respostas lado a lado (Fase 137.5 — modo consenso manual, sem
+    integração automática com os agentes de produção). Somente leitura —
+    não persiste nada, não exige aprovação HITL, mesmo espírito do endpoint
+    `/test` já existente."""
+    from app.core.crypto import decrypt
+    from app.integrations.llm_client import call_llm_parallel
+    import json
+
+    prompt = (body.prompt or "").strip()
+    if not prompt:
+        raise HTTPException(status_code=422, detail="Informe um prompt")
+    if len(prompt) > 4000:
+        raise HTTPException(status_code=422, detail="Prompt muito longo (máx. 4000 caracteres)")
+    if not (2 <= len(body.config_ids) <= 5):
+        raise HTTPException(status_code=422, detail="Escolha entre 2 e 5 IAs para comparar")
+
+    configs = []
+    for config_id in body.config_ids:
+        config = await db.get(AIProviderConfig, uuid.UUID(config_id))
+        if not config or config.user_id != current_user.id or not config.enabled:
+            raise HTTPException(status_code=404, detail="Uma das IAs escolhidas não foi encontrada ou está desativada")
+        configs.append(config)
+
+    creds_list = []
+    for config in configs:
+        api_key = None
+        if config.credentials_enc:
+            raw = decrypt(config.credentials_enc)
+            if raw:
+                try:
+                    api_key = (json.loads(raw) or {}).get("api_key")
+                except Exception:
+                    api_key = None
+        creds_list.append({
+            "provider": config.provider, "api_key": api_key or "",
+            "model": config.model, "base_url": config.base_url,
+        })
+
+    resultados = await call_llm_parallel(
+        creds_list,
+        messages=[{"role": "user", "content": prompt}],
+        system="Você é um assistente jurídico. Responda de forma direta e objetiva.",
+        max_tokens=2048,
+    )
+
+    return {
+        "results": [
+            {
+                "config_id": str(config.id),
+                "display_name": config.display_name,
+                "provider": r["provider"],
+                "model": r["model"],
+                "content": r["content"],
+                "input_tokens": r["input_tokens"],
+                "output_tokens": r["output_tokens"],
+                "cost_usd": r["cost_usd"],
+                "latency_ms": r["latency_ms"],
+                "error": r["error"],
+            }
+            for config, r in zip(configs, resultados)
+        ],
+    }
+
+
 def _friendly_ai_error(exc: Exception, provider: str, model: str | None, suggested: str) -> str:
     """Traduz erros do SDK/API (Gemini/Anthropic) em mensagens acionáveis em PT."""
     err_str = str(exc).lower()
