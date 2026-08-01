@@ -416,11 +416,20 @@ OVERRIDABLE_TASKS = [
 
 class AIOverrideItem(BaseModel):
     task_type: str
-    model: str
+    provider_config_id: str | None = None  # Fase 137.4 — IA inteira pra essa tarefa
+    model: str | None = None               # legado da Fase 137.1 — só string de modelo
 
 
 class AIOverridesUpdate(BaseModel):
     overrides: list[AIOverrideItem]
+
+
+def _override_to_dict(r) -> dict:
+    return {
+        "task_type": r.task_type,
+        "provider_config_id": str(r.provider_config_id) if r.provider_config_id else None,
+        "model": r.model,
+    }
 
 
 @router.get("/me/ai-settings/overrides")
@@ -428,7 +437,8 @@ async def get_my_ai_overrides(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Overrides de modelo por tipo de tarefa. Sem override → modelo global."""
+    """Ajuste por área: qual IA usar (ou só qual modelo) por tipo de tarefa.
+    Sem override → usa a IA padrão do usuário."""
     from app.models.user import AITaskOverride
 
     result = await db.execute(
@@ -437,7 +447,7 @@ async def get_my_ai_overrides(
     rows = result.scalars().all()
     return {
         "tasks": OVERRIDABLE_TASKS,
-        "overrides": [{"task_type": r.task_type, "model": r.model} for r in rows],
+        "overrides": [_override_to_dict(r) for r in rows],
     }
 
 
@@ -450,17 +460,39 @@ async def update_my_ai_overrides(
     """Substitui o conjunto de overrides do usuário (lista vazia limpa tudo)."""
     from app.models.user import AITaskOverride
 
-    prov = (current_user.ai_provider or "gemini").lower()
+    # Provider da config PADRÃO real do usuário (Fase 137.4) — só usado pra
+    # validar o formato do `model` no caminho legado (sem provider_config_id).
+    # Antes validava contra `current_user.ai_provider`, a coluna de provider
+    # único de antes da Fase 137.1 — já não reflete a IA padrão real desde a
+    # fundação multi-provedor (bug corrigido nesta fase).
+    default_config = (await db.execute(
+        select(AIProviderConfig).where(
+            AIProviderConfig.user_id == current_user.id,
+            AIProviderConfig.is_default == True,  # noqa: E712
+        )
+    )).scalar_one_or_none()
+    prov = (default_config.provider if default_config else current_user.ai_provider) or "gemini"
+
     seen: set[str] = set()
+    configs_do_usuario: dict[str, AIProviderConfig] = {}
     for item in body.overrides:
         if item.task_type not in OVERRIDABLE_TASKS:
             raise HTTPException(status_code=422, detail=f"Tipo de tarefa inválido: {item.task_type}")
         if item.task_type in seen:
             raise HTTPException(status_code=422, detail=f"Tipo de tarefa duplicado: {item.task_type}")
         seen.add(item.task_type)
-        err = _validate_model_format(prov, item.model.strip())
-        if err:
-            raise HTTPException(status_code=422, detail=err)
+
+        if item.provider_config_id:
+            config = await db.get(AIProviderConfig, uuid.UUID(item.provider_config_id))
+            if not config or config.user_id != current_user.id:
+                raise HTTPException(status_code=404, detail=f"IA não encontrada para a tarefa {item.task_type}")
+            configs_do_usuario[item.task_type] = config
+        elif item.model and item.model.strip():
+            err = _validate_model_format(prov, item.model.strip())
+            if err:
+                raise HTTPException(status_code=422, detail=err)
+        else:
+            raise HTTPException(status_code=422, detail=f"Informe uma IA ou um modelo para {item.task_type}")
 
     # Substituição integral: remove os atuais e insere os enviados.
     existing = (await db.execute(
@@ -468,16 +500,19 @@ async def update_my_ai_overrides(
     )).scalars().all()
     for row in existing:
         await db.delete(row)
+    novas = []
     for item in body.overrides:
-        db.add(AITaskOverride(
+        override = AITaskOverride(
             user_id=current_user.id,
             tenant_id=current_user.tenant_id,
             task_type=item.task_type,
-            model=item.model.strip(),
-        ))
+            provider_config_id=configs_do_usuario[item.task_type].id if item.task_type in configs_do_usuario else None,
+            model=item.model.strip() if item.model else None,
+        )
+        db.add(override)
+        novas.append(override)
     await db.flush()
-    return {"overrides": [{"task_type": i.task_type, "model": i.model.strip()} for i in body.overrides],
-            "message": "Ajustes por área salvos"}
+    return {"overrides": [_override_to_dict(o) for o in novas], "message": "Ajustes por área salvos"}
 
 
 @router.get("/me")

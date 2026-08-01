@@ -84,10 +84,10 @@ export default function MinhaIAPage() {
     carregar();
     fetch("/api/v1/users/me/ai-settings/overrides", { headers: authH() })
       .then((r) => (r.ok ? r.json() : null))
-      .then((d: { overrides: { task_type: string; model: string }[] } | null) => {
+      .then((d: { overrides: { task_type: string; provider_config_id: string | null; model: string | null }[] } | null) => {
         if (d?.overrides) {
           const map: Record<string, string> = {};
-          d.overrides.forEach((o) => { map[o.task_type] = o.model; });
+          d.overrides.forEach((o) => { if (o.provider_config_id) map[o.task_type] = o.provider_config_id; });
           setOverrides(map);
           if (d.overrides.length > 0) setShowOverrides(true);
         }
@@ -168,8 +168,8 @@ export default function MinhaIAPage() {
 
   async function salvarOverrides() {
     const list = Object.entries(overrides)
-      .map(([task_type, m]) => ({ task_type, model: m.trim() }))
-      .filter((o) => o.model);
+      .filter(([, configId]) => configId)
+      .map(([task_type, provider_config_id]) => ({ task_type, provider_config_id }));
     try {
       const res = await fetch("/api/v1/users/me/ai-settings/overrides", {
         method: "PUT", headers: authH(), body: JSON.stringify({ overrides: list }),
@@ -281,32 +281,36 @@ export default function MinhaIAPage() {
         </div>
       )}
 
-      {/* Ajuste por área: modelo diferente por tipo de tarefa (opcional) */}
+      {/* Ajuste por área: uma IA diferente por tipo de tarefa (opcional) */}
       <div className="afj-card mt-4 border border-afj-cream-dark rounded-sm overflow-hidden">
         <button type="button" onClick={() => setShowOverrides((v) => !v)}
           className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-afj-cream/40 transition-colors">
           <span className="flex items-center gap-2 text-sm text-afj-black/75">
             <SlidersHorizontal size={14} className="text-afj-gold" />
-            Ajuste por área <span className="text-afj-black/35 text-xs">(opcional — modelo diferente por tarefa, mesma IA padrão)</span>
+            Ajuste por área <span className="text-afj-black/35 text-xs">(opcional — uma IA diferente por tarefa)</span>
           </span>
           <ChevronDown size={15} className={`text-afj-black/30 transition-transform ${showOverrides ? "rotate-180" : ""}`} />
         </button>
         {showOverrides && (
           <div className="px-4 pb-4 pt-1 border-t border-afj-cream-dark space-y-2.5">
             <p className="text-[11px] text-afj-black/45 leading-relaxed">
-              Use um modelo específico em cada área (ex.: um premium para petições, um rápido para relatórios).
-              Em branco = usa o modelo da sua IA padrão.
+              Use uma IA diferente em cada área (ex.: uma premium para petições, uma rápida/barata para relatórios).
+              &quot;Usar IA padrão&quot; = sem ajuste, usa a IA marcada como padrão acima.
             </p>
             {TASK_LABELS.map(({ task, label }) => (
               <div key={task} className="flex items-center gap-3">
                 <span className="text-xs text-afj-black/60 w-44 flex-shrink-0">{label}</span>
-                <input
+                <select
                   value={overrides[task] || ""}
                   onChange={(e) => setOverrides((o) => ({ ...o, [task]: e.target.value }))}
-                  placeholder="modelo da IA padrão"
-                  name={`afj-ai-override-${task}`} autoComplete="off" data-lpignore="true" data-1p-ignore
-                  className="flex-1 bg-afj-cream border border-afj-cream-dark rounded-sm px-3 py-1.5 text-xs placeholder:text-afj-black/25 focus:outline-none focus:border-afj-gold"
-                />
+                  name={`afj-ai-override-${task}`}
+                  className="flex-1 bg-afj-cream border border-afj-cream-dark rounded-sm px-3 py-1.5 text-xs focus:outline-none focus:border-afj-gold"
+                >
+                  <option value="">Usar IA padrão</option>
+                  {configs.filter((c) => c.enabled).map((c) => (
+                    <option key={c.id} value={c.id}>{c.display_name} ({providers[c.provider]?.nome || c.provider})</option>
+                  ))}
+                </select>
               </div>
             ))}
             <button onClick={salvarOverrides} className="btn-afj-primary text-xs py-1.5 mt-1">Salvar ajustes por área</button>

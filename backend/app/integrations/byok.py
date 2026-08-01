@@ -26,6 +26,13 @@ falhar de um jeito recuperável. Efeito colateral bem-vindo: se a config
 marcada como padrão estiver com a chave indecifrável (ex.: `ENCRYPTION_KEY`
 trocada), a próxima config decifrável da lista vira a padrão efetiva desta
 chamada, em vez do usuário cair de vez no provider do sistema.
+
+Fase 137.4 — o "ajuste por área" (`AITaskOverride`) pode substituir a config
+padrão por uma `AIProviderConfig` INTEIRA (provider+chave+modelo próprios)
+pra um `task_type` específico, não só trocar a string do modelo. Se a config
+referenciada sumiu/foi desativada/ficou indecifrável, cai pro `model` legado
+da própria `AITaskOverride` (se houver) e, na ausência de qualquer um dos
+dois, mantém a config padrão sem alteração — fail-soft em 3 níveis.
 """
 import json
 from contextlib import asynccontextmanager
@@ -40,11 +47,17 @@ log = structlog.get_logger()
 _MAX_FALLBACK_CHAIN = 3
 
 
-async def _resolver_override_modelo(session, user_id, task_type, model):
-    """AITaskOverride troca só o MODELO pra uma tarefa — reusa provider/chave
-    da config resolvida (nova ou legada), igual antes da Fase 137.1."""
+async def _resolver_override(session, user_id, task_type, primaria: dict) -> dict:
+    """Aplica o "ajuste por área" (`AITaskOverride`) em cima da config já
+    resolvida (`primaria`, mesmo formato de `ai_creds_ctx`). Fase 137.4:
+    - `provider_config_id` válido/decifrável → substitui `primaria` inteira
+      por essa outra `AIProviderConfig` (provider+chave+modelo próprios).
+    - senão, `model` (legado da Fase 137.1) → troca só a string do modelo,
+      mantendo provider/chave de `primaria`.
+    - senão → devolve `primaria` sem alteração. Nunca lança — override
+      quebrado/removido só significa "sem ajuste pra essa tarefa"."""
     if not task_type:
-        return model
+        return primaria
     from sqlalchemy import select
     from app.models.user import AITaskOverride
 
@@ -54,7 +67,33 @@ async def _resolver_override_modelo(session, user_id, task_type, model):
             AITaskOverride.task_type == task_type,
         )
     )).scalar_one_or_none()
-    return override.model if (override and override.model) else model
+    if not override:
+        return primaria
+
+    if override.provider_config_id:
+        from app.models.ai_config import AIProviderConfig
+        from app.core.crypto import decrypt
+
+        config = await session.get(AIProviderConfig, override.provider_config_id)
+        if config and config.user_id == user_id and config.enabled:
+            api_key = None
+            if config.credentials_enc:
+                raw = decrypt(config.credentials_enc)
+                if raw:
+                    try:
+                        api_key = (json.loads(raw) or {}).get("api_key")
+                    except Exception:
+                        api_key = None
+            if api_key or config.auth_method == "none":
+                return {
+                    "provider": config.provider, "api_key": api_key or "",
+                    "model": config.model, "base_url": config.base_url,
+                }
+        # Config removida/desativada/indecifrável — cai pro model legado abaixo.
+
+    if override.model:
+        return {**primaria, "model": override.model}
+    return primaria
 
 
 @asynccontextmanager
@@ -105,8 +144,7 @@ async def user_ai_creds(session, user_id, task_type=None):
                     log.warning("byok_decrypt_failed", user_id=str(user_id), config_id=str(config.id))
 
             if resolvidas:
-                primaria = dict(resolvidas[0])
-                primaria["model"] = await _resolver_override_modelo(session, user_id, task_type, primaria["model"])
+                primaria = await _resolver_override(session, user_id, task_type, dict(resolvidas[0]))
                 token = ai_creds_ctx.set(primaria)
                 if len(resolvidas) > 1:
                     fallback_token = ai_fallback_ctx.set(resolvidas[1:])
@@ -148,10 +186,10 @@ async def _fallback_legado(session, user_id, task_type):
     if not key:
         log.warning("byok_decrypt_failed", user_id=str(user_id))
         return None
-    model = await _resolver_override_modelo(session, user_id, task_type, user.ai_model or None)
-    return ai_creds_ctx.set({
+    primaria = await _resolver_override(session, user_id, task_type, {
         "provider": user.ai_provider or None,
         "api_key": key,
-        "model": model,
+        "model": user.ai_model or None,
         "base_url": None,
     })
+    return ai_creds_ctx.set(primaria)

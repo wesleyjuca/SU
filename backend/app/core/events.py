@@ -247,6 +247,12 @@ async def lifespan(app: FastAPI):
             # VARCHAR não reescreve linhas nem dispara trg_audit_logs_immutable
             # (que só age em UPDATE/DELETE) — seguro mesmo com a tabela imutável.
             "ALTER TABLE audit_logs ALTER COLUMN action TYPE VARCHAR(255)",
+            # Fase 137.4 — "ajuste por área" passa a poder referenciar uma
+            # AIProviderConfig inteira (provider+chave+modelo próprios), não só
+            # trocar a string do modelo. `model` vira opcional (fallback legado).
+            "ALTER TABLE ai_task_overrides ALTER COLUMN model DROP NOT NULL",
+            "ALTER TABLE ai_task_overrides ADD COLUMN IF NOT EXISTS provider_config_id UUID "
+            "REFERENCES ai_provider_configs(id) ON DELETE SET NULL",
         ]:
             try:
                 async with engine.begin() as conn:
