@@ -31,6 +31,16 @@ type AIConfig = {
   last_error: string | null;
 };
 
+type AIConfigStats = {
+  total_calls: number;
+  success_rate: number;
+  avg_latency_ms: number;
+  total_cost_usd: number;
+  total_tokens: number;
+  last_used_at: string | null;
+  last_error: string | null;
+};
+
 type CompareResult = {
   config_id: string;
   display_name: string;
@@ -61,6 +71,7 @@ function authH(): HeadersInit {
 
 export default function MinhaIAPage() {
   const [configs, setConfigs] = useState<AIConfig[]>([]);
+  const [stats, setStats] = useState<Record<string, AIConfigStats>>({});
   const [providers, setProviders] = useState<Record<string, ProviderInfo>>({});
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
@@ -78,9 +89,10 @@ export default function MinhaIAPage() {
   async function carregar() {
     setLoading(true);
     try {
-      const [rProv, rCfg] = await Promise.all([
+      const [rProv, rCfg, rStats] = await Promise.all([
         fetch("/api/v1/users/me/ai-providers", { headers: authH() }),
         fetch("/api/v1/users/me/ai-configs", { headers: authH() }),
+        fetch("/api/v1/users/me/ai-configs/stats", { headers: authH() }),
       ]);
       if (rCfg.status === 401) {
         if (typeof window !== "undefined") {
@@ -91,6 +103,7 @@ export default function MinhaIAPage() {
       }
       if (rProv.ok) setProviders((await rProv.json()).providers || {});
       if (rCfg.ok) setConfigs((await rCfg.json()).configs || []);
+      if (rStats.ok) setStats((await rStats.json()).stats || {});
     } catch {
       setMsg({ ok: false, text: "Falha ao carregar suas IAs." });
     } finally {
@@ -291,6 +304,13 @@ export default function MinhaIAPage() {
                     <p className="text-xs text-afj-black/45 mt-1">
                       {info?.nome || c.provider} {c.model && `· ${c.model}`}
                     </p>
+                    {stats[c.id] && stats[c.id].total_calls > 0 && (
+                      <p className="text-[11px] text-afj-black/40 mt-1">
+                        {stats[c.id].total_calls} chamada{stats[c.id].total_calls === 1 ? "" : "s"} ·{" "}
+                        {Math.round(stats[c.id].success_rate * 100)}% sucesso ·{" "}
+                        ${stats[c.id].total_cost_usd.toFixed(4)} · {Math.round(stats[c.id].avg_latency_ms)}ms méd.
+                      </p>
+                    )}
                     {c.last_error && <p className="text-[11px] text-red-500 mt-1">{c.last_error}</p>}
                   </div>
                 </div>

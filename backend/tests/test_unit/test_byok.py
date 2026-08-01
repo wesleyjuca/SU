@@ -90,7 +90,10 @@ async def test_usa_ai_provider_config_quando_existe(monkeypatch):
 
     async with byok_mod.user_ai_creds(session, uuid.uuid4()):
         creds = ai_creds_ctx.get()
-        assert creds == {"provider": "openrouter", "api_key": "sk-config-123", "model": "openai/gpt-4.1", "base_url": None}
+        assert creds == {
+            "provider": "openrouter", "api_key": "sk-config-123", "model": "openai/gpt-4.1",
+            "base_url": None, "config_id": str(config.id),
+        }
         assert ai_fallback_ctx.get() is None  # só 1 config — sem cadeia
 
     assert ai_creds_ctx.get() is None  # resetado ao sair do context manager
@@ -176,7 +179,10 @@ async def test_monta_cadeia_de_fallback_com_2_configs(monkeypatch):
     async with byok_mod.user_ai_creds(session, uuid.uuid4()):
         assert ai_creds_ctx.get()["provider"] == "anthropic"
         cadeia = ai_fallback_ctx.get()
-        assert cadeia == [{"provider": "gemini", "api_key": "sk-2", "model": "gemini-2.5-flash", "base_url": None}]
+        assert cadeia == [{
+            "provider": "gemini", "api_key": "sk-2", "model": "gemini-2.5-flash",
+            "base_url": None, "config_id": str(fallback.id),
+        }]
 
     assert ai_creds_ctx.get() is None
     assert ai_fallback_ctx.get() is None  # resetado ao sair

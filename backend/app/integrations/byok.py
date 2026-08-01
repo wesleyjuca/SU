@@ -88,6 +88,7 @@ async def _resolver_override(session, user_id, task_type, primaria: dict) -> dic
                 return {
                     "provider": config.provider, "api_key": api_key or "",
                     "model": config.model, "base_url": config.base_url,
+                    "config_id": str(config.id),
                 }
         # Config removida/desativada/indecifrável — cai pro model legado abaixo.
 
@@ -136,6 +137,7 @@ async def user_ai_creds(session, user_id, task_type=None):
                         "api_key": api_key or "",
                         "model": config.model,
                         "base_url": config.base_url,
+                        "config_id": str(config.id),
                     })
                 else:
                     # Credencial salva mas indecifrável — normalmente a
