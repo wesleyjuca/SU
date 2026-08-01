@@ -15,6 +15,7 @@ from app.models.crm import Opportunity
 from app.models.intimacao import Intimacao
 from app.models.tribunal import Tribunal
 from app.models.ai_config import AIProviderConfig
+from app.models.jurisprudencia_ingerida import JurisprudenciaIngerida
 
 __all__ = [
     "User", "UserPermission", "Session",
@@ -37,4 +38,5 @@ __all__ = [
     "ProcessTeamMember",
     "Tribunal",
     "AIProviderConfig",
+    "JurisprudenciaIngerida",
 ]

@@ -1,4 +1,4 @@
-"""Definição das 6 collections Qdrant do AFJ CORE SYSTEM."""
+"""Definição das 7 collections Qdrant do AFJ CORE SYSTEM."""
 from qdrant_client.models import Distance, VectorParams, PayloadSchemaType
 from app.config import settings
 
@@ -12,6 +12,9 @@ COLLECTIONS: dict[str, dict] = {
             "numero_processo": PayloadSchemaType.KEYWORD,
             "area_direito": PayloadSchemaType.KEYWORD,
             "favoravel": PayloadSchemaType.BOOL,
+            # Já capturado no painel manual de indexação desde sempre, nunca
+            # tinha sido indexado pra filtro/agregação (Fase 138.1).
+            "relator": PayloadSchemaType.KEYWORD,
         },
     },
     "peticoes_afj": {
