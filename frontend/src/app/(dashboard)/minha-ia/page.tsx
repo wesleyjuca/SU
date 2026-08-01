@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import {
   Bot, KeyRound, CheckCircle2, XCircle, Loader2, Sparkles, Eye, EyeOff,
-  SlidersHorizontal, ChevronDown, ChevronUp, Plus, Star, FlaskConical, Copy, Pencil, Trash2, X, Scale,
+  SlidersHorizontal, ChevronDown, ChevronUp, Plus, Star, FlaskConical, Copy, Pencil, Trash2, X, Scale, Shuffle,
 } from "lucide-react";
 
 type ProviderInfo = {
@@ -80,6 +80,9 @@ export default function MinhaIAPage() {
   const [modal, setModal] = useState<{ mode: "add" | "edit"; config: AIConfig | null } | null>(null);
   const [overrides, setOverrides] = useState<Record<string, string>>({});
   const [showOverrides, setShowOverrides] = useState(false);
+  const [modoBalanceamento, setModoBalanceamento] = useState<string>("padrao");
+  const [showBalanceamento, setShowBalanceamento] = useState(false);
+  const [salvandoBalanceamento, setSalvandoBalanceamento] = useState(false);
   const [showComparar, setShowComparar] = useState(false);
   const [compararSelecionadas, setCompararSelecionadas] = useState<string[]>([]);
   const [compararPrompt, setCompararPrompt] = useState("");
@@ -89,10 +92,11 @@ export default function MinhaIAPage() {
   async function carregar() {
     setLoading(true);
     try {
-      const [rProv, rCfg, rStats] = await Promise.all([
+      const [rProv, rCfg, rStats, rBalance] = await Promise.all([
         fetch("/api/v1/users/me/ai-providers", { headers: authH() }),
         fetch("/api/v1/users/me/ai-configs", { headers: authH() }),
         fetch("/api/v1/users/me/ai-configs/stats", { headers: authH() }),
+        fetch("/api/v1/users/me/ai-settings/balance-mode", { headers: authH() }),
       ]);
       if (rCfg.status === 401) {
         if (typeof window !== "undefined") {
@@ -104,6 +108,7 @@ export default function MinhaIAPage() {
       if (rProv.ok) setProviders((await rProv.json()).providers || {});
       if (rCfg.ok) setConfigs((await rCfg.json()).configs || []);
       if (rStats.ok) setStats((await rStats.json()).stats || {});
+      if (rBalance.ok) setModoBalanceamento((await rBalance.json()).mode || "padrao");
     } catch {
       setMsg({ ok: false, text: "Falha ao carregar suas IAs." });
     } finally {
@@ -211,6 +216,20 @@ export default function MinhaIAPage() {
     } catch { setMsg({ ok: false, text: "Falha de conexão." }); }
   }
 
+  async function salvarBalanceamento(novoModo: string) {
+    const anterior = modoBalanceamento;
+    setModoBalanceamento(novoModo); setSalvandoBalanceamento(true); setMsg(null);
+    try {
+      const res = await fetch("/api/v1/users/me/ai-settings/balance-mode", {
+        method: "PUT", headers: authH(), body: JSON.stringify({ mode: novoModo }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) { setModoBalanceamento(anterior); setMsg({ ok: false, text: d.detail || "Erro ao salvar modo de balanceamento" }); return; }
+      setMsg({ ok: true, text: "Modo de balanceamento salvo." });
+    } catch { setModoBalanceamento(anterior); setMsg({ ok: false, text: "Falha de conexão." }); }
+    finally { setSalvandoBalanceamento(false); }
+  }
+
   function alternarSelecaoComparar(id: string) {
     setCompararSelecionadas((sel) => (
       sel.includes(id) ? sel.filter((x) => x !== id) : sel.length < 5 ? [...sel, id] : sel
@@ -260,6 +279,12 @@ export default function MinhaIAPage() {
         </div>
       ) : (
         <div className="space-y-3">
+          {modoBalanceamento !== "padrao" && (
+            <p className="text-[11px] text-amber-600 -mt-1 mb-1">
+              Balanceamento automático está ativo — a ordem manual abaixo é ignorada nas chamadas reais
+              (veja &quot;Balanceamento automático&quot; mais abaixo para mudar).
+            </p>
+          )}
           {configs.filter((c) => !c.is_default && c.enabled).length > 1 && (
             <p className="text-[11px] text-afj-black/40 -mt-1 mb-1">
               Se a IA padrão falhar, o sistema tenta automaticamente a próxima desta lista, na ordem abaixo.
@@ -373,6 +398,43 @@ export default function MinhaIAPage() {
               </div>
             ))}
             <button onClick={salvarOverrides} className="btn-afj-primary text-xs py-1.5 mt-1">Salvar ajustes por área</button>
+          </div>
+        )}
+      </div>
+
+      {/* Balanceamento automático: escolhe sozinho qual IA tentar primeiro (opcional) */}
+      <div className="afj-card mt-4 border border-afj-cream-dark rounded-sm overflow-hidden">
+        <button type="button" onClick={() => setShowBalanceamento((v) => !v)}
+          className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-afj-cream/40 transition-colors">
+          <span className="flex items-center gap-2 text-sm text-afj-black/75">
+            <Shuffle size={14} className="text-afj-gold" />
+            Balanceamento automático <span className="text-afj-black/35 text-xs">(opcional — escolhe automaticamente qual IA usar primeiro)</span>
+          </span>
+          <ChevronDown size={15} className={`text-afj-black/30 transition-transform ${showBalanceamento ? "rotate-180" : ""}`} />
+        </button>
+        {showBalanceamento && (
+          <div className="px-4 pb-4 pt-1 border-t border-afj-cream-dark space-y-2.5">
+            <p className="text-[11px] text-afj-black/45 leading-relaxed">
+              Por padrão, a IA marcada como padrão é sempre a primeira tentativa, seguida da fila de fallback
+              manual acima. Ative um modo automático para variar isso a cada chamada.
+            </p>
+            {[
+              { v: "padrao", t: "Padrão (manual)", d: "Mantém a ordem definida acima (IA padrão + fila de fallback)." },
+              { v: "round_robin", t: "Revezamento", d: "Alterna qual IA tentar primeiro a cada chamada, distribuindo o uso entre todas as IAs ativas." },
+              { v: "performance", t: "Performance", d: "Prioriza automaticamente a IA com melhor taxa de sucesso, menor custo e menor latência nos últimos 7 dias." },
+            ].map((op) => (
+              <label key={op.v} className={`flex items-start gap-2.5 px-3 py-2 rounded-sm border cursor-pointer ${modoBalanceamento === op.v ? "border-afj-gold bg-afj-gold/10" : "border-afj-cream-dark"}`}>
+                <input type="radio" name="modo-balanceamento" checked={modoBalanceamento === op.v}
+                  disabled={salvandoBalanceamento} onChange={() => salvarBalanceamento(op.v)} className="accent-afj-gold mt-0.5" />
+                <span>
+                  <span className="text-xs font-medium text-afj-black block">{op.t}</span>
+                  <span className="text-[11px] text-afj-black/45">{op.d}</span>
+                </span>
+              </label>
+            ))}
+            {configs.filter((c) => c.enabled).length < 2 && (
+              <p className="text-[11px] text-afj-black/35">Cadastre pelo menos 2 IAs ativas para o balanceamento automático ter efeito.</p>
+            )}
           </div>
         )}
       </div>
