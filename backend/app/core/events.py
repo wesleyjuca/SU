@@ -253,6 +253,11 @@ async def lifespan(app: FastAPI):
             "ALTER TABLE ai_task_overrides ALTER COLUMN model DROP NOT NULL",
             "ALTER TABLE ai_task_overrides ADD COLUMN IF NOT EXISTS provider_config_id UUID "
             "REFERENCES ai_provider_configs(id) ON DELETE SET NULL",
+            # Fase 137.6 — "modo de uso" global (padrao/round_robin/performance):
+            # escolhe automaticamente qual AIProviderConfig tentar primeiro a cada
+            # chamada. NULL = padrao (ordem manual de sempre) — zero regressão pra
+            # quem nunca abrir essa opção.
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS ai_balance_mode VARCHAR(20)",
         ]:
             try:
                 async with engine.begin() as conn:

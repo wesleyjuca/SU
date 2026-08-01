@@ -653,6 +653,33 @@ async def update_my_ai_overrides(
     return {"overrides": [_override_to_dict(o) for o in novas], "message": "Ajustes por área salvos"}
 
 
+class AIBalanceModeUpdate(BaseModel):
+    mode: str
+
+
+@router.get("/me/ai-settings/balance-mode")
+async def get_my_ai_balance_mode(current_user: User = Depends(get_current_user)):
+    """Modo de uso global (Fase 137.6) — como escolher automaticamente qual
+    IA cadastrada tentar primeiro em cada chamada. Ver app/services/ai_balance.py."""
+    return {"mode": current_user.ai_balance_mode or "padrao"}
+
+
+@router.put("/me/ai-settings/balance-mode")
+async def update_my_ai_balance_mode(
+    body: AIBalanceModeUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.services.ai_balance import MODOS_VALIDOS
+
+    if body.mode not in MODOS_VALIDOS:
+        raise HTTPException(status_code=422, detail=f"Modo inválido. Use um de: {', '.join(MODOS_VALIDOS)}")
+    novo = None if body.mode == "padrao" else body.mode
+    await db.execute(update(User).where(User.id == current_user.id).values(ai_balance_mode=novo))
+    await db.commit()
+    return {"mode": body.mode, "message": "Modo de balanceamento salvo"}
+
+
 @router.get("/me")
 async def get_me(
     current_user: User = Depends(get_current_user),

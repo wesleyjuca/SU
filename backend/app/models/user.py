@@ -25,6 +25,10 @@ class User(Base):
     ai_api_key_enc: Mapped[str | None] = mapped_column(Text)          # chave cifrada em repouso
     ai_model: Mapped[str | None] = mapped_column(String(80))
     ai_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Fase 137.6 — modo de uso global (balanceamento automático) entre as
+    # várias AIProviderConfig do usuário. NULL = "padrao" (ordem manual de
+    # sempre). Ver app/services/ai_balance.py.
+    ai_balance_mode: Mapped[str | None] = mapped_column(String(20))
     tenant_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("tenants.id"), nullable=True, index=True)
     linked_client_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("clients.id"), nullable=True)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

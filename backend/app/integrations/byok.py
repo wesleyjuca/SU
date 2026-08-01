@@ -33,6 +33,17 @@ pra um `task_type` específico, não só trocar a string do modelo. Se a config
 referenciada sumiu/foi desativada/ficou indecifrável, cai pro `model` legado
 da própria `AITaskOverride` (se houver) e, na ausência de qualquer um dos
 dois, mantém a config padrão sem alteração — fail-soft em 3 níveis.
+
+Fase 137.6 — a ordem final das configs (antes só `is_default DESC, priority
+ASC NULLS LAST, created_at ASC`) agora pode vir de um "modo de balanceamento"
+(`User.ai_balance_mode`, ver `app/services/ai_balance.py`): "padrao" (mesma
+ordem de sempre), "round_robin" (revezamento) ou "performance" (score de
+sucesso/custo/latência recentes via `AICallLog`). A busca deixa de aplicar
+`ORDER BY`/`LIMIT` no SQL — busca todas as configs `enabled=True`, aplica o
+modo em Python, só então corta pra `_MAX_FALLBACK_CHAIN`. `is_default`/
+`priority` viram decorativos (não consultados) quando um modo automático
+está ativo — o `_resolver_override()` acima continua rodando por cima do
+resultado, então o ajuste por área sempre vence, não importa o modo.
 """
 import json
 from contextlib import asynccontextmanager
@@ -114,12 +125,34 @@ async def user_ai_creds(session, user_id, task_type=None):
                 select(AIProviderConfig).where(
                     AIProviderConfig.user_id == user_id,
                     AIProviderConfig.enabled == True,  # noqa: E712
-                ).order_by(
-                    AIProviderConfig.is_default.desc(),
-                    AIProviderConfig.priority.asc().nullslast(),
-                    AIProviderConfig.created_at.asc(),
-                ).limit(_MAX_FALLBACK_CHAIN)
+                )
             )).scalars().all()
+
+            # Fase 137.6 — balanceamento automático: com mais de 1 config, a
+            # ordem final pode vir de um modo diferente de "padrao" (ver
+            # app/services/ai_balance.py). Com 0 ou 1 config, `ordenar_configs`
+            # já é um no-op garantido — nem dispara as queries extras de
+            # modo/stats abaixo.
+            from app.services.ai_balance import (
+                MODOS_VALIDOS, ordenar_configs, buscar_stats_recentes, calcular_rotation_offset,
+            )
+
+            modo = "padrao"
+            stats = None
+            offset = 0
+            if len(rows) > 1:
+                from app.models.user import User
+
+                modo_raw = (await session.execute(
+                    select(User.ai_balance_mode).where(User.id == user_id)
+                )).scalar_one_or_none()
+                modo = modo_raw if modo_raw in MODOS_VALIDOS else "padrao"
+                if modo == "performance":
+                    stats = await buscar_stats_recentes(session, user_id)
+                elif modo == "round_robin":
+                    offset = await calcular_rotation_offset(session, user_id)
+
+            rows = ordenar_configs(rows, modo, stats=stats, rotation_offset=offset)[:_MAX_FALLBACK_CHAIN]
 
             resolvidas = []
             for config in rows:
