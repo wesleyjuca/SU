@@ -36,26 +36,34 @@ class _RowsResult:
 
 
 class _FakeSession:
-    """Devolve os resultados na ORDEM em que `session.execute()` é chamado."""
-    def __init__(self, *results):
+    """Devolve os resultados na ORDEM em que `session.execute()` é chamado.
+    `get_map` resolve `session.get(Model, id)` (usado pelo override com
+    `provider_config_id` — Fase 137.4)."""
+    def __init__(self, *results, get_map=None):
         self._results = list(results)
         self._i = 0
+        self._get_map = get_map or {}
 
     async def execute(self, stmt):
         r = self._results[self._i]
         self._i += 1
         return r
 
+    async def get(self, model, obj_id):
+        return self._get_map.get((model, obj_id))
+
 
 class _FakeConfig:
     def __init__(self, provider="anthropic", credentials_enc="tok", model="claude-sonnet-5",
-                 base_url=None, auth_method="api_key"):
+                 base_url=None, auth_method="api_key", user_id=None, enabled=True):
         self.id = uuid.uuid4()
         self.provider = provider
         self.credentials_enc = credentials_enc
         self.model = model
         self.base_url = base_url
         self.auth_method = auth_method
+        self.user_id = user_id
+        self.enabled = enabled
 
 
 class _FakeUser:
@@ -67,8 +75,9 @@ class _FakeUser:
 
 
 class _FakeOverride:
-    def __init__(self, model):
+    def __init__(self, model=None, provider_config_id=None):
         self.model = model
+        self.provider_config_id = provider_config_id
 
 
 @pytest.mark.asyncio
@@ -219,3 +228,71 @@ async def test_primaria_indecifravel_promove_proxima_config_como_padrao_efetiva(
         assert creds["provider"] == "gemini"
         assert creds["api_key"] == "sk-2"
         assert ai_fallback_ctx.get() is None  # não sobrou mais ninguém pra cadeia
+
+
+# ─── Fase 137.4 — "ajuste por área" referencia uma IA inteira ────────────────
+
+@pytest.mark.asyncio
+async def test_override_com_provider_config_id_substitui_a_config_inteira(monkeypatch):
+    from app.models.ai_config import AIProviderConfig
+    import app.core.crypto as crypto_mod
+    monkeypatch.setattr(crypto_mod, "decrypt", lambda tok: '{"api_key": "sk-' + tok + '"}')
+
+    user_id = uuid.uuid4()
+    padrao = _FakeConfig(provider="anthropic", credentials_enc="1", model="claude-sonnet-5", user_id=user_id)
+    outra = _FakeConfig(provider="deepseek", credentials_enc="2", model="deepseek-chat", user_id=user_id, enabled=True)
+    override = _FakeOverride(provider_config_id=outra.id)
+    session = _FakeSession(
+        _RowsResult([padrao]), _ScalarResult(override),
+        get_map={(AIProviderConfig, outra.id): outra},
+    )
+
+    async with byok_mod.user_ai_creds(session, user_id, task_type="analytics_report"):
+        creds = ai_creds_ctx.get()
+        assert creds["provider"] == "deepseek"
+        assert creds["model"] == "deepseek-chat"
+        assert creds["api_key"] == "sk-2"
+
+
+@pytest.mark.asyncio
+async def test_override_com_config_removida_cai_no_model_legado(monkeypatch):
+    import app.core.crypto as crypto_mod
+    monkeypatch.setattr(crypto_mod, "decrypt", lambda tok: '{"api_key": "sk-1"}')
+
+    user_id = uuid.uuid4()
+    padrao = _FakeConfig(provider="anthropic", credentials_enc="1", model="claude-sonnet-5", user_id=user_id)
+    config_id_removida = uuid.uuid4()
+    override = _FakeOverride(model="claude-opus-4-8", provider_config_id=config_id_removida)
+    session = _FakeSession(
+        _RowsResult([padrao]), _ScalarResult(override),
+        get_map={},  # config_id_removida não existe mais
+    )
+
+    async with byok_mod.user_ai_creds(session, user_id, task_type="generate_petition"):
+        creds = ai_creds_ctx.get()
+        assert creds["provider"] == "anthropic"  # continua a padrão
+        assert creds["model"] == "claude-opus-4-8"  # cai pro model legado
+
+
+@pytest.mark.asyncio
+async def test_override_com_config_de_outro_usuario_e_ignorado(monkeypatch):
+    """Defesa em profundidade: mesmo que um provider_config_id de outro
+    usuário chegasse até aqui, nunca deveria ser aplicado."""
+    from app.models.ai_config import AIProviderConfig
+    import app.core.crypto as crypto_mod
+    monkeypatch.setattr(crypto_mod, "decrypt", lambda tok: '{"api_key": "sk-1"}')
+
+    user_id = uuid.uuid4()
+    outro_user_id = uuid.uuid4()
+    padrao = _FakeConfig(provider="anthropic", credentials_enc="1", model="claude-sonnet-5", user_id=user_id)
+    config_de_outro = _FakeConfig(provider="deepseek", credentials_enc="2", model="deepseek-chat", user_id=outro_user_id)
+    override = _FakeOverride(provider_config_id=config_de_outro.id)
+    session = _FakeSession(
+        _RowsResult([padrao]), _ScalarResult(override),
+        get_map={(AIProviderConfig, config_de_outro.id): config_de_outro},
+    )
+
+    async with byok_mod.user_ai_creds(session, user_id, task_type="generate_petition"):
+        creds = ai_creds_ctx.get()
+        assert creds["provider"] == "anthropic"  # config de outro usuário nunca aplicada
+        assert creds["model"] == "claude-sonnet-5"
