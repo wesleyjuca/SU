@@ -872,7 +872,7 @@ async def invite_user(
                 ),
                 text_body=texto,
                 db=db,
-                sender_user_id=current_user.id,  # envia pela conta Google conectada, se houver
+                tenant_id=current_user.tenant_id,  # envia pela conta Google do escritório, se conectada
             )
         except Exception:
             pass

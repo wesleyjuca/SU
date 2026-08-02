@@ -60,16 +60,16 @@ async def send_email(
     html_body: str,
     text_body: Optional[str] = None,
     db=None,
-    sender_user_id=None,
+    tenant_id=None,
 ) -> bool:
     from app.config import settings
 
-    # Google Workspace: se o remetente tem conta Google conectada, envia pela
-    # Gmail API (sai da caixa do próprio usuário); falha cai no SMTP abaixo.
-    if db is not None and sender_user_id is not None:
+    # Google Workspace do escritório (Fase 139): se o tenant tem a conta
+    # Google conectada, envia pela Gmail API; falha cai no SMTP abaixo.
+    if db is not None and tenant_id is not None:
         try:
             from app.services.google_workspace import get_valid_token, gmail_send, GoogleNotConnected
-            token = await get_valid_token(db, sender_user_id)
+            token = await get_valid_token(db, tenant_id)
             await gmail_send(token, to, subject, html_body)
             log.info("email_sent_via_gmail", to=to)
             return True
@@ -113,10 +113,10 @@ async def send_prazo_alert(
     base_url: str = "https://afj.sistema.com.br",
     process_id: str = "",
     db=None,
-    sender_user_id=None,
+    tenant_id=None,
 ) -> bool:
     link = f"{base_url}/processos/{process_id}" if process_id else base_url
     subject = f"[AFJ CORE] {'🚨 URGENTE' if dias <= 3 else '⚠️ ATENÇÃO'} — Prazo em {dias} dia{'s' if dias != 1 else ''}: {descricao[:60]}"
     html = _build_html_prazo(descricao, dias, data_prazo, link)
     text = f"AFJ CORE — Prazo em {dias} dia(s)\n\n{descricao}\nData: {data_prazo}\nLink: {link}"
-    return await send_email(to_email, subject, html, text, db=db, sender_user_id=sender_user_id)
+    return await send_email(to_email, subject, html, text, db=db, tenant_id=tenant_id)

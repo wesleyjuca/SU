@@ -1,68 +1,26 @@
-"""Google Workspace — tokens OAuth (com refresh) e helpers REST (httpx).
+"""Google Workspace — helpers REST (httpx) do escritório (Fase 139).
 
 Sem SDK do Google: chamadas REST diretas às APIs (Calendar, Drive, Gmail).
-Tokens ficam cifrados em GoogleIntegration; o access_token é renovado
-automaticamente via refresh_token quando expirado.
-"""
+OAuth (URL de autorização, troca de code, refresh) é genérico e vive em
+`app/services/integration_hub.py` (provider `"google_workspace"`, mesmo
+mecanismo já usado por Stripe Connect/Mercado Pago/Google Drive doutrina) —
+este módulo só guarda os helpers específicos de cada recurso do Google
+(Calendar/Drive/Gmail), que recebem um `token: str` já pronto.
+
+Antes da Fase 139 a conexão era por USUÁRIO (`GoogleIntegration`, cada
+advogado conectava a própria conta) — agora é por TENANT (`TenantIntegration`,
+1 conta única do escritório inteiro, decisão tomada com o usuário)."""
 import base64
 import json
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, timedelta
 
 import httpx
-import structlog
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import settings
-from app.core.crypto import encrypt, decrypt
-from app.models.integrations import GoogleIntegration
-
-log = structlog.get_logger()
-
-OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token"
-OAUTH_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
-SCOPES = [
-    "https://www.googleapis.com/auth/calendar.events",
-    "https://www.googleapis.com/auth/drive.file",
-    "https://www.googleapis.com/auth/gmail.send",
-    "https://www.googleapis.com/auth/userinfo.email",
-]
+from app.services import integration_hub
 
 
 class GoogleNotConnected(Exception):
-    """Usuário sem conta Google conectada (ou tokens inválidos)."""
-
-
-def is_configured() -> bool:
-    return bool(settings.GOOGLE_CLIENT_ID and settings.GOOGLE_CLIENT_SECRET and settings.GOOGLE_REDIRECT_URI)
-
-
-def build_auth_url(state: str) -> str:
-    from urllib.parse import urlencode
-    params = {
-        "client_id": settings.GOOGLE_CLIENT_ID,
-        "redirect_uri": settings.GOOGLE_REDIRECT_URI,
-        "response_type": "code",
-        "scope": " ".join(SCOPES),
-        "access_type": "offline",
-        "prompt": "consent",   # garante refresh_token na primeira conexão
-        "state": state,
-    }
-    return f"{OAUTH_AUTH_URL}?{urlencode(params)}"
-
-
-async def exchange_code(code: str) -> dict:
-    """Troca o authorization code por tokens."""
-    async with httpx.AsyncClient(timeout=15) as client:
-        resp = await client.post(OAUTH_TOKEN_URL, data={
-            "code": code,
-            "client_id": settings.GOOGLE_CLIENT_ID,
-            "client_secret": settings.GOOGLE_CLIENT_SECRET,
-            "redirect_uri": settings.GOOGLE_REDIRECT_URI,
-            "grant_type": "authorization_code",
-        })
-        resp.raise_for_status()
-        return resp.json()
+    """Escritório sem conta Google do Workspace conectada (ou token inválido)."""
 
 
 async def fetch_user_email(access_token: str) -> str | None:
@@ -79,43 +37,14 @@ async def fetch_user_email(access_token: str) -> str | None:
     return None
 
 
-async def get_valid_token(db: AsyncSession, user_id) -> str:
-    """Access token válido do usuário, renovando via refresh_token se preciso."""
-    integ = (await db.execute(
-        select(GoogleIntegration).where(GoogleIntegration.user_id == user_id)
-    )).scalar_one_or_none()
-    if not integ or not integ.refresh_token_enc:
-        raise GoogleNotConnected("Conecte sua conta Google em Integrações.")
-
-    now = datetime.now(timezone.utc)
-    expiry = integ.token_expiry
-    if expiry is not None and expiry.tzinfo is None:
-        expiry = expiry.replace(tzinfo=timezone.utc)
-
-    access = decrypt(integ.access_token_enc)
-    if access and expiry and expiry > now + timedelta(seconds=60):
-        return access
-
-    # Renova
-    refresh = decrypt(integ.refresh_token_enc)
-    if not refresh:
-        raise GoogleNotConnected("Reconecte sua conta Google (token inválido).")
-    async with httpx.AsyncClient(timeout=15) as client:
-        resp = await client.post(OAUTH_TOKEN_URL, data={
-            "refresh_token": refresh,
-            "client_id": settings.GOOGLE_CLIENT_ID,
-            "client_secret": settings.GOOGLE_CLIENT_SECRET,
-            "grant_type": "refresh_token",
-        })
-        if resp.status_code != 200:
-            log.warning("google_refresh_failed", status=resp.status_code)
-            raise GoogleNotConnected("Sessão Google expirada — reconecte em Integrações.")
-        data = resp.json()
-
-    integ.access_token_enc = encrypt(data["access_token"])
-    integ.token_expiry = now + timedelta(seconds=int(data.get("expires_in", 3600)))
-    await db.flush()
-    return data["access_token"]
+async def get_valid_token(db, tenant_id) -> str:
+    """Access token válido da conta Google do escritório, renovando sozinho
+    se preciso (`integration_hub.get_credentials` já trata refresh de forma
+    genérica — mesmo mecanismo usado por `google_drive_doutrina`, Fase 138.2)."""
+    creds = await integration_hub.get_credentials(db, tenant_id, "google_workspace")
+    if not creds or not creds.get("access_token"):
+        raise GoogleNotConnected("Conecte a conta Google do escritório em Integrações.")
+    return creds["access_token"]
 
 
 # ─── Helpers de recursos ─────────────────────────────────────────────────────
@@ -172,7 +101,7 @@ async def calendar_create_allday_event(token: str, titulo: str, descricao: str, 
 
 
 async def drive_upload_pdf(token: str, nome: str, pdf_bytes: bytes) -> dict:
-    """Sobe um PDF ao Drive do usuário (multipart upload)."""
+    """Sobe um PDF ao Drive do escritório (multipart upload)."""
     metadata = {"name": f"{nome}.pdf", "mimeType": "application/pdf"}
     boundary = "afjcoreboundary"
     body = (
