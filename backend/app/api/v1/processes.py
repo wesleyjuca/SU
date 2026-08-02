@@ -14,6 +14,9 @@ from app.core.exceptions import NotFoundError
 router = APIRouter(prefix="/processes", tags=["processes"])
 
 
+_DESFECHOS_VALIDOS = {"EXITO", "PARCIAL", "ACORDO", "DERROTA"}
+
+
 class ProcessCreate(BaseModel):
     numero_cnj: str | None = None
     tribunal: str
@@ -30,9 +33,17 @@ class ProcessCreate(BaseModel):
     oab_responsavel: str | None = None
     monitoring_active: bool = True
     desfecho: str | None = None  # EXITO, PARCIAL, ACORDO, DERROTA
+    tese_id: str | None = None  # Fase 138.4 — tese jurídica argumentada
     descricao: str | None = None
     responsavel_id: str | None = None       # advogado principal (default: quem cria)
     equipe: list[str] | None = None         # demais advogados do processo
+
+    @field_validator("desfecho")
+    @classmethod
+    def _validar_desfecho_create(cls, v):
+        if v is not None and v not in _DESFECHOS_VALIDOS:
+            raise ValueError(f"desfecho inválido. Use: {', '.join(sorted(_DESFECHOS_VALIDOS))}")
+        return v
 
 
 _SITUACOES_VALIDAS = {"ATIVO", "SUSPENSO", "ARQUIVADO", "ENCERRADO"}
@@ -60,6 +71,7 @@ class ProcessUpdate(BaseModel):
     oab_responsavel: str | None = None
     monitoring_active: bool | None = None
     desfecho: str | None = None
+    tese_id: str | None = None  # Fase 138.4 — tese jurídica argumentada
     descricao: str | None = None
     responsavel_id: str | None = None
     equipe: list[str] | None = None
@@ -69,6 +81,13 @@ class ProcessUpdate(BaseModel):
     def _validar_situacao(cls, v):
         if v is not None and v not in _SITUACOES_VALIDAS:
             raise ValueError(f"situacao inválida. Use: {', '.join(sorted(_SITUACOES_VALIDAS))}")
+        return v
+
+    @field_validator("desfecho")
+    @classmethod
+    def _validar_desfecho_update(cls, v):
+        if v is not None and v not in _DESFECHOS_VALIDOS:
+            raise ValueError(f"desfecho inválido. Use: {', '.join(sorted(_DESFECHOS_VALIDOS))}")
         return v
 
 
@@ -90,6 +109,7 @@ class ProcessResponse(BaseModel):
     fase: str | None = None
     situacao: str
     desfecho: str | None
+    tese_id: str | None = None
     valor_causa: float | None
     client_id: str | None
     parte_contraria: str | None = None
@@ -120,6 +140,22 @@ async def _validar_client_id(db: AsyncSession, client_id: str | None, tenant_id)
     if not existe:
         raise HTTPException(status_code=404, detail="Cliente não encontrado.")
     return cid
+
+
+async def _validar_tese_id(db: AsyncSession, tese_id: str | None, tenant_id) -> uuid.UUID | None:
+    """Garante que a tese (se informada) pertence ao tenant — mesmo espírito
+    de `_validar_client_id`, evita linkar o processo à tese de outro escritório."""
+    if not tese_id:
+        return None
+    from app.models.tese import Tese
+    from fastapi import HTTPException
+    tid = uuid.UUID(tese_id)
+    existe = (await db.execute(
+        select(Tese.id).where(Tese.id == tid, Tese.tenant_id == tenant_id)
+    )).scalar_one_or_none()
+    if not existe:
+        raise HTTPException(status_code=404, detail="Tese não encontrada.")
+    return tid
 
 
 async def _validar_advogados_do_tenant(db: AsyncSession, tenant_id, user_ids: list[uuid.UUID]) -> dict:
@@ -348,10 +384,11 @@ async def create_process(
     equipe = [uuid.UUID(e) for e in (body.equipe or [])]
 
     process = LegalProcess(
-        **body.model_dump(exclude_none=True, exclude={"client_id", "responsavel_id", "equipe"}),
+        **body.model_dump(exclude_none=True, exclude={"client_id", "responsavel_id", "equipe", "tese_id"}),
         responsavel_id=responsavel,
         tenant_id=current_user.tenant_id,
         client_id=await _validar_client_id(db, body.client_id, current_user.tenant_id),
+        tese_id=await _validar_tese_id(db, body.tese_id, current_user.tenant_id),
         fonte="MANUAL",
     )
     db.add(process)
@@ -622,6 +659,8 @@ async def update_process(
     for field, value in body.model_dump(exclude_none=True, exclude={"responsavel_id", "equipe"}).items():
         if field == "client_id" and value:
             setattr(process, field, await _validar_client_id(db, value, current_user.tenant_id))
+        elif field == "tese_id" and value:
+            setattr(process, field, await _validar_tese_id(db, value, current_user.tenant_id))
         else:
             setattr(process, field, value)
     # Reatribuição de responsável/equipe (opcional no mesmo PUT)
@@ -961,7 +1000,7 @@ async def archive_process(
         raise NotFoundError("Processo", process_id)
     process.situacao = "ARQUIVADO"
     process.monitoring_active = False
-    if desfecho in ("EXITO", "PARCIAL", "ACORDO", "DERROTA"):
+    if desfecho in _DESFECHOS_VALIDOS:
         process.desfecho = desfecho
     await db.flush()
 
@@ -1193,6 +1232,7 @@ def _to_response(p: LegalProcess) -> ProcessResponse:
         fase=p.fase,
         situacao=p.situacao,
         desfecho=p.desfecho,
+        tese_id=str(p.tese_id) if p.tese_id else None,
         valor_causa=float(p.valor_causa) if p.valor_causa else None,
         client_id=str(p.client_id) if p.client_id else None,
         parte_contraria=p.parte_contraria,

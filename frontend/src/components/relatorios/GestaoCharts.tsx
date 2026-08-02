@@ -38,6 +38,8 @@ export interface GestaoData {
     total_com_desfecho: number;
     win_rate: number;
     por_area: { area: string; win_rate: number; total: number }[];
+    por_tribunal: { tribunal: string; win_rate: number; total: number }[];
+    por_tese: { tese: string; win_rate: number; total: number }[];
   };
 }
 
@@ -165,6 +167,40 @@ export default function GestaoCharts({ data }: { data: GestaoData }) {
               </BarChart>
             </ResponsiveContainer>
           ) : <Empty msg="Sem processos com desfecho por área" />}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        {/* Fase 138.4 — Taxa de êxito por tribunal */}
+        <div className="afj-card p-5">
+          <h3 className="font-semibold text-sm text-afj-black mb-4">Taxa de êxito por tribunal</h3>
+          {data.taxa_exito.por_tribunal.length > 0 ? (
+            <ResponsiveContainer width="100%" height={Math.max(180, data.taxa_exito.por_tribunal.length * 30)}>
+              <BarChart data={data.taxa_exito.por_tribunal} layout="vertical" margin={{ left: 10 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#EAE5D8" horizontal={false} />
+                <XAxis type="number" domain={[0, 100]} tickFormatter={(v) => `${v}%`} tick={{ fontSize: 11, fill: "#6B6B6B" }} axisLine={false} tickLine={false} />
+                <YAxis type="category" dataKey="tribunal" tick={{ fontSize: 11, fill: "#6B6B6B" }} axisLine={false} tickLine={false} width={70} />
+                <Tooltip formatter={(v: number) => [`${v}%`, "Êxito"]} />
+                <Bar dataKey="win_rate" name="Êxito" fill={GOLD} radius={[0, 2, 2, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          ) : <Empty msg="Sem processos com desfecho por tribunal" />}
+        </div>
+
+        {/* Fase 138.4 — Taxa de êxito por tese */}
+        <div className="afj-card p-5">
+          <h3 className="font-semibold text-sm text-afj-black mb-4">Taxa de êxito por tese</h3>
+          {data.taxa_exito.por_tese.length > 0 ? (
+            <ResponsiveContainer width="100%" height={Math.max(180, data.taxa_exito.por_tese.length * 30)}>
+              <BarChart data={data.taxa_exito.por_tese} layout="vertical" margin={{ left: 10 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#EAE5D8" horizontal={false} />
+                <XAxis type="number" domain={[0, 100]} tickFormatter={(v) => `${v}%`} tick={{ fontSize: 11, fill: "#6B6B6B" }} axisLine={false} tickLine={false} />
+                <YAxis type="category" dataKey="tese" tick={{ fontSize: 11, fill: "#6B6B6B" }} axisLine={false} tickLine={false} width={110} />
+                <Tooltip formatter={(v: number) => [`${v}%`, "Êxito"]} />
+                <Bar dataKey="win_rate" name="Êxito" fill={GOLD} radius={[0, 2, 2, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          ) : <Empty msg="Marque a tese dos processos pra ver a taxa de êxito por tese" />}
         </div>
       </div>
     </div>

@@ -43,6 +43,7 @@ export interface Processo {
   fase: string | null;
   situacao: "ATIVO" | "SUSPENSO" | "ARQUIVADO" | "ENCERRADO";
   desfecho?: string | null;
+  tese_id?: string | null;
   valor_causa: number | null;
   client_id: string | null;
   polo: string | null;

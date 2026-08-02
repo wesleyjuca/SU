@@ -16,6 +16,7 @@ from app.models.intimacao import Intimacao
 from app.models.tribunal import Tribunal
 from app.models.ai_config import AIProviderConfig
 from app.models.jurisprudencia_ingerida import JurisprudenciaIngerida
+from app.models.tese import Tese
 
 __all__ = [
     "User", "UserPermission", "Session",
@@ -39,4 +40,5 @@ __all__ = [
     "Tribunal",
     "AIProviderConfig",
     "JurisprudenciaIngerida",
+    "Tese",
 ]

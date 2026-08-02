@@ -26,7 +26,7 @@ const PARTE_FORM_VAZIO = { nome: "", tipo: "AUTOR", polo: "", cpf_cnpj: "", oab:
 const SITUACOES_PROCESSO = ["ATIVO", "SUSPENSO", "ARQUIVADO", "ENCERRADO"];
 const PROCESSO_FORM_VAZIO = {
   numero_cnj: "", tribunal: "", vara: "", comarca: "", uf: "", tipo_acao: "",
-  area_direito: "", fase: "", situacao: "ATIVO", desfecho: "", valor_causa: "",
+  area_direito: "", fase: "", situacao: "ATIVO", desfecho: "", tese_id: "", valor_causa: "",
   parte_contraria: "", polo: "", oab_responsavel: "", descricao: "", monitoring_active: true,
 };
 
@@ -71,6 +71,13 @@ export default function ProcessoDetailPage() {
   const [showProcessoModal, setShowProcessoModal] = useState(false);
   const [savingProcesso, setSavingProcesso] = useState(false);
   const [processoForm, setProcessoForm] = useState(PROCESSO_FORM_VAZIO);
+  const [teses, setTeses] = useState<{ id: string; nome: string }[]>([]);
+
+  async function fetchTeses() {
+    const token = localStorage.getItem("afj_access_token");
+    const res = await fetch("/api/v1/teses", { headers: { Authorization: `Bearer ${token}` } });
+    if (res.ok) setTeses(await res.json());
+  }
 
   function abrirEditorProcesso() {
     if (!processo) return;
@@ -85,6 +92,7 @@ export default function ProcessoDetailPage() {
       fase: processo.fase ?? "",
       situacao: processo.situacao ?? "ATIVO",
       desfecho: processo.desfecho ?? "",
+      tese_id: processo.tese_id ?? "",
       valor_causa: processo.valor_causa != null ? String(processo.valor_causa) : "",
       parte_contraria: processo.parte_contraria ?? "",
       polo: processo.polo ?? "",
@@ -92,6 +100,7 @@ export default function ProcessoDetailPage() {
       descricao: processo.descricao ?? "",
       monitoring_active: processo.monitoring_active,
     });
+    if (teses.length === 0) fetchTeses();
     setShowProcessoModal(true);
   }
 
@@ -114,6 +123,7 @@ export default function ProcessoDetailPage() {
           fase: processoForm.fase || undefined,
           situacao: processoForm.situacao || undefined,
           desfecho: processoForm.desfecho || undefined,
+          tese_id: processoForm.tese_id || undefined,
           valor_causa: processoForm.valor_causa ? Number(processoForm.valor_causa) : undefined,
           parte_contraria: processoForm.parte_contraria || undefined,
           polo: processoForm.polo || undefined,
@@ -263,6 +273,7 @@ export default function ProcessoDetailPage() {
 
   useEffect(() => {
     if (id) fetchAll();
+    fetchTeses();
   }, [id]);
 
   async function fetchAll() {
@@ -491,6 +502,7 @@ export default function ProcessoDetailPage() {
                 { label: "OAB Responsável", value: processo.oab_responsavel },
                 { label: "Comarca / UF", value: processo.comarca ? `${processo.comarca} / ${processo.uf}` : processo.uf },
                 { label: "Desfecho", value: processo.desfecho },
+                { label: "Tese", value: teses.find((t) => t.id === processo.tese_id)?.nome ?? null },
                 {
                   label: "Origem",
                   value: processo.fonte === "OAB" ? "Captura automática (OAB)"
@@ -1002,7 +1014,15 @@ export default function ProcessoDetailPage() {
                   </select>
                 </div>
               </div>
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-4 gap-3">
+                <div>
+                  <label className="text-xs text-afj-black/60 block mb-1">Tese</label>
+                  <select value={processoForm.tese_id} onChange={(e) => setProcessoForm({ ...processoForm, tese_id: e.target.value })}
+                    className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm bg-white focus:outline-none focus:border-afj-gold">
+                    <option value="">—</option>
+                    {teses.map((t) => <option key={t.id} value={t.id}>{t.nome}</option>)}
+                  </select>
+                </div>
                 <div>
                   <label className="text-xs text-afj-black/60 block mb-1">Valor da Causa (R$)</label>
                   <input type="number" min="0" step="0.01" value={processoForm.valor_causa} onChange={(e) => setProcessoForm({ ...processoForm, valor_causa: e.target.value })}

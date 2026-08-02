@@ -271,6 +271,12 @@ async def lifespan(app: FastAPI):
             # (achado pela verificação empírica desta fase, antes do merge).
             "ALTER TABLE jurisprudencia_ingerida ALTER COLUMN fonte TYPE VARCHAR(80)",
             "ALTER TABLE sync_runs ALTER COLUMN fonte TYPE VARCHAR(80)",
+            # Fase 138.4 — tese jurídica (tabela `teses`, nova, criada pelo
+            # create_all acima) linkada ao processo — NULL continua
+            # significando "sem tese definida", zero regressão.
+            "ALTER TABLE legal_processes ADD COLUMN IF NOT EXISTS tese_id UUID "
+            "REFERENCES teses(id) ON DELETE SET NULL",
+            "CREATE INDEX IF NOT EXISTS ix_legal_processes_tese_id ON legal_processes (tese_id)",
         ]:
             try:
                 async with engine.begin() as conn:

@@ -26,6 +26,10 @@ class LegalProcess(Base):
     fase: Mapped[str | None] = mapped_column(String(50))   # CONHECIMENTO, EXECUCAO, RECURSAL
     situacao: Mapped[str] = mapped_column(String(50), default="ATIVO", index=True)
     desfecho: Mapped[str | None] = mapped_column(String(20))  # EXITO, PARCIAL, ACORDO, DERROTA (ao encerrar)
+    # Fase 138.4 — tese jurídica argumentada, escolhida manualmente numa
+    # lista controlada por tenant (app/models/tese.py). SET NULL ao apagar
+    # a tese: desativar/remover uma tese não derruba os processos já ligados.
+    tese_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("teses.id", ondelete="SET NULL"), nullable=True, index=True)
     valor_causa: Mapped[Decimal | None] = mapped_column(Numeric(15, 2))
     client_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("clients.id"), index=True)
     responsavel_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id"))
