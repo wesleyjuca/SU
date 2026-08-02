@@ -258,6 +258,19 @@ async def lifespan(app: FastAPI):
             # chamada. NULL = padrao (ordem manual de sempre) — zero regressão pra
             # quem nunca abrir essa opção.
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS ai_balance_mode VARCHAR(20)",
+            # Fase 138.2 — jurisprudencia_ingerida (Fase 138.1) passa a servir
+            # também fontes trazidas por um escritório específico (pasta de
+            # doutrina do Drive), não só fontes globais como o STJ. NULL
+            # continua significando "fonte global/sem dono" — zero regressão.
+            "ALTER TABLE jurisprudencia_ingerida ADD COLUMN IF NOT EXISTS tenant_id UUID "
+            "REFERENCES tenants(id) ON DELETE CASCADE",
+            "CREATE INDEX IF NOT EXISTS ix_jurisprudencia_ingerida_tenant_id ON jurisprudencia_ingerida (tenant_id)",
+            # Fase 138.2 — `fonte` nasceu VARCHAR(30) só pra caber
+            # "stj_dados_abertos" (Fase 138.1); "google_drive:{tenant_id}"
+            # sozinho já usa 49 chars e estourava na 1ª inserção real
+            # (achado pela verificação empírica desta fase, antes do merge).
+            "ALTER TABLE jurisprudencia_ingerida ALTER COLUMN fonte TYPE VARCHAR(80)",
+            "ALTER TABLE sync_runs ALTER COLUMN fonte TYPE VARCHAR(80)",
         ]:
             try:
                 async with engine.begin() as conn:

@@ -92,17 +92,65 @@ async def hub_disconnect(
     return {"message": "Integração desconectada." if removed else "Integração já estava desconectada."}
 
 
+# ─── Pasta de doutrina do Google Drive — Fase 138.2 ───────────────────────────
+class DriveFolderBody(BaseModel):
+    folder: str
+
+
+@router.put("/google_drive_doutrina/folder")
+async def hub_set_drive_folder(
+    body: DriveFolderBody,
+    current_user: User = Depends(require_role("ADMIN")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Configura a pasta do Drive a sincronizar — só depois de conectado
+    (a URL/ID nunca é segredo, fica em `extra_data`, não em `credentials_enc`)."""
+    from app.integrations.google_drive.client import extrair_folder_id
+
+    integ = await integration_hub.get_integration(db, current_user.tenant_id, "google_drive_doutrina")
+    if not integ or not integ.credentials_enc:
+        raise HTTPException(status_code=422, detail="Conecte a conta Google antes de configurar a pasta.")
+
+    folder_id = extrair_folder_id(body.folder)
+    if not folder_id:
+        raise HTTPException(
+            status_code=422,
+            detail="Não foi possível identificar o ID da pasta — cole a URL completa da pasta do Drive ou o ID.",
+        )
+    integ.extra_data = {**(integ.extra_data or {}), "folder_id": folder_id}
+    await db.commit()
+    return {"folder_id": folder_id, "message": "Pasta configurada — a sincronização roda automaticamente todo dia."}
+
+
 # ─── OAuth "Conectar conta" — Fase 117 (Stripe Connect, Mercado Pago) ─────────
+async def _modulo_habilitado(db: AsyncSession, tenant_id, chave: str) -> bool:
+    """Opt-in por escritório (mesmo padrão de google_integration.py::_google_enabled)."""
+    from app.models.tenant import TenantConfig
+    if not tenant_id:
+        return False
+    cfg = (await db.execute(
+        select(TenantConfig).where(TenantConfig.tenant_id == tenant_id)
+    )).scalar_one_or_none()
+    return bool(cfg and (cfg.modules_enabled or {}).get(chave, False))
+
+
 @router.get("/{provider}/oauth/connect")
 async def hub_oauth_connect(
     provider: str,
     current_user: User = Depends(require_role("ADMIN")),
+    db: AsyncSession = Depends(get_db),
 ):
     """Gera a URL de login delegado ("conectar sua conta") do provedor —
     alternativa em 1 clique ao form de colar chave, quando disponível."""
     meta = integration_hub.PROVIDERS.get(provider)
     if not meta or not meta.get("oauth_disponivel"):
         raise HTTPException(status_code=422, detail="Login por conta não disponível para este provedor.")
+    if provider == "google_drive_doutrina" and not await _modulo_habilitado(db, current_user.tenant_id, "google_drive_doutrina"):
+        raise HTTPException(
+            status_code=422,
+            detail="A integração Google Drive (Doutrina) está desabilitada para este escritório. "
+                   "Habilite em Configurações > Módulos antes de conectar.",
+        )
     if not integration_hub.is_oauth_configured(provider):
         raise HTTPException(
             status_code=422,

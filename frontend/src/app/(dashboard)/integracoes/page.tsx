@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect } from "react";
-import { Plug, MessageCircle, PenTool, Clock, CheckCircle2, Smartphone, Loader2, LogOut, Link2, CreditCard, Wallet, X, RefreshCw, AlertTriangle, Scale, Search, ScrollText } from "lucide-react";
+import { Plug, MessageCircle, PenTool, Clock, CheckCircle2, Smartphone, Loader2, LogOut, Link2, CreditCard, Wallet, X, RefreshCw, AlertTriangle, Scale, Search, ScrollText, FolderOpen } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
 
@@ -198,11 +198,12 @@ interface HubIntegracao {
   fields: HubField[]; ativa: string[]; obter: string;
   status: string; connected_at: string | null;
   oauth_disponivel: boolean;
+  extra_data: Record<string, string>;
 }
 
 // Fase 117 — nomes curtos pro toast de retorno do OAuth (?hub_oauth=stripe_ok etc.),
 // antes mesmo da lista de integrações carregar.
-const HUB_OAUTH_LABELS: Record<string, string> = { stripe: "Stripe", mercadopago: "Mercado Pago" };
+const HUB_OAUTH_LABELS: Record<string, string> = { stripe: "Stripe", mercadopago: "Mercado Pago", google_drive_doutrina: "Google Drive" };
 
 const HUB_ICONS: Record<string, typeof CreditCard> = {
   stripe: CreditCard,
@@ -212,7 +213,12 @@ const HUB_ICONS: Record<string, typeof CreditCard> = {
   pdpj: Scale,
   escavador: Search,
   judit: ScrollText,
+  google_drive_doutrina: FolderOpen,
 };
+
+// Fase 138.2 — único provedor do hub com opt-in por módulo (como o Google
+// Workspace da carta dedicada acima, mas genérico dentro do hub).
+const MODULOS_HUB: Record<string, string> = { google_drive_doutrina: "google_drive_doutrina" };
 
 // Provedores com teste de credencial automático (fontes credenciadas).
 const TESTAVEIS = new Set(["pdpj", "escavador", "judit"]);
@@ -226,6 +232,9 @@ function HubCards() {
   const [working, setWorking] = useState(false);
   const [testando, setTestando] = useState<string | null>(null);
   const [oauthConectando, setOauthConectando] = useState<string | null>(null);
+  const [modulos, setModulos] = useState<Record<string, boolean>>({});
+  const [folderInputs, setFolderInputs] = useState<Record<string, string>>({});
+  const [salvandoPasta, setSalvandoPasta] = useState<string | null>(null);
 
   async function fetchHub() {
     try {
@@ -234,8 +243,16 @@ function HubCards() {
     } catch { /* mantém lista vazia */ }
   }
 
+  async function fetchModulos() {
+    try {
+      const res = await fetch("/api/v1/tenant/config", { headers: authH() });
+      if (res.ok) setModulos((await res.json()).modules_enabled || {});
+    } catch { /* mantém estado padrão (desligado) */ }
+  }
+
   useEffect(() => {
     fetchHub();
+    fetchModulos();
     fetch("/api/v1/users/me", { headers: authH() })
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => setIsAdmin(d?.role === "ADMIN" || d?.role === "SUPERADMIN"))
@@ -295,6 +312,35 @@ function HubCards() {
       fetchHub();
     } catch { toast.error("Falha de conexão."); }
     finally { setTestando(null); }
+  }
+
+  async function alternarModuloHub(provider: string, chave: string, habilitar: boolean) {
+    setWorking(true);
+    try {
+      const res = await fetch("/api/v1/tenant/modules", {
+        method: "PUT", headers: authH(),
+        body: JSON.stringify({ [chave]: habilitar }),
+      });
+      if (res.ok) { toast.success(habilitar ? "Módulo habilitado para o escritório." : "Módulo desabilitado para o escritório."); fetchModulos(); }
+      else toast.error("Erro ao atualizar o módulo.");
+    } catch { toast.error("Falha de conexão."); }
+    finally { setWorking(false); }
+  }
+
+  async function salvarPasta(it: HubIntegracao) {
+    const valor = (folderInputs[it.provider] ?? it.extra_data?.folder_id ?? "").trim();
+    if (!valor) return;
+    setSalvandoPasta(it.provider);
+    try {
+      const res = await fetch(`/api/v1/integrations/hub/${it.provider}/folder`, {
+        method: "PUT", headers: authH(),
+        body: JSON.stringify({ folder: valor }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (res.ok) { toast.success(d.message || "Pasta configurada."); fetchHub(); }
+      else toast.error(d.detail || "Erro ao configurar a pasta.");
+    } catch { toast.error("Falha de conexão."); }
+    finally { setSalvandoPasta(null); }
   }
 
   async function desconectar(it: HubIntegracao) {
@@ -358,6 +404,44 @@ function HubCards() {
               </p>
             )}
 
+            {/* Opt-in por módulo (Fase 138.2 — hoje só Google Drive Doutrina) */}
+            {MODULOS_HUB[it.provider] && isAdmin && (
+              <label className="flex items-center gap-2.5 cursor-pointer mt-3">
+                <input type="checkbox" checked={Boolean(modulos[MODULOS_HUB[it.provider]])} disabled={working}
+                  onChange={(e) => alternarModuloHub(it.provider, MODULOS_HUB[it.provider], e.target.checked)}
+                  className="accent-afj-gold w-4 h-4" />
+                <span className="text-sm text-afj-black/75">Habilitar {it.nome} para este escritório</span>
+              </label>
+            )}
+            {MODULOS_HUB[it.provider] && !isAdmin && !modulos[MODULOS_HUB[it.provider]] && (
+              <p className="mt-3 text-xs text-afj-black/45">Integração não habilitada pelo administrador deste escritório.</p>
+            )}
+
+            {/* Pasta do Drive a sincronizar — só depois de conectado (Fase 138.2) */}
+            {it.provider === "google_drive_doutrina" && it.status === "CONECTADA" && (
+              <div className="mt-3 pt-3 border-t border-afj-cream-dark">
+                <label className="block text-xs font-medium text-afj-black/70 mb-1">Pasta do Drive a sincronizar</label>
+                <div className="flex items-center gap-2">
+                  <input type="text" value={folderInputs[it.provider] ?? it.extra_data?.folder_id ?? ""}
+                    onChange={(e) => setFolderInputs((prev) => ({ ...prev, [it.provider]: e.target.value }))}
+                    placeholder="Cole a URL ou o ID da pasta do Drive"
+                    disabled={!isAdmin}
+                    className="flex-1 border border-afj-cream-dark rounded-sm px-3 py-1.5 text-xs focus:outline-none focus:border-afj-gold disabled:opacity-60" />
+                  {isAdmin && (
+                    <button onClick={() => salvarPasta(it)} disabled={salvandoPasta === it.provider}
+                      className="btn-afj-outline text-xs py-1.5 px-3 rounded-sm flex items-center gap-1.5 disabled:opacity-50 flex-shrink-0">
+                      {salvandoPasta === it.provider ? <Loader2 size={12} className="animate-spin" /> : <FolderOpen size={12} />} Salvar
+                    </button>
+                  )}
+                </div>
+                {it.extra_data?.folder_id && (
+                  <p className="text-[11px] text-afj-black/40 mt-1">
+                    Pasta atual: <code className="bg-afj-cream px-1 rounded">{it.extra_data.folder_id}</code>
+                  </p>
+                )}
+              </div>
+            )}
+
             <div className="flex items-center gap-3 mt-4 flex-wrap">
               {temCredencial ? (
                 <>
@@ -379,22 +463,30 @@ function HubCards() {
                     </button>
                   )}
                 </>
+              ) : MODULOS_HUB[it.provider] && !modulos[MODULOS_HUB[it.provider]] ? (
+                <p className="text-xs text-afj-black/45">
+                  {isAdmin ? "Habilite o módulo acima antes de conectar." : "Aguardando o administrador habilitar o módulo."}
+                </p>
               ) : isAdmin && it.oauth_disponivel ? (
                 <>
                   <button onClick={() => conectarOAuth(it)} disabled={oauthConectando === it.provider}
                     className="btn-afj-primary text-sm py-2 px-4 rounded-sm flex items-center gap-2 disabled:opacity-50">
                     {oauthConectando === it.provider ? <Loader2 size={14} className="animate-spin" /> : <Link2 size={14} />} Conectar com login
                   </button>
-                  <button onClick={() => abrirConectar(it)} disabled={working}
-                    className="text-xs text-afj-black/45 hover:text-afj-black/70 underline underline-offset-2">
-                    ou colar chave manualmente
-                  </button>
+                  {it.fields.length > 0 && (
+                    <button onClick={() => abrirConectar(it)} disabled={working}
+                      className="text-xs text-afj-black/45 hover:text-afj-black/70 underline underline-offset-2">
+                      ou colar chave manualmente
+                    </button>
+                  )}
                 </>
-              ) : isAdmin ? (
+              ) : isAdmin && it.fields.length > 0 ? (
                 <button onClick={() => abrirConectar(it)} disabled={working}
                   className="btn-afj-primary text-sm py-2 px-4 rounded-sm flex items-center gap-2 disabled:opacity-50">
                   <Link2 size={14} /> Conectar
                 </button>
+              ) : isAdmin ? (
+                <p className="text-xs text-afj-black/45">Login por conta não configurado no servidor.</p>
               ) : (
                 <p className="text-xs text-afj-black/45">Somente o administrador do escritório pode conectar.</p>
               )}

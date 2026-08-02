@@ -1,5 +1,6 @@
 """JurisprudenciaIngerida — controle de idempotência da ingestão automática
-de jurisprudência/legislação (Fase 138.1, pipeline STJ dados abertos).
+de conteúdo externo (Fase 138.1, pipeline STJ dados abertos; Fase 138.2,
+doutrina via Google Drive).
 
 1 linha por documento externo já processado, chave de idempotência
 `(fonte, fonte_documento_id)` — se o mesmo documento aparecer de novo numa
@@ -10,8 +11,14 @@ Não duplica o texto completo do documento aqui — o conteúdo já vai pro
 Qdrant via `ingest_document()` (chunk+embed+upsert); esta tabela guarda só o
 necessário pra idempotência/observabilidade/retry (metadados extraídos,
 status, erro), o mesmo espírito de `AICallLog` (Fase 137.7): fonte de
-verdade em outro lugar, aqui é só controle."""
-from sqlalchemy import String, UniqueConstraint, Index
+verdade em outro lugar, aqui é só controle.
+
+`tenant_id` (Fase 138.2) é `NULL` pra fontes globais/compartilhadas (ex.:
+STJ, sem dono) e preenchido pra fontes trazidas por um escritório específico
+(ex.: `google_drive:{tenant_id}`, pasta de doutrina privada) — mesmo nome
+genérico reaproveitado por ambos os casos em vez de criar uma tabela quase
+duplicada por fonte."""
+from sqlalchemy import String, UniqueConstraint, Index, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import UUID as PGUUID, JSONB
 from sqlalchemy import DateTime, func
@@ -28,9 +35,17 @@ class JurisprudenciaIngerida(Base):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    fonte: Mapped[str] = mapped_column(String(30), nullable=False)  # stj_dados_abertos
+    # NULL = fonte global/compartilhada (ex.: STJ). Preenchido = fonte trazida
+    # por um escritório específico (ex.: pasta de doutrina do Drive).
+    tenant_id: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True, index=True,
+    )
+    # String(80): "google_drive:{tenant_id}" (Fase 138.2) sozinho já usa 49
+    # chars ("google_drive:" + UUID) — 30 (tamanho original, só cobria
+    # "stj_dados_abertos") estourava na 1ª inserção real de doutrina.
+    fonte: Mapped[str] = mapped_column(String(80), nullable=False)  # stj_dados_abertos | google_drive:{tenant_id}
     fonte_documento_id: Mapped[str] = mapped_column(String(255), nullable=False)
-    collection_alvo: Mapped[str] = mapped_column(String(30), nullable=False)  # jurisprudencia | legislacao
+    collection_alvo: Mapped[str] = mapped_column(String(30), nullable=False)  # jurisprudencia | doutrina_privada
     metadata_extraida: Mapped[dict] = mapped_column(JSONB, default=dict)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="PENDENTE")  # PENDENTE | EMBEDDED | FALHOU
     erro: Mapped[str | None] = mapped_column(String(500))

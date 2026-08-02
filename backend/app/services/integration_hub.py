@@ -150,6 +150,22 @@ PROVIDERS: dict[str, dict] = {
         "obter": "Jusbrasil → Painel de API → gerar token. Deixe a URL base em branco "
                  "para usar o endpoint padrão.",
     },
+    "google_drive_doutrina": {
+        "nome": "Google Drive — Doutrina",
+        "desc": "Pasta do Drive do escritório com livros/artigos próprios (direito de uso "
+                "já do escritório) — sincronizada automaticamente pra base de doutrina "
+                "privada, sem afetar a doutrina compartilhada entre todos os tenants. "
+                "Opcional e por escritório.",
+        "tipo": "api_key",  # sem form manual — só OAuth (ver oauth_disponivel)
+        "oauth_disponivel": True,
+        "fields": [],
+        "ativa": [
+            "Ingestão automática diária dos arquivos da pasta configurada (DOCX/PDF)",
+            "Busca semântica na coleção privada de doutrina do escritório",
+        ],
+        "obter": "Clique em \"Conectar com login\" e escolha a conta Google do escritório. "
+                 "Depois de conectado, cole a URL ou o ID da pasta do Drive.",
+    },
 }
 
 
@@ -283,6 +299,9 @@ async def list_status(db: AsyncSession, tenant_id) -> list[dict]:
             "oauth_disponivel": bool(meta.get("oauth_disponivel")) and is_oauth_configured(key),
             "status": integ.status if integ else "DESCONECTADA",
             "connected_at": integ.connected_at.isoformat() if integ and integ.connected_at else None,
+            # Metadados não-sensíveis (ex.: folder_id do Drive, Fase 138.2) —
+            # nunca contém credencial, sempre seguro expor.
+            "extra_data": (integ.extra_data or {}) if integ else {},
         })
     return out
 
@@ -323,6 +342,21 @@ OAUTH_PROVIDERS: dict[str, dict] = {
         # Expira em 180 dias (confirmado na pesquisa) — precisa renovar via
         # refresh_token, tratado em _refresh_oauth_if_needed.
     },
+    # Fase 138.2 — reaproveita o mesmo client_id/secret do Google Cloud
+    # Console já usado pelo OAuth pessoal (google_workspace.py), só com um
+    # redirect_uri próprio (Google aceita múltiplos redirect_uri por
+    # client_id — os dois fluxos coexistem sem conflito). O refresh do Google
+    # é o fluxo OAuth2 clássico que _refresh_oauth_if_needed já implementa
+    # de forma genérica — nada específico de Google precisa ser adicionado ali.
+    "google_drive_doutrina": {
+        "authorize_url": "https://accounts.google.com/o/oauth2/v2/auth",
+        "token_url": "https://oauth2.googleapis.com/token",
+        "scope": "https://www.googleapis.com/auth/drive.readonly",
+        "client_id_setting": "GOOGLE_CLIENT_ID",
+        "client_secret_setting": "GOOGLE_CLIENT_SECRET",
+        "redirect_uri_setting": "GOOGLE_DRIVE_OAUTH_REDIRECT_URI",
+        "token_field": "access_token",
+    },
 }
 
 
@@ -348,6 +382,12 @@ def build_oauth_url(provider: str, state: str) -> str:
     }
     if provider == "mercadopago":
         params["platform_id"] = "mp"
+    if provider == "google_drive_doutrina":
+        # Sem isso o Google só devolve refresh_token na primeira conexão de
+        # todas — access_type=offline+prompt=consent garante em toda conexão
+        # (mesmo padrão de google_workspace.py::build_auth_url).
+        params["access_type"] = "offline"
+        params["prompt"] = "consent"
     if cfg.get("scope"):
         params["scope"] = cfg["scope"]
     return f"{cfg['authorize_url']}?{urlencode(params)}"
@@ -361,7 +401,10 @@ async def exchange_oauth_code(provider: str, code: str) -> dict:
         "code": code,
         "grant_type": "authorization_code",
     }
-    if provider == "mercadopago":
+    if provider in ("mercadopago", "google_drive_doutrina"):
+        # Google exige client_id+redirect_uri na troca do code (não só no
+        # refresh) — mesmo formato que google_workspace.py::exchange_code já
+        # usa pro fluxo pessoal.
         data["client_id"] = getattr(settings, cfg["client_id_setting"])
         data["redirect_uri"] = getattr(settings, cfg["redirect_uri_setting"])
     async with httpx.AsyncClient(timeout=15) as client:

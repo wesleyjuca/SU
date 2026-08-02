@@ -133,23 +133,6 @@ async def delete_template(
     await db.flush()
 
 
-def _extract_docx_text(raw: bytes) -> str:
-    """Extrai o texto de um .docx (parágrafos + tabelas), preservando quebras."""
-    import io
-    from docx import Document as DocxDocument
-
-    docx = DocxDocument(io.BytesIO(raw))
-    lines: list[str] = []
-    for p in docx.paragraphs:
-        lines.append(p.text)
-    for table in docx.tables:
-        for row in table.rows:
-            cells = [c.text.strip() for c in row.cells if c.text.strip()]
-            if cells:
-                lines.append(" | ".join(cells))
-    return "\n".join(lines).strip()
-
-
 @router.post("/upload", status_code=201, response_model=TemplateResponse)
 async def upload_template(
     file: UploadFile = File(...),
@@ -173,7 +156,8 @@ async def upload_template(
     lower = filename.lower()
     if lower.endswith(".docx"):
         try:
-            conteudo = _extract_docx_text(raw)
+            from app.utils.docx_text import extract_docx_text
+            conteudo = extract_docx_text(raw)
         except Exception:
             raise HTTPException(status_code=400, detail="Não foi possível ler o .docx. Verifique o arquivo.")
     elif lower.endswith(".txt"):

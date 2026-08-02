@@ -14,7 +14,7 @@ DEFAULT_COLLECTIONS = ["jurisprudencia", "peticoes_afj", "legislacao"]
 # Coleções privadas do escritório: os chunks carregam tenant_id no payload e a
 # busca DEVE filtrar por ele (senão um escritório enxerga dados de outro).
 # As demais (jurisprudencia, legislacao, doutrina) são bases públicas/compartilhadas.
-PRIVATE_COLLECTIONS = {"peticoes_afj", "memorias_afj", "documentos_clientes"}
+PRIVATE_COLLECTIONS = {"peticoes_afj", "memorias_afj", "documentos_clientes", "doutrina_privada"}
 
 # Cache de resultado de busca — evita reembedar (OpenAI, pago) + rebuscar no
 # Qdrant a mesma query repetida pelo mesmo escritório em janela curta.

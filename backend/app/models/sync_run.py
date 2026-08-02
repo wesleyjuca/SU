@@ -17,7 +17,9 @@ class SyncRun(Base):
     id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     # NULL = execução global (ex.: polling do beat que varre todos os tenants)
     tenant_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True, index=True)
-    fonte: Mapped[str] = mapped_column(String(30), nullable=False)   # comunica | datajud | multi
+    # String(80): "google_drive:{tenant_id}" (Fase 138.2) usa 49 chars —
+    # 30 (tamanho original) só cobria os nomes curtos anteriores.
+    fonte: Mapped[str] = mapped_column(String(80), nullable=False)   # comunica | datajud | multi | google_drive:{tenant_id}
     tipo: Mapped[str] = mapped_column(String(20), nullable=False)    # CAPTURA | SCAN | POLLING
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="RUNNING")  # RUNNING | OK | ERRO
     stats: Mapped[dict] = mapped_column(JSONB, default=dict)
