@@ -145,10 +145,10 @@ async def hub_oauth_connect(
     meta = integration_hub.PROVIDERS.get(provider)
     if not meta or not meta.get("oauth_disponivel"):
         raise HTTPException(status_code=422, detail="Login por conta não disponível para este provedor.")
-    if provider == "google_drive_doutrina" and not await _modulo_habilitado(db, current_user.tenant_id, "google_drive_doutrina"):
+    if provider in ("google_drive_doutrina", "google_workspace") and not await _modulo_habilitado(db, current_user.tenant_id, provider):
         raise HTTPException(
             status_code=422,
-            detail="A integração Google Drive (Doutrina) está desabilitada para este escritório. "
+            detail=f"A integração {meta['nome']} está desabilitada para este escritório. "
                    "Habilite em Configurações > Módulos antes de conectar.",
         )
     if not integration_hub.is_oauth_configured(provider):
@@ -184,7 +184,14 @@ async def hub_oauth_callback(
 
     try:
         tokens = await integration_hub.exchange_oauth_code(provider, code)
-        await integration_hub.save_oauth_tokens(db, user.tenant_id, provider, tokens, connected_by=user.id)
+        integ = await integration_hub.save_oauth_tokens(db, user.tenant_id, provider, tokens, connected_by=user.id)
+        if provider == "google_workspace":
+            # Guarda o e-mail conectado só pra exibição (GET /integrations/google/status)
+            # — nunca é usado pra autenticação, não é segredo.
+            from app.services.google_workspace import fetch_user_email
+            email = await fetch_user_email(tokens["access_token"])
+            if email:
+                integ.extra_data = {**(integ.extra_data or {}), "google_email": email}
         await db.commit()
     except Exception as exc:
         log.warning("hub_oauth_callback_erro", provider=provider, error=str(exc))

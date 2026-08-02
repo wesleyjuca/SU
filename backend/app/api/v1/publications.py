@@ -147,7 +147,7 @@ async def triar_publicacao(
     await db.flush()
 
     from app.services.deadline_calendar import sincronizar_prazo_no_google
-    await sincronizar_prazo_no_google(db, deadline, current_user.id)
+    await sincronizar_prazo_no_google(db, deadline, current_user.tenant_id)
 
     return {
         "message": "Prazo criado a partir da intimação.",

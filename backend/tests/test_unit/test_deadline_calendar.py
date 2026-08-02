@@ -1,4 +1,5 @@
-"""Fase 91 — sincronização best-effort de prazos com o Google Agenda (Google mockado)."""
+"""Fase 91 — sincronização best-effort de prazos com o Google Agenda (Google mockado).
+Fase 139: token agora é buscado por tenant (conta do escritório), não por usuário."""
 import pytest
 from datetime import date
 
@@ -18,7 +19,7 @@ async def test_sincroniza_com_sucesso(monkeypatch):
 
     chamada = {}
 
-    async def _fake_get_valid_token(db, user_id):
+    async def _fake_get_valid_token(db, tenant_id):
         return "TOKEN"
 
     async def _fake_create(token, titulo, descricao, data):
@@ -30,7 +31,7 @@ async def test_sincroniza_com_sucesso(monkeypatch):
     monkeypatch.setattr(gw, "get_valid_token", _fake_get_valid_token)
     monkeypatch.setattr(gw, "calendar_create_allday_event", _fake_create)
 
-    await sincronizar_prazo_no_google(db=None, deadline=_FakeDeadline(), user_id="u1")
+    await sincronizar_prazo_no_google(db=None, deadline=_FakeDeadline(), tenant_id="t1")
 
     assert chamada["token"] == "TOKEN"
     assert "CONTESTACAO" in chamada["titulo"]
@@ -41,22 +42,22 @@ async def test_sincroniza_com_sucesso(monkeypatch):
 async def test_sem_google_conectado_nao_propaga(monkeypatch):
     import app.services.google_workspace as gw
 
-    async def _sem_conexao(db, user_id):
+    async def _sem_conexao(db, tenant_id):
         raise gw.GoogleNotConnected("sem conta conectada")
 
     monkeypatch.setattr(gw, "get_valid_token", _sem_conexao)
 
     # Não deve levantar — comportamento idêntico ao atual (sem Google, sem evento).
-    await sincronizar_prazo_no_google(db=None, deadline=_FakeDeadline(), user_id="u1")
+    await sincronizar_prazo_no_google(db=None, deadline=_FakeDeadline(), tenant_id="t1")
 
 
 @pytest.mark.asyncio
 async def test_erro_generico_nao_propaga(monkeypatch):
     import app.services.google_workspace as gw
 
-    async def _erro(db, user_id):
+    async def _erro(db, tenant_id):
         raise RuntimeError("timeout de rede")
 
     monkeypatch.setattr(gw, "get_valid_token", _erro)
 
-    await sincronizar_prazo_no_google(db=None, deadline=_FakeDeadline(), user_id="u1")
+    await sincronizar_prazo_no_google(db=None, deadline=_FakeDeadline(), tenant_id="t1")

@@ -71,10 +71,9 @@ class Settings(BaseSettings):
 
     # ─── Google Workspace (OAuth) ────────────────────────────────────────────
     # Sem credenciais, a integração fica "não configurada" (instruções no card
-    # de Integrações). Redirect deve apontar para /api/v1/integrations/google/callback.
+    # de Integrações).
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""
-    GOOGLE_REDIRECT_URI: str = ""
 
     # Fase 117 — OAuth do hub de integrações (Stripe Connect / Mercado Pago),
     # mesmo padrão do Google acima: sem credenciais, o provedor continua
@@ -93,6 +92,12 @@ class Settings(BaseSettings):
     # Google permite múltiplos redirect_uri cadastrados no mesmo client_id.
     # Deve apontar para /api/v1/integrations/hub/google_drive_doutrina/oauth/callback.
     GOOGLE_DRIVE_OAUTH_REDIRECT_URI: str = ""
+    # Fase 139 — OAuth do Google Workspace em nível de TENANT (Gmail+Agenda+
+    # Drive do escritório, substitui o antigo fluxo pessoal por usuário).
+    # Reaproveita GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET, redirect_uri próprio
+    # (3º redirect cadastrado no mesmo client_id — Google permite múltiplos).
+    # Deve apontar para /api/v1/integrations/hub/google_workspace/oauth/callback.
+    GOOGLE_WORKSPACE_OAUTH_REDIRECT_URI: str = ""
     DEFAULT_EMBEDDING_MODEL: str = "text-embedding-3-large"
     EMBEDDING_DIMENSIONS: int = 3072
 

@@ -166,6 +166,22 @@ PROVIDERS: dict[str, dict] = {
         "obter": "Clique em \"Conectar com login\" e escolha a conta Google do escritório. "
                  "Depois de conectado, cole a URL ou o ID da pasta do Drive.",
     },
+    "google_workspace": {
+        "nome": "Google Workspace (Escritório)",
+        "desc": "Gmail, Agenda e Drive do escritório numa conexão única — antes eram fluxos "
+                "separados por advogado; agora é 1 conta do escritório pra todo mundo. "
+                "E-mails automáticos (alerta de prazo, convite de usuário) e eventos de "
+                "agenda passam a usar essa conta compartilhada. Opcional e por escritório.",
+        "tipo": "api_key",  # sem form manual — só OAuth (ver oauth_disponivel)
+        "oauth_disponivel": True,
+        "fields": [],
+        "ativa": [
+            "Envio de e-mails automáticos (alertas de prazo, convite de novo usuário) pela conta do escritório",
+            "Sincronização de prazos com a Agenda do escritório",
+            "Salvar documentos gerados no Drive do escritório",
+        ],
+        "obter": "Clique em \"Conectar com login\" e escolha a conta Google do escritório.",
+    },
 }
 
 
@@ -343,9 +359,9 @@ OAUTH_PROVIDERS: dict[str, dict] = {
         # refresh_token, tratado em _refresh_oauth_if_needed.
     },
     # Fase 138.2 — reaproveita o mesmo client_id/secret do Google Cloud
-    # Console já usado pelo OAuth pessoal (google_workspace.py), só com um
+    # Console usado pelos outros fluxos Google deste hub, só com um
     # redirect_uri próprio (Google aceita múltiplos redirect_uri por
-    # client_id — os dois fluxos coexistem sem conflito). O refresh do Google
+    # client_id — os fluxos coexistem sem conflito). O refresh do Google
     # é o fluxo OAuth2 clássico que _refresh_oauth_if_needed já implementa
     # de forma genérica — nada específico de Google precisa ser adicionado ali.
     "google_drive_doutrina": {
@@ -355,6 +371,24 @@ OAUTH_PROVIDERS: dict[str, dict] = {
         "client_id_setting": "GOOGLE_CLIENT_ID",
         "client_secret_setting": "GOOGLE_CLIENT_SECRET",
         "redirect_uri_setting": "GOOGLE_DRIVE_OAUTH_REDIRECT_URI",
+        "token_field": "access_token",
+    },
+    # Fase 139 — substitui o antigo OAuth pessoal por usuário
+    # (google_workspace.py::SCOPES) por uma conexão única do escritório.
+    # 4 escopos consolidados numa só tela de consentimento (antes eram
+    # pedidos separadamente, sempre os mesmos 4, só que por usuário).
+    "google_workspace": {
+        "authorize_url": "https://accounts.google.com/o/oauth2/v2/auth",
+        "token_url": "https://oauth2.googleapis.com/token",
+        "scope": (
+            "https://www.googleapis.com/auth/calendar.events "
+            "https://www.googleapis.com/auth/drive.file "
+            "https://www.googleapis.com/auth/gmail.send "
+            "https://www.googleapis.com/auth/userinfo.email"
+        ),
+        "client_id_setting": "GOOGLE_CLIENT_ID",
+        "client_secret_setting": "GOOGLE_CLIENT_SECRET",
+        "redirect_uri_setting": "GOOGLE_WORKSPACE_OAUTH_REDIRECT_URI",
         "token_field": "access_token",
     },
 }
@@ -382,10 +416,9 @@ def build_oauth_url(provider: str, state: str) -> str:
     }
     if provider == "mercadopago":
         params["platform_id"] = "mp"
-    if provider == "google_drive_doutrina":
+    if provider in ("google_drive_doutrina", "google_workspace"):
         # Sem isso o Google só devolve refresh_token na primeira conexão de
-        # todas — access_type=offline+prompt=consent garante em toda conexão
-        # (mesmo padrão de google_workspace.py::build_auth_url).
+        # todas — access_type=offline+prompt=consent garante em toda conexão.
         params["access_type"] = "offline"
         params["prompt"] = "consent"
     if cfg.get("scope"):
@@ -401,10 +434,8 @@ async def exchange_oauth_code(provider: str, code: str) -> dict:
         "code": code,
         "grant_type": "authorization_code",
     }
-    if provider in ("mercadopago", "google_drive_doutrina"):
-        # Google exige client_id+redirect_uri na troca do code (não só no
-        # refresh) — mesmo formato que google_workspace.py::exchange_code já
-        # usa pro fluxo pessoal.
+    if provider in ("mercadopago", "google_drive_doutrina", "google_workspace"):
+        # Google exige client_id+redirect_uri na troca do code (não só no refresh).
         data["client_id"] = getattr(settings, cfg["client_id_setting"])
         data["redirect_uri"] = getattr(settings, cfg["redirect_uri_setting"])
     async with httpx.AsyncClient(timeout=15) as client:
