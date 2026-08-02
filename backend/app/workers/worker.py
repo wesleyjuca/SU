@@ -15,6 +15,7 @@ celery_app = Celery(
         "app.workers.tasks.session_cleanup",
         "app.workers.tasks.jurisprudencia_sync",
         "app.workers.tasks.google_drive_sync",
+        "app.workers.tasks.legislacao_sync",
     ],
 )
 
@@ -60,5 +61,12 @@ celery_app.conf.beat_schedule = {
     "sync-google-drive-doutrina": {
         "task": "app.workers.tasks.google_drive_sync.sync_google_drive_doutrina",
         "schedule": crontab(hour=5, minute=0),
+    },
+    # Sincronização diária de legislação federal via LexML/Planalto
+    # (Fase 138.3) — horário distinto de STJ (4h) e Drive (5h) pra não
+    # competir por I/O/CPU no mesmo minuto.
+    "sync-legislacao-federal": {
+        "task": "app.workers.tasks.legislacao_sync.sync_legislacao_diario",
+        "schedule": crontab(hour=6, minute=0),
     },
 }
