@@ -61,6 +61,9 @@ COLLECTIONS: dict[str, dict] = {
         "payload_fields": {
             "diploma": PayloadSchemaType.KEYWORD,
             "artigo": PayloadSchemaType.KEYWORD,
+            # Fase 138.3 — ingestão automática via LexML/Planalto.
+            "tipo_norma": PayloadSchemaType.KEYWORD,  # "Lei" | "Decreto"
+            "urn": PayloadSchemaType.KEYWORD,         # URN LexML, chave estável do documento
         },
     },
     "memorias_afj": {
