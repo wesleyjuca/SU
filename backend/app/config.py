@@ -86,6 +86,13 @@ class Settings(BaseSettings):
     MERCADOPAGO_OAUTH_CLIENT_ID: str = ""
     MERCADOPAGO_OAUTH_CLIENT_SECRET: str = ""
     MERCADOPAGO_OAUTH_REDIRECT_URI: str = ""
+    # Fase 138.2 — OAuth do Google Drive em nível de TENANT (pasta de doutrina
+    # do escritório), distinto do OAuth pessoal (GOOGLE_REDIRECT_URI acima).
+    # Reaproveita GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET (mesmo client do Google
+    # Cloud Console já configurado) — só o redirect_uri é próprio, já que o
+    # Google permite múltiplos redirect_uri cadastrados no mesmo client_id.
+    # Deve apontar para /api/v1/integrations/hub/google_drive_doutrina/oauth/callback.
+    GOOGLE_DRIVE_OAUTH_REDIRECT_URI: str = ""
     DEFAULT_EMBEDDING_MODEL: str = "text-embedding-3-large"
     EMBEDDING_DIMENSIONS: int = 3072
 

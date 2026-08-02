@@ -58,6 +58,7 @@ class ModulesUpdate(BaseModel):
     agentes: bool | None = None
     visual_law: bool | None = None
     google_workspace: bool | None = None   # integração opcional por escritório (opt-in do ADMIN)
+    google_drive_doutrina: bool | None = None  # Fase 138.2 — idem, pasta de doutrina do Drive
 
 
 class NavUpdate(BaseModel):

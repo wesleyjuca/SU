@@ -1,4 +1,4 @@
-"""Definição das 7 collections Qdrant do AFJ CORE SYSTEM."""
+"""Definição das 8 collections Qdrant do AFJ CORE SYSTEM."""
 from qdrant_client.models import Distance, VectorParams, PayloadSchemaType
 from app.config import settings
 
@@ -38,6 +38,20 @@ COLLECTIONS: dict[str, dict] = {
         "payload_fields": {
             "autor": PayloadSchemaType.KEYWORD,
             "area": PayloadSchemaType.KEYWORD,
+        },
+    },
+    "doutrina_privada": {
+        "description": "Doutrina própria do escritório (pasta do Google Drive, Fase 138.2) — "
+                        "isolada por tenant, distinta da doutrina compartilhada acima. "
+                        "Conteúdo trazido pelo próprio escritório (direito de uso já do "
+                        "escritório), nunca deve aparecer pra outro tenant.",
+        "vector_size": settings.EMBEDDING_DIMENSIONS,
+        "distance": Distance.COSINE,
+        "payload_fields": {
+            "nome_arquivo": PayloadSchemaType.KEYWORD,
+            "google_file_id": PayloadSchemaType.KEYWORD,
+            # Coleção privada — ver nota em peticoes_afj acima.
+            "tenant_id": PayloadSchemaType.KEYWORD,
         },
     },
     "legislacao": {

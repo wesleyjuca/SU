@@ -81,6 +81,9 @@ def _limpar_settings_oauth():
     for prefix in ("STRIPE_OAUTH_", "MERCADOPAGO_OAUTH_"):
         for suffix in ("CLIENT_ID", "CLIENT_SECRET", "REDIRECT_URI"):
             setattr(settings, f"{prefix}{suffix}", "")
+    settings.GOOGLE_CLIENT_ID = ""
+    settings.GOOGLE_CLIENT_SECRET = ""
+    settings.GOOGLE_DRIVE_OAUTH_REDIRECT_URI = ""
 
 
 def test_is_oauth_configured_falso_sem_settings():
@@ -128,6 +131,37 @@ def test_build_oauth_url_mercadopago_inclui_platform_id():
     _limpar_settings_oauth()
 
 
+def test_build_oauth_url_google_drive_doutrina_inclui_access_type_offline_e_consent():
+    """Sem access_type=offline+prompt=consent o Google só devolve refresh_token
+    na 1ª conexão de todas — precisa forçar em toda URL de autorização."""
+    from app.services import integration_hub as ih
+    from app.config import settings
+    _limpar_settings_oauth()
+    settings.GOOGLE_CLIENT_ID = "gcid"
+    settings.GOOGLE_DRIVE_OAUTH_REDIRECT_URI = "https://api.example.com/drive-cb"
+    url = ih.build_oauth_url("google_drive_doutrina", "state3")
+    assert url.startswith("https://accounts.google.com/o/oauth2/v2/auth?")
+    assert "client_id=gcid" in url
+    assert "access_type=offline" in url
+    assert "prompt=consent" in url
+    assert "drive.readonly" in url
+    _limpar_settings_oauth()
+
+
+def test_build_oauth_url_mercadopago_nao_inclui_access_type_offline():
+    """O branch access_type=offline é específico do Google — não deve vazar
+    pros demais providers."""
+    from app.services import integration_hub as ih
+    from app.config import settings
+    _limpar_settings_oauth()
+    settings.MERCADOPAGO_OAUTH_CLIENT_ID = "mpid"
+    settings.MERCADOPAGO_OAUTH_REDIRECT_URI = "https://api.example.com/cb"
+    url = ih.build_oauth_url("mercadopago", "state2b")
+    assert "access_type" not in url
+    assert "prompt=consent" not in url
+    _limpar_settings_oauth()
+
+
 def test_exchange_oauth_code_chama_token_url_correto():
     from app.services import integration_hub as ih
     _FakeAsyncClient.calls = []
@@ -146,6 +180,34 @@ def test_exchange_oauth_code_chama_token_url_correto():
     assert data["grant_type"] == "authorization_code"
 
 
+def test_exchange_oauth_code_google_drive_doutrina_inclui_client_id_e_redirect_uri():
+    """Google exige client_id+redirect_uri na troca do code (não só no
+    refresh) — mesmo formato que google_workspace.py já usa pro fluxo pessoal."""
+    from app.services import integration_hub as ih
+    from app.config import settings
+    _limpar_settings_oauth()
+    settings.GOOGLE_CLIENT_ID = "gcid"
+    settings.GOOGLE_CLIENT_SECRET = "gsecret"
+    settings.GOOGLE_DRIVE_OAUTH_REDIRECT_URI = "https://api.example.com/drive-cb"
+
+    _FakeAsyncClient.calls = []
+    _FakeAsyncClient.next_response = _FakeResponse({"access_token": "tok_drive", "refresh_token": "ref_drive", "expires_in": 3600})
+    original_client = ih.httpx.AsyncClient
+    ih.httpx.AsyncClient = _FakeAsyncClient
+    try:
+        result = asyncio.run(ih.exchange_oauth_code("google_drive_doutrina", "auth_code_drive"))
+    finally:
+        ih.httpx.AsyncClient = original_client
+        _limpar_settings_oauth()
+
+    assert result["access_token"] == "tok_drive"
+    url, data = _FakeAsyncClient.calls[0]
+    assert url == "https://oauth2.googleapis.com/token"
+    assert data["code"] == "auth_code_drive"
+    assert data["client_id"] == "gcid"
+    assert data["redirect_uri"] == "https://api.example.com/drive-cb"
+
+
 def test_oauth_tokens_to_credentials_marca_oauth_e_usa_token_field_certo():
     from app.services import integration_hub as ih
     creds_stripe = ih._oauth_tokens_to_credentials("stripe", {"access_token": "sk_live_x"})
@@ -158,6 +220,14 @@ def test_oauth_tokens_to_credentials_marca_oauth_e_usa_token_field_certo():
     assert creds_mp["access_token"] == "APP_USR-x"
     assert creds_mp["oauth_refresh_token"] == "r1"
     assert "oauth_expires_at" in creds_mp
+
+    creds_drive = ih._oauth_tokens_to_credentials(
+        "google_drive_doutrina", {"access_token": "ya29.x", "refresh_token": "r_drive", "expires_in": 3600},
+    )
+    assert creds_drive["__oauth__"] is True
+    assert creds_drive["access_token"] == "ya29.x"
+    assert creds_drive["oauth_refresh_token"] == "r_drive"
+    assert "oauth_expires_at" in creds_drive
 
 
 def test_refresh_oauth_if_needed_sem_expires_at_e_noop_stripe():

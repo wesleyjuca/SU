@@ -14,6 +14,7 @@ VALID_COLLECTIONS = {
     "jurisprudencia",
     "peticoes_afj",
     "doutrina",
+    "doutrina_privada",
     "legislacao",
     "memorias_afj",
     "documentos_clientes",

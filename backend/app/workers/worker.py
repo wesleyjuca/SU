@@ -14,6 +14,7 @@ celery_app = Celery(
         "app.workers.tasks.ocr_tasks",
         "app.workers.tasks.session_cleanup",
         "app.workers.tasks.jurisprudencia_sync",
+        "app.workers.tasks.google_drive_sync",
     ],
 )
 
@@ -53,5 +54,11 @@ celery_app.conf.beat_schedule = {
     "sync-stj-jurisprudencia": {
         "task": "app.workers.tasks.jurisprudencia_sync.sync_stj_diario",
         "schedule": crontab(hour=4, minute=0),
+    },
+    # Sincronização diária das pastas de doutrina do Google Drive, por
+    # escritório (Fase 138.2).
+    "sync-google-drive-doutrina": {
+        "task": "app.workers.tasks.google_drive_sync.sync_google_drive_doutrina",
+        "schedule": crontab(hour=5, minute=0),
     },
 }
