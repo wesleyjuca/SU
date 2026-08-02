@@ -6,6 +6,7 @@ from app.api.v1 import (
     financial, ws, audit, rag, notifications, tenant, system, lgpd, push, portal,
     petition_templates, integrity, google_integration, tenants_admin, billing,
     reports_admin, invoices, crm, publications, integrations_hub, ai_oauth,
+    teses,
 )
 from app.dependencies import require_active_tenant, get_current_staff
 
@@ -27,6 +28,7 @@ _BLOCK_STAFF = [*_BLOCK, *_STAFF]
 api_router.include_router(auth.router)
 api_router.include_router(approvals.router, dependencies=_BLOCK_STAFF)
 api_router.include_router(processes.router, dependencies=_BLOCK_STAFF)
+api_router.include_router(teses.router, dependencies=_BLOCK_STAFF)
 api_router.include_router(clients.router, dependencies=_BLOCK_STAFF)
 api_router.include_router(documents.router, dependencies=_BLOCK_STAFF)
 api_router.include_router(financial.router, dependencies=_BLOCK_STAFF)

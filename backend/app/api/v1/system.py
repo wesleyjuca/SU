@@ -428,6 +428,7 @@ async def analytics_gestao(
     from app.models.client import Client
     from app.models.process import LegalProcess, ProcessDeadline
     from app.models.document import Document
+    from app.models.tese import Tese
 
     tid = current_user.tenant_id
 
@@ -547,6 +548,47 @@ async def analytics_gestao(
             for k, v in sorted(area_map.items(), key=lambda kv: kv[1]["total"], reverse=True)
         ]
 
+        # ── Fase 138.4 — taxa de êxito por tribunal (jurimetria do escritório,
+        # texto livre — sem FK real pra Tribunal, GROUP BY funciona igual) ────
+        por_tribunal_rows = (await db.execute(
+            select(LegalProcess.tribunal, LegalProcess.desfecho, func.count(LegalProcess.id))
+            .where(LegalProcess.tenant_id == tid, LegalProcess.desfecho.is_not(None))
+            .group_by(LegalProcess.tribunal, LegalProcess.desfecho)
+        )).all()
+        tribunal_map: dict = {}
+        for tribunal, desf, n in por_tribunal_rows:
+            t = tribunal_map.setdefault(tribunal, {"ganhos": 0, "total": 0})
+            t["total"] += int(n)
+            if desf in ("EXITO", "ACORDO"):
+                t["ganhos"] += int(n)
+        exito_por_tribunal = [
+            {"tribunal": k, "win_rate": round(100 * v["ganhos"] / v["total"], 1) if v["total"] else 0.0, "total": v["total"]}
+            for k, v in sorted(tribunal_map.items(), key=lambda kv: kv[1]["total"], reverse=True)
+        ]
+
+        # ── Fase 138.4 — taxa de êxito por tese (só processos com tese_id
+        # definida — a maioria hoje não tem, campo é novo) ────────────────────
+        por_tese_rows = (await db.execute(
+            select(LegalProcess.tese_id, LegalProcess.desfecho, func.count(LegalProcess.id))
+            .where(LegalProcess.tenant_id == tid, LegalProcess.desfecho.is_not(None), LegalProcess.tese_id.is_not(None))
+            .group_by(LegalProcess.tese_id, LegalProcess.desfecho)
+        )).all()
+        tese_map: dict = {}
+        for tese_id, desf, n in por_tese_rows:
+            t = tese_map.setdefault(tese_id, {"ganhos": 0, "total": 0})
+            t["total"] += int(n)
+            if desf in ("EXITO", "ACORDO"):
+                t["ganhos"] += int(n)
+        tese_nomes = {}
+        if tese_map:
+            tese_nomes = dict((await db.execute(
+                select(Tese.id, Tese.nome).where(Tese.id.in_(tese_map.keys()))
+            )).all())
+        exito_por_tese = [
+            {"tese": tese_nomes.get(k, "—"), "win_rate": round(100 * v["ganhos"] / v["total"], 1) if v["total"] else 0.0, "total": v["total"]}
+            for k, v in sorted(tese_map.items(), key=lambda kv: kv[1]["total"], reverse=True)
+        ]
+
         return {
             "rentabilidade_clientes": rentab_clientes,
             "rentabilidade_processos": rentab_processos,
@@ -556,6 +598,8 @@ async def analytics_gestao(
                 "total_com_desfecho": int(total_desf),
                 "win_rate": win_rate,
                 "por_area": exito_por_area,
+                "por_tribunal": exito_por_tribunal,
+                "por_tese": exito_por_tese,
             },
         }
 
