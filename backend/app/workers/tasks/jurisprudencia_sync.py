@@ -3,7 +3,16 @@
 Processa só o lote mais recente disponível no portal por execução — nunca um
 backfill histórico completo dentro do beat automático (um backfill manual,
 sob demanda e com teto explícito, é uma ação separada, fora de escopo desta
-fase). Sem credencial nenhuma necessária — fonte pública, sem tenant."""
+fase). Sem credencial nenhuma necessária — fonte pública, sem tenant.
+
+Fase 138.5: cada acórdão novo é classificado (favorável/desfavorável +
+área do direito) via LLM antes da ingestão, populando os campos
+`favoravel`/`area_direito` do payload Qdrant (reservados desde a Fase 138.1,
+nunca preenchidos até aqui). Acórdãos ingeridos ANTES desta fase não são
+reclassificados retroativamente (decisão do usuário — backfill fica pra uma
+ação futura separada, sob pedido explícito)."""
+import json
+import re
 from datetime import datetime, timezone
 from sqlalchemy import select
 import structlog
@@ -11,6 +20,89 @@ import structlog
 from app.workers.worker import celery_app
 
 log = structlog.get_logger()
+
+AREA_DIREITO_VALIDAS = {
+    "CIVIL", "TRABALHISTA", "PENAL", "TRIBUTARIO", "ADMINISTRATIVO",
+    "CONSUMIDOR", "EMPRESARIAL", "PREVIDENCIARIO", "FAMILIA", "CONSTITUCIONAL",
+    "AMBIENTAL", "OUTRO",
+}  # mesmo vocabulário livre-mas-convencionado de LegalProcess.area_direito
+   # (app/models/process.py:25), estendido com categorias STJ-relevantes.
+
+CLASSIFICACAO_SYSTEM_PROMPT = """Você é um assistente jurídico que classifica acórdãos do STJ.
+Leia a ementa/trecho do acórdão e responda APENAS um JSON, sem texto antes ou depois:
+{"favoravel": true|false, "area_direito": "<uma das categorias>"}
+
+"favoravel": true se o acórdão dá provimento ao recurso / reforma a decisão
+recorrida em favor do recorrente; false se nega provimento / mantém a
+decisão recorrida. Se genuinamente não for possível determinar a partir do
+texto, responda favoravel como false e não invente.
+
+"area_direito": escolha UMA destas categorias, em maiúsculas, a que melhor
+descreve a matéria: CIVIL, TRABALHISTA, PENAL, TRIBUTARIO, ADMINISTRATIVO,
+CONSUMIDOR, EMPRESARIAL, PREVIDENCIARIO, FAMILIA, CONSTITUCIONAL, AMBIENTAL,
+OUTRO.
+
+Responda só o JSON."""
+
+CLASSIFICACAO_TRUNCAMENTO = 4000  # chars — ementa/relatório costuma bastar
+
+
+def _extrair_classificacao(texto: str) -> dict | None:
+    """Extrai {"favoravel": bool, "area_direito": str} da resposta do LLM.
+    Tolerante a cerca de markdown/texto extra. None se malformado/campos
+    ausentes/tipo errado ou fora do vocabulário — nunca lança."""
+    if not texto:
+        return None
+    limpo = texto.strip()
+    m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", limpo, re.DOTALL)
+    candidato = m.group(1) if m else limpo
+    if not m:
+        i, f = candidato.find("{"), candidato.rfind("}")
+        if i == -1 or f == -1 or f < i:
+            return None
+        candidato = candidato[i:f + 1]
+    try:
+        dados = json.loads(candidato)
+    except Exception:
+        return None
+    if not isinstance(dados, dict):
+        return None
+    favoravel = dados.get("favoravel")
+    area = str(dados.get("area_direito") or "").strip().upper()
+    if not isinstance(favoravel, bool) or area not in AREA_DIREITO_VALIDAS:
+        return None
+    return {"favoravel": favoravel, "area_direito": area}
+
+
+async def classificar_acordao(texto: str) -> dict | None:
+    """Classifica favorabilidade + área de direito de 1 acórdão via LLM.
+    Fail-soft: qualquer erro (rede, parsing, formato) retorna None — o
+    chamador decide o que fazer (na sync: não popula os campos, loga e
+    segue). Função standalone reutilizável fora do loop de sync (ex.: uma
+    futura reclassificação em lote, sob pedido explícito)."""
+    from app.integrations.llm_client import call_llm
+
+    trecho = (texto or "")[:CLASSIFICACAO_TRUNCAMENTO]
+    if not trecho.strip():
+        return None
+    try:
+        conteudo, _in_tok, _out_tok, custo = await call_llm(
+            messages=[{"role": "user", "content": trecho}],
+            system=CLASSIFICACAO_SYSTEM_PROMPT,
+            model="claude-haiku-4-5-20251001",
+            max_tokens=100,
+            temperature=0.0,
+        )
+    except Exception as exc:
+        log.warning("stj_classificacao_llm_falhou", error=str(exc))
+        return None
+
+    resultado = _extrair_classificacao(conteudo)
+    if resultado is None:
+        log.warning("stj_classificacao_formato_invalido", resposta=conteudo[:200])
+        return None
+    resultado["custo_usd"] = custo
+    return resultado
 
 
 async def executar_sync_stj(db) -> dict:
@@ -27,6 +119,8 @@ async def executar_sync_stj(db) -> dict:
     processados = 0
     pulados = 0
     falhas = 0
+    nao_classificados = 0
+    custo_total = 0.0
     try:
         registros = await buscar_lote_recente()
     except Exception as exc:
@@ -63,8 +157,22 @@ async def executar_sync_stj(db) -> dict:
         db.add(entrada)
         await db.flush()
 
+        # Classificação (Fase 138.5) tem try/except próprio, separado do de
+        # ingestão logo abaixo — uma falha aqui nunca deve marcar o
+        # documento como FALHOU (bloquearia reingestão por um problema
+        # cosmético, não fatal). `classificar_acordao` já é fail-soft e não
+        # lança, mas o resultado ainda pode ser None.
+        classificacao = await classificar_acordao(reg["texto"])
+        if classificacao is None:
+            nao_classificados += 1
+        else:
+            custo_total += classificacao.get("custo_usd", 0.0)
+
         try:
             qdrant_metadata = {"tribunal": "STJ", **metadata_extraida}
+            if classificacao is not None:
+                qdrant_metadata["favoravel"] = classificacao["favoravel"]
+                qdrant_metadata["area_direito"] = classificacao["area_direito"]
             await ingest_document(
                 content=reg["texto"], collection="jurisprudencia",
                 metadata=qdrant_metadata, document_id=fonte_documento_id,
@@ -79,7 +187,11 @@ async def executar_sync_stj(db) -> dict:
         entrada.processed_at = datetime.now(timezone.utc)
         await db.commit()
 
-    stats = {"processados": processados, "pulados": pulados, "falhas": falhas}
+    stats = {
+        "processados": processados, "pulados": pulados, "falhas": falhas,
+        "nao_classificados": nao_classificados,
+        "custo_classificacao_usd": round(custo_total, 4),
+    }
     await finalizar_sync(db, run, "OK", stats)
     await db.commit()
     log.info("stj_sync_complete", **stats)

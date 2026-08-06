@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect } from "react";
-import { BookOpen, Search, Loader2, Copy, Check, AlertTriangle, Upload, ChevronDown, ChevronUp } from "lucide-react";
+import { BookOpen, Search, Loader2, Copy, Check, AlertTriangle, Upload, ChevronDown, ChevronUp, BarChart2 } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
 import { useUserStore } from "@/store";
@@ -141,6 +141,82 @@ function PainelIndexacao() {
   );
 }
 
+interface RelatorFavorabilidade {
+  relator: string;
+  total: number;
+  favoraveis: number;
+  taxa_favoravel: number;
+}
+
+function PainelFavorabilidade() {
+  const [aberto, setAberto] = useState(false);
+  const [dados, setDados] = useState<RelatorFavorabilidade[] | null>(null);
+  const [carregando, setCarregando] = useState(false);
+
+  useEffect(() => {
+    if (!aberto || dados) return;
+    setCarregando(true);
+    const token = localStorage.getItem("afj_access_token");
+    fetch("/api/v1/rag/jurisprudencia/favorabilidade", { headers: { Authorization: `Bearer ${token}` } })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => setDados(data?.relatores ?? []))
+      .catch(() => setDados([]))
+      .finally(() => setCarregando(false));
+  }, [aberto, dados]);
+
+  return (
+    <div className="afj-card p-0 overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setAberto((v) => !v)}
+        className="w-full flex items-center justify-between px-5 py-3 text-left"
+      >
+        <span className="flex items-center gap-2 text-sm font-medium text-afj-black">
+          <BarChart2 size={14} className="text-afj-gold" />
+          Favorabilidade por relator (STJ)
+        </span>
+        {aberto ? <ChevronUp size={15} className="text-afj-black/40" /> : <ChevronDown size={15} className="text-afj-black/40" />}
+      </button>
+
+      {aberto && (
+        <div className="px-5 pb-5 border-t border-afj-cream-dark pt-4">
+          {carregando && <p className="text-xs text-afj-black/40">Carregando...</p>}
+          {!carregando && dados && dados.length === 0 && (
+            <p className="text-xs text-afj-black/40">
+              Nenhum acórdão classificado ainda. A classificação passa a rodar automaticamente
+              nos acórdãos ingeridos a partir de agora (não retroage aos já indexados).
+            </p>
+          )}
+          {!carregando && dados && dados.length > 0 && (
+            <div className="overflow-x-auto">
+              <table className="afj-table w-full text-sm">
+                <thead>
+                  <tr>
+                    <th className="text-left">Relator</th>
+                    <th className="text-right">Acórdãos</th>
+                    <th className="text-right">Favoráveis</th>
+                    <th className="text-right">Taxa</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {dados.map((r) => (
+                    <tr key={r.relator}>
+                      <td>{r.relator}</td>
+                      <td className="text-right">{r.total}</td>
+                      <td className="text-right">{r.favoraveis}</td>
+                      <td className="text-right">{(r.taxa_favoravel * 100).toFixed(0)}%</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function scoreColor(score: number): string {
   if (score >= 0.85) return "bg-green-100 text-green-700";
   if (score >= 0.70) return "bg-amber-100 text-amber-700";
@@ -246,6 +322,7 @@ export default function BuscaJuridicaPage() {
       </div>
 
       {user?.role === "ADMIN" && <PainelIndexacao />}
+      <PainelFavorabilidade />
 
       {/* Formulário de busca */}
       <form onSubmit={buscar} className="afj-card p-5 space-y-4">

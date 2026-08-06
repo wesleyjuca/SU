@@ -116,6 +116,41 @@ async def rag_coverage(
         )
 
 
+@router.get("/jurisprudencia/favorabilidade")
+async def rag_jurisprudencia_favorabilidade(
+    current_user: User = Depends(require_role("ADMIN", "SOCIO", "ADVOGADO", "PARALEGAL", "ASSISTENTE")),
+):
+    """Breakdown de favorabilidade por relator na base de jurisprudência STJ
+    (Fase 138.5). `tribunal` não entra como eixo — hoje é sempre "STJ" nesta
+    coleção (pipeline STJ-only, Fase 138.1). Acórdãos ingeridos antes da
+    Fase 138.5 não têm `favoravel` classificado e ficam de fora da contagem."""
+    cache_key = "rag:favorabilidade:jurisprudencia"
+    try:
+        from app.db.redis import get_redis
+        import json
+
+        redis = await get_redis()
+        if redis:
+            cached = await redis.get(cache_key)
+            if cached:
+                return {"relatores": json.loads(cached)}
+
+        from app.db.qdrant import get_qdrant
+        from app.rag.aggregation import agregar_favorabilidade_por_relator
+
+        qdrant = await get_qdrant()
+        dados = await agregar_favorabilidade_por_relator(qdrant, "jurisprudencia")
+
+        if redis:
+            await redis.set(cache_key, json.dumps(dados), ex=600)
+        return {"relatores": dados}
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Serviço RAG indisponível: {str(exc)}",
+        )
+
+
 @router.post("/ingest", status_code=status.HTTP_202_ACCEPTED)
 async def rag_ingest(
     req: IngestRequest,
