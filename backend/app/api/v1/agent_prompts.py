@@ -15,7 +15,7 @@ from app.db.base import get_db
 from app.dependencies import require_role
 from app.models.user import User
 from app.models.agent_prompt import AgentPromptConfig, AgentPromptVersion, AgentAttachment
-from app.agents.prompt_registry import AGENT_PROMPT_SLOTS
+from app.agents.prompt_registry import AGENT_PROMPT_SLOTS, resolve_default_prompt
 from app.core.exceptions import NotFoundError
 
 router = APIRouter(prefix="/agents", tags=["agent-prompts"])
@@ -34,10 +34,21 @@ def _validar_slot(name: str, slot: str) -> None:
         raise HTTPException(status_code=404, detail=f"Slot '{slot}' não existe para o agente '{name}'.")
 
 
+def _default_text_para_slot(name: str, slot: str) -> str | None:
+    """Resolve o texto padrão (não o override) do slot, pra o SUPERADMIN ver
+    o que está editando mesmo sem nenhum override salvo ainda."""
+    for s in AGENT_PROMPT_SLOTS.get(name, []):
+        if s["slot"] == slot:
+            default_ref = s.get("default_ref")
+            return resolve_default_prompt(default_ref) if default_ref else None
+    return None
+
+
 class PromptResponse(BaseModel):
     agent_name: str
     slot: str
-    prompt_text: str | None  # None = usando o default hardcoded
+    prompt_text: str | None  # None = sem override — ver default_text pro texto em vigor
+    default_text: str | None  # texto padrão hardcoded, sempre presente pra agentes com LLM
     versao: int
     updated_by: str | None
     updated_at: str | None
@@ -82,13 +93,17 @@ async def get_agent_prompt(
 ):
     _validar_agente(name)
     _validar_slot(name, slot)
+    default_text = _default_text_para_slot(name, slot)
     row = (await db.execute(
         select(AgentPromptConfig).where(AgentPromptConfig.agent_name == name, AgentPromptConfig.prompt_slot == slot)
     )).scalar_one_or_none()
     if not row:
-        return PromptResponse(agent_name=name, slot=slot, prompt_text=None, versao=0, updated_by=None, updated_at=None)
+        return PromptResponse(
+            agent_name=name, slot=slot, prompt_text=None, default_text=default_text,
+            versao=0, updated_by=None, updated_at=None,
+        )
     return PromptResponse(
-        agent_name=name, slot=slot, prompt_text=row.prompt_text, versao=row.versao,
+        agent_name=name, slot=slot, prompt_text=row.prompt_text, default_text=default_text, versao=row.versao,
         updated_by=str(row.updated_by) if row.updated_by else None,
         updated_at=row.updated_at.isoformat(),
     )
@@ -124,7 +139,8 @@ async def update_agent_prompt(
     row.updated_by = current_user.id
     await db.flush()
     return PromptResponse(
-        agent_name=name, slot=slot, prompt_text=row.prompt_text, versao=row.versao,
+        agent_name=name, slot=slot, prompt_text=row.prompt_text,
+        default_text=_default_text_para_slot(name, slot), versao=row.versao,
         updated_by=str(current_user.id), updated_at=row.updated_at.isoformat(),
     )
 

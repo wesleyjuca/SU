@@ -13,6 +13,7 @@ interface PromptData {
   agent_name: string;
   slot: string;
   prompt_text: string | null;
+  default_text: string | null;
   versao: number;
   updated_by: string | null;
   updated_at: string | null;
@@ -79,7 +80,7 @@ export function AgentDetailDrawer({ agentName, onClose }: AgentDetailDrawerProps
       .get<PromptData>(`/agents/${agentName}/prompt?slot=${activeSlot}`)
       .then((data) => {
         setPrompt(data);
-        setTexto(data.prompt_text ?? "");
+        setTexto(data.prompt_text ?? data.default_text ?? "");
         setChangeSummary("");
       })
       .catch(() => toast.error("Erro ao carregar prompt."));
@@ -94,7 +95,7 @@ export function AgentDetailDrawer({ agentName, onClose }: AgentDetailDrawerProps
         change_summary: changeSummary || null,
       });
       setPrompt(data);
-      setTexto(data.prompt_text ?? "");
+      setTexto(data.prompt_text ?? data.default_text ?? "");
       setChangeSummary("");
       toast.success(restaurarPadrao ? "Prompt restaurado ao padrão." : "Prompt salvo.");
     } catch {
@@ -197,10 +198,16 @@ export function AgentDetailDrawer({ agentName, onClose }: AgentDetailDrawerProps
 
               {prompt && (
                 <div className="space-y-2">
+                  {prompt.prompt_text === null && (
+                    <p className="text-xs text-afj-black/40">
+                      {prompt.default_text
+                        ? "Mostrando o prompt padrão do sistema — editar e salvar cria um override."
+                        : "Prompt padrão não encontrado no código — pode editar do zero mesmo assim."}
+                    </p>
+                  )}
                   <textarea
                     value={texto}
                     onChange={(e) => setTexto(e.target.value)}
-                    placeholder={prompt.prompt_text === null ? "Usando o prompt padrão do sistema..." : ""}
                     rows={10}
                     className="w-full px-3 py-2.5 text-sm border border-afj-cream-dark rounded-sm focus:outline-none focus:border-afj-gold font-mono"
                   />

@@ -127,3 +127,86 @@ async def test_execute_verificar_citacoes_falha_nao_derruba_peticao(monkeypatch)
 
     assert result.status.value == "AWAITING_APPROVAL"
     assert result.output["citacoes"] == []
+
+
+# ─── Fase 140.1.1 — mensagens de erro diagnosticáveis (não engolidas) ──────
+
+@pytest.mark.asyncio
+async def test_execute_falha_na_chamada_claude_propaga_com_prefixo(monkeypatch):
+    """A chamada Claude não tinha try/except próprio — o erro cru do SDK
+    chegava em AgentRun.error_message sem dizer ONDE falhou. Agora vira
+    RuntimeError com prefixo diagnosticável, ainda propagado (BaseAgent.run()
+    continua decidindo o status final — não vira fail-soft silencioso)."""
+    import app.agents.petition.petition_agent as pa_mod
+
+    async def _fake_call_claude_falha(messages, system, max_tokens=8096, temperature=0.3):
+        raise RuntimeError("rate limit exceeded")
+
+    monkeypatch.setattr(pa_mod, "call_claude", _fake_call_claude_falha)
+
+    agent = PetitionAgent()
+    with pytest.raises(RuntimeError) as exc_info:
+        await agent.execute(_ctx())
+
+    assert "Falha ao gerar petição via IA" in str(exc_info.value)
+    assert "rate limit exceeded" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_execute_via_run_falha_na_ia_vira_agentrun_failed_diagnosticavel():
+    """Ponta a ponta via BaseAgent.run() (o wrapper real usado em produção):
+    confirma que o erro prefixado chega inteiro em AgentResult.error, não é
+    engolido nem truncado pelo loop de retry."""
+    import app.agents.petition.petition_agent as pa_mod
+
+    class _FailingAgent(PetitionAgent):
+        max_retries = 0
+
+    async def _fake_call_claude_falha(messages, system, max_tokens=8096, temperature=0.3):
+        raise ConnectionError("timeout ao chamar Anthropic")
+
+    orig = pa_mod.call_claude
+    pa_mod.call_claude = _fake_call_claude_falha
+    try:
+        agent = _FailingAgent()
+        result = await agent.run(_ctx())
+    finally:
+        pa_mod.call_claude = orig
+
+    assert result.status.value == "FAILED"
+    assert "Falha ao gerar petição via IA" in result.error
+    assert "timeout ao chamar Anthropic" in result.error
+
+
+@pytest.mark.asyncio
+async def test_execute_falha_ao_salvar_documento_propaga_com_prefixo(monkeypatch):
+    """DB save (_salvar_documento) não tinha try/except próprio — agora
+    propaga com prefixo dizendo que a falha foi ao SALVAR, não ao GERAR
+    (mensagens diferentes ajudam a distinguir as duas causas mais prováveis
+    de uma execução FAILED de petition_agent)."""
+    import app.agents.petition.petition_agent as pa_mod
+
+    async def _fake_call_claude(messages, system, max_tokens=8096, temperature=0.3):
+        return "Petição gerada.", 100, 200, 0.05
+
+    monkeypatch.setattr(pa_mod, "call_claude", _fake_call_claude)
+    pa_mod.last_call_truncated_ctx.set(False)
+
+    async def _fake_verificar_citacoes(texto, tribunal=None):
+        return []
+
+    monkeypatch.setattr("app.services.citacao_check.verificar_citacoes", _fake_verificar_citacoes)
+
+    class _FakeDBQuebrado:
+        def add(self, obj):
+            pass
+
+        async def flush(self):
+            raise RuntimeError("violação de FK: process_id não existe")
+
+    agent = PetitionAgent(db=_FakeDBQuebrado())
+    with pytest.raises(RuntimeError) as exc_info:
+        await agent.execute(_ctx())
+
+    assert "Falha ao salvar petição no banco" in str(exc_info.value)
+    assert "violação de FK" in str(exc_info.value)

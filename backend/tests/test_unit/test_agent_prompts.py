@@ -8,7 +8,7 @@ from fastapi import HTTPException
 
 from app.agents.base.agent import BaseAgent
 from app.agents.base.result import AgentResult, AgentStatus
-from app.agents.prompt_registry import AGENT_PROMPT_SLOTS
+from app.agents.prompt_registry import AGENT_PROMPT_SLOTS, resolve_default_prompt
 from app.api.v1.agent_prompts import (
     get_prompt_slots, get_agent_prompt, update_agent_prompt, list_prompt_versions,
     list_attachments, upload_attachment, delete_attachment,
@@ -308,6 +308,53 @@ async def test_require_role_superadmin_passa_pro_superadmin():
     checker = require_role("SUPERADMIN")
     user = _FakeUser(role="SUPERADMIN")
     assert await checker(current_user=user) is user
+
+
+# ─── Fase 140.1.1 — expor o prompt padrão (default_text) ───────────────────
+
+def test_resolve_default_prompt_caminho_valido():
+    texto = resolve_default_prompt("app.agents.petition.petition_agent.PETITION_SYSTEM_PROMPT")
+    assert texto is not None
+    assert "PETIÇÕES" in texto or "petição" in texto.lower()
+
+
+def test_resolve_default_prompt_modulo_inexistente_retorna_none():
+    assert resolve_default_prompt("app.agents.inexistente.modulo_fake.CONST") is None
+
+
+def test_resolve_default_prompt_constante_inexistente_retorna_none():
+    assert resolve_default_prompt("app.agents.petition.petition_agent.CONST_QUE_NAO_EXISTE") is None
+
+
+def test_resolve_default_prompt_sem_ponto_retorna_none():
+    assert resolve_default_prompt("nada_com_ponto") is None
+
+
+def test_resolve_default_prompt_todos_os_12_agentes_com_llm_resolvem():
+    for name, slots in AGENT_PROMPT_SLOTS.items():
+        for slot in slots:
+            default_ref = slot.get("default_ref")
+            assert default_ref, f"{name}/{slot['slot']} deveria ter default_ref (agente com LLM)"
+            texto = resolve_default_prompt(default_ref)
+            assert texto and len(texto) > 0, f"{name}/{slot['slot']} ({default_ref}) não resolveu"
+
+
+@pytest.mark.asyncio
+async def test_get_agent_prompt_sem_override_devolve_default_text():
+    db = _FakeDB(execute_results=[_FakeResult(scalar=None)])
+    resp = await get_agent_prompt("petition_agent", slot="primary", current_user=_FakeUser(), db=db)
+    assert resp.prompt_text is None
+    assert resp.default_text is not None
+    assert "PETIÇÕES" in resp.default_text or "petição" in resp.default_text.lower()
+
+
+@pytest.mark.asyncio
+async def test_get_agent_prompt_com_override_ainda_devolve_default_text():
+    config = _FakeConfig(prompt_text="override customizado", versao=2)
+    db = _FakeDB(execute_results=[_FakeResult(scalar=config)])
+    resp = await get_agent_prompt("petition_agent", slot="primary", current_user=_FakeUser(), db=db)
+    assert resp.prompt_text == "override customizado"
+    assert resp.default_text is not None  # default continua visível mesmo com override ativo
 
 
 def test_agent_prompt_slots_7_agentes_sem_llm():
