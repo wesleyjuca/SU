@@ -106,7 +106,7 @@ class JurisprudenceAgent(BaseAgent):
                     "role": "user",
                     "content": f"Analise estes acórdãos em relação à tese: '{tese}'\n\nACÓRDÃOS:\n{juris_str}\n\nClassifique cada um: favorável/desfavorável à tese, relevância e como utilizá-los na peça."
                 }],
-                system=JURISPRUDENCE_SYSTEM,
+                system=await self.resolve_system_prompt(JURISPRUDENCE_SYSTEM),
                 max_tokens=2000,
             )
             duration_ms = int(time.time() * 1000) - call_start_ms

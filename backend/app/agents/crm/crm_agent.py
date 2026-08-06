@@ -14,6 +14,8 @@ log = structlog.get_logger()
 
 _SEGMENTOS_VALIDOS = ("PLATINUM", "GOLD", "SILVER", "REGULAR")
 
+CRM_FOLLOWUP_SYSTEM = "Você é assistente do escritório AFJ Advogados. Escreva com cordialidade e profissionalismo."
+
 
 class CRMAgent(BaseAgent):
     name: ClassVar[str] = "crm_agent"
@@ -119,7 +121,7 @@ Tom: profissional, empático, objetivo. Máximo 5 linhas."""
         call_start_ms = int(time.time() * 1000)
         content, input_t, output_t, cost = await call_claude(
             messages=[{"role": "user", "content": prompt}],
-            system="Você é assistente do escritório AFJ Advogados. Escreva com cordialidade e profissionalismo.",
+            system=await self.resolve_system_prompt(CRM_FOLLOWUP_SYSTEM, slot="draft_followup"),
             max_tokens=300,
         )
         duration_ms = int(time.time() * 1000) - call_start_ms

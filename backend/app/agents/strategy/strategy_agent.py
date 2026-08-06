@@ -86,7 +86,7 @@ Produza uma análise estratégica completa com:
         call_start_ms = int(time.time() * 1000)
         content, input_t, output_t, cost = await call_claude(
             messages=[{"role": "user", "content": prompt}],
-            system=STRATEGY_SYSTEM,
+            system=await self.resolve_system_prompt(STRATEGY_SYSTEM),
             max_tokens=4000,
             temperature=0.4,
         )

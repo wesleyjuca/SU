@@ -89,7 +89,7 @@ Inclua cores: verde para aprovações, vermelho para rejeições, amarelo para a
         call_start_ms = int(time.time() * 1000)
         content, input_t, output_t, cost = await call_claude(
             messages=[{"role": "user", "content": prompt}],
-            system=VISUAL_SYSTEM,
+            system=await self.resolve_system_prompt(VISUAL_SYSTEM),
             max_tokens=1500,
         )
         duration_ms = int(time.time() * 1000) - call_start_ms
@@ -122,7 +122,7 @@ Formato: timeline
         call_start_ms = int(time.time() * 1000)
         content, input_t, output_t, cost = await call_claude(
             messages=[{"role": "user", "content": prompt}],
-            system=VISUAL_SYSTEM,
+            system=await self.resolve_system_prompt(VISUAL_SYSTEM),
             max_tokens=1000,
         )
         duration_ms = int(time.time() * 1000) - call_start_ms
@@ -151,7 +151,7 @@ Retorne uma tabela Markdown com colunas relevantes. Use ✅ e ❌ para facilitar
         call_start_ms = int(time.time() * 1000)
         content, input_t, output_t, cost = await call_claude(
             messages=[{"role": "user", "content": prompt}],
-            system=VISUAL_SYSTEM,
+            system=await self.resolve_system_prompt(VISUAL_SYSTEM),
             max_tokens=800,
         )
         duration_ms = int(time.time() * 1000) - call_start_ms

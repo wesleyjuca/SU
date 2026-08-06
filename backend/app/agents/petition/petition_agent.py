@@ -87,7 +87,7 @@ Gere a petição completa seguindo o template e as regras absolutas do sistema."
         call_start_ms = int(time.time() * 1000)
         content, input_tokens, output_tokens, cost = await call_claude(
             messages=[{"role": "user", "content": prompt_usuario}],
-            system=PETITION_SYSTEM_PROMPT,
+            system=await self.resolve_system_prompt(PETITION_SYSTEM_PROMPT),
             max_tokens=8000,
             temperature=0.2,  # baixíssima temperatura para consistência jurídica
         )

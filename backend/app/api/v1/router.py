@@ -6,7 +6,7 @@ from app.api.v1 import (
     financial, ws, audit, rag, notifications, tenant, system, lgpd, push, portal,
     petition_templates, integrity, google_integration, tenants_admin, billing,
     reports_admin, invoices, crm, publications, integrations_hub, ai_oauth,
-    teses,
+    teses, agent_prompts,
 )
 from app.dependencies import require_active_tenant, get_current_staff
 
@@ -59,6 +59,10 @@ api_router.include_router(integrations_hub.webhooks_router)
 api_router.include_router(tenants_admin.router)
 api_router.include_router(billing.router)
 api_router.include_router(reports_admin.router)
+# Fora do bloco try/except do agents.router (abaixo) de propósito — gestão
+# de prompt/anexos dos agentes nativos (Fase 140.1) não depende do grafo
+# LangGraph, continua funcionando mesmo se ele falhar ao montar.
+api_router.include_router(agent_prompts.router, dependencies=_BLOCK_STAFF)
 
 # Agents router depends on LangGraph — load with guard so a build failure
 # degrades only /agents/* without bringing down the entire app

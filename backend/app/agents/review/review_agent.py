@@ -70,14 +70,18 @@ class ReviewAgent(BaseAgent):
             k=5,
         )
 
+        # Resolvido 1x e compartilhado pelas 4 etapas — evita 4 lookups
+        # concorrentes idênticos no fan-out do asyncio.gather abaixo.
+        system_prompt = await self.resolve_system_prompt(REVIEW_SYSTEM_PROMPT)
+
         # Executar as 4 etapas de revisão em paralelo — são independentes
         # entre si (nenhuma lê o resultado de outra), então rodar concorrente
         # corta a latência de ~soma-das-4 pra ~a-mais-lenta-das-4.
         resultado_formal, resultado_consistencia, resultado_risco, resultado_estilo = await asyncio.gather(
-            self._etapa_formal(ctx, conteudo, tipo),
-            self._etapa_consistencia(ctx, conteudo, jurisprudencia_verificada, legislacao),
-            self._etapa_risco(ctx, conteudo, tipo),
-            self._etapa_estilo(ctx, conteudo),
+            self._etapa_formal(ctx, conteudo, tipo, system_prompt),
+            self._etapa_consistencia(ctx, conteudo, jurisprudencia_verificada, legislacao, system_prompt),
+            self._etapa_risco(ctx, conteudo, tipo, system_prompt),
+            self._etapa_estilo(ctx, conteudo, system_prompt),
         )
 
         total_tokens = (
@@ -127,7 +131,7 @@ class ReviewAgent(BaseAgent):
             cost_usd=total_cost,
         )
 
-    async def _etapa_formal(self, ctx: AgentContext, conteudo: str, tipo: str) -> dict:
+    async def _etapa_formal(self, ctx: AgentContext, conteudo: str, tipo: str, system_prompt: str) -> dict:
         prompt = f"""Faça uma revisão FORMAL da peça abaixo.
 Verifique: estrutura (seções obrigatórias presentes), formatação, citações de artigos (formato correto),
 numeração de pedidos, endereçamento ao juízo, qualificação das partes.
@@ -142,7 +146,7 @@ Retorne um JSON com:
         call_start_ms = int(time.time() * 1000)
         content, input_t, output_t, cost = await call_claude(
             messages=[{"role": "user", "content": prompt}],
-            system=REVIEW_SYSTEM_PROMPT,
+            system=system_prompt,
             max_tokens=2000,
         )
         duration_ms = int(time.time() * 1000) - call_start_ms
@@ -153,7 +157,7 @@ Retorne um JSON com:
         })
         return {"resultado": content, "tokens": input_t + output_t, "cost": cost, "issues": _parse_issues_from_claude(content)}
 
-    async def _etapa_consistencia(self, ctx: AgentContext, conteudo: str, jurisprudencia: list, legislacao: list) -> dict:
+    async def _etapa_consistencia(self, ctx: AgentContext, conteudo: str, jurisprudencia: list, legislacao: list, system_prompt: str) -> dict:
         juris_str = "\n".join([f"- {j.get('numero', 'N/A')} ({j.get('tribunal', 'N/A')})" for j in jurisprudencia])
         prompt = f"""Verifique a CONSISTÊNCIA JURÍDICA da peça.
 Confronte cada citação de jurisprudência com a lista de acórdãos VERIFICADOS abaixo.
@@ -170,7 +174,7 @@ Retorne JSON: {{"issues": [...], "citacoes_nao_verificadas": [...], "aprovado": 
         call_start_ms = int(time.time() * 1000)
         content, input_t, output_t, cost = await call_claude(
             messages=[{"role": "user", "content": prompt}],
-            system=REVIEW_SYSTEM_PROMPT,
+            system=system_prompt,
             max_tokens=2000,
         )
         duration_ms = int(time.time() * 1000) - call_start_ms
@@ -181,7 +185,7 @@ Retorne JSON: {{"issues": [...], "citacoes_nao_verificadas": [...], "aprovado": 
         })
         return {"resultado": content, "tokens": input_t + output_t, "cost": cost, "issues": _parse_issues_from_claude(content)}
 
-    async def _etapa_risco(self, ctx: AgentContext, conteudo: str, tipo: str) -> dict:
+    async def _etapa_risco(self, ctx: AgentContext, conteudo: str, tipo: str, system_prompt: str) -> dict:
         prompt = f"""Faça uma análise de RISCO da peça jurídica.
 Identifique: argumentos fracos, pedidos com baixa probabilidade de êxito, ausência de teses alternativas,
 riscos processuais (preclusão, intempestividade potencial, falta de provas mencionadas).
@@ -194,7 +198,7 @@ Retorne JSON: {{"nivel_risco": "ALTO|MEDIO|BAIXO", "riscos": [...], "teses_alter
         call_start_ms = int(time.time() * 1000)
         content, input_t, output_t, cost = await call_claude(
             messages=[{"role": "user", "content": prompt}],
-            system=REVIEW_SYSTEM_PROMPT,
+            system=system_prompt,
             max_tokens=2000,
         )
         duration_ms = int(time.time() * 1000) - call_start_ms
@@ -213,7 +217,7 @@ Retorne JSON: {{"nivel_risco": "ALTO|MEDIO|BAIXO", "riscos": [...], "teses_alter
             "teses_alternativas": parsed.get("teses_alternativas", []),
         }
 
-    async def _etapa_estilo(self, ctx: AgentContext, conteudo: str) -> dict:
+    async def _etapa_estilo(self, ctx: AgentContext, conteudo: str, system_prompt: str) -> dict:
         prompt = f"""Revise o ESTILO da peça jurídica.
 Verifique: adequação da linguagem (formal jurídica), clareza, concisão, redundâncias,
 erros gramaticais (norma culta), uso correto de termos técnicos jurídicos em português.
@@ -226,7 +230,7 @@ Retorne JSON: {{"issues": [...], "sugestoes_estilo": [...], "nota_redacao": 0-10
         call_start_ms = int(time.time() * 1000)
         content, input_t, output_t, cost = await call_claude(
             messages=[{"role": "user", "content": prompt}],
-            system=REVIEW_SYSTEM_PROMPT,
+            system=system_prompt,
             max_tokens=1500,
         )
         duration_ms = int(time.time() * 1000) - call_start_ms

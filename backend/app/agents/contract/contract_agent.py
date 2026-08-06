@@ -44,7 +44,7 @@ Use linguagem jurídica clara e proteja os interesses do escritório."""
         call_start_ms = int(time.time() * 1000)
         content, input_t, output_t, cost = await call_claude(
             messages=[{"role": "user", "content": prompt}],
-            system=CONTRACT_SYSTEM,
+            system=await self.resolve_system_prompt(CONTRACT_SYSTEM),
             max_tokens=4000,
             temperature=0.1,
         )
