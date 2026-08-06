@@ -85,12 +85,19 @@ Gere a petição completa seguindo o template e as regras absolutas do sistema."
 
         # 5. Chamar Claude
         call_start_ms = int(time.time() * 1000)
-        content, input_tokens, output_tokens, cost = await call_claude(
-            messages=[{"role": "user", "content": prompt_usuario}],
-            system=await self.resolve_system_prompt(PETITION_SYSTEM_PROMPT),
-            max_tokens=8000,
-            temperature=0.2,  # baixíssima temperatura para consistência jurídica
-        )
+        try:
+            content, input_tokens, output_tokens, cost = await call_claude(
+                messages=[{"role": "user", "content": prompt_usuario}],
+                system=await self.resolve_system_prompt(PETITION_SYSTEM_PROMPT),
+                max_tokens=8000,
+                temperature=0.2,  # baixíssima temperatura para consistência jurídica
+            )
+        except Exception as exc:
+            # Não engole o erro — BaseAgent.run() continua sendo quem decide
+            # o resultado final (FAILED + AgentRun.error_message). Só troca
+            # uma mensagem crua do SDK/provedor por uma que diz ONDE falhou,
+            # já que o painel do Cérebro só mostra str(exc).
+            raise RuntimeError(f"Falha ao gerar petição via IA: {exc}") from exc
         duration_ms = int(time.time() * 1000) - call_start_ms
         ctx.add_tokens(input_tokens + output_tokens, cost)
         ctx.add_audit_event("LLM_CALL", {
@@ -131,7 +138,13 @@ Gere a petição completa seguindo o template e as regras absolutas do sistema."
         # 7. Criar documento no DB (se DB disponível)
         document_id = str(uuid.uuid4())
         if self.db:
-            document_id = await self._salvar_documento(ctx, content, tipo_peticao, total_tokens, cost)
+            try:
+                document_id = await self._salvar_documento(ctx, content, tipo_peticao, total_tokens, cost)
+            except Exception as exc:
+                # Mesma lógica do bloco acima: não engole, só torna
+                # diagnosticável (ex.: violação de FK vira mensagem clara
+                # de "onde" em vez do erro cru do driver do Postgres).
+                raise RuntimeError(f"Falha ao salvar petição no banco: {exc}") from exc
 
         ctx.document_id = uuid.UUID(document_id) if isinstance(document_id, str) else document_id
         ctx.set_state("peticao_gerada", True)
