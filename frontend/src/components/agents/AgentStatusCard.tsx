@@ -18,6 +18,7 @@ interface AgentStatusCardProps {
   agent: AgentCardData;
   categoryColor: string;
   onTrigger?: (agentName: string) => Promise<void>;
+  onOpenDetail?: (agentName: string) => void;
 }
 
 const STATUS_CONFIG: Record<AgentStatus, { icon: React.ReactNode; label: string; dotClass: string }> = {
@@ -53,13 +54,14 @@ const STATUS_CONFIG: Record<AgentStatus, { icon: React.ReactNode; label: string;
   },
 };
 
-export function AgentStatusCard({ agent, categoryColor, onTrigger }: AgentStatusCardProps) {
+export function AgentStatusCard({ agent, categoryColor, onTrigger, onOpenDetail }: AgentStatusCardProps) {
   const [triggering, setTriggering] = useState(false);
   const status = agent.status ?? "idle";
   const statusCfg = STATUS_CONFIG[status];
   const isRunning = status === "running";
 
-  async function handleTrigger() {
+  async function handleTrigger(e: React.MouseEvent) {
+    e.stopPropagation();
     if (!onTrigger || triggering || isRunning) return;
     setTriggering(true);
     try {
@@ -71,9 +73,10 @@ export function AgentStatusCard({ agent, categoryColor, onTrigger }: AgentStatus
 
   return (
     <div
+      onClick={onOpenDetail ? () => onOpenDetail(agent.name) : undefined}
       className={`afj-card p-4 flex flex-col gap-3 transition-all ${
         isRunning ? "border-blue-200 bg-blue-50/30 shadow-sm shadow-blue-100" : "hover:border-afj-gold/30"
-      }`}
+      } ${onOpenDetail ? "cursor-pointer" : ""}`}
     >
       {/* Header */}
       <div className="flex items-start justify-between">

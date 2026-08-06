@@ -2,8 +2,10 @@
 import { useState } from "react";
 import { Play, Loader2, XCircle } from "lucide-react";
 import { AgentStatusCard } from "@/components/agents/AgentStatusCard";
+import { AgentDetailDrawer } from "@/components/agents/AgentDetailDrawer";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
+import { useUserStore } from "@/store";
 import type { AgentCardData } from "@/components/agents/AgentStatusCard";
 
 const AGENTS: AgentCardData[] = [
@@ -39,6 +41,9 @@ const CATEGORY_COLORS: Record<string, string> = {
 
 export default function AgentesPage() {
   const toast = useToast();
+  const user = useUserStore((s) => s.user);
+  const isSuperadmin = user?.role === "SUPERADMIN";
+  const [detailAgent, setDetailAgent] = useState<string | null>(null);
   const [taskType, setTaskType] = useState("generate_petition");
   const [taskDesc, setTaskDesc] = useState("");
   const [arquivosInput, setArquivosInput] = useState("");
@@ -201,17 +206,23 @@ export default function AgentesPage() {
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
             {/* Sem onTrigger: o botão dos cartões disparava o task_type do
                 seletor global (clicar em OCR gerava petição). O disparo agora
-                é feito apenas pelo painel "Disparar Tarefa". */}
+                é feito apenas pelo painel "Disparar Tarefa". Clique no card
+                abre o detalhe de prompt/anexos, só pra SUPERADMIN. */}
             {AGENTS.filter((a) => a.category === cat).map((agent) => (
               <AgentStatusCard
                 key={agent.name}
                 agent={agent}
                 categoryColor={CATEGORY_COLORS[agent.category]}
+                onOpenDetail={isSuperadmin ? setDetailAgent : undefined}
               />
             ))}
           </div>
         </div>
       ))}
+
+      {detailAgent && (
+        <AgentDetailDrawer agentName={detailAgent} onClose={() => setDetailAgent(null)} />
+      )}
     </div>
   );
 }

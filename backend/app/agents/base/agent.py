@@ -131,6 +131,45 @@ class BaseAgent(ABC):
                  cost_usd=round(cost, 4), run_total_usd=round(ctx.total_cost_usd, 4))
         return content
 
+    # ─── Prompt editável por SUPERADMIN (Fase 140.1) ──────────────────────────
+    async def resolve_system_prompt(self, default: str, slot: str = "primary") -> str:
+        """Resolve o system prompt efetivo: override do SUPERADMIN (se existir
+        e não for NULL) + contexto de anexos (texto extraído, best-effort),
+        com fallback fail-soft total para `default` em qualquer erro/ausência
+        de DB — um agente NUNCA deve quebrar por causa desta lookup."""
+        effective = default
+        if self.db is None:
+            return effective
+        try:
+            from sqlalchemy import select
+            from app.models.agent_prompt import AgentPromptConfig
+            row = (await self.db.execute(
+                select(AgentPromptConfig.prompt_text).where(
+                    AgentPromptConfig.agent_name == self.name,
+                    AgentPromptConfig.prompt_slot == slot,
+                )
+            )).scalar_one_or_none()
+            if row:
+                effective = row
+        except Exception as exc:
+            log.warning("prompt_override_lookup_failed", agent=self.name, slot=slot, error=str(exc))
+
+        try:
+            from sqlalchemy import select
+            from app.models.agent_prompt import AgentAttachment
+            textos = (await self.db.execute(
+                select(AgentAttachment.extracted_text).where(
+                    AgentAttachment.agent_name == self.name,
+                    AgentAttachment.extracted_text.is_not(None),
+                )
+            )).scalars().all()
+            juntos = "\n\n".join(t for t in textos if t)[:20000]
+            if juntos:
+                effective = effective + "\n\n--- CONTEXTO ADICIONAL (anexos) ---\n" + juntos
+        except Exception as exc:
+            log.warning("attachment_context_lookup_failed", agent=self.name, error=str(exc))
+        return effective
+
     # ─── Validação de saída (hook) ────────────────────────────────────────────
     async def validate(self, ctx: AgentContext, result: AgentResult) -> list[str]:
         """Valida a saída do agente; retorna a lista de problemas encontrados.

@@ -9,6 +9,8 @@ import structlog
 
 log = structlog.get_logger()
 
+COMPLIANCE_SYSTEM = "Você é especialista em ética da OAB e marketing jurídico conforme CFOAB."
+
 
 class ComplianceAgent(BaseAgent):
     name: ClassVar[str] = "compliance_agent"
@@ -60,7 +62,7 @@ class ComplianceAgent(BaseAgent):
         call_start_ms = int(time.time() * 1000)
         content, input_t, output_t, cost = await call_claude(
             messages=[{"role": "user", "content": f"Verifique se este documento de marketing jurídico está em conformidade com o Código de Ética da OAB:\n\n{documento[:2000]}\n\nIdentifique: violações (se houver), sugestões de adequação."}],
-            system="Você é especialista em ética da OAB e marketing jurídico conforme CFOAB.",
+            system=await self.resolve_system_prompt(COMPLIANCE_SYSTEM),
             max_tokens=800,
         )
         duration_ms = int(time.time() * 1000) - call_start_ms

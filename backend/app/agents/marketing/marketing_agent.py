@@ -73,7 +73,7 @@ Formato:
         call_start_ms = int(time.time() * 1000)
         content, input_t, output_t, cost = await call_claude(
             messages=[{"role": "user", "content": prompt}],
-            system=MARKETING_SYSTEM,
+            system=await self.resolve_system_prompt(MARKETING_SYSTEM),
             max_tokens=800,
         )
         duration_ms = int(time.time() * 1000) - call_start_ms
@@ -99,7 +99,7 @@ Regras OAB: educativo, sem prometer resultados."""
         call_start_ms = int(time.time() * 1000)
         content, input_t, output_t, cost = await call_claude(
             messages=[{"role": "user", "content": prompt}],
-            system=MARKETING_SYSTEM,
+            system=await self.resolve_system_prompt(MARKETING_SYSTEM),
             max_tokens=800,
         )
         duration_ms = int(time.time() * 1000) - call_start_ms
@@ -125,7 +125,7 @@ Estrutura: introdução impactante, desenvolvimento com subtítulos, conclusão 
         call_start_ms = int(time.time() * 1000)
         content, input_t, output_t, cost = await call_claude(
             messages=[{"role": "user", "content": prompt}],
-            system=MARKETING_SYSTEM,
+            system=await self.resolve_system_prompt(MARKETING_SYSTEM),
             max_tokens=1500,
         )
         duration_ms = int(time.time() * 1000) - call_start_ms

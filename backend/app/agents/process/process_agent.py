@@ -20,6 +20,8 @@ import structlog
 
 log = structlog.get_logger()
 
+PROCESS_SUMMARY_SYSTEM = "Você é assistente jurídico. Seja objetivo e técnico. Destaque prazos e obrigações."
+
 
 def per_tenant_poll_cap(batch_size: int, num_tenants: int) -> int:
     """Fatia máxima do lote de polling que um único tenant pode ocupar.
@@ -341,7 +343,7 @@ class ProcessAgent(BaseAgent):
         call_start_ms = int(time.time() * 1000)
         content, input_t, output_t, cost = await call_claude(
             messages=[{"role": "user", "content": f"Resuma este andamento processual em 2-3 frases objetivas para um advogado:\n\n{descricao[:2000]}"}],
-            system="Você é assistente jurídico. Seja objetivo e técnico. Destaque prazos e obrigações.",
+            system=await self.resolve_system_prompt(PROCESS_SUMMARY_SYSTEM),
             max_tokens=200,
         )
         duration_ms = int(time.time() * 1000) - call_start_ms

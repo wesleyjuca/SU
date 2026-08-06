@@ -89,7 +89,7 @@ Priorize por: impacto no escritório × facilidade de implementação."""
         call_start_ms = int(time.time() * 1000)
         content, input_t, output_t, cost = await call_claude(
             messages=[{"role": "user", "content": prompt}],
-            system=INNOVATION_SYSTEM,
+            system=await self.resolve_system_prompt(INNOVATION_SYSTEM),
             max_tokens=2000,
         )
         duration_ms = int(time.time() * 1000) - call_start_ms

@@ -137,10 +137,12 @@ async def test_review_agent_4_etapas_geram_4_eventos_llm_call(monkeypatch):
     agent = review_mod.ReviewAgent()
     ctx = AgentContext(task_type="test")
 
-    r_formal = await agent._etapa_formal(ctx, "conteúdo de teste", "PETICAO_INICIAL")
-    r_consistencia = await agent._etapa_consistencia(ctx, "conteúdo de teste", [], [])
-    r_risco = await agent._etapa_risco(ctx, "conteúdo de teste", "PETICAO_INICIAL")
-    r_estilo = await agent._etapa_estilo(ctx, "conteúdo de teste")
+    system_prompt = review_mod.REVIEW_SYSTEM_PROMPT
+
+    r_formal = await agent._etapa_formal(ctx, "conteúdo de teste", "PETICAO_INICIAL", system_prompt)
+    r_consistencia = await agent._etapa_consistencia(ctx, "conteúdo de teste", [], [], system_prompt)
+    r_risco = await agent._etapa_risco(ctx, "conteúdo de teste", "PETICAO_INICIAL", system_prompt)
+    r_estilo = await agent._etapa_estilo(ctx, "conteúdo de teste", system_prompt)
 
     assert chamadas == 4
     assert all(r["tokens"] == 20 for r in (r_formal, r_consistencia, r_risco, r_estilo))
