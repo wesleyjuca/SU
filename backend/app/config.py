@@ -140,6 +140,21 @@ class Settings(BaseSettings):
     VAPID_EMAIL: str = "mailto:dev@afjadvogados.com.br"
     PUSH_ENABLED: bool = False       # True when VAPID keys are configured
 
+    # ─── Armazenamento de objetos (S3/MinIO) ────────────────────────────────
+    # Fase 141 — migra uploads novos de Document.arquivo_url (base64 no
+    # Postgres, ver CLAUDE.md "Storage de documentos") para object storage
+    # S3-compatível. Funciona igual para AWS S3, Cloudflare R2, MinIO ou
+    # Railway Object Storage — todos falam a API S3. Sem credenciais, o
+    # upload continua gravando base64 inline como sempre fez (fail-soft) —
+    # fica pro primeiro ADMIN que configurar depois do deploy, mesmo padrão
+    # do Google Workspace/Stripe Connect/Mercado Pago OAuth já shipados.
+    S3_ENDPOINT_URL: str = ""        # ex.: https://<account>.r2.cloudflarestorage.com. Vazio = endpoint padrão da AWS.
+    S3_BUCKET: str = ""
+    S3_ACCESS_KEY_ID: str = ""
+    S3_SECRET_ACCESS_KEY: str = ""
+    S3_REGION: str = "auto"          # "auto" funciona pra R2/MinIO; na AWS real, setar a região (ex. "us-east-1")
+    S3_ADDRESSING_STYLE: str = "path"  # path-style: exigido por MinIO/R2, aceito pela AWS
+
     @model_validator(mode="after")
     def derive_from_urls(self) -> "Settings":
         # DATABASE_URL obrigatória em produção — avisa mas não impede startup

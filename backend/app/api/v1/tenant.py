@@ -595,10 +595,14 @@ async def get_tenant_usage(
         select(func.count(User.id)).where(User.tenant_id == tid, User.is_active == True)  # noqa: E712
     )).scalar_one() or 0
 
-    # Estimativa de armazenamento: bytes dos arquivos (base64) + textos no banco
+    # Estimativa de armazenamento: bytes reais dos arquivos migrados pro S3
+    # (Fase 141, arquivo_size_bytes) ou o tamanho do base64 legado como
+    # aproximação pras linhas ainda não migradas, + textos no banco.
     storage_bytes = (await db.execute(
         select(
-            func.coalesce(func.sum(func.length(Document.arquivo_url)), 0)
+            func.coalesce(func.sum(
+                func.coalesce(Document.arquivo_size_bytes, func.length(Document.arquivo_url))
+            ), 0)
             + func.coalesce(func.sum(func.length(Document.conteudo_texto)), 0)
             + func.coalesce(func.sum(func.length(Document.conteudo_html)), 0)
         ).where(Document.tenant_id == tid)

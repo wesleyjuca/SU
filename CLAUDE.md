@@ -144,13 +144,13 @@ Achados de uma simulação de volume (2 escritórios, ~10 processos/dia, 1 ano �
 Fase 116) que exigem decisão de produto/jurídica antes de qualquer mudança
 de código, por isso ficam só documentados aqui, não implementados:
 
-- **Storage de documentos** — `Document.arquivo_url` grava o arquivo inteiro
-  como base64 dentro do Postgres (`Text`, via TOAST), sem object storage
-  (S3/MinIO). Em uso sustentado por 1+ ano isso pode chegar a dezenas de GB
-  no próprio banco (infla tamanho de tabela, tempo de `VACUUM`, tamanho de
-  backup/dump). Migrar para armazenamento de objeto é a solução padrão da
-  indústria pra esse padrão de uso, mas é mudança de contrato de API — fica
-  pra quando o volume real justificar, não antecipar sem necessidade.
+- ~~**Storage de documentos**~~ — **resolvido (Fase 141)**. `Document`
+  ganhou `arquivo_storage_key`/`arquivo_mimetype`/`arquivo_size_bytes`;
+  uploads novos vão pra object storage S3-compatível (AWS S3, Cloudflare
+  R2, MinIO, Railway Object Storage — configurável via `S3_*` em
+  `app/config.py`) quando configurado, com fallback automático pro caminho
+  legado (base64 inline) sem credenciais. Sem backfill das linhas antigas
+  — ficam no caminho legado indefinidamente, não é bug.
 - **Retenção de auditoria (LGPD)** — `audit_logs` é imutável por trigger de
   banco (`trg_audit_logs_immutable`) e cresce indefinidamente (1 linha por
   request de escrita, não só por evento de negócio) — sem qualquer rotina de

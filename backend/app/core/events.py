@@ -277,6 +277,14 @@ async def lifespan(app: FastAPI):
             "ALTER TABLE legal_processes ADD COLUMN IF NOT EXISTS tese_id UUID "
             "REFERENCES teses(id) ON DELETE SET NULL",
             "CREATE INDEX IF NOT EXISTS ix_legal_processes_tese_id ON legal_processes (tese_id)",
+            # Fase 141 — storage de documentos migra de base64-no-Postgres pra
+            # object storage S3-compatível (ver CLAUDE.md "Storage de
+            # documentos"). NULL nas 3 colunas = binário segue inline em
+            # arquivo_url como sempre (caminho legado, sem backfill nesta
+            # fase); setado = bytes vivem no S3 nessa key.
+            "ALTER TABLE documents ADD COLUMN IF NOT EXISTS arquivo_storage_key VARCHAR(500)",
+            "ALTER TABLE documents ADD COLUMN IF NOT EXISTS arquivo_mimetype VARCHAR(150)",
+            "ALTER TABLE documents ADD COLUMN IF NOT EXISTS arquivo_size_bytes INTEGER",
         ]:
             try:
                 async with engine.begin() as conn:

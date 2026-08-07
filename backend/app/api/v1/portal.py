@@ -254,13 +254,29 @@ async def portal_document_content(
     doc = result.scalar_one_or_none()
     if not doc:
         raise HTTPException(status_code=404, detail="Documento não encontrado")
+
+    # Fase 141: documentos migrados pro object storage não têm mais o
+    # binário inline em arquivo_url — gera uma URL pré-assinada de vida
+    # curta em vez de devolver `null` (o campo continua útil, não vira uma
+    # armadilha silenciosa se este endpoint for revivido no futuro).
+    arquivo_url = doc.arquivo_url
+    if doc.arquivo_storage_key:
+        from app.integrations import object_storage
+        try:
+            filename = (doc.metadata_json or {}).get("filename")
+            arquivo_url = await object_storage.generate_presigned_url(
+                doc.arquivo_storage_key, filename=filename, expires_in=300
+            )
+        except object_storage.ObjectStorageError:
+            arquivo_url = None
+
     return {
         "id": str(doc.id),
         "titulo": doc.titulo,
         "tipo": doc.tipo,
         "conteudo_html": doc.conteudo_html,
         "conteudo_texto": doc.conteudo_texto,
-        "arquivo_url": doc.arquivo_url,
+        "arquivo_url": arquivo_url,
     }
 
 

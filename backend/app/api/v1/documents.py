@@ -56,6 +56,7 @@ class DocumentResponse(BaseModel):
     client_id: str | None
     created_at: str
     tem_texto: bool = False
+    tem_arquivo_original: bool = False
     ocr_status: str | None = None
 
 
@@ -148,11 +149,15 @@ async def upload_document(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Recebe um arquivo e cria um Document (tenant-scoped). O binário é
-    guardado como data URL base64 em `arquivo_url`; texto simples é extraído
-    para `conteudo_texto`. PDFs/imagens ficam para o fluxo de OCR."""
+    """Recebe um arquivo e cria um Document (tenant-scoped). Se object storage
+    S3-compatível estiver configurado (Fase 141), o binário vai pra lá e só a
+    key fica gravada; senão, segue o caminho legado (data URL base64 em
+    `arquivo_url`). Texto simples é extraído para `conteudo_texto`. PDFs/
+    imagens ficam para o fluxo de OCR."""
     import base64
     import hashlib
+
+    from app.integrations import object_storage
 
     contents = await file.read()
     MAX_BYTES = 10 * 1024 * 1024  # 10MB
@@ -163,7 +168,6 @@ async def upload_document(
 
     content_type = file.content_type or "application/octet-stream"
     sha256 = hashlib.sha256(contents).hexdigest()
-    data_url = f"data:{content_type};base64," + base64.b64encode(contents).decode()
 
     # Extrai texto apenas para tipos textuais simples; o resto vai para OCR.
     conteudo_texto = None
@@ -180,11 +184,29 @@ async def upload_document(
     if ocr_pending:
         metadata_json["ocr"] = {"status": "PENDENTE"}
 
+    doc_id = uuid.uuid4()
+    arquivo_url = None
+    storage_key = None
+    if object_storage.is_configured():
+        try:
+            storage_key = await object_storage.upload_bytes(
+                tenant_id=current_user.tenant_id, document_id=doc_id,
+                filename=file.filename or "arquivo", content_type=content_type, data=contents,
+            )
+        except object_storage.ObjectStorageError:
+            raise HTTPException(status_code=502, detail="Falha ao enviar o arquivo para o armazenamento. Tente novamente.")
+    else:
+        arquivo_url = f"data:{content_type};base64," + base64.b64encode(contents).decode()
+
     doc = Document(
+        id=doc_id,
         tipo=tipo,
         titulo=titulo,
         conteudo_texto=conteudo_texto,
-        arquivo_url=data_url,
+        arquivo_url=arquivo_url,
+        arquivo_storage_key=storage_key,
+        arquivo_mimetype=content_type,
+        arquivo_size_bytes=len(contents),
         arquivo_hash=sha256,
         status="RASCUNHO",
         gerado_por_ia=False,
@@ -426,6 +448,54 @@ async def download_document(
         content=pdf_bytes,
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{doc.titulo[:50]}.pdf"'},
+    )
+
+
+@router.get("/{doc_id}/original")
+async def download_document_original(
+    doc_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Serve os bytes originalmente enviados no upload (Fase 141) — ao
+    contrário de `/download`, que sempre re-renderiza um PDF a partir do
+    texto extraído. Funciona tanto pra documentos migrados pro object
+    storage quanto pro caminho legado (base64 inline)."""
+    from fastapi.responses import Response as FastAPIResponse
+
+    from app.integrations import object_storage
+    from app.utils.data_url import parse_data_url
+
+    result = await db.execute(
+        select(Document).where(
+            Document.id == uuid.UUID(doc_id),
+            Document.tenant_id == current_user.tenant_id,
+        )
+    )
+    doc = result.scalar_one_or_none()
+    if not doc:
+        raise NotFoundError("Documento", doc_id)
+
+    filename = (doc.metadata_json or {}).get("filename") or f"{doc.titulo[:50]}"
+
+    if doc.arquivo_storage_key:
+        try:
+            raw = await object_storage.get_bytes(doc.arquivo_storage_key)
+        except object_storage.ObjectStorageError:
+            raise HTTPException(status_code=502, detail="Falha ao recuperar o arquivo original.")
+        content_type = doc.arquivo_mimetype or "application/octet-stream"
+    else:
+        b64, ct = parse_data_url(doc.arquivo_url or "")
+        if not b64:
+            raise HTTPException(status_code=404, detail="Este documento não possui um arquivo original enviado.")
+        import base64
+        raw = base64.b64decode(b64)
+        content_type = doc.arquivo_mimetype or ct or "application/octet-stream"
+
+    return FastAPIResponse(
+        content=raw,
+        media_type=content_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 
@@ -905,6 +975,7 @@ def _to_response(d: Document) -> DocumentResponse:
         client_id=str(d.client_id) if d.client_id else None,
         created_at=d.created_at.isoformat(),
         tem_texto=bool((d.conteudo_texto or "").strip()),
+        tem_arquivo_original=bool(d.arquivo_storage_key or (d.arquivo_url or "").startswith("data:")),
         ocr_status=(ocr or {}).get("status") if isinstance(ocr, dict) else None,
     )
 

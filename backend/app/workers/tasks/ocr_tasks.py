@@ -6,28 +6,16 @@ Dois pontos de entrada compartilham o mesmo núcleo (`_process_ocr`):
 - `run_ocr_inproc`   — coroutine para o fallback via FastAPI BackgroundTasks
   quando o broker está fora do ar (o upload nunca falha por causa do OCR).
 """
+import base64
 import uuid
 from datetime import datetime
 
 import structlog
 
+from app.utils.data_url import parse_data_url
 from app.workers.worker import celery_app
 
 log = structlog.get_logger()
-
-
-def _parse_data_url(arquivo_url: str) -> tuple[str | None, str | None]:
-    """Devolve (base64_puro, content_type) a partir de um data URL
-    `data:<ct>;base64,<dados>`. Retorna (None, None) se não reconhecer."""
-    if not arquivo_url or not arquivo_url.startswith("data:"):
-        return None, None
-    try:
-        header, b64 = arquivo_url.split(",", 1)
-    except ValueError:
-        return None, None
-    # header = "data:application/pdf;base64"
-    ct = header[len("data:"):].split(";", 1)[0] or None
-    return b64, ct
 
 
 async def _process_ocr(doc_id: str, tenant_id: str | None) -> None:
@@ -51,7 +39,15 @@ async def _process_ocr(doc_id: str, tenant_id: str | None) -> None:
             log.warning("ocr_document_not_found", doc_id=doc_id, tenant_id=tenant_id)
             return
 
-        b64, ct_from_url = _parse_data_url(doc.arquivo_url or "")
+        if doc.arquivo_storage_key:
+            from app.integrations import object_storage
+            try:
+                raw = await object_storage.get_bytes(doc.arquivo_storage_key)
+                b64, ct_from_url = base64.b64encode(raw).decode(), doc.arquivo_mimetype
+            except object_storage.ObjectStorageError:
+                b64, ct_from_url = None, None
+        else:
+            b64, ct_from_url = parse_data_url(doc.arquivo_url or "")
         meta = dict(doc.metadata_json or {})
         content_type = meta.get("content_type") or ct_from_url
 
