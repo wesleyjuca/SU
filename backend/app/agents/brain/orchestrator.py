@@ -217,6 +217,10 @@ def _resolve_agent_class(route: str):
         "coding_agent": "app.agents.coding.coding_agent.CodingAgent",
         "innovation_agent": "app.agents.innovation.innovation_agent.InnovationAgent",
         "publication_monitor_agent": "app.agents.publication_monitor.publication_monitor_agent.PublicationMonitorAgent",
+        # Fase 140.2 — executor genérico de agentes customizados aprovados
+        # (ADMIN propõe, SUPERADMIN aprova). Não é um agente por proposta;
+        # 1 classe só, parametrizada por task_input.custom_agent_id.
+        "custom_agent": "app.agents.custom.custom_agent_executor.CustomAgentExecutor",
     }
 
     class_path = agent_map.get(route)

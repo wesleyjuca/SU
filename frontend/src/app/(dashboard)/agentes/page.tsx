@@ -1,12 +1,70 @@
 "use client";
-import { useState } from "react";
-import { Play, Loader2, XCircle } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Play, Loader2, XCircle, Sparkles, Plus } from "lucide-react";
 import { AgentStatusCard } from "@/components/agents/AgentStatusCard";
 import { AgentDetailDrawer } from "@/components/agents/AgentDetailDrawer";
+import { ProposeCustomAgentModal } from "@/components/agents/ProposeCustomAgentModal";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
 import { useUserStore } from "@/store";
+import { api } from "@/lib/api";
 import type { AgentCardData } from "@/components/agents/AgentStatusCard";
+
+interface CustomAgent {
+  id: string;
+  name: string;
+  description: string;
+}
+
+function CustomAgentCard({ agent }: { agent: CustomAgent }) {
+  const toast = useToast();
+  const [instrucao, setInstrucao] = useState("");
+  const [executando, setExecutando] = useState(false);
+
+  async function executar() {
+    setExecutando(true);
+    try {
+      const data = await api.post<{ run_id: string }>("/agents/trigger", {
+        task_type: "run_custom_agent",
+        task_input: { custom_agent_id: agent.id, descricao: instrucao || undefined },
+      });
+      toast.success(`Execução iniciada: ${data.run_id}`);
+      setInstrucao("");
+    } catch (err: any) {
+      toast.error(err?.message || "Erro ao executar agente.");
+    } finally {
+      setExecutando(false);
+    }
+  }
+
+  return (
+    <div className="afj-card p-4 flex flex-col gap-3">
+      <div className="flex items-start gap-2">
+        <div className="w-8 h-8 rounded-lg bg-afj-gold/10 flex items-center justify-center flex-shrink-0">
+          <Sparkles size={14} className="text-afj-gold" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="font-semibold text-sm text-afj-black truncate">{agent.name}</p>
+          <p className="text-xs text-afj-black/50 mt-0.5 line-clamp-2">{agent.description}</p>
+        </div>
+      </div>
+      <input
+        value={instrucao}
+        onChange={(e) => setInstrucao(e.target.value)}
+        placeholder="Instrução para esta execução (opcional)"
+        className="w-full px-2.5 py-1.5 text-xs border border-afj-cream-dark rounded-sm focus:outline-none focus:border-afj-gold"
+      />
+      <button
+        onClick={executar}
+        disabled={executando}
+        className="w-full flex items-center justify-center gap-1.5 py-1.5 rounded text-xs font-medium bg-afj-cream hover:bg-afj-gold/10 text-afj-black/60 hover:text-afj-gold disabled:opacity-50 transition-colors"
+      >
+        {executando ? <Loader2 size={10} className="animate-spin" /> : <Play size={10} />}
+        {executando ? "Iniciando..." : "Executar"}
+      </button>
+    </div>
+  );
+}
 
 const AGENTS: AgentCardData[] = [
   { name: "orchestration_agent", label: "Orquestrador", desc: "Coordena todos os agentes", category: "CORE" },
@@ -43,7 +101,10 @@ export default function AgentesPage() {
   const toast = useToast();
   const user = useUserStore((s) => s.user);
   const isSuperadmin = user?.role === "SUPERADMIN";
+  const podePropoAgente = ["ADMIN", "SOCIO", "SUPERADMIN"].includes(user?.role ?? "");
   const [detailAgent, setDetailAgent] = useState<string | null>(null);
+  const [mostrarPropor, setMostrarPropor] = useState(false);
+  const [customAgents, setCustomAgents] = useState<CustomAgent[]>([]);
   const [taskType, setTaskType] = useState("generate_petition");
   const [taskDesc, setTaskDesc] = useState("");
   const [arquivosInput, setArquivosInput] = useState("");
@@ -112,12 +173,36 @@ export default function AgentesPage() {
 
   const categories = [...new Set(AGENTS.map((a) => a.category))];
 
+  async function carregarCustomAgents() {
+    try {
+      const data = await api.get<CustomAgent[]>("/custom-agents?status=APROVADO");
+      setCustomAgents(data);
+    } catch {
+      // fail-soft: seção de agentes customizados simplesmente não aparece
+    }
+  }
+
+  useEffect(() => {
+    carregarCustomAgents();
+  }, []);
+
   return (
     <div className="max-w-7xl mx-auto space-y-6">
       <Breadcrumb crumbs={[{ label: "Dashboard", href: "/dashboard" }, { label: "Agentes IA" }]} />
-      <div>
-        <h1 className="font-display text-2xl font-semibold text-afj-black">Agentes IA</h1>
-        <p className="text-afj-black/50 text-sm">19 agentes especializados — {AGENTS.length} disponíveis</p>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h1 className="font-display text-2xl font-semibold text-afj-black">Agentes IA</h1>
+          <p className="text-afj-black/50 text-sm">19 agentes especializados — {AGENTS.length} disponíveis</p>
+        </div>
+        {podePropoAgente && (
+          <button
+            onClick={() => setMostrarPropor(true)}
+            className="btn-afj-outline rounded-md flex items-center gap-1.5 whitespace-nowrap"
+          >
+            <Plus size={14} />
+            Propor Agente
+          </button>
+        )}
       </div>
 
       {result && (
@@ -220,8 +305,30 @@ export default function AgentesPage() {
         </div>
       ))}
 
+      {/* Agentes customizados aprovados — propostos por ADMIN, aprovados pelo SUPERADMIN */}
+      {customAgents.length > 0 && (
+        <div>
+          <h2 className="text-xs font-semibold text-afj-black/40 uppercase tracking-wider mb-3 flex items-center gap-1.5">
+            <Sparkles size={12} className="text-afj-gold" />
+            Agentes Customizados
+          </h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+            {customAgents.map((agent) => (
+              <CustomAgentCard key={agent.id} agent={agent} />
+            ))}
+          </div>
+        </div>
+      )}
+
       {detailAgent && (
         <AgentDetailDrawer agentName={detailAgent} onClose={() => setDetailAgent(null)} />
+      )}
+
+      {mostrarPropor && (
+        <ProposeCustomAgentModal
+          onClose={() => setMostrarPropor(false)}
+          onProposed={carregarCustomAgents}
+        />
       )}
     </div>
   );
