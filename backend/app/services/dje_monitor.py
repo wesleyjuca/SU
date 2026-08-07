@@ -7,6 +7,7 @@ triagem humana (endpoint /publicacoes/{id}/triagem).
 """
 from __future__ import annotations
 
+import asyncio
 import re
 import uuid
 from datetime import date, timedelta, datetime, timezone
@@ -14,7 +15,14 @@ from datetime import date, timedelta, datetime, timezone
 import structlog
 from sqlalchemy import select
 
+from app.integrations.fontes.circuit_breaker import CircuitBreaker
+
 log = structlog.get_logger()
+
+# Fase 142 — pequeno intervalo entre requisições sequenciais à Comunica/DJEN
+# dentro de uma mesma varredura, pra reduzir o risco de a rajada (dezenas de
+# OABs, zero pausa) parecer tráfego de bot pro anti-bot do portal.
+_INTERVALO_ENTRE_OABS_S = 0.5
 
 
 def _digits(v: str | None) -> str:
@@ -73,10 +81,30 @@ async def scan_publicacoes(db, tenant_id: uuid.UUID | None = None, dias_retro: i
     from app.services.movements_import import iniciar_sync, finalizar_sync
     sync = await iniciar_sync(db, tenant_id, fonte="comunica", tipo="SCAN")
 
+    # Fase 142 — circuit breaker local a esta varredura: se a Comunica
+    # começar a rejeitar (403/500/timeout) nas primeiras OABs, para de
+    # martelar pras OABs restantes em vez de repetir o mesmo padrão
+    # rejeitado até o fim da lista. Escopo é só esta chamada (não
+    # compartilhado com o fluxo sob demanda via ComunicaFonte) — simples e
+    # já resolve o caso mais comum (rajada dentro do próprio job diário).
+    breaker = CircuitBreaker(name="comunica_scan_diario")
+    puladas_circuito = 0
+
     novas = 0
     casadas = 0
     for oab_numero, oab_uf, t_id in oabs:
-        comunicacoes = await buscar_comunicacoes(oab_numero, oab_uf, data_inicio, hoje)
+        if not breaker.allow():
+            puladas_circuito += 1
+            continue
+
+        st: dict = {}
+        comunicacoes = await buscar_comunicacoes(oab_numero, oab_uf, data_inicio, hoje, stats=st)
+        if st.get("requests") and not st.get("ok"):
+            breaker.record_failure()
+        else:
+            breaker.record_success()
+        await asyncio.sleep(_INTERVALO_ENTRE_OABS_S)
+
         pmap = await _proc_map(t_id) if comunicacoes else {}
 
         for c in comunicacoes:
@@ -178,8 +206,21 @@ async def scan_publicacoes(db, tenant_id: uuid.UUID | None = None, dias_retro: i
                             f"({c.tipo_comunicacao or 'Intimação'}) — revise e defina o prazo em Publicações.",
                         )
 
-    resultado = {"oabs_monitoradas": len(oabs), "intimacoes_novas": novas, "casadas_com_processo": casadas}
+    resultado = {
+        "oabs_monitoradas": len(oabs),
+        "intimacoes_novas": novas,
+        "casadas_com_processo": casadas,
+        # Fase 142 — observabilidade do circuit breaker (ver painel Cérebro
+        # → Infraestrutura): se comunica_bloqueada=True, a Comunica rejeitou
+        # requisições nesta varredura e o job parou de insistir pras OABs
+        # restantes em vez de martelar o portal até o fim da lista.
+        "comunica_bloqueada": breaker.state != "closed",
+        "oabs_puladas_circuito": puladas_circuito,
+    }
     await finalizar_sync(db, sync, "OK", resultado)
     await db.commit()
-    log.info("dje_scan_done", oabs=len(oabs), novas=novas, casadas=casadas, tenant=str(tenant_id) if tenant_id else "all")
+    log.info(
+        "dje_scan_done", oabs=len(oabs), novas=novas, casadas=casadas,
+        puladas_circuito=puladas_circuito, tenant=str(tenant_id) if tenant_id else "all",
+    )
     return resultado
