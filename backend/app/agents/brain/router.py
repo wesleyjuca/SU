@@ -61,6 +61,13 @@ def classify_task(task_type: str, task_input: dict) -> str:
     Se task_type já mapeado diretamente, usa ele.
     Caso contrário, tenta inferir por palavras-chave no task_input.
     """
+    # Fase 140.2 — agente customizado aprovado, resolvido dinamicamente
+    # (não é uma entrada fixa em TASK_ROUTE_MAP, task_input.custom_agent_id
+    # diz QUAL agente; a barreira de aprovação real vive dentro do próprio
+    # executor, não aqui — classify_task() é síncrono, sem acesso ao DB).
+    if task_type == "run_custom_agent":
+        return "custom_agent"
+
     if task_type in TASK_ROUTE_MAP:
         route = TASK_ROUTE_MAP[task_type]
         # Para chains, retorna o primeiro agente (orquestrador encadeia)

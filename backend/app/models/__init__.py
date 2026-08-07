@@ -18,6 +18,7 @@ from app.models.ai_config import AIProviderConfig
 from app.models.jurisprudencia_ingerida import JurisprudenciaIngerida
 from app.models.tese import Tese
 from app.models.agent_prompt import AgentPromptConfig, AgentPromptVersion, AgentAttachment
+from app.models.custom_agent import CustomAgent
 
 __all__ = [
     "User", "UserPermission", "Session",
@@ -44,4 +45,5 @@ __all__ = [
     "AgentPromptConfig",
     "AgentPromptVersion",
     "AgentAttachment",
+    "CustomAgent",
 ]

@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
-import { Brain, Network, Cpu, ShieldCheck, Sparkles, Building2, ScrollText, Lightbulb } from "lucide-react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Brain, Network, Cpu, ShieldCheck, Sparkles, Building2, ScrollText, Lightbulb, Bot } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { BrainMap } from "@/components/cerebro/BrainMap";
 import { BrainInfra } from "@/components/cerebro/BrainInfra";
@@ -10,9 +10,10 @@ import { BrainAssistant } from "@/components/cerebro/BrainAssistant";
 import { BrainMetrics } from "@/components/cerebro/BrainMetrics";
 import { BrainLogs } from "@/components/cerebro/BrainLogs";
 import { BrainInsights } from "@/components/cerebro/BrainInsights";
+import { BrainCustomAgents } from "@/components/cerebro/BrainCustomAgents";
 import { useUserStore } from "@/store";
 
-type AbaKey = "mapa" | "infra" | "plataforma" | "logs" | "auditoria" | "insights" | "assistente";
+type AbaKey = "mapa" | "infra" | "plataforma" | "logs" | "auditoria" | "insights" | "assistente" | "agentes-propostos";
 const ABAS: { key: AbaKey; label: string; icon: React.ElementType }[] = [
   { key: "mapa", label: "Mapa", icon: Network },
   { key: "infra", label: "Infraestrutura", icon: Cpu },
@@ -21,10 +22,12 @@ const ABAS: { key: AbaKey; label: string; icon: React.ElementType }[] = [
   { key: "auditoria", label: "Auditoria", icon: ShieldCheck },
   { key: "insights", label: "Insights", icon: Lightbulb },
   { key: "assistente", label: "Assistente", icon: Sparkles },
+  { key: "agentes-propostos", label: "Agentes Propostos", icon: Bot },
 ];
 
 export default function CerebroPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const user = useUserStore((s) => s.user);
   const [aba, setAba] = useState<AbaKey>("mapa");
 
@@ -34,11 +37,17 @@ export default function CerebroPage() {
     if (user && user.role !== "SUPERADMIN") router.replace("/dashboard");
   }, [user, router]);
 
-  // Restaura a última aba escolhida.
+  // ?aba= na URL (ex.: link de notificação de agente proposto) tem prioridade
+  // sobre a última aba salva — senão o link nunca abriria na aba certa.
   useEffect(() => {
+    const daUrl = searchParams.get("aba");
+    if (daUrl && ABAS.some((a) => a.key === daUrl)) {
+      setAba(daUrl as AbaKey);
+      return;
+    }
     const salva = typeof window !== "undefined" ? localStorage.getItem("cerebro_aba") : null;
     if (salva && ABAS.some((a) => a.key === salva)) setAba(salva as AbaKey);
-  }, []);
+  }, [searchParams]);
   const trocarAba = (k: AbaKey) => { setAba(k); try { localStorage.setItem("cerebro_aba", k); } catch { /* noop */ } };
 
   if (user && user.role !== "SUPERADMIN") return null;
@@ -85,6 +94,7 @@ export default function CerebroPage() {
         {aba === "auditoria" && <BrainAudit />}
         {aba === "insights" && <BrainInsights />}
         {aba === "assistente" && <BrainAssistant />}
+        {aba === "agentes-propostos" && <BrainCustomAgents />}
       </div>
     </div>
   );
