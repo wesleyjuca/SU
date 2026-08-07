@@ -18,7 +18,15 @@ class Document(Base):
     titulo: Mapped[str] = mapped_column(String(500), nullable=False)
     conteudo_texto: Mapped[str | None] = mapped_column(Text)
     conteudo_html: Mapped[str | None] = mapped_column(Text)
+    # Storage do arquivo (Fase 141): NULL nas 3 colunas abaixo = binário segue
+    # inline em arquivo_url como base64 (caminho legado). arquivo_storage_key
+    # setado = bytes vivem em object storage S3-compatível (arquivo_url fica
+    # NULL pra essas linhas) — sem backfill, linhas antigas continuam pelo
+    # caminho legado indefinidamente. Ver app/integrations/object_storage.py.
     arquivo_url: Mapped[str | None] = mapped_column(Text)
+    arquivo_storage_key: Mapped[str | None] = mapped_column(String(500))
+    arquivo_mimetype: Mapped[str | None] = mapped_column(String(150))
+    arquivo_size_bytes: Mapped[int | None] = mapped_column(Integer)
     arquivo_hash: Mapped[str | None] = mapped_column(String(64))  # SHA-256
     versao: Mapped[int] = mapped_column(Integer, default=1)
     status: Mapped[str] = mapped_column(String(50), default="RASCUNHO")  # RASCUNHO, REVISAO, APROVADO, PROTOCOLADO

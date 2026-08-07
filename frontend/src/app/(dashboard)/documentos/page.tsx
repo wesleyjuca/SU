@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect, useRef } from "react";
-import { FolderOpen, Search, FileText, Download, Upload, ScanLine, X, CloudUpload, Eye, Plus, Pencil, Trash2, Save, Loader2, History, RotateCcw, Scale, CheckCircle2, AlertTriangle, HelpCircle } from "lucide-react";
+import { FolderOpen, Search, FileText, Download, Upload, ScanLine, X, CloudUpload, Eye, Plus, Pencil, Trash2, Save, Loader2, History, RotateCcw, Scale, CheckCircle2, AlertTriangle, HelpCircle, Paperclip } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
 
@@ -18,6 +18,7 @@ interface Documento {
   client_id: string | null;
   created_at: string;
   tem_texto: boolean;
+  tem_arquivo_original: boolean;
   ocr_status: string | null;
 }
 
@@ -325,6 +326,28 @@ export default function DocumentosPage() {
     }
   }
 
+  async function downloadOriginal(id: string, titulo: string) {
+    try {
+      const token = localStorage.getItem("afj_access_token");
+      const res = await fetch(`/api/v1/documents/${id}/original`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const blob = await res.blob();
+        const a = Object.assign(document.createElement("a"), {
+          href: URL.createObjectURL(blob),
+          download: titulo.slice(0, 60),
+        });
+        a.click();
+        URL.revokeObjectURL(a.href);
+      } else {
+        toast.error("Erro ao baixar o arquivo original.");
+      }
+    } catch {
+      toast.error("Erro de conexão ao baixar o arquivo original.");
+    }
+  }
+
   return (
     <div className="max-w-7xl mx-auto space-y-5">
       <Breadcrumb crumbs={[{ label: "Dashboard", href: "/dashboard" }, { label: "Documentos" }]} />
@@ -494,6 +517,16 @@ export default function DocumentosPage() {
                       >
                         <Download size={14} />
                       </button>
+                      {d.tem_arquivo_original && (
+                        <button
+                          onClick={() => downloadOriginal(d.id, d.titulo)}
+                          className="tap-target text-afj-black/30 hover:text-afj-gold transition-colors"
+                          title="Baixar arquivo original enviado"
+                          aria-label="Baixar arquivo original enviado"
+                        >
+                          <Paperclip size={14} />
+                        </button>
+                      )}
                       <button
                         onClick={() => excluirDoc(d)}
                         disabled={deleting === d.id}
