@@ -149,3 +149,25 @@ async def test_build_messages_few_shot():
 async def test_recall_sem_qdrant_retorna_vazio():
     ctx = AgentContext(task_type="t")
     assert await EchoAgent(qdrant=None).recall(ctx, "consulta") == []
+
+
+@pytest.mark.asyncio
+async def test_recall_encaminha_tenant_id_pro_retrieve(monkeypatch):
+    """Fase 144 — regressão do vazamento cross-tenant: recall() precisa
+    repassar ctx.tenant_id pro retrieve(), senão o filtro de coleção
+    privada (peticoes_afj/memorias_afj/documentos_clientes/doutrina_privada)
+    nunca é aplicado (retrieval.py só filtra `if tenant_id`)."""
+    chamadas = {}
+
+    async def fake_retrieve(qdrant_client, query, collections=None, k=5, tenant_id=None):
+        chamadas["tenant_id"] = tenant_id
+        return []
+
+    import app.rag.retrieval as retrieval_module
+    monkeypatch.setattr(retrieval_module, "retrieve", fake_retrieve)
+
+    tenant_id = "11111111-1111-1111-1111-111111111111"
+    ctx = AgentContext(task_type="t", tenant_id=tenant_id)
+    await EchoAgent(qdrant=object()).recall(ctx, "consulta", collections=["peticoes_afj"])
+
+    assert chamadas["tenant_id"] == tenant_id
