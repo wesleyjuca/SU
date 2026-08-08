@@ -11,10 +11,21 @@ import uuid
 
 import structlog
 from fastapi import HTTPException
-from sqlalchemy import select, func
+from sqlalchemy import select, func, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 log = structlog.get_logger()
+
+# Fase 145 — corrida de TOCTOU: AgentRun nasce com status=RUNNING e
+# cost_usd=NULL no momento do disparo (agents.py, documents.py etc.) e só
+# ganha o custo real depois que o agente termina (podendo levar segundos) —
+# a soma de cost_usd sozinha conta ZERO pras chamadas em andamento, então 2
+# requisições concorrentes do mesmo usuário podem ambas ler "dentro do
+# orçamento" e ambas prosseguir. Reserva-se conservadoramente este valor por
+# execução em andamento (mesma ordem de grandeza do teto padrão por run de
+# BaseAgent.max_cost_usd_per_run) só pra decidir over_limit/over_threshold —
+# o spent_usd exibido na UI continua refletindo só o gasto confirmado.
+RESERVA_ESTIMADA_USD_POR_RUN = 1.0
 
 
 async def get_budget_status(db: AsyncSession, user_id, tenant_id) -> dict | None:
@@ -28,6 +39,13 @@ async def get_budget_status(db: AsyncSession, user_id, tenant_id) -> dict | None
     if not limit_row or not limit_row.monthly_limit_usd:
         return None
 
+    # Lock advisory leve — não fecha a corrida sozinho (a reserva abaixo que
+    # fecha), mas reduz o resíduo: sem ele, o intervalo de risco é "duração
+    # da chamada de IA" (segundos); com ele, cai pra "duração destas 2
+    # queries" (milissegundos), já que checagens concorrentes do MESMO
+    # usuário serializam aqui.
+    await db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:chave))"), {"chave": f"ai_budget:{user_id}"})
+
     inicio_mes = datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     spent = (await db.execute(
         select(func.coalesce(func.sum(AgentRun.cost_usd), 0)).where(
@@ -37,15 +55,26 @@ async def get_budget_status(db: AsyncSession, user_id, tenant_id) -> dict | None
         )
     )).scalar_one() or 0
 
+    em_andamento = (await db.execute(
+        select(func.count(AgentRun.id)).where(
+            AgentRun.triggered_by == user_id,
+            AgentRun.tenant_id == tenant_id,
+            AgentRun.started_at >= inicio_mes,
+            AgentRun.status == "RUNNING",
+            AgentRun.cost_usd.is_(None),
+        )
+    )).scalar_one() or 0
+
     limit_usd = float(limit_row.monthly_limit_usd)
     spent_usd = float(spent)
+    spent_com_reserva = spent_usd + (em_andamento * RESERVA_ESTIMADA_USD_POR_RUN)
     pct = (spent_usd / limit_usd * 100) if limit_usd > 0 else 0.0
     return {
         "limit_usd": limit_usd,
         "spent_usd": round(spent_usd, 4),
         "pct": round(pct, 1),
         "alert_pct": limit_row.alert_pct or 80,
-        "over_limit": spent_usd >= limit_usd,
+        "over_limit": spent_com_reserva >= limit_usd,
         "over_threshold": pct >= (limit_row.alert_pct or 80),
     }
 
