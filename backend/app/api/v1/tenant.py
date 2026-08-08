@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, field_validator
 from typing import Any
 
 from app.db.base import get_db
@@ -10,6 +10,12 @@ from app.dependencies import get_current_user, require_role
 from app.models.user import User
 from app.models.tenant import Tenant, TenantConfig
 from app.core.tenant import get_tenant_config, invalidate_tenant_cache, DEFAULT_TENANT_SLUG
+
+# Fase 143 — cap defensivo pra evitar que PUT /tenant/branding (campo de
+# texto livre, sem upload) aceite um data URL base64 de tamanho arbitrário
+# — os endpoints de upload dedicados já capeiam em 2MB/512KB antes de
+# base64-codificar; esse valor dá folga generosa acima disso.
+_MAX_BRANDING_STRING_LEN = 4_000_000
 
 router = APIRouter(prefix="/tenant", tags=["tenant"])
 
@@ -49,6 +55,13 @@ class BrandingUpdate(BaseModel):
     office_name: str | None = None  # armazenado em metadata.office_name
     slogan: str | None = None       # armazenado em metadata.slogan
 
+    @field_validator("logo_url", "logo_dark_url", "favicon_url")
+    @classmethod
+    def _validar_tamanho(cls, v):
+        if v and len(v) > _MAX_BRANDING_STRING_LEN:
+            raise ValueError(f"Valor excede o tamanho máximo permitido ({_MAX_BRANDING_STRING_LEN} caracteres).")
+        return v
+
 
 class ModulesUpdate(BaseModel):
     processos: bool | None = None
@@ -65,6 +78,22 @@ class NavUpdate(BaseModel):
     nav_config: list[dict[str, Any]]
 
 
+async def _resolve_cached_logo_url(config: dict) -> str | None:
+    """Fase 143 — `get_tenant_config()` cacheia `logo_storage_key` (valor
+    estável, seguro por até TENANT_CACHE_TTL), nunca uma URL calculada. A
+    presigned URL de verdade é gerada aqui, fresca a cada request (cálculo
+    local, sem round-trip de rede) — evita servir uma URL expirada a partir
+    do cache."""
+    storage_key = config.get("logo_storage_key")
+    if not storage_key:
+        return config.get("logo_url")
+    from app.integrations import object_storage
+    try:
+        return await object_storage.generate_presigned_url(storage_key, expires_in=3600)
+    except object_storage.ObjectStorageError:
+        return None
+
+
 @router.get("/theme", response_model=ThemeResponse)
 async def get_theme(
     current_user: User = Depends(get_current_user),
@@ -76,7 +105,7 @@ async def get_theme(
         primary_color=config["primary_color"],
         secondary_color=config["secondary_color"],
         accent_color=config["accent_color"],
-        logo_url=config["logo_url"],
+        logo_url=await _resolve_cached_logo_url(config),
         logo_dark_url=config["logo_dark_url"],
         favicon_url=config["favicon_url"],
         app_name=config["app_name"],
@@ -91,6 +120,7 @@ async def get_config(
     db: AsyncSession = Depends(get_db),
 ):
     config = await get_tenant_config(db, tenant_slug=await _resolve_tenant_slug(db, current_user))
+    config = {**config, "logo_url": await _resolve_cached_logo_url(config)}
     return TenantConfigResponse(**config)
 
 
@@ -108,17 +138,26 @@ async def update_branding(
             meta_updates[field] = updates.pop(field)
     for field, value in updates.items():
         setattr(config, field, value)
+    if "logo_url" in updates:
+        # Fase 143 — logo_url colado à mão (URL externa literal) tem
+        # precedência sobre um logo migrado pro S3; zera a storage key pra
+        # não ficar uma ambiguidade entre os 2 caminhos.
+        config.logo_storage_key = None
+        config.logo_mimetype = None
     if meta_updates:
         current_meta = config.extra_data or {}
         config.extra_data = {**current_meta, **meta_updates}
     await db.flush()
     await invalidate_tenant_cache(tenant.slug)
     meta = config.extra_data or {}
+    logo_url = await _resolve_cached_logo_url({
+        "logo_storage_key": config.logo_storage_key, "logo_url": config.logo_url,
+    })
     return ThemeResponse(
         primary_color=config.primary_color,
         secondary_color=config.secondary_color,
         accent_color=config.accent_color,
-        logo_url=config.logo_url,
+        logo_url=logo_url,
         logo_dark_url=config.logo_dark_url,
         favicon_url=config.favicon_url,
         app_name=config.app_name,
@@ -148,17 +187,42 @@ async def upload_logo(
     current_user: User = Depends(require_role("ADMIN")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Recebe arquivo de imagem, converte para base64 data URL e salva como logo_url."""
+    """Recebe arquivo de imagem e salva como logo do timbrado — vai pro
+    object storage S3-compatível quando configurado (Fase 143, reaproveita
+    app/integrations/object_storage.py da Fase 141), senão mantém o
+    caminho legado (base64 inline em logo_url)."""
     import base64
+    from app.integrations import object_storage
+
     ALLOWED = {"image/png", "image/jpeg", "image/svg+xml", "image/webp"}
     if file.content_type not in ALLOWED:
         raise HTTPException(status_code=400, detail="Tipo não suportado. Use PNG, JPG, SVG ou WebP.")
     contents = await file.read()
     if len(contents) > 2 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="Arquivo muito grande. Máximo 2MB.")
+
+    tenant, config = await _get_or_create_config(db, current_user)
+
+    if object_storage.is_configured():
+        try:
+            key = await object_storage.upload_bytes(
+                tenant_id=tenant.id, document_id=config.id,
+                filename=file.filename or "logo", content_type=file.content_type, data=contents,
+            )
+        except object_storage.ObjectStorageError:
+            raise HTTPException(status_code=502, detail="Falha ao enviar o logo para o armazenamento. Tente novamente.")
+        config.logo_storage_key = key
+        config.logo_mimetype = file.content_type
+        config.logo_url = None
+        await db.flush()
+        await invalidate_tenant_cache(tenant.slug)
+        preview_url = await object_storage.generate_presigned_url(key, expires_in=3600)
+        return {"logo_url": preview_url}
+
     b64 = base64.b64encode(contents).decode()
     data_url = f"data:{file.content_type};base64,{b64}"
-    tenant, config = await _get_or_create_config(db, current_user)
+    config.logo_storage_key = None
+    config.logo_mimetype = None
     config.logo_url = data_url
     await db.flush()
     await invalidate_tenant_cache(tenant.slug)
@@ -270,7 +334,7 @@ async def get_letterhead(
         "oab": lh.get("oab"),
         "footer": lh.get("footer"),
         "use_logo": lh.get("use_logo", True),
-        "has_logo": bool(config.logo_url),
+        "has_logo": bool(config.logo_url or config.logo_storage_key),
     }
 
 

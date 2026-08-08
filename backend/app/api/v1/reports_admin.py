@@ -243,8 +243,10 @@ async def _banca_letterhead(db: AsyncSession, banca: Tenant) -> dict | None:
     if not cfg:
         return None
     lh = dict((cfg.document_templates or {}).get("letterhead", {}))
-    if cfg.logo_url:
-        lh["logo_data_url"] = cfg.logo_url
+    from app.services.letterhead import resolve_logo_data_url
+    logo_data_url = await resolve_logo_data_url(cfg)
+    if logo_data_url:
+        lh["logo_data_url"] = logo_data_url
     return lh
 
 

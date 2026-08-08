@@ -438,8 +438,10 @@ async def portal_document_download(
         )).scalar_one_or_none()
         if cfg:
             letterhead = dict((cfg.document_templates or {}).get("letterhead", {}))
-            if cfg.logo_url:
-                letterhead["logo_data_url"] = cfg.logo_url
+            from app.services.letterhead import resolve_logo_data_url
+            logo_data_url = await resolve_logo_data_url(cfg)
+            if logo_data_url:
+                letterhead["logo_data_url"] = logo_data_url
     except Exception:
         letterhead = None
 
