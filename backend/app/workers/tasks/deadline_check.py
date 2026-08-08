@@ -5,7 +5,10 @@ import structlog
 log = structlog.get_logger()
 
 
-@celery_app.task(name="app.workers.tasks.deadline_check.check_upcoming_deadlines", bind=True)
+@celery_app.task(
+    name="app.workers.tasks.deadline_check.check_upcoming_deadlines", bind=True,
+    time_limit=1800, soft_time_limit=1500,
+)
 def check_upcoming_deadlines(self):
     """Verifica prazos nos próximos 3, 7 e 15 dias e envia notificações."""
     from app.workers.async_utils import run_worker_coro
@@ -143,10 +146,25 @@ def check_upcoming_deadlines(self):
             log.info("deadlines_checked", total_notificacoes=total_notificacoes, contratos=contratos_notif)
             return {"notificacoes_criadas": total_notificacoes, "contratos": contratos_notif}
 
-    return run_worker_coro(_run())
+    async def _run_with_lock():
+        from app.workers.task_lock import TaskLock
+
+        lock = TaskLock("check_upcoming_deadlines", ttl_seconds=2100)
+        if not await lock.acquire():
+            log.info("task_skipped_lock_held", task="check_upcoming_deadlines")
+            return {"skipped": True, "reason": "lock_held"}
+        try:
+            return await _run()
+        finally:
+            await lock.release()
+
+    return run_worker_coro(_run_with_lock())
 
 
-@celery_app.task(name="app.workers.tasks.deadline_check.scan_daily_publications", bind=True)
+@celery_app.task(
+    name="app.workers.tasks.deadline_check.scan_daily_publications", bind=True,
+    time_limit=3600, soft_time_limit=3300,
+)
 def scan_daily_publications(self):
     """Scan diário de publicações nos DJes."""
     from app.workers.async_utils import run_worker_coro
@@ -159,4 +177,16 @@ def scan_daily_publications(self):
             # Varre a Comunica/DJEN (pública) para todas as OABs monitoradas.
             return await scan_publicacoes(db, tenant_id=None, dias_retro=1)
 
-    return run_worker_coro(_run())
+    async def _run_with_lock():
+        from app.workers.task_lock import TaskLock
+
+        lock = TaskLock("scan_daily_publications", ttl_seconds=3900)
+        if not await lock.acquire():
+            log.info("task_skipped_lock_held", task="scan_daily_publications")
+            return {"skipped": True, "reason": "lock_held"}
+        try:
+            return await _run()
+        finally:
+            await lock.release()
+
+    return run_worker_coro(_run_with_lock())
