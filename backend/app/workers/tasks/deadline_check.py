@@ -93,34 +93,50 @@ def check_upcoming_deadlines(self):
                     )
 
             # ── Vencimento de contratos (D-30/15/7) ──────────────────────────
+            # Fase 146 — janela + faixas já notificadas (alertas_enviados),
+            # mesmo padrão do bloco de ProcessDeadline acima: evita reenvio em
+            # execução duplicada/concorrente do job diário (o job não tem
+            # run-mutex — 2 execuções no mesmo dia reenviariam e-mail/push/
+            # WhatsApp pra todo contrato vencendo, antes desta fase) e torna
+            # o alerta resiliente a downtime do worker (não depende de bater
+            # a data exata).
             from sqlalchemy import func as _func
             from app.models.document import Contract, Document
+            CONTRATO_BUCKETS = [30, 15, 7]
             contratos_notif = 0
-            for dias in (30, 15, 7):
-                alvo = today + timedelta(days=dias)
-                rows = (await db.execute(
-                    select(Contract, Document.created_by, Document.titulo)
-                    .join(Document, Contract.document_id == Document.id)
-                    .where(
-                        _func.date(Contract.data_fim) == alvo,
-                        Contract.status.notin_(["RASCUNHO", "CANCELADO", "ENCERRADO"]),
-                    )
-                )).all()
-                for contrato, created_by, titulo in rows:
-                    if not created_by:
-                        continue
-                    sufixo = " (renovação automática)" if contrato.renovacao_auto else ""
-                    notif_contrato = Notification(
-                        user_id=created_by,
-                        tipo="CONTRATO_VENCENDO",
-                        titulo=f"Contrato vence em {dias} dias: {(titulo or 'Contrato')[:70]}",
-                        corpo=f"Vencimento: {contrato.data_fim.date() if contrato.data_fim else '—'}{sufixo}",
-                        priority="HIGH" if dias <= 7 else "NORMAL",
-                        link="/contratos",
-                    )
-                    db.add(notif_contrato)
-                    await publish_notification_ws(notif_contrato)
-                    contratos_notif += 1
+            rows = (await db.execute(
+                select(Contract, Document.created_by, Document.titulo)
+                .join(Document, Contract.document_id == Document.id)
+                .where(
+                    Contract.data_fim.isnot(None),
+                    _func.date(Contract.data_fim) >= today,
+                    _func.date(Contract.data_fim) <= today + timedelta(days=max(CONTRATO_BUCKETS)),
+                    Contract.status.notin_(["RASCUNHO", "CANCELADO", "ENCERRADO"]),
+                )
+            )).all()
+            for contrato, created_by, titulo in rows:
+                dias = (contrato.data_fim.date() - today).days
+                enviados = set(contrato.alertas_enviados or [])
+                aplicaveis = [b for b in CONTRATO_BUCKETS if dias <= b]
+                nao_enviados = [b for b in aplicaveis if b not in enviados]
+                if not nao_enviados or not created_by:
+                    if aplicaveis and set(aplicaveis) - enviados:
+                        contrato.alertas_enviados = sorted(enviados | set(aplicaveis))
+                    continue
+
+                sufixo = " (renovação automática)" if contrato.renovacao_auto else ""
+                notif_contrato = Notification(
+                    user_id=created_by,
+                    tipo="CONTRATO_VENCENDO",
+                    titulo=f"Contrato vence em {dias} dias: {(titulo or 'Contrato')[:70]}",
+                    corpo=f"Vencimento: {contrato.data_fim.date()}{sufixo}",
+                    priority="HIGH" if dias <= 7 else "NORMAL",
+                    link="/contratos",
+                )
+                db.add(notif_contrato)
+                await publish_notification_ws(notif_contrato)
+                contratos_notif += 1
+                contrato.alertas_enviados = sorted(enviados | set(aplicaveis))
             total_notificacoes += contratos_notif
 
             await db.commit()
