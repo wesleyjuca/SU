@@ -266,7 +266,7 @@ class BaseAgent(ABC):
             return []
         try:
             from app.rag.retrieval import retrieve
-            results = await retrieve(self.qdrant, query, collections=collections, k=k)
+            results = await retrieve(self.qdrant, query, collections=collections, k=k, tenant_id=ctx.tenant_id)
             ctx.retrieved_memory.extend(results)
             return results
         except Exception as exc:
