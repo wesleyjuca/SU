@@ -110,5 +110,10 @@ class Contract(Base):
     status: Mapped[str] = mapped_column(String(30), default="RASCUNHO")
     assinaturas: Mapped[dict | None] = mapped_column(JSONB)
     renovacao_auto: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Fase 146 — faixas de alerta de vencimento (30/15/7 dias) já notificadas,
+    # mesmo padrão de ProcessDeadline.alertas_enviados: evita reenvio em
+    # execução duplicada/concorrente do job diário e torna o alerta
+    # resiliente a downtime do worker (não depende de data exata).
+    alertas_enviados: Mapped[list | None] = mapped_column(JSONB, default=list)
 
     document: Mapped["Document"] = relationship(back_populates="contract")

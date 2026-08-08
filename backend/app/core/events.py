@@ -289,6 +289,9 @@ async def lifespan(app: FastAPI):
             # (TenantConfig.logo_url, achado adjacente da Fase 141).
             "ALTER TABLE tenant_configs ADD COLUMN IF NOT EXISTS logo_storage_key VARCHAR(500)",
             "ALTER TABLE tenant_configs ADD COLUMN IF NOT EXISTS logo_mimetype VARCHAR(150)",
+            # Fase 146 — faixas de alerta de vencimento de contrato já enviadas
+            # (mesmo padrão de process_deadlines.alertas_enviados, Fase 48)
+            "ALTER TABLE contracts ADD COLUMN IF NOT EXISTS alertas_enviados JSONB DEFAULT '[]'::jsonb",
         ]:
             try:
                 async with engine.begin() as conn:
