@@ -98,7 +98,10 @@ async def executar_sync_legislacao(db) -> dict:
     return stats
 
 
-@celery_app.task(name="app.workers.tasks.legislacao_sync.sync_legislacao_diario", bind=True, max_retries=3)
+@celery_app.task(
+    name="app.workers.tasks.legislacao_sync.sync_legislacao_diario", bind=True, max_retries=3,
+    time_limit=1800, soft_time_limit=1500,
+)
 def sync_legislacao_diario(self):
     """Executa `executar_sync_legislacao()` — roda via Beat, re-tenta se a
     task inteira falhar (ex.: DB indisponível)."""
@@ -109,8 +112,20 @@ def sync_legislacao_diario(self):
         async with AsyncSessionLocal() as db:
             return await executar_sync_legislacao(db)
 
+    async def _run_with_lock():
+        from app.workers.task_lock import TaskLock
+
+        lock = TaskLock("sync_legislacao_diario", ttl_seconds=2100)
+        if not await lock.acquire():
+            log.info("task_skipped_lock_held", task="sync_legislacao_diario")
+            return {"skipped": True, "reason": "lock_held"}
+        try:
+            return await _run()
+        finally:
+            await lock.release()
+
     try:
-        return run_worker_coro(_run())
+        return run_worker_coro(_run_with_lock())
     except Exception as exc:
         log.error("legislacao_sync_failed", error=str(exc))
         raise self.retry(exc=exc, countdown=300)

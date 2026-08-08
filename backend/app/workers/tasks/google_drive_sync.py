@@ -130,7 +130,10 @@ async def executar_sync_drive_doutrina(db) -> dict:
     return resultado
 
 
-@celery_app.task(name="app.workers.tasks.google_drive_sync.sync_google_drive_doutrina", bind=True, max_retries=3)
+@celery_app.task(
+    name="app.workers.tasks.google_drive_sync.sync_google_drive_doutrina", bind=True, max_retries=3,
+    time_limit=7200, soft_time_limit=6900,
+)
 def sync_google_drive_doutrina(self):
     """Executa `executar_sync_drive_doutrina()` — roda via Beat."""
     from app.workers.async_utils import run_worker_coro
@@ -140,8 +143,20 @@ def sync_google_drive_doutrina(self):
         async with AsyncSessionLocal() as db:
             return await executar_sync_drive_doutrina(db)
 
+    async def _run_with_lock():
+        from app.workers.task_lock import TaskLock
+
+        lock = TaskLock("sync_google_drive_doutrina", ttl_seconds=7500)
+        if not await lock.acquire():
+            log.info("task_skipped_lock_held", task="sync_google_drive_doutrina")
+            return {"skipped": True, "reason": "lock_held"}
+        try:
+            return await _run()
+        finally:
+            await lock.release()
+
     try:
-        return run_worker_coro(_run())
+        return run_worker_coro(_run_with_lock())
     except Exception as exc:
         log.error("drive_sync_failed", error=str(exc))
         raise self.retry(exc=exc, countdown=300)
