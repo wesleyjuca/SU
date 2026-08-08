@@ -285,6 +285,10 @@ async def lifespan(app: FastAPI):
             "ALTER TABLE documents ADD COLUMN IF NOT EXISTS arquivo_storage_key VARCHAR(500)",
             "ALTER TABLE documents ADD COLUMN IF NOT EXISTS arquivo_mimetype VARCHAR(150)",
             "ALTER TABLE documents ADD COLUMN IF NOT EXISTS arquivo_size_bytes INTEGER",
+            # Fase 143 — mesmo padrão, pro logo do timbrado do escritório
+            # (TenantConfig.logo_url, achado adjacente da Fase 141).
+            "ALTER TABLE tenant_configs ADD COLUMN IF NOT EXISTS logo_storage_key VARCHAR(500)",
+            "ALTER TABLE tenant_configs ADD COLUMN IF NOT EXISTS logo_mimetype VARCHAR(150)",
         ]:
             try:
                 async with engine.begin() as conn:

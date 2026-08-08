@@ -62,6 +62,11 @@ async def get_tenant_config(db: AsyncSession, tenant_slug: str | None = None) ->
         "secondary_color": config.secondary_color,
         "accent_color": config.accent_color,
         "logo_url": config.logo_url,
+        # Fase 143 — valores estáveis, seguros pro cache de 5min; a
+        # presigned URL de verdade é calculada fresca a cada request em
+        # tenant.py (nunca cacheada, expiraria dentro do próprio TTL).
+        "logo_storage_key": config.logo_storage_key,
+        "logo_mimetype": config.logo_mimetype,
         "logo_dark_url": config.logo_dark_url,
         "favicon_url": config.favicon_url,
         "app_name": config.app_name,
@@ -103,6 +108,8 @@ def _default_config() -> dict:
         "secondary_color": "#1A1A1A",
         "accent_color": "#F5F0E8",
         "logo_url": None,
+        "logo_storage_key": None,
+        "logo_mimetype": None,
         "logo_dark_url": None,
         "favicon_url": None,
         "app_name": "AFJ CORE",
