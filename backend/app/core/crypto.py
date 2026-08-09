@@ -46,3 +46,15 @@ def decrypt(token: str | None) -> str | None:
         return _get_fernet().decrypt(token.encode()).decode()
     except (InvalidToken, Exception):
         return None
+
+
+def decrypt_or_raw(value: str | None) -> str | None:
+    """Decifra um valor cifrado por encrypt(); se falhar (InvalidToken —
+    dado gravado em texto puro ANTES de um campo passar a ser cifrado, sem
+    backfill), devolve o valor bruto como está em vez de None. Uso: campos
+    que migraram de texto puro pra cifrado sem reprocessar linhas antigas
+    (ex.: Client.cpf/cnpj, Fase 149)."""
+    if not value:
+        return value
+    decrypted = decrypt(value)
+    return decrypted if decrypted is not None else value

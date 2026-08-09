@@ -12,7 +12,7 @@ from app.dependencies import get_current_user, require_role
 from app.models.user import User
 from app.models.client import Client, ClientContact, ClientInteraction
 from app.core.exceptions import NotFoundError
-from app.core.crypto import encrypt, decrypt
+from app.core.crypto import encrypt, decrypt_or_raw
 
 router = APIRouter(prefix="/clients", tags=["clients"])
 
@@ -389,17 +389,6 @@ def _contact_to_dict(c: ClientContact) -> dict:
     }
 
 
-def _decrypt_or_raw(value: str | None) -> str | None:
-    """Decifra CPF/CNPJ cifrados desde a Fase 149. Fail-soft: linhas gravadas
-    antes desta fase ainda estão em texto puro (sem backfill, mesmo padrão de
-    outras migrações de dado em repouso desta sessão) — decrypt() falha nesse
-    caso (InvalidToken) e devolve o valor bruto como está."""
-    if not value:
-        return value
-    decrypted = decrypt(value)
-    return decrypted if decrypted is not None else value
-
-
 def _to_response(c: Client) -> ClientResponse:
     return ClientResponse(
         id=str(c.id),
@@ -409,8 +398,8 @@ def _to_response(c: Client) -> ClientResponse:
         email=c.email,
         telefone=c.telefone,
         whatsapp=c.whatsapp,
-        cpf=_decrypt_or_raw(c.cpf),
-        cnpj=_decrypt_or_raw(c.cnpj),
+        cpf=decrypt_or_raw(c.cpf),
+        cnpj=decrypt_or_raw(c.cnpj),
         endereco_json=c.endereco_json,
         observacoes=c.observacoes,
         status=c.status,
