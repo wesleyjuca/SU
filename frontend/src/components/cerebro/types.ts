@@ -61,6 +61,10 @@ export interface AuditEvento {
   ip_address: string | null; legal_basis: string | null; tenant_id: string | null;
 }
 
+export interface TenantResumo {
+  id: string; name: string; slug: string;
+}
+
 export interface Insight {
   tipo: "melhoria" | "erro" | "risco" | "evolucao";
   titulo: string;

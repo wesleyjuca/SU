@@ -18,34 +18,52 @@ interface AuditLog {
   legal_basis: string | null;
 }
 
+const PAGE_SIZE = 100;
+
 export default function AuditoriaPage() {
   const [logs, setLogs] = useState<AuditLog[]>([]);
+  const [total, setTotal] = useState(0);
+  const [offset, setOffset] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [search, setSearch] = useState("");
   const [filtroSucesso, setFiltroSucesso] = useState("");
 
-  useEffect(() => { fetchLogs(); }, []);
+  // Fase 162 — paginação real usando total/offset que o backend (GET /audit)
+  // já devolvia desde a Fase 148, mas o frontend nunca usava; antes disso
+  // a tela ficava presa nos 100 eventos mais recentes.
+  useEffect(() => { fetchLogs(0, false); }, [filtroSucesso]);
 
-  async function fetchLogs() {
-    setLoading(true);
+  async function fetchLogs(novoOffset = 0, append = false) {
+    if (append) setLoadingMore(true); else setLoading(true);
     try {
       const token = localStorage.getItem("afj_access_token");
-      const logsRes = await fetch("/api/v1/audit?limit=100", {
+      const params = new URLSearchParams();
+      params.set("limit", String(PAGE_SIZE));
+      params.set("offset", String(novoOffset));
+      if (filtroSucesso) params.set("success", filtroSucesso);
+      const logsRes = await fetch(`/api/v1/audit?${params}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (logsRes.ok) setLogs((await logsRes.json()).items);
-    } finally { setLoading(false); }
+      if (logsRes.ok) {
+        const data = await logsRes.json();
+        const items: AuditLog[] = data.items ?? [];
+        setLogs((prev) => (append ? [...prev, ...items] : items));
+        setTotal(data.total ?? 0);
+        setHasMore(items.length === PAGE_SIZE);
+        setOffset(novoOffset + items.length);
+      }
+    } finally {
+      if (append) setLoadingMore(false); else setLoading(false);
+    }
   }
 
-  const filtrados = logs.filter((l) => {
-    const matchSearch = !search || l.action.toLowerCase().includes(search.toLowerCase()) ||
-      l.resource_type?.toLowerCase().includes(search.toLowerCase()) ||
-      l.agent_name?.toLowerCase().includes(search.toLowerCase());
-    const matchSucesso = !filtroSucesso ||
-      (filtroSucesso === "true" && l.success) ||
-      (filtroSucesso === "false" && !l.success);
-    return matchSearch && matchSucesso;
-  });
+  const filtrados = logs.filter((l) =>
+    !search || l.action.toLowerCase().includes(search.toLowerCase()) ||
+    l.resource_type?.toLowerCase().includes(search.toLowerCase()) ||
+    l.agent_name?.toLowerCase().includes(search.toLowerCase())
+  );
 
   return (
     <div className="max-w-7xl mx-auto space-y-5">
@@ -61,22 +79,22 @@ export default function AuditoriaPage() {
         <div className="afj-card p-4 flex items-center gap-3">
           <ShieldCheck size={24} className="text-afj-gold flex-shrink-0" />
           <div>
-            <p className="text-lg font-bold text-afj-black">{logs.length}</p>
-            <p className="text-xs text-afj-black/50">Total de eventos</p>
+            <p className="text-lg font-bold text-afj-black">{total}</p>
+            <p className="text-xs text-afj-black/50">Total de eventos (com os filtros ativos)</p>
           </div>
         </div>
         <div className="afj-card p-4 flex items-center gap-3">
           <CheckCircle size={24} className="text-green-500 flex-shrink-0" />
           <div>
             <p className="text-lg font-bold text-afj-black">{logs.filter((l) => l.success).length}</p>
-            <p className="text-xs text-afj-black/50">Bem-sucedidos</p>
+            <p className="text-xs text-afj-black/50">Bem-sucedidos ({logs.length} carregados)</p>
           </div>
         </div>
         <div className="afj-card p-4 flex items-center gap-3">
           <XCircle size={24} className="text-red-500 flex-shrink-0" />
           <div>
             <p className="text-lg font-bold text-afj-black">{logs.filter((l) => !l.success).length}</p>
-            <p className="text-xs text-afj-black/50">Com falhas</p>
+            <p className="text-xs text-afj-black/50">Com falhas ({logs.length} carregados)</p>
           </div>
         </div>
       </div>
@@ -164,6 +182,18 @@ export default function AuditoriaPage() {
             </tbody>
           </table>
           </div>
+        </div>
+      )}
+
+      {hasMore && !loading && (
+        <div className="flex justify-center">
+          <button
+            onClick={() => fetchLogs(offset, true)}
+            disabled={loadingMore}
+            className="btn-afj-outline rounded-sm text-sm disabled:opacity-50"
+          >
+            {loadingMore ? "Carregando..." : `Carregar mais (${logs.length} de ${total})`}
+          </button>
         </div>
       )}
     </div>
