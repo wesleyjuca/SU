@@ -12,6 +12,7 @@ interface Funil {
   estagios: string[];
   colunas: Record<string, Opp[]>;
   totais: Record<string, { count: number; valor: number }>;
+  truncado: Record<string, boolean>;
   forecast: number; pipeline_aberto: number; abertas: number;
 }
 interface Cliente { id: string; nome_completo: string }
@@ -164,6 +165,11 @@ export default function FunilPage() {
                     </div>
                   ))}
                   {funil.colunas[est].length === 0 && <p className="text-[11px] text-afj-black/30 text-center py-3">—</p>}
+                  {funil.truncado[est] && (
+                    <p className="text-[10px] text-afj-black/40 text-center py-2">
+                      Mostrando {funil.colunas[est].length} de {funil.totais[est].count} — os totais acima já contam todas
+                    </p>
+                  )}
                 </div>
               </div>
             ))}
