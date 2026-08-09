@@ -236,8 +236,21 @@ class ProcessAgent(BaseAgent):
         novos_movimentos = 0
         polled_ids: list[uuid.UUID] = []
         inicio_batch = datetime.now(timezone.utc)
+        # Fase 152 — o SyncRun agregado abaixo grava tenant_id=None (lote
+        # global, todos os tenants do beat numa única passada), mas a página
+        # de saúde por tenant (GET /system/health/tenant-infra) filtra por
+        # tenant_id exato e nunca batia — "última sincronização" ficava
+        # sempre null pro polling, mesmo funcionando. Mantém o agregado (o
+        # painel Cérebro consome ele como visão pooled) e acrescenta 1
+        # SyncRun por tenant que teve processo no lote.
+        from collections import defaultdict
+        stats_por_tenant: dict = defaultdict(lambda: {
+            "total_processos": 0, "polled_ok": 0, "errors": 0, "novos_movimentos": 0,
+        })
 
         for processo in processos:
+            st_tenant = stats_por_tenant[processo.tenant_id]
+            st_tenant["total_processos"] += 1
             try:
                 sub_ctx = AgentContext(
                     task_type="poll_process",
@@ -252,12 +265,17 @@ class ProcessAgent(BaseAgent):
                 result_poll = await self._poll_single_process(sub_ctx, sub_ctx.task_input)
                 if result_poll.succeeded:
                     polled += 1
-                    novos_movimentos += sub_ctx.get_state("novos_movimentos", 0)
+                    novos = sub_ctx.get_state("novos_movimentos", 0)
+                    novos_movimentos += novos
+                    st_tenant["polled_ok"] += 1
+                    st_tenant["novos_movimentos"] += novos
                     polled_ids.append(processo.id)
                 else:
                     errors += 1
+                    st_tenant["errors"] += 1
             except Exception as exc:
                 errors += 1
+                st_tenant["errors"] += 1
                 log.error("batch_poll_error", processo=str(processo.id), error=str(exc))
 
         # Uma única sessão para o fechamento do batch (antes: 1 sessão POR processo)
@@ -285,6 +303,13 @@ class ProcessAgent(BaseAgent):
                     stats=stats, started_at=inicio_batch,
                     finished_at=datetime.now(timezone.utc),
                 ))
+                for tid, st_tenant in stats_por_tenant.items():
+                    db2.add(SyncRun(
+                        tenant_id=tid, fonte="datajud", tipo="POLLING",
+                        status="OK" if st_tenant["errors"] == 0 else "ERRO",
+                        stats=st_tenant, started_at=inicio_batch,
+                        finished_at=datetime.now(timezone.utc),
+                    ))
                 await db2.commit()
         except Exception as exc:
             log.warning("poll_batch_close_failed", error=str(exc))
