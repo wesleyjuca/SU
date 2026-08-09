@@ -1009,26 +1009,44 @@ async def brain_map(current_user: User = Depends(require_role("SUPERADMIN"))):
 @router.get("/brain/audit")
 async def brain_audit(
     limit: int = Query(default=100, ge=1, le=300),
+    offset: int = Query(default=0, ge=0),
+    tenant_id: str | None = Query(default=None, description="Filtra por um tenant específico"),
+    action: str | None = Query(default=None, description="Busca parcial (ilike) na ação"),
+    success: bool | None = Query(default=None),
     current_user: User = Depends(require_role("SUPERADMIN")),
 ):
     """Trilha de auditoria recente — visão de PLATAFORMA (todas as tenants),
-    exclusiva do SUPERADMIN. Lê o audit_log imutável (últimas N ações). Best-effort:
-    qualquer falha retorna lista vazia, nunca derruba o painel."""
+    exclusiva do SUPERADMIN. Lê o audit_log imutável. Best-effort: qualquer
+    falha retorna lista vazia, nunca derruba o painel.
+
+    Fase 162 — ganhou offset/tenant_id/action/success (antes só tinha limit,
+    fixo nos últimos 300 eventos da PLATAFORMA INTEIRA, sem forma de buscar
+    um tenant/período específico)."""
     await _audit_brain(current_user.id, "BRAIN_AUDIT_VIEW")
     try:
-        from sqlalchemy import select, desc
+        from sqlalchemy import select, desc, func
         from app.db.base import AsyncSessionLocal
         from app.models.audit_log import AuditLog
         async with AsyncSessionLocal() as db:
-            rows = (await db.execute(
-                select(
-                    AuditLog.id, AuditLog.timestamp, AuditLog.action, AuditLog.user_id,
-                    AuditLog.agent_name, AuditLog.resource_type, AuditLog.resource_id,
-                    AuditLog.success, AuditLog.contains_pii, AuditLog.ip_address,
-                    AuditLog.legal_basis, AuditLog.tenant_id,
-                ).order_by(desc(AuditLog.timestamp)).limit(limit)
-            )).all()
-        return {"ok": True, "eventos": [
+            stmt = select(
+                AuditLog.id, AuditLog.timestamp, AuditLog.action, AuditLog.user_id,
+                AuditLog.agent_name, AuditLog.resource_type, AuditLog.resource_id,
+                AuditLog.success, AuditLog.contains_pii, AuditLog.ip_address,
+                AuditLog.legal_basis, AuditLog.tenant_id,
+            ).order_by(desc(AuditLog.timestamp))
+
+            if tenant_id:
+                stmt = stmt.where(AuditLog.tenant_id == uuid.UUID(tenant_id))
+            if action:
+                stmt = stmt.where(AuditLog.action.ilike(f"%{action}%"))
+            if success is not None:
+                stmt = stmt.where(AuditLog.success == success)
+
+            total = (await db.execute(
+                select(func.count()).select_from(stmt.subquery())
+            )).scalar_one()
+            rows = (await db.execute(stmt.offset(offset).limit(limit))).all()
+        return {"ok": True, "total": total, "limit": limit, "offset": offset, "eventos": [
             {
                 "id": r.id,
                 "timestamp": r.timestamp.isoformat() if r.timestamp else None,
@@ -1046,7 +1064,7 @@ async def brain_audit(
             for r in rows
         ]}
     except Exception as exc:
-        return {"ok": False, "eventos": [], "detail": str(exc)[:200]}
+        return {"ok": False, "total": 0, "limit": limit, "offset": offset, "eventos": [], "detail": str(exc)[:200]}
 
 
 @router.get("/brain/logs")
