@@ -138,15 +138,29 @@ async def _enriquecer_partes(db, tenant_id, procs: list[tuple]) -> int:
     fonte = await fonte_partes_credenciada(db, tenant_id)
     if not fonte:
         return 0
+    from app.services import integration_hub
+
     total = 0
+    teve_erro = False
+    ultimo_erro = None
     for proc, tribunal in procs:
         try:
             partes = await fonte.partes(proc.numero_cnj, tribunal)
-        except Exception:
+        except Exception as exc:
             partes = []
+            teve_erro = True
+            ultimo_erro = str(exc)[:400]
         if partes:
             res = await importar_partes(db, proc, partes)
             total += res.get("novas", 0)
+    # Fase 165 — registra uso REAL da credencial (não só o clique manual em
+    # "Testar conexão"): resposta vazia sem exceção não é necessariamente
+    # erro (o processo pode legitimamente não ter partes cadastradas ainda),
+    # então só marca ERRO quando `fonte.partes()` de fato lançou.
+    if total > 0:
+        await integration_hub.registrar_uso(db, tenant_id, fonte.nome, sucesso=True)
+    elif teve_erro:
+        await integration_hub.registrar_uso(db, tenant_id, fonte.nome, sucesso=False, detalhe=ultimo_erro)
     return total
 
 

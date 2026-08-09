@@ -68,14 +68,18 @@ async def enviar_whatsapp(db: AsyncSession, tenant_id, telefone: str | None, tex
             resp = await client.post(url, json=template_payload, headers=headers)
             if resp.status_code < 400:
                 log.info("whatsapp_enviado", via="template", to=numero[-4:])
+                await integration_hub.registrar_uso(db, tenant_id, "whatsapp", sucesso=True)
                 return True
             # Template ausente/não aprovado → tenta texto (janela de 24h)
             log.warning("whatsapp_template_falhou", status=resp.status_code, body=resp.text[:200])
             resp = await client.post(url, json=text_payload, headers=headers)
             if resp.status_code < 400:
                 log.info("whatsapp_enviado", via="texto", to=numero[-4:])
+                await integration_hub.registrar_uso(db, tenant_id, "whatsapp", sucesso=True)
                 return True
             log.warning("whatsapp_texto_falhou", status=resp.status_code, body=resp.text[:200])
+            await integration_hub.registrar_uso(db, tenant_id, "whatsapp", sucesso=False, detalhe=f"HTTP {resp.status_code}: {resp.text[:300]}")
     except Exception as exc:
         log.warning("whatsapp_unreachable", error=str(exc))
+        await integration_hub.registrar_uso(db, tenant_id, "whatsapp", sucesso=False, detalhe=str(exc)[:400])
     return False

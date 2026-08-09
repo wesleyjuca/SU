@@ -242,6 +242,36 @@ async def get_credentials(db: AsyncSession, tenant_id, provider: str) -> dict | 
     return creds
 
 
+async def registrar_uso(db: AsyncSession, tenant_id, provider: str, sucesso: bool, detalhe: str | None = None) -> None:
+    """Marca `last_success_at`/`last_error_at` a partir de um uso REAL da
+    credencial (envio de e-mail/WhatsApp, captura de partes etc.) — não só
+    do clique manual em "Testar conexão" (`testar_conexao()` abaixo). Sem
+    isso uma integração podia ficar morta há semanas com a UI ainda
+    mostrando CONECTADA (Fase 165).
+
+    Auto-commit (mesmo padrão fail-soft de `notification.create_batch` —
+    Fase 118/156): os chamadores vivem em contextos de transação muito
+    diferentes (request FastAPI com auto-commit no fim, task Celery com
+    commit explícito, ou nenhum dos dois), então a única forma confiável de
+    a marca sobreviver é ela commitar por conta própria. Nunca propaga
+    exceção — um erro aqui não pode derrubar o fluxo principal."""
+    try:
+        integ = await get_integration(db, tenant_id, provider)
+        if not integ:
+            return
+        agora = datetime.now(timezone.utc)
+        if sucesso:
+            integ.last_success_at = agora
+            integ.status = "CONECTADA"
+        else:
+            integ.last_error_at = agora
+            integ.last_error_detail = (detalhe or "")[:500]
+            integ.status = "ERRO"
+        await db.commit()
+    except Exception as exc:
+        log.warning("integration_registrar_uso_falhou", provider=provider, error=str(exc))
+
+
 async def _fonte_credenciada_do_provider(db: AsyncSession, tenant_id, provider: str):
     """Instância da fonte credenciada de um provider (ou None se não testável)."""
     if provider == "pdpj":
@@ -280,6 +310,12 @@ async def testar_conexao(db: AsyncSession, tenant_id, provider: str) -> dict:
     except Exception as exc:
         ok, detail = False, str(exc)[:120]
     integ.status = "CONECTADA" if ok else "ERRO"
+    agora = datetime.now(timezone.utc)
+    if ok:
+        integ.last_success_at = agora
+    else:
+        integ.last_error_at = agora
+        integ.last_error_detail = (detail or "")[:500]
     await db.flush()
     log.info("integration_test", provider=provider, tenant_id=str(tenant_id), ok=ok)
     return {"ok": ok, "status": integ.status, "detail": detail}
@@ -315,6 +351,9 @@ async def list_status(db: AsyncSession, tenant_id) -> list[dict]:
             "oauth_disponivel": bool(meta.get("oauth_disponivel")) and is_oauth_configured(key),
             "status": integ.status if integ else "DESCONECTADA",
             "connected_at": integ.connected_at.isoformat() if integ and integ.connected_at else None,
+            "last_success_at": integ.last_success_at.isoformat() if integ and integ.last_success_at else None,
+            "last_error_at": integ.last_error_at.isoformat() if integ and integ.last_error_at else None,
+            "last_error_detail": (integ.last_error_detail if integ else None),
             # Metadados não-sensíveis (ex.: folder_id do Drive, Fase 138.2) —
             # nunca contém credencial, sempre seguro expor.
             "extra_data": (integ.extra_data or {}) if integ else {},
@@ -512,16 +551,21 @@ async def _refresh_oauth_if_needed(db: AsyncSession, integ: TenantIntegration, p
     refresh_token = creds.get("oauth_refresh_token")
     if not refresh_token:
         log.warning("oauth_credential_expired_no_refresh", provider=provider, tenant_id=str(integ.tenant_id))
+        # Fase 165 — antes o status ficava CONECTADA pra sempre nesse caso;
+        # sem refresh_token o token expirado nunca vai se renovar sozinho.
+        await registrar_uso(db, integ.tenant_id, provider, sucesso=False, detalhe="token OAuth expirado, sem refresh_token disponível")
         return creds
     try:
         tokens = await _exchange_oauth_refresh(provider, refresh_token)
     except Exception as exc:
         log.warning("oauth_refresh_failed", provider=provider, error=str(exc))
+        await registrar_uso(db, integ.tenant_id, provider, sucesso=False, detalhe=f"falha ao renovar token OAuth: {str(exc)[:400]}")
         return creds
 
     new_creds = _oauth_tokens_to_credentials(provider, tokens, fallback_refresh=refresh_token)
     integ.credentials_enc = encrypt(json.dumps(new_creds))
     integ.status = "CONECTADA"
+    integ.last_success_at = datetime.now(timezone.utc)
     await db.flush()
     log.info("oauth_token_refreshed", provider=provider, tenant_id=str(integ.tenant_id))
     return new_creds
