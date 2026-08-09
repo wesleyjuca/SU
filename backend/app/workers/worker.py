@@ -1,7 +1,32 @@
 """Celery worker — tarefas agendadas e em background do AFJ CORE SYSTEM."""
+import structlog
 from celery import Celery
 from celery.schedules import crontab
 from app.config import settings
+
+log = structlog.get_logger()
+
+# Fase 163 — Sentry só era inicializado em main.py (processo web); exceções
+# do lado do worker (falha de poll, falha de sync, lock preso mid-loop)
+# nunca eram reportadas em lugar nenhum externo, só nos logs locais.
+# Mesmo padrão opcional de main.py (só inicializa se SENTRY_DSN estiver
+# configurado), com CeleryIntegration no lugar de FastApiIntegration.
+if settings.SENTRY_DSN:
+    try:
+        import sentry_sdk
+        from sentry_sdk.integrations.celery import CeleryIntegration
+        from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
+        sentry_sdk.init(
+            dsn=settings.SENTRY_DSN,
+            environment=settings.ENVIRONMENT,
+            release=f"afj-core@{settings.VERSION}",
+            traces_sample_rate=0.1,
+            integrations=[CeleryIntegration(), SqlalchemyIntegration()],
+            send_default_pii=False,
+        )
+        log.info("sentry_initialized_worker", environment=settings.ENVIRONMENT)
+    except ImportError:
+        log.warning("sentry_sdk_not_installed", hint="pip install sentry-sdk[celery]")
 
 celery_app = Celery(
     "afj_core",
