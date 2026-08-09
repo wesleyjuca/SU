@@ -1,7 +1,7 @@
 """CRM — funil de vendas (oportunidades)."""
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func, case, or_
 from pydantic import BaseModel, Field
 from datetime import date
 from decimal import Decimal
@@ -18,6 +18,12 @@ router = APIRouter(prefix="/crm", tags=["crm"])
 ESTAGIOS = ["LEAD", "QUALIFICACAO", "PROPOSTA", "NEGOCIACAO", "GANHO", "PERDIDO"]
 _ABERTOS = ("LEAD", "QUALIFICACAO", "PROPOSTA", "NEGOCIACAO")
 _STAFF = require_role("ADMIN", "SOCIO", "ADVOGADO", "GESTOR")
+# Fase 161 — cards renderizados por coluna do Kanban, por estágio. Estágios
+# terminais (GANHO/PERDIDO) nunca são removidos e acumulam pra sempre —
+# sem esse teto, o funil carregaria centenas/milhares de cards conforme o
+# pipeline envelhece. totais/forecast continuam refletindo TODAS as
+# oportunidades (agregação SQL, não afetada por este teto).
+FUNIL_CARD_LIMIT = 100
 
 
 class OppCreate(BaseModel):
@@ -95,29 +101,61 @@ async def _get_opp(db: AsyncSession, opp_id: str, tenant_id) -> Opportunity:
 
 @router.get("/funil")
 async def funil(current_user: User = Depends(_STAFF), db: AsyncSession = Depends(get_db)):
-    """Kanban: oportunidades por estágio + forecast ponderado das abertas."""
-    opps = (await db.execute(
-        select(Opportunity).where(Opportunity.tenant_id == current_user.tenant_id)
-        .order_by(Opportunity.created_at.desc())
-    )).scalars().all()
-    nomes = await _nomes_clientes(db, opps, current_user.tenant_id)
+    """Kanban: oportunidades por estágio + forecast ponderado das abertas.
 
-    colunas = {e: [] for e in ESTAGIOS}
+    Fase 161 — `totais`/`forecast`/`pipeline_aberto` vêm de uma agregação SQL
+    sobre TODAS as oportunidades do tenant (nunca truncados). Os cards de
+    cada coluna (`colunas`) são limitados a `FUNIL_CARD_LIMIT` mais recentes
+    por estágio — `truncado[estagio]` sinaliza quando a coluna tem mais
+    oportunidades do que as exibidas (nunca um teto silencioso)."""
+    agg_rows = (await db.execute(
+        select(
+            Opportunity.estagio,
+            func.count().label("count"),
+            func.coalesce(func.sum(Opportunity.valor_estimado), 0).label("valor"),
+            func.coalesce(func.sum(
+                case(
+                    (Opportunity.estagio.in_(_ABERTOS),
+                     Opportunity.valor_estimado * Opportunity.probabilidade / 100.0),
+                    else_=0,
+                )
+            ), 0).label("forecast_parcial"),
+        )
+        .where(Opportunity.tenant_id == current_user.tenant_id)
+        .group_by(Opportunity.estagio)
+    )).all()
+
     totais = {e: {"count": 0, "valor": 0.0} for e in ESTAGIOS}
     forecast = 0.0
-    for o in opps:
-        est = o.estagio if o.estagio in colunas else "LEAD"
-        colunas[est].append(_to_dict(o, nomes.get(o.client_id)))
-        totais[est]["count"] += 1
-        totais[est]["valor"] += float(o.valor_estimado or 0)
-        if est in _ABERTOS:
-            forecast += float(o.valor_estimado or 0) * (o.probabilidade or 0) / 100.0
+    for row in agg_rows:
+        est = row.estagio if row.estagio in totais else "LEAD"
+        totais[est]["count"] += row.count
+        totais[est]["valor"] += float(row.valor or 0)
+        forecast += float(row.forecast_parcial or 0)
+
+    colunas: dict = {}
+    truncado: dict = {}
+    for est in ESTAGIOS:
+        condicao_estagio = (
+            or_(Opportunity.estagio == "LEAD", Opportunity.estagio.not_in(ESTAGIOS))
+            if est == "LEAD" else Opportunity.estagio == est
+        )
+        opps_est = (await db.execute(
+            select(Opportunity)
+            .where(Opportunity.tenant_id == current_user.tenant_id, condicao_estagio)
+            .order_by(Opportunity.created_at.desc())
+            .limit(FUNIL_CARD_LIMIT)
+        )).scalars().all()
+        nomes = await _nomes_clientes(db, opps_est, current_user.tenant_id)
+        colunas[est] = [_to_dict(o, nomes.get(o.client_id)) for o in opps_est]
+        truncado[est] = totais[est]["count"] > len(opps_est)
 
     pipeline_aberto = sum(totais[e]["valor"] for e in _ABERTOS)
     return {
         "estagios": ESTAGIOS,
         "colunas": colunas,
         "totais": totais,
+        "truncado": truncado,
         "forecast": round(forecast, 2),
         "pipeline_aberto": round(pipeline_aberto, 2),
         "abertas": sum(totais[e]["count"] for e in _ABERTOS),
