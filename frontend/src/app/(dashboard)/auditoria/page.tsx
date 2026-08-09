@@ -33,7 +33,7 @@ export default function AuditoriaPage() {
       const logsRes = await fetch("/api/v1/audit?limit=100", {
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (logsRes.ok) setLogs(await logsRes.json());
+      if (logsRes.ok) setLogs((await logsRes.json()).items);
     } finally { setLoading(false); }
   }
 
