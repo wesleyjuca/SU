@@ -24,6 +24,11 @@ class Client(Base):
     tenant_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("tenants.id"), nullable=True, index=True)
     origem: Mapped[str | None] = mapped_column(String(100))   # site, indicacao, crm_agent
     status: Mapped[str] = mapped_column(String(50), default="PROSPECTO")
+    # Fase 151 — separado de `status` (lifecycle: PROSPECTO/ATIVO/INATIVO).
+    # crm_agent.classify_client gravava o segmento (PLATINUM/GOLD/SILVER/
+    # REGULAR) direto em `status`, colidindo com o dropdown de lifecycle do
+    # frontend.
+    segmento: Mapped[str | None] = mapped_column(String(20))
     lgpd_consent: Mapped[bool] = mapped_column(Boolean, default=False)
     lgpd_consent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     observacoes: Mapped[str | None] = mapped_column(Text)

@@ -133,7 +133,11 @@ async def test_analisar_lead_client_id_de_outro_tenant_e_ignorado(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_classificar_cliente_atualiza_status_e_observacoes(monkeypatch):
+async def test_classificar_cliente_atualiza_segmento_e_observacoes(monkeypatch):
+    """Fase 151 — segmento (PLATINUM/GOLD/SILVER/REGULAR) precisa ir pro campo
+    Client.segmento, separado de Client.status (lifecycle:
+    PROSPECTO/ATIVO/INATIVO) — antes da fase, classify_client sobrescrevia
+    status direto, colidindo com o dropdown de lifecycle do frontend."""
     async def _fake_call_claude_classif(*a, **k):
         return "segmento: GOLD, frequência alta", 5, 10, 0.005
 
@@ -147,7 +151,8 @@ async def test_classificar_cliente_atualiza_status_e_observacoes(monkeypatch):
     res = await agent.execute(ctx)
     assert res.output["persistido"] is True
     assert res.output["segmento_detectado"] == "GOLD"
-    assert cliente.status == "GOLD"
+    assert cliente.segmento == "GOLD"
+    assert cliente.status == "PROSPECTO"  # lifecycle intocado pela classificação
     assert "GOLD" in cliente.observacoes
     assert db.flush_count == 1
 

@@ -292,6 +292,9 @@ async def lifespan(app: FastAPI):
             # Fase 146 — faixas de alerta de vencimento de contrato já enviadas
             # (mesmo padrão de process_deadlines.alertas_enviados, Fase 48)
             "ALTER TABLE contracts ADD COLUMN IF NOT EXISTS alertas_enviados JSONB DEFAULT '[]'::jsonb",
+            # Fase 151 — segmento de cliente (PLATINUM/GOLD/SILVER/REGULAR)
+            # separado do status de lifecycle (PROSPECTO/ATIVO/INATIVO)
+            "ALTER TABLE clients ADD COLUMN IF NOT EXISTS segmento VARCHAR(20)",
         ]:
             try:
                 async with engine.begin() as conn:

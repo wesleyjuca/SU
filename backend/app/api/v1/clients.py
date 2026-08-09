@@ -46,6 +46,7 @@ class ClientResponse(BaseModel):
     endereco_json: dict[str, Any] | None = None
     observacoes: str | None = None
     status: str
+    segmento: str | None = None
     origem: str | None
     lgpd_consent: bool
     created_at: str
@@ -403,6 +404,7 @@ def _to_response(c: Client) -> ClientResponse:
         endereco_json=c.endereco_json,
         observacoes=c.observacoes,
         status=c.status,
+        segmento=c.segmento,
         origem=c.origem,
         lgpd_consent=c.lgpd_consent,
         created_at=c.created_at.isoformat(),
