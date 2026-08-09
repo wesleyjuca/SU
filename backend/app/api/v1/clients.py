@@ -12,6 +12,7 @@ from app.dependencies import get_current_user, require_role
 from app.models.user import User
 from app.models.client import Client, ClientContact, ClientInteraction
 from app.core.exceptions import NotFoundError
+from app.core.crypto import encrypt, decrypt
 
 router = APIRouter(prefix="/clients", tags=["clients"])
 
@@ -107,6 +108,10 @@ async def create_client(
         data["lgpd_consent_at"] = datetime.now(timezone.utc)
     data["responsavel_id"] = current_user.id
     data["tenant_id"] = current_user.tenant_id
+    if "cpf" in data:
+        data["cpf"] = encrypt(data["cpf"])
+    if "cnpj" in data:
+        data["cnpj"] = encrypt(data["cnpj"])
 
     client = Client(**data)
     db.add(client)
@@ -150,6 +155,8 @@ async def update_client(
         raise NotFoundError("Cliente", client_id)
 
     for field, value in body.model_dump(exclude_none=True).items():
+        if field in ("cpf", "cnpj"):
+            value = encrypt(value)
         setattr(client, field, value)
     if body.lgpd_consent and not client.lgpd_consent:
         client.lgpd_consent_at = datetime.now(timezone.utc)
@@ -382,6 +389,17 @@ def _contact_to_dict(c: ClientContact) -> dict:
     }
 
 
+def _decrypt_or_raw(value: str | None) -> str | None:
+    """Decifra CPF/CNPJ cifrados desde a Fase 149. Fail-soft: linhas gravadas
+    antes desta fase ainda estão em texto puro (sem backfill, mesmo padrão de
+    outras migrações de dado em repouso desta sessão) — decrypt() falha nesse
+    caso (InvalidToken) e devolve o valor bruto como está."""
+    if not value:
+        return value
+    decrypted = decrypt(value)
+    return decrypted if decrypted is not None else value
+
+
 def _to_response(c: Client) -> ClientResponse:
     return ClientResponse(
         id=str(c.id),
@@ -391,8 +409,8 @@ def _to_response(c: Client) -> ClientResponse:
         email=c.email,
         telefone=c.telefone,
         whatsapp=c.whatsapp,
-        cpf=c.cpf,
-        cnpj=c.cnpj,
+        cpf=_decrypt_or_raw(c.cpf),
+        cnpj=_decrypt_or_raw(c.cnpj),
         endereco_json=c.endereco_json,
         observacoes=c.observacoes,
         status=c.status,
