@@ -95,6 +95,52 @@ async def test_criticality_high_exige_aprovacao():
 
 
 @pytest.mark.asyncio
+async def test_criticality_high_fallback_seta_approval_required():
+    """Fase 155 — regressão do bypass latente: node_check_approval/
+    create_approval_from_state chaveiam em approval_required (dict), não
+    no status. Um agente que confia só em criticality="HIGH" (sem setar
+    approval_required na própria saída, como CriticalAgent) tinha o run
+    marcado SUCCESS no final_state e NENHUM Approval criado, mesmo com
+    status=AWAITING_APPROVAL no AgentResult — o "safety net" documentado
+    no BaseAgent não protegia nada na prática."""
+    result = await CriticalAgent().run(AgentContext(task_type="t", task_input={}))
+    assert result.approval_required is not None
+    assert result.approval_required["tipo"] == "CRITICAL_AGENT_REVIEW"
+    assert result.approval_required["titulo"]
+    assert result.approval_required["descricao"]
+
+    # Prova end-to-end: reproduz exatamente a lógica de node_check_approval +
+    # route_after_approval_check do orquestrador (brain/orchestrator.py) —
+    # antes do fix, pending_approval ficava None e a rota ia pra
+    # "post_process" (bypass); agora vai pra "awaiting_approval" de verdade.
+    pending_approval = result.approval_required if result.needs_approval else None
+    rota = "awaiting_approval" if pending_approval else "post_process"
+    assert rota == "awaiting_approval"
+
+
+@pytest.mark.asyncio
+async def test_approval_required_explicito_nao_e_sobrescrito():
+    """Um agente que já seta approval_required por conta própria (os 4
+    nativos gated — petition/contract/marketing/coding) não deve ter o
+    dict genérico do fallback pisando no seu."""
+
+    class ExplicitCriticalAgent(BaseAgent):
+        name = "explicit_critical_agent"
+        description = "seta approval_required na própria execução"
+        criticality = "HIGH"
+
+        async def execute(self, ctx):
+            return AgentResult(
+                status=AgentStatus.SUCCESS, agent_name=self.name,
+                approval_required={"tipo": "CUSTOM_TIPO", "titulo": "Custom", "descricao": "Custom"},
+            )
+
+    result = await ExplicitCriticalAgent().run(AgentContext(task_type="t", task_input={}))
+    assert result.status == AgentStatus.AWAITING_APPROVAL
+    assert result.approval_required == {"tipo": "CUSTOM_TIPO", "titulo": "Custom", "descricao": "Custom"}
+
+
+@pytest.mark.asyncio
 async def test_retry_recupera_falha_transitoria():
     FlakyAgent.calls = 0
     result = await FlakyAgent().run(AgentContext(task_type="t"))

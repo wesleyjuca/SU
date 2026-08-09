@@ -225,6 +225,20 @@ class BaseAgent(ABC):
                 exige_humano = self.requires_human_approval or self.criticality == "HIGH"
                 if exige_humano and ctx.approved is None:
                     result.status = AgentStatus.AWAITING_APPROVAL
+                    # Fase 155 — sem isso, node_check_approval/create_approval_from_state
+                    # nunca disparam: eles chaveiam em approval_required (dict), não no
+                    # status. Um agente que confia só em criticality="HIGH" (sem setar
+                    # approval_required na própria saída) tinha o run marcado SUCCESS e
+                    # nenhum Approval criado — bypass latente do invariante HITL do
+                    # CLAUDE.md. Só preenche se a subclasse ainda não setou o próprio.
+                    if not result.approval_required:
+                        result.approval_required = {
+                            "tipo": f"{self.name.upper()}_REVIEW",
+                            "titulo": f"Revisar execução de {self.name}",
+                            "descricao": f"O agente {self.name} tem criticidade HIGH e "
+                                         "requer aprovação humana antes que sua saída "
+                                         "seja considerada concluída.",
+                        }
 
                 log.info(
                     "agent_complete",
