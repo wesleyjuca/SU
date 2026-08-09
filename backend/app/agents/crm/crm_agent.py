@@ -168,7 +168,7 @@ Tom: profissional, empático, objetivo. Máximo 5 linhas."""
                         segmento_detectado = seg
                         break
                 if segmento_detectado:
-                    cliente.status = segmento_detectado
+                    cliente.segmento = segmento_detectado
                 nota = f"[crm_agent classificação {datetime.now(timezone.utc).date().isoformat()}] {content[:500]}"
                 cliente.observacoes = f"{cliente.observacoes}\n{nota}" if cliente.observacoes else nota
                 await self.db.flush()
