@@ -51,6 +51,8 @@ const STATUS_STYLE: Record<string, string> = {
   CANCELADO: "badge-arquivado",
 };
 
+const PAGE_SIZE = 50;
+
 export default function FinanceiroPage() {
   const toast = useToast();
   const [entries, setEntries] = useState<Entry[]>([]);
@@ -58,6 +60,9 @@ export default function FinanceiroPage() {
   const [overdue, setOverdue] = useState<Overdue | null>(null);
   const [monthlyData, setMonthlyData] = useState<MonthlyData[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
+  const [offset, setOffset] = useState(0);
   const [filtroTipo, setFiltroTipo] = useState("");
   const [filtroStatus, setFiltroStatus] = useState("");
   const [showModal, setShowModal] = useState(false);
@@ -74,7 +79,7 @@ export default function FinanceiroPage() {
     defaultValues: { tipo: "RECEITA", status: "PENDENTE" },
   });
 
-  useEffect(() => { fetchEntries(); fetchSummary(); }, [filtroTipo, filtroStatus]);
+  useEffect(() => { fetchEntries(0, false); fetchSummary(); }, [filtroTipo, filtroStatus]);
   useEffect(() => { fetchMonthly(); fetchOverdue(); }, []);
 
   async function fetchOverdue() {
@@ -85,18 +90,29 @@ export default function FinanceiroPage() {
     } catch {}
   }
 
-  async function fetchEntries() {
-    setLoading(true);
+  async function fetchEntries(newOffset = 0, append = false) {
+    if (append) setLoadingMore(true);
+    else setLoading(true);
     try {
       const token = localStorage.getItem("afj_access_token");
       const params = new URLSearchParams();
       if (filtroTipo) params.set("tipo", filtroTipo);
       if (filtroStatus) params.set("status", filtroStatus);
+      params.set("limit", String(PAGE_SIZE));
+      params.set("offset", String(newOffset));
       const res = await fetch(`/api/v1/financial?${params}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (res.ok) setEntries(await res.json());
-    } finally { setLoading(false); }
+      if (res.ok) {
+        const data: Entry[] = await res.json();
+        setEntries((prev) => (append ? [...prev, ...data] : data));
+        setHasMore(data.length === PAGE_SIZE);
+        setOffset(newOffset + data.length);
+      }
+    } finally {
+      if (append) setLoadingMore(false);
+      else setLoading(false);
+    }
   }
 
   async function fetchSummary() {
@@ -430,6 +446,19 @@ export default function FinanceiroPage() {
             </tbody>
           </table>
           </div>
+        </div>
+      )}
+
+      {/* Carregar mais */}
+      {hasMore && !loading && (
+        <div className="flex justify-center">
+          <button
+            onClick={() => fetchEntries(offset, true)}
+            disabled={loadingMore}
+            className="btn-afj-outline rounded-sm text-sm disabled:opacity-50"
+          >
+            {loadingMore ? "Carregando..." : "Carregar mais lançamentos"}
+          </button>
         </div>
       )}
 
