@@ -1,7 +1,7 @@
 """Portal do Cliente — endpoints read-only acessíveis com role CLIENT."""
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc
+from sqlalchemy import select, desc, or_
 import uuid
 
 from app.db.base import get_db
@@ -334,6 +334,10 @@ async def portal_messages(
         .where(
             ClientInteraction.client_id == client_id,
             ClientInteraction.tipo == "PORTAL",
+            or_(
+                ClientInteraction.tenant_id == user.tenant_id,
+                ClientInteraction.tenant_id.is_(None),
+            ),
         )
         .order_by(ClientInteraction.created_at)
         .limit(limit)
@@ -363,6 +367,7 @@ async def portal_send_message(
 
     msg = ClientInteraction(
         client_id=client_id,
+        tenant_id=user.tenant_id,
         user_id=user.id,
         tipo="PORTAL",
         descricao=texto,

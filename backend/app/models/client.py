@@ -59,6 +59,10 @@ class ClientInteraction(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     client_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("clients.id", ondelete="CASCADE"), nullable=False)
+    # Fase 153 — endurecimento defensivo em profundidade (não é exploração
+    # conhecida hoje: os 2 caminhos de escrita já resolvem client_id dentro
+    # do tenant do usuário antes de persistir). Nullable, sem backfill.
+    tenant_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("tenants.id"), nullable=True, index=True)
     user_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id"))
     tipo: Mapped[str | None] = mapped_column(String(50))  # EMAIL, LIGACAO, REUNIAO, WHATSAPP, SISTEMA
     descricao: Mapped[str] = mapped_column(Text, nullable=False)

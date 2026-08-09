@@ -1,7 +1,7 @@
 """Endpoints LGPD — Lei Geral de Proteção de Dados (Lei 13.709/2018)."""
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc
+from sqlalchemy import select, desc, or_
 from pydantic import BaseModel
 from datetime import datetime, timezone
 import uuid
@@ -101,7 +101,13 @@ async def export_client_data(
 
     interactions_result = await db.execute(
         select(ClientInteraction)
-        .where(ClientInteraction.client_id == uuid.UUID(client_id))
+        .where(
+            ClientInteraction.client_id == uuid.UUID(client_id),
+            or_(
+                ClientInteraction.tenant_id == current_user.tenant_id,
+                ClientInteraction.tenant_id.is_(None),
+            ),
+        )
         .order_by(desc(ClientInteraction.created_at))
     )
     interactions = interactions_result.scalars().all()
