@@ -295,6 +295,11 @@ async def lifespan(app: FastAPI):
             # Fase 151 — segmento de cliente (PLATINUM/GOLD/SILVER/REGULAR)
             # separado do status de lifecycle (PROSPECTO/ATIVO/INATIVO)
             "ALTER TABLE clients ADD COLUMN IF NOT EXISTS segmento VARCHAR(20)",
+            # Fase 153 — endurecimento defensivo: client_interactions não tinha
+            # tenant_id (só client_id), violando o invariante de filtro por
+            # tenant em profundidade. Nullable pra não quebrar linhas antigas.
+            "ALTER TABLE client_interactions ADD COLUMN IF NOT EXISTS tenant_id UUID "
+            "REFERENCES tenants(id)",
         ]:
             try:
                 async with engine.begin() as conn:

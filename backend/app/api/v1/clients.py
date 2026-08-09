@@ -188,6 +188,7 @@ async def add_interaction(
 
     interaction = ClientInteraction(
         client_id=uuid.UUID(client_id),
+        tenant_id=current_user.tenant_id,
         user_id=current_user.id,
         tipo=body.tipo,
         descricao=body.descricao,
@@ -215,7 +216,17 @@ async def get_interactions(
         raise NotFoundError("Cliente", client_id)
     result = await db.execute(
         select(ClientInteraction)
-        .where(ClientInteraction.client_id == uuid.UUID(client_id))
+        .where(
+            ClientInteraction.client_id == uuid.UUID(client_id),
+            # Fase 153 — tenant_id é NULL em linhas anteriores à migração
+            # (sem backfill, mesmo padrão de toda a sessão); client_id já
+            # foi validado contra o tenant acima, então o filtro aqui é
+            # defesa em profundidade, não a única barreira.
+            or_(
+                ClientInteraction.tenant_id == current_user.tenant_id,
+                ClientInteraction.tenant_id.is_(None),
+            ),
+        )
         .order_by(desc(ClientInteraction.created_at))
         .limit(limit)
     )

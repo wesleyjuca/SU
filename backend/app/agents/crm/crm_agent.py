@@ -91,6 +91,7 @@ Retorne:
             from app.models.client import ClientInteraction
             self.db.add(ClientInteraction(
                 client_id=client_id,
+                tenant_id=ctx.tenant_id,
                 tipo="SISTEMA",
                 descricao=content[:4000],
                 metadata_json={"canal": canal, "origem_agente": "crm_agent.analisar_lead", "lead_nome": nome},
