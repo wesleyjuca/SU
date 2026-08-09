@@ -67,12 +67,32 @@ async def create_approval_from_state(db, agent_run, final_state) -> "uuid.UUID |
 
 
 async def _notify_tenant_of_approval(db, approval) -> None:
-    """Publica NEW_APPROVAL_PENDING (Fase 118) para todo colaborador do escritório
-    (mesmo escopo de visibilidade de `GET /approvals` — tenant inteiro, sem
-    filtro de papel; só a resolução exige ADVOGADO/SOCIO/ADMIN). Fail-soft:
-    `publish_event` já não propaga erro."""
+    """Notifica todo colaborador do escritório (mesmo escopo de visibilidade de
+    `GET /approvals` — tenant inteiro, sem filtro de papel; só a resolução
+    exige ADVOGADO/SOCIO/ADMIN) por 2 canais complementares:
+
+    1. `Notification` persistente (Fase 156) — sobrevive a reconexão/refresh e
+       alimenta o sino de notificações (`GET /notifications`); sem isso, uma
+       aprovação pendente só era vista se o revisor estivesse com a aba aberta
+       no exato momento do disparo do WebSocket (`Approval.expires_at` existe
+       no model mas nada lê/escala aprovações esquecidas — isso continua fora
+       de escopo aqui, é um lembrete/escalação seguinte, não implementado).
+       Construído inline (não via `services/notification.py::create_batch`,
+       que faz seu próprio `db.commit()`) pra entrar na MESMA transação do
+       `Approval` — commit é responsabilidade do caller de
+       `create_approval_from_state`, mesmo contrato de sempre.
+    2. Evento WS `NEW_APPROVAL_PENDING` (Fase 118), consumido por
+       `useApprovals`/`useNotifications` no frontend pra atualizar o contador
+       em tempo real.
+
+    Fail-soft: `publish_event`/`publish_notification_ws` já não propagam
+    erro; qualquer falha ao persistir a notificação é logada e não deve
+    derrubar a criação do Approval em si (o `Approval` já foi
+    `add()`+`flush()`ado pelo caller antes desta função rodar)."""
     from sqlalchemy import select
     from app.models.user import User
+    from app.models.notification import Notification
+    from app.services.notification import publish_notification_ws
     from app.api.v1.ws import publish_event
 
     user_ids = (await db.execute(
@@ -83,6 +103,19 @@ async def _notify_tenant_of_approval(db, approval) -> None:
         )
     )).scalars().all()
     for uid in user_ids:
+        try:
+            notif = Notification(
+                user_id=uid,
+                tipo="APROVACAO_PENDENTE",
+                titulo=f"Aprovação pendente: {approval.titulo}",
+                corpo=approval.descricao,
+                priority=approval.prioridade,
+                link="/aprovacoes",
+            )
+            db.add(notif)
+            await publish_notification_ws(notif)
+        except Exception as exc:
+            log.warning("approval_notification_persist_failed", approval_id=str(approval.id), error=str(exc))
         await publish_event(str(uid), "NEW_APPROVAL_PENDING", {
             "approval_id": str(approval.id),
             "tipo": approval.tipo,

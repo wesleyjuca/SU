@@ -1,5 +1,6 @@
 """Unit tests para o serviço HITL (criação de Approval + execução aprovada)."""
 import uuid
+from app.models.notification import Notification
 from app.services.approval import (
     create_approval_from_state,
     execute_approved_action,
@@ -68,6 +69,74 @@ async def test_create_approval_pending_with_scope():
 
 async def test_no_approval_when_not_pending():
     assert await create_approval_from_state(_FakeDBAdd(), _FakeRun(), {"pending_approval": None}) is None
+
+
+# ─── Fase 156 — aprovações pendentes só notificavam via WebSocket, sem
+# persistência: se o revisor não estivesse com a aba aberta no exato
+# momento do disparo, o alerta era perdido pra sempre. ─────────────────────
+
+class _FakeScalarsStaff:
+    def __init__(self, staff_ids):
+        self._ids = staff_ids
+
+    def scalars(self):
+        ids = self._ids
+
+        class _S:
+            def all(self_inner):
+                return ids
+        return _S()
+
+    def scalar_one_or_none(self):
+        return None  # Fase 132 — sem Approval pré-existente pra esse run_id
+
+
+class _FakeDBAddComStaff(_FakeDBAdd):
+    def __init__(self, staff_ids):
+        super().__init__()
+        self._staff_ids = staff_ids
+
+    async def execute(self, stmt):
+        return _FakeScalarsStaff(self._staff_ids)
+
+
+async def test_create_approval_persiste_notification_por_colaborador():
+    staff_ids = [uuid.uuid4(), uuid.uuid4()]
+    db = _FakeDBAddComStaff(staff_ids)
+    run = _FakeRun()
+    final_state = {
+        "pending_approval": {"tipo": "PETITION_REVIEW", "titulo": "Revisar petição", "descricao": "d",
+                              "prioridade": "ALTA"},
+        "agent_results": [],
+    }
+    await create_approval_from_state(db, run, final_state)
+
+    notifs = [o for o in db.added if isinstance(o, Notification)]
+    assert len(notifs) == 2
+    assert {n.user_id for n in notifs} == set(staff_ids)
+    for n in notifs:
+        assert n.tipo == "APROVACAO_PENDENTE"
+        assert "Revisar petição" in n.titulo
+        assert n.link == "/aprovacoes"
+    # A Approval em si continua sendo criada normalmente (não é sobrescrita
+    # pelas Notifications no mesmo db.added).
+    approvals = [o for o in db.added if not isinstance(o, Notification)]
+    assert len(approvals) == 1
+    assert approvals[0].status == "PENDENTE"
+
+
+async def test_create_approval_sem_colaboradores_nao_falha():
+    """Escritório sem staff ativo (edge case) — não deve lançar, só não notifica ninguém."""
+    db = _FakeDBAdd()  # scalars().all() vazio, mesma fixture já usada acima
+    run = _FakeRun()
+    final_state = {
+        "pending_approval": {"tipo": "PETITION_REVIEW", "titulo": "Revisar", "descricao": "d"},
+        "agent_results": [],
+    }
+    await create_approval_from_state(db, run, final_state)  # não deve lançar
+    # A Approval em si ainda é criada (só não há ninguém pra notificar).
+    assert any(o.status == "PENDENTE" for o in db.added if not isinstance(o, Notification))
+    assert all(not isinstance(o, Notification) for o in db.added)
 
 
 # ---- executor de ação aprovada ----
