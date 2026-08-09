@@ -75,6 +75,7 @@ async def list_entries(
     tipo: str | None = None,
     status: str | None = None,
     limit: int = Query(default=50, le=200),
+    offset: int = 0,
     current_user: User = Depends(require_role("ADMIN", "SOCIO", "GESTOR")),
     db: AsyncSession = Depends(get_db),
 ):
@@ -82,6 +83,7 @@ async def list_entries(
         select(FinancialEntry)
         .where(FinancialEntry.tenant_id == current_user.tenant_id)
         .order_by(desc(FinancialEntry.created_at))
+        .offset(offset)
         .limit(limit)
     )
     if tipo:
