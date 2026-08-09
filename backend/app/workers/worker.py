@@ -41,6 +41,7 @@ celery_app = Celery(
         "app.workers.tasks.jurisprudencia_sync",
         "app.workers.tasks.google_drive_sync",
         "app.workers.tasks.legislacao_sync",
+        "app.workers.tasks.infra_check",
     ],
 )
 
@@ -93,5 +94,12 @@ celery_app.conf.beat_schedule = {
     "sync-legislacao-federal": {
         "task": "app.workers.tasks.legislacao_sync.sync_legislacao_diario",
         "schedule": crontab(hour=6, minute=0),
+    },
+    # Alerta proativo de infra (Fase 164) — antes o painel Cérebro só via
+    # o estado das fontes/Celery/Redis/Qdrant quando um SUPERADMIN abria a
+    # aba manualmente; agora avisa por notificação na transição de estado.
+    "checar-infra-periodico": {
+        "task": "app.workers.tasks.infra_check.checar_infra_periodico",
+        "schedule": crontab(minute="*/5"),
     },
 }
