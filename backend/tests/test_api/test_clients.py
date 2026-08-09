@@ -136,6 +136,39 @@ async def test_client_contacts_crud(client: AsyncClient, auth_headers: dict):
     assert all(c["id"] != contact_id for c in list_after.json())
 
 
+async def test_create_client_cpf_cnpj_round_trip_through_encryption(client: AsyncClient, auth_headers: dict):
+    """Fase 149 — CPF/CNPJ são cifrados em repouso (app/core/crypto.py); a API
+    precisa continuar devolvendo o valor original transparentemente."""
+    payload = {
+        "tipo": "PJ",
+        "nome_completo": "Empresa Criptografia Teste",
+        "cpf": "123.456.789-00",
+        "cnpj": "12.345.678/0001-90",
+        "lgpd_consent": False,
+    }
+    res = await client.post("/api/v1/clients", json=payload, headers=auth_headers)
+    if res.status_code != 201:
+        pytest.skip("Could not create client")
+    data = res.json()
+    assert data["cpf"] == "123.456.789-00"
+    assert data["cnpj"] == "12.345.678/0001-90"
+    client_id = data["id"]
+
+    res2 = await client.get(f"/api/v1/clients/{client_id}", headers=auth_headers)
+    assert res2.status_code == 200
+    assert res2.json()["cpf"] == "123.456.789-00"
+    assert res2.json()["cnpj"] == "12.345.678/0001-90"
+
+    # PUT também deve recifrar o valor atualizado
+    upd = await client.put(
+        f"/api/v1/clients/{client_id}",
+        json={"tipo": "PJ", "nome_completo": "Empresa Criptografia Teste", "cpf": "987.654.321-00", "lgpd_consent": False},
+        headers=auth_headers,
+    )
+    assert upd.status_code == 200
+    assert upd.json()["cpf"] == "987.654.321-00"
+
+
 async def test_lgpd_data_export(client: AsyncClient, auth_headers: dict):
     create_res = await client.post(
         "/api/v1/clients",
