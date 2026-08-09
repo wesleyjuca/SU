@@ -1,7 +1,7 @@
 """Endpoints para gestão de processos judiciais."""
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc
+from sqlalchemy import select, desc, or_
 from pydantic import BaseModel, field_validator
 import uuid
 
@@ -344,6 +344,7 @@ async def list_processes(
     area_direito: str | None = None,
     situacao: str | None = None,
     client_id: str | None = None,
+    q: str | None = Query(default=None, description="Busca livre por número CNJ ou tribunal"),
     mine: bool = Query(default=False, description="Somente os processos do advogado logado"),
     limit: int = Query(default=50, le=200),
     offset: int = 0,
@@ -366,6 +367,12 @@ async def list_processes(
         query = query.where(LegalProcess.situacao == situacao)
     if client_id:
         query = query.where(LegalProcess.client_id == uuid.UUID(client_id))
+    if q:
+        termo = f"%{q.strip()}%"
+        query = query.where(or_(
+            LegalProcess.numero_cnj.ilike(termo),
+            LegalProcess.tribunal.ilike(termo),
+        ))
     if mine or await _confinar_a_equipe(db, current_user):
         query = query.where(_mine_filter(current_user.id))
 

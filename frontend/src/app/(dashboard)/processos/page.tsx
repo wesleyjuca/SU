@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import { Scale, Plus, AlertTriangle, Search, Pencil, Trash2, Download } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
@@ -76,9 +76,23 @@ export default function ProcessosPage() {
     localStorage.setItem("processos_view", view);
   }, [view]);
 
+  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   useEffect(() => {
     fetchProcessos(0, false);
   }, [filtroArea, somenteMeus]);
+
+  // Fase 160 — busca server-side (numero_cnj/tribunal via GET /processes?q=),
+  // com debounce (mesmo padrão de SearchModal.tsx) pra não disparar 1
+  // request por tecla digitada.
+  useEffect(() => {
+    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    searchDebounceRef.current = setTimeout(() => fetchProcessos(0, false), 300);
+    return () => {
+      if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search]);
 
   async function fetchProcessos(newOffset = 0, append = false) {
     if (append) setLoadingMore(true);
@@ -88,6 +102,7 @@ export default function ProcessosPage() {
       const params = new URLSearchParams();
       if (filtroArea) params.set("area_direito", filtroArea);
       if (somenteMeus) params.set("mine", "true");
+      if (search.trim()) params.set("q", search.trim());
       params.set("limit", String(PAGE_SIZE));
       params.set("offset", String(newOffset));
       const res = await fetch(`/api/v1/processes?${params}`, {
@@ -193,9 +208,10 @@ export default function ProcessosPage() {
     if (res.ok) { setDeletingId(null); setDesfecho(""); fetchProcessos(0, false); }
   }
 
-  const filtrados = processos.filter((p) =>
-    !search || p.numero_cnj?.includes(search) || p.tribunal.toLowerCase().includes(search.toLowerCase())
-  );
+  // Fase 160 — a busca (numero_cnj/tribunal) agora é feita server-side via
+  // GET /processes?q=... (efeito com debounce acima); `processos` já vem
+  // filtrado do backend, não precisa mais filtrar de novo aqui.
+  const filtrados = processos;
 
   return (
     <div className="max-w-7xl mx-auto space-y-5">
