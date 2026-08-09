@@ -11,6 +11,7 @@ from app.dependencies import get_current_user, require_role
 from app.models.user import User
 from app.models.client import Client, ClientInteraction
 from app.core.exceptions import NotFoundError
+from app.core.crypto import decrypt_or_raw
 
 router = APIRouter(prefix="/lgpd", tags=["lgpd"])
 
@@ -122,6 +123,8 @@ async def export_client_data(
         "titular": {
             "id": str(client.id),
             "nome": client.nome_completo,
+            "cpf": decrypt_or_raw(client.cpf),
+            "cnpj": decrypt_or_raw(client.cnpj),
             "email": client.email,
             "telefone": client.telefone,
             "whatsapp": client.whatsapp,

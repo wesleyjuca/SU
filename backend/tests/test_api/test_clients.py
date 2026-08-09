@@ -172,7 +172,10 @@ async def test_create_client_cpf_cnpj_round_trip_through_encryption(client: Asyn
 async def test_lgpd_data_export(client: AsyncClient, auth_headers: dict):
     create_res = await client.post(
         "/api/v1/clients",
-        json={"tipo": "PF", "nome_completo": "LGPD Titular", "email": "lgpd@test.com", "lgpd_consent": True},
+        json={
+            "tipo": "PF", "nome_completo": "LGPD Titular", "email": "lgpd@test.com",
+            "cpf": "555.666.777-88", "lgpd_consent": True,
+        },
         headers=auth_headers,
     )
     if create_res.status_code != 201:
@@ -185,6 +188,9 @@ async def test_lgpd_data_export(client: AsyncClient, auth_headers: dict):
     assert "titular" in data
     assert "interacoes" in data
     assert "base_legal" in data
+    # Fase 150 — o export precisa devolver CPF/CNPJ decifrados, mesmo docstring
+    # do endpoint já prometia isso mas o dict de retorno não incluía as chaves.
+    assert data["titular"]["cpf"] == "555.666.777-88"
 
 
 async def test_lgpd_data_erasure_anonymizes_pii(client: AsyncClient, auth_headers: dict):
