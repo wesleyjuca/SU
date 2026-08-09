@@ -53,10 +53,15 @@ const TIPO_COLORS: Record<string, string> = {
   OUTROS: "bg-gray-100 text-gray-700",
 };
 
+const PAGE_SIZE = 50;
+
 export default function DocumentosPage() {
   const toast = useToast();
   const [docs, setDocs] = useState<Documento[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
+  const [offset, setOffset] = useState(0);
   const [search, setSearch] = useState("");
   const [filtroTipo, setFiltroTipo] = useState("");
   const [filtroStatus, setFiltroStatus] = useState("");
@@ -191,7 +196,7 @@ export default function DocumentosPage() {
     finally { setDeleting(null); }
   }
 
-  useEffect(() => { fetchDocs(); }, [filtroTipo, filtroStatus]);
+  useEffect(() => { fetchDocs(0, false); }, [filtroTipo, filtroStatus]);
 
   // Google Workspace: mostra "Salvar no Drive" apenas para quem conectou a conta
   useEffect(() => {
@@ -217,18 +222,29 @@ export default function DocumentosPage() {
     finally { setSavingDrive(null); }
   }
 
-  async function fetchDocs() {
-    setLoading(true);
+  async function fetchDocs(newOffset = 0, append = false) {
+    if (append) setLoadingMore(true);
+    else setLoading(true);
     try {
       const token = localStorage.getItem("afj_access_token");
       const params = new URLSearchParams();
       if (filtroTipo) params.set("tipo", filtroTipo);
       if (filtroStatus) params.set("status", filtroStatus);
+      params.set("limit", String(PAGE_SIZE));
+      params.set("offset", String(newOffset));
       const res = await fetch(`/api/v1/documents?${params}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (res.ok) setDocs(await res.json());
-    } finally { setLoading(false); }
+      if (res.ok) {
+        const data: Documento[] = await res.json();
+        setDocs((prev) => (append ? [...prev, ...data] : data));
+        setHasMore(data.length === PAGE_SIZE);
+        setOffset(newOffset + data.length);
+      }
+    } finally {
+      if (append) setLoadingMore(false);
+      else setLoading(false);
+    }
   }
 
   const filtrados = docs.filter((d) =>
@@ -554,6 +570,19 @@ export default function DocumentosPage() {
             </tbody>
           </table>
           </div>
+        </div>
+      )}
+
+      {/* Carregar mais */}
+      {hasMore && !loading && (
+        <div className="flex justify-center">
+          <button
+            onClick={() => fetchDocs(offset, true)}
+            disabled={loadingMore}
+            className="btn-afj-outline rounded-sm text-sm disabled:opacity-50"
+          >
+            {loadingMore ? "Carregando..." : "Carregar mais documentos"}
+          </button>
         </div>
       )}
 
