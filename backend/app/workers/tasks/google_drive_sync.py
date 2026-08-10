@@ -66,51 +66,65 @@ async def executar_sync_drive_doutrina(db) -> dict:
 
         tenants_sincronizados += 1
         processados = pulados = falhas = 0
-        for arq in arquivos:
-            file_id = arq.get("id")
-            if not file_id:
-                continue
-            existe = (await db.execute(
-                select(JurisprudenciaIngerida).where(
-                    JurisprudenciaIngerida.fonte == fonte,
-                    JurisprudenciaIngerida.fonte_documento_id == file_id,
-                )
-            )).scalar_one_or_none()
-            if existe:
-                pulados += 1
-                continue
-
-            metadata = {"nome_arquivo": arq.get("name"), "google_file_id": file_id}
-            entrada = JurisprudenciaIngerida(
-                tenant_id=integ.tenant_id, fonte=fonte, fonte_documento_id=file_id,
-                collection_alvo="doutrina_privada", metadata_extraida=metadata, status="PENDENTE",
-            )
-            db.add(entrada)
-            await db.flush()
-
-            try:
-                conteudo = await baixar_arquivo(creds["access_token"], file_id)
-                if conteudo is None:
-                    raise RuntimeError("download do arquivo falhou")
-                texto = await extrair_texto(arq.get("mimeType"), conteudo)
-                if not texto:
-                    entrada.status = "FALHOU"
-                    entrada.erro = "tipo de arquivo não suportado ou sem texto extraível"
-                    falhas += 1
-                else:
-                    await ingest_document(
-                        content=texto, collection="doutrina_privada",
-                        metadata={"tenant_id": str(integ.tenant_id), **metadata}, document_id=file_id,
+        # Fase 167 — uma exceção não tratada no meio da lista de arquivos de
+        # UM tenant (DB caiu, SoftTimeLimitExceeded) propagava pra fora do
+        # loop externo inteiro, abortando a sincronização dos DEMAIS
+        # tenants e deixando o SyncRun deste tenant preso em RUNNING —
+        # contrariava o próprio design fail-soft-por-tenant do arquivo
+        # (ver docstring do módulo). Finaliza ERRO só pra este tenant e
+        # segue pro próximo, em vez de re-lançar.
+        try:
+            for arq in arquivos:
+                file_id = arq.get("id")
+                if not file_id:
+                    continue
+                existe = (await db.execute(
+                    select(JurisprudenciaIngerida).where(
+                        JurisprudenciaIngerida.fonte == fonte,
+                        JurisprudenciaIngerida.fonte_documento_id == file_id,
                     )
-                    entrada.status = "EMBEDDED"
-                    processados += 1
-            except Exception as exc:
-                entrada.status = "FALHOU"
-                entrada.erro = str(exc)[:500]
-                falhas += 1
-                log.warning("drive_ingest_falhou", tenant_id=str(integ.tenant_id), file_id=file_id, error=str(exc))
-            entrada.processed_at = datetime.now(timezone.utc)
+                )).scalar_one_or_none()
+                if existe:
+                    pulados += 1
+                    continue
+
+                metadata = {"nome_arquivo": arq.get("name"), "google_file_id": file_id}
+                entrada = JurisprudenciaIngerida(
+                    tenant_id=integ.tenant_id, fonte=fonte, fonte_documento_id=file_id,
+                    collection_alvo="doutrina_privada", metadata_extraida=metadata, status="PENDENTE",
+                )
+                db.add(entrada)
+                await db.flush()
+
+                try:
+                    conteudo = await baixar_arquivo(creds["access_token"], file_id)
+                    if conteudo is None:
+                        raise RuntimeError("download do arquivo falhou")
+                    texto = await extrair_texto(arq.get("mimeType"), conteudo)
+                    if not texto:
+                        entrada.status = "FALHOU"
+                        entrada.erro = "tipo de arquivo não suportado ou sem texto extraível"
+                        falhas += 1
+                    else:
+                        await ingest_document(
+                            content=texto, collection="doutrina_privada",
+                            metadata={"tenant_id": str(integ.tenant_id), **metadata}, document_id=file_id,
+                        )
+                        entrada.status = "EMBEDDED"
+                        processados += 1
+                except Exception as exc:
+                    entrada.status = "FALHOU"
+                    entrada.erro = str(exc)[:500]
+                    falhas += 1
+                    log.warning("drive_ingest_falhou", tenant_id=str(integ.tenant_id), file_id=file_id, error=str(exc))
+                entrada.processed_at = datetime.now(timezone.utc)
+                await db.commit()
+        except Exception as exc:
+            log.error("drive_sync_loop_falhou", tenant_id=str(integ.tenant_id), error=str(exc))
+            stats = {"processados": processados, "pulados": pulados, "falhas": falhas, "erro": str(exc)[:300]}
+            await finalizar_sync(db, run, "ERRO", stats)
             await db.commit()
+            continue
 
         stats = {"processados": processados, "pulados": pulados, "falhas": falhas}
         await finalizar_sync(db, run, "OK", stats)

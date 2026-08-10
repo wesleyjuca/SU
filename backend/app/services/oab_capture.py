@@ -213,106 +213,124 @@ async def capturar_por_oab(
         await db.commit()
         return resultado
 
-    # Diagnóstico da fonte (distingue "inalcançável" de "0 no período").
-    # `stats["itens"]` acumula o total bruto de comunicações (a fonte preenche).
+    # Fase 167 — sem este try/except em volta do corpo principal, uma
+    # exceção não tratada (DB caiu, SoftTimeLimitExceeded) propagava pra
+    # fora da função, pulando o `finalizar_sync("OK", ...)` no final — o
+    # SyncRun ficava preso em RUNNING pra sempre. Contadores parciais
+    # inicializados antes do try pra sempre existirem no except, não
+    # importa em qual ponto a falha aconteceu.
     stats: dict = {}
-    fonte_comunica = obter_fonte("comunica")
-
-    # numero_cnj (dígitos) -> dados do processo a criar
+    total_comunicacoes = 0
     achados: dict[str, dict] = {}
-    for numero, uf, owner in oabs:
-        descobertos = await fonte_comunica.descobrir_por_oab(
-            numero, uf, inicio, hoje, max_paginas=20, stats=stats,
-        ) if fonte_comunica else []
-        for p in descobertos:
-            cnj = p.numero_cnj
-            if not cnj or cnj in achados:
-                continue
-            raw = p.raw
-            numero_fmt = getattr(raw, "numero_cnj_fmt", None) or cnj
-            achados[cnj] = {
-                "numero_cnj_fmt": numero_fmt,
-                "tribunal": normalizar_codigo(p.tribunal or f"TJ{uf}"),
-                "uf": uf,
-                "oab": f"{numero}/{uf}",
-                "owner": owner,
-            }
-    total_comunicacoes = stats.get("itens", 0)
-
-    if not achados:
-        resultado = {"oabs": len(oabs), "comunicacoes_encontradas": total_comunicacoes,
-                     "processos_encontrados": 0, "processos_criados": 0,
-                     "fonte_respondeu": bool(stats.get("ok")),
-                     "fonte_detalhe": stats.get("error")}
-        await finalizar_sync(db, sync, "OK" if stats.get("ok") else "ERRO", resultado)
-        await db.commit()
-        return resultado
-
-    # Já existentes no tenant (dedup por dígitos do CNJ)
-    existentes = {
-        _digits(n) for (n,) in (await db.execute(
-            select(LegalProcess.numero_cnj).where(
-                LegalProcess.tenant_id == tenant_id, LegalProcess.numero_cnj.isnot(None)
-            )
-        )).all() if n
-    }
-
     criados = 0
-    novos: list[tuple] = []  # (proc, tribunal) p/ enriquecer via DataJud
-    for cnj, info in achados.items():
-        if cnj in existentes:
-            continue
-        proc = LegalProcess(
-            id=uuid.uuid4(),
-            tenant_id=tenant_id,
-            numero_cnj=info["numero_cnj_fmt"],
-            tribunal=info["tribunal"],
-            uf=info["uf"],
-            situacao="ATIVO",
-            oab_responsavel=info["oab"],
-            responsavel_id=info["owner"],
-            monitoring_active=True,
-            fonte="OAB",
-            metadata_json={"oab_origem": info["oab"]},
-        )
-        db.add(proc)
-        await db.flush()
-        # Liga ao advogado dono da OAB (aparece na Minha Área / modo confidencial)
-        if info["owner"]:
-            db.add(ProcessTeamMember(process_id=proc.id, user_id=info["owner"], papel="RESPONSAVEL"))
-        novos.append((proc, info["tribunal"]))
-        criados += 1
+    try:
+        # Diagnóstico da fonte (distingue "inalcançável" de "0 no período").
+        # `stats["itens"]` acumula o total bruto de comunicações (a fonte preenche).
+        fonte_comunica = obter_fonte("comunica")
 
-    # Enriquecimento via DataJud (metadados + andamentos por número). Bounded p/ não
-    # estourar timeout; a busca por OAB NÃO existe no DataJud público (só por número).
-    await _enriquecer_via_datajud(db, novos[:40])
-    # Partes via fonte credenciada (PDPJ/Escavador/Judit; só com opt-in, senão no-op).
-    await _enriquecer_partes(db, tenant_id, novos[:40])
+        # numero_cnj (dígitos) -> dados do processo a criar
+        for numero, uf, owner in oabs:
+            descobertos = await fonte_comunica.descobrir_por_oab(
+                numero, uf, inicio, hoje, max_paginas=20, stats=stats,
+            ) if fonte_comunica else []
+            for p in descobertos:
+                cnj = p.numero_cnj
+                if not cnj or cnj in achados:
+                    continue
+                raw = p.raw
+                numero_fmt = getattr(raw, "numero_cnj_fmt", None) or cnj
+                achados[cnj] = {
+                    "numero_cnj_fmt": numero_fmt,
+                    "tribunal": normalizar_codigo(p.tribunal or f"TJ{uf}"),
+                    "uf": uf,
+                    "oab": f"{numero}/{uf}",
+                    "owner": owner,
+                }
+        total_comunicacoes = stats.get("itens", 0)
 
-    if triggered_by and criados:
-        from app.services.notification import publish_notification_ws
-        notif = Notification(
-            user_id=triggered_by,
-            tenant_id=tenant_id,
-            tipo="NOVO_ANDAMENTO",
-            titulo="Captura por OAB concluída",
-            corpo=f"{criados} novo(s) processo(s) capturado(s) pelas OABs do escritório.",
-            priority="NORMAL",
-            link="/processos",
-        )
-        db.add(notif)
-        await publish_notification_ws(notif)
+        if not achados:
+            resultado = {"oabs": len(oabs), "comunicacoes_encontradas": total_comunicacoes,
+                         "processos_encontrados": 0, "processos_criados": 0,
+                         "fonte_respondeu": bool(stats.get("ok")),
+                         "fonte_detalhe": stats.get("error")}
+            await finalizar_sync(db, sync, "OK" if stats.get("ok") else "ERRO", resultado)
+            await db.commit()
+            return resultado
 
-    resultado = {
-        "oabs": len(oabs),
-        "comunicacoes_encontradas": total_comunicacoes,
-        "processos_encontrados": len(achados),
-        "processos_criados": criados,
-        "fonte_respondeu": bool(stats.get("ok")),
-        "fonte_detalhe": stats.get("error"),
-    }
-    await finalizar_sync(db, sync, "OK", resultado)
-    await db.commit()
-    log.info("oab_capture_done", tenant=str(tenant_id), oabs=len(oabs),
-             comunicacoes=total_comunicacoes, encontrados=len(achados), criados=criados)
-    return resultado
+        # Já existentes no tenant (dedup por dígitos do CNJ)
+        existentes = {
+            _digits(n) for (n,) in (await db.execute(
+                select(LegalProcess.numero_cnj).where(
+                    LegalProcess.tenant_id == tenant_id, LegalProcess.numero_cnj.isnot(None)
+                )
+            )).all() if n
+        }
+
+        novos: list[tuple] = []  # (proc, tribunal) p/ enriquecer via DataJud
+        for cnj, info in achados.items():
+            if cnj in existentes:
+                continue
+            proc = LegalProcess(
+                id=uuid.uuid4(),
+                tenant_id=tenant_id,
+                numero_cnj=info["numero_cnj_fmt"],
+                tribunal=info["tribunal"],
+                uf=info["uf"],
+                situacao="ATIVO",
+                oab_responsavel=info["oab"],
+                responsavel_id=info["owner"],
+                monitoring_active=True,
+                fonte="OAB",
+                metadata_json={"oab_origem": info["oab"]},
+            )
+            db.add(proc)
+            await db.flush()
+            # Liga ao advogado dono da OAB (aparece na Minha Área / modo confidencial)
+            if info["owner"]:
+                db.add(ProcessTeamMember(process_id=proc.id, user_id=info["owner"], papel="RESPONSAVEL"))
+            novos.append((proc, info["tribunal"]))
+            criados += 1
+
+        # Enriquecimento via DataJud (metadados + andamentos por número). Bounded p/ não
+        # estourar timeout; a busca por OAB NÃO existe no DataJud público (só por número).
+        await _enriquecer_via_datajud(db, novos[:40])
+        # Partes via fonte credenciada (PDPJ/Escavador/Judit; só com opt-in, senão no-op).
+        await _enriquecer_partes(db, tenant_id, novos[:40])
+
+        if triggered_by and criados:
+            from app.services.notification import publish_notification_ws
+            notif = Notification(
+                user_id=triggered_by,
+                tenant_id=tenant_id,
+                tipo="NOVO_ANDAMENTO",
+                titulo="Captura por OAB concluída",
+                corpo=f"{criados} novo(s) processo(s) capturado(s) pelas OABs do escritório.",
+                priority="NORMAL",
+                link="/processos",
+            )
+            db.add(notif)
+            await publish_notification_ws(notif)
+
+        resultado = {
+            "oabs": len(oabs),
+            "comunicacoes_encontradas": total_comunicacoes,
+            "processos_encontrados": len(achados),
+            "processos_criados": criados,
+            "fonte_respondeu": bool(stats.get("ok")),
+            "fonte_detalhe": stats.get("error"),
+        }
+        await finalizar_sync(db, sync, "OK", resultado)
+        await db.commit()
+        log.info("oab_capture_done", tenant=str(tenant_id), oabs=len(oabs),
+                 comunicacoes=total_comunicacoes, encontrados=len(achados), criados=criados)
+        return resultado
+    except Exception as exc:
+        log.error("oab_capture_loop_falhou", tenant=str(tenant_id), error=str(exc))
+        resultado = {
+            "oabs": len(oabs), "comunicacoes_encontradas": total_comunicacoes,
+            "processos_encontrados": len(achados), "processos_criados": criados,
+            "erro": str(exc)[:300],
+        }
+        await finalizar_sync(db, sync, "ERRO", resultado)
+        await db.commit()
+        raise
