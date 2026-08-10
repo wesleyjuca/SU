@@ -34,6 +34,9 @@ interface HubIntegracao {
   provider: string; nome: string; desc: string; tipo: string;
   fields: HubField[]; ativa: string[]; obter: string;
   status: string; connected_at: string | null;
+  // Fase 165 — antes só o clique manual em "Testar conexão" atualizava o
+  // status; estes campos refletem o último uso REAL da credencial.
+  last_success_at: string | null; last_error_at: string | null; last_error_detail: string | null;
   oauth_disponivel: boolean;
   extra_data: Record<string, string>;
 }
@@ -245,7 +248,8 @@ function HubCards() {
 
             {comErro && (
               <p className="mt-3 text-[11px] text-red-600 bg-red-50 border border-red-200 rounded-sm px-2.5 py-1.5">
-                A última verificação falhou (credencial inválida/expirada). Teste a conexão ou reconecte.
+                {it.last_error_detail || "A última verificação falhou (credencial inválida/expirada)."} Teste a conexão ou reconecte.
+                {it.last_error_at && ` (${new Date(it.last_error_at).toLocaleString("pt-BR")})`}
               </p>
             )}
 
@@ -293,6 +297,11 @@ function HubCards() {
                   {it.connected_at && (
                     <span className="text-xs text-afj-black/55">
                       Conectada em {new Date(it.connected_at).toLocaleDateString("pt-BR")}
+                    </span>
+                  )}
+                  {it.last_success_at && !comErro && (
+                    <span className="text-xs text-afj-black/40">
+                      · último uso OK em {new Date(it.last_success_at).toLocaleString("pt-BR")}
                     </span>
                   )}
                   {isAdmin && TESTAVEIS.has(it.provider) && (

@@ -797,14 +797,21 @@ async def atualizar_partes(
             detail="Nenhuma fonte de partes conectada. Conecte PJe/PDPJ, Escavador, Judit ou Jusbrasil em Integrações.",
         )
 
+    from app.services import integration_hub
+
     try:
         partes = await fonte.partes(process.numero_cnj, process.tribunal)
-    except Exception:
+    except Exception as exc:
         partes = []
+        # Fase 165 — resposta vazia sem exceção não é necessariamente erro (o
+        # processo pode legitimamente não ter partes cadastradas ainda); só
+        # marca ERRO quando `fonte.partes()` de fato lançou.
+        await integration_hub.registrar_uso(db, current_user.tenant_id, fonte.nome, sucesso=False, detalhe=str(exc)[:400])
     if not partes:
         return {"novas": 0, "fonte_respondeu": False,
                 "message": f"{fonte.nome.upper()} não retornou partes (token expirado/sem acesso ao processo, ou fora do ar)."}
 
+    await integration_hub.registrar_uso(db, current_user.tenant_id, fonte.nome, sucesso=True)
     resultado = await importar_partes(db, process, partes, origem=fonte.nome.upper())
     await db.commit()
     novas = resultado["novas"]

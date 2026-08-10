@@ -300,6 +300,12 @@ async def lifespan(app: FastAPI):
             # tenant em profundidade. Nullable pra não quebrar linhas antigas.
             "ALTER TABLE client_interactions ADD COLUMN IF NOT EXISTS tenant_id UUID "
             "REFERENCES tenants(id)",
+            # Fase 165 — status de TenantIntegration só mudava no clique manual
+            # de "Testar conexão"; estas colunas passam a ser atualizadas em
+            # todo uso real da credencial (ver integration_hub.registrar_uso).
+            "ALTER TABLE tenant_integrations ADD COLUMN IF NOT EXISTS last_success_at TIMESTAMPTZ",
+            "ALTER TABLE tenant_integrations ADD COLUMN IF NOT EXISTS last_error_at TIMESTAMPTZ",
+            "ALTER TABLE tenant_integrations ADD COLUMN IF NOT EXISTS last_error_detail VARCHAR(500)",
         ]:
             try:
                 async with engine.begin() as conn:

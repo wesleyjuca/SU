@@ -36,5 +36,13 @@ class TenantIntegration(Base):
     extra_data: Mapped[dict] = mapped_column(JSONB, default=dict)
     connected_by: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     connected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Fase 165 — antes só o clique manual em "Testar conexão" atualizava
+    # `status`; uma integração podia estar morta há semanas com a UI ainda
+    # mostrando CONECTADA. Estas colunas são atualizadas em todo uso REAL da
+    # credencial (envio de e-mail/WhatsApp, captura de partes etc.), não só
+    # no teste manual — ver `integration_hub.registrar_uso()`.
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error_detail: Mapped[str | None] = mapped_column(String(500))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
