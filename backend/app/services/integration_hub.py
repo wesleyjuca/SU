@@ -83,7 +83,17 @@ PROVIDERS: dict[str, dict] = {
             "Aviso de nova intimação para a equipe do processo",
             "Fatura com link de pagamento enviada ao cliente",
         ],
-        "obter": "Meta for Developers → app WhatsApp Business → API Setup. "
+        # Fase 168 — a instrução antiga apontava pra aba "API Setup" do Meta
+        # for Developers, que só emite um token TEMPORÁRIO de 24h — seguindo
+        # literalmente, o WhatsApp para de enviar 1 dia depois de conectado.
+        # O caminho certo pro token PERMANENTE é via Usuário do Sistema no
+        # Meta Business Suite.
+        "obter": "Meta Business Suite → Configurações do negócio → Usuários do "
+                 "sistema → crie (ou selecione) um usuário do sistema, atribua o "
+                 "ativo \"Conta do WhatsApp Business\" com a permissão "
+                 "whatsapp_business_messaging e gere um token PERMANENTE (sem "
+                 "expiração) — não use o token temporário de 24h da aba "
+                 "\"Configuração da API\", ele expira em 1 dia e derruba o envio. "
                  "Crie e aprove um template chamado 'afj_notificacao' (pt_BR) com "
                  "um parâmetro {{1}} no corpo — mensagens fora da janela de 24h "
                  "exigem template aprovado.",
@@ -272,6 +282,21 @@ async def registrar_uso(db: AsyncSession, tenant_id, provider: str, sucesso: boo
         log.warning("integration_registrar_uso_falhou", provider=provider, error=str(exc))
 
 
+class _WhatsAppFonteTeste:
+    """Adapter fino só pra expor `.testar()` no mesmo formato das fontes
+    credenciadas (Fase 168) — WhatsApp não é uma `FonteProcessual` (não
+    descobre/detalha processo), então não tem um `para_tenant()` próprio;
+    isso só embrulha as 2 credenciais já decifradas."""
+
+    def __init__(self, access_token: str | None, phone_number_id: str | None) -> None:
+        self._access_token = access_token
+        self._phone_number_id = phone_number_id
+
+    async def testar(self) -> tuple[bool, str]:
+        from app.services.whatsapp import testar_credenciais
+        return await testar_credenciais(self._access_token, self._phone_number_id)
+
+
 async def _fonte_credenciada_do_provider(db: AsyncSession, tenant_id, provider: str):
     """Instância da fonte credenciada de um provider (ou None se não testável)."""
     if provider == "pdpj":
@@ -282,6 +307,11 @@ async def _fonte_credenciada_do_provider(db: AsyncSession, tenant_id, provider: 
         from app.integrations.fontes.judit_fonte import para_tenant
     elif provider == "jusbrasil":
         from app.integrations.fontes.jusbrasil_fonte import para_tenant
+    elif provider == "whatsapp":
+        creds = await get_credentials(db, tenant_id, provider)
+        if not creds:
+            return None
+        return _WhatsAppFonteTeste(creds.get("access_token"), creds.get("phone_number_id"))
     else:
         return None
     return await para_tenant(db, tenant_id)
@@ -290,10 +320,11 @@ async def _fonte_credenciada_do_provider(db: AsyncSession, tenant_id, provider: 
 async def testar_conexao(db: AsyncSession, tenant_id, provider: str) -> dict:
     """Testa a credencial conectada e atualiza o `status` (CONECTADA/ERRO).
 
-    Para as fontes credenciadas (pdpj/escavador/judit) faz uma sonda autenticada
-    que distingue 401/403 (credencial inválida/expirada) de sucesso. Para os
-    demais provedores não há teste automático — retorna o status atual. Não faz
-    commit (o chamador comita). Detecção de expiração = este teste marcando ERRO."""
+    Para as fontes credenciadas (pdpj/escavador/judit/jusbrasil) e pra WhatsApp
+    (Fase 168) faz uma sonda autenticada que distingue 401/403 (credencial
+    inválida/expirada) de sucesso. Para os demais provedores não há teste
+    automático — retorna o status atual. Não faz commit (o chamador comita).
+    Detecção de expiração = este teste marcando ERRO."""
     if provider not in PROVIDERS:
         return {"ok": False, "status": "DESCONHECIDO", "detail": "provedor desconhecido"}
     integ = await get_integration(db, tenant_id, provider)

@@ -68,8 +68,10 @@ const MODULOS_HUB: Record<string, string> = {
   google_workspace: "google_workspace",
 };
 
-// Provedores com teste de credencial automático (fontes credenciadas).
-const TESTAVEIS = new Set(["pdpj", "escavador", "judit"]);
+// Provedores com teste de credencial automático (fontes credenciadas +
+// WhatsApp, Fase 168 — antes o botão nem aparecia pra jusbrasil, apesar do
+// backend já testar essa fonte desde a Fase 88, nem pra WhatsApp).
+const TESTAVEIS = new Set(["pdpj", "escavador", "judit", "jusbrasil", "whatsapp"]);
 
 function HubCards() {
   const toast = useToast();
