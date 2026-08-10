@@ -177,10 +177,13 @@ async def _fontes() -> dict:
             from app.integrations.fontes.registry import todas_as_fontes
             for f in todas_as_fontes():
                 breaker = getattr(f, "_breaker", None)
+                # Fase 166 — `estado_atual()` lê o Redis (estado
+                # compartilhado entre processos), não só a memória local do
+                # processo web que está servindo este painel.
                 resultado["fontes"].append({
                     "nome": getattr(f, "nome", "?"),
                     "capabilities": sorted(c.value for c in getattr(f, "capabilities", set())),
-                    "breaker": (breaker.state if breaker is not None else None),
+                    "breaker": (await breaker.estado_atual() if breaker is not None else None),
                 })
         except Exception as exc:
             resultado["ok"] = False
