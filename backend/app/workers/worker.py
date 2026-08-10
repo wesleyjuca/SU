@@ -42,6 +42,7 @@ celery_app = Celery(
         "app.workers.tasks.google_drive_sync",
         "app.workers.tasks.legislacao_sync",
         "app.workers.tasks.infra_check",
+        "app.workers.tasks.sync_reaper",
     ],
 )
 
@@ -101,5 +102,12 @@ celery_app.conf.beat_schedule = {
     "checar-infra-periodico": {
         "task": "app.workers.tasks.infra_check.checar_infra_periodico",
         "schedule": crontab(minute="*/5"),
+    },
+    # Reaper de SyncRun travados em RUNNING (Fase 167) — rede de segurança
+    # pro cenário residual que try/except não cobre (processo morto sem
+    # desenrolar a pilha, ex.: OOM kill).
+    "reapear-syncs-travados": {
+        "task": "app.workers.tasks.sync_reaper.reapear_syncs_travados_periodico",
+        "schedule": crontab(minute="*/30"),
     },
 }

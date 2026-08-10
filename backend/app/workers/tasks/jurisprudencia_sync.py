@@ -130,62 +130,80 @@ async def executar_sync_stj(db) -> dict:
         await db.commit()
         raise
 
-    for reg in registros:
-        fonte_documento_id = reg.get("fonte_documento_id")
-        if not fonte_documento_id:
-            continue
-        existe = (await db.execute(
-            select(JurisprudenciaIngerida).where(
-                JurisprudenciaIngerida.fonte == "stj_dados_abertos",
-                JurisprudenciaIngerida.fonte_documento_id == fonte_documento_id,
-            )
-        )).scalar_one_or_none()
-        if existe:
-            pulados += 1
-            continue
+    # Fase 167 — sem este try/except em volta do loop inteiro, uma exceção
+    # não tratada no MEIO da lista (ex.: DB caiu, ou o SoftTimeLimitExceeded
+    # que o próprio Celery levanta perto do time_limit) propagava direto pra
+    # fora de `executar_sync_stj`, pulando o `finalizar_sync("OK", ...)` no
+    # final — o SyncRun ficava preso em RUNNING pra sempre, mesmo com o
+    # worker já tendo morrido/desistido havia muito tempo.
+    try:
+        for reg in registros:
+            fonte_documento_id = reg.get("fonte_documento_id")
+            if not fonte_documento_id:
+                continue
+            existe = (await db.execute(
+                select(JurisprudenciaIngerida).where(
+                    JurisprudenciaIngerida.fonte == "stj_dados_abertos",
+                    JurisprudenciaIngerida.fonte_documento_id == fonte_documento_id,
+                )
+            )).scalar_one_or_none()
+            if existe:
+                pulados += 1
+                continue
 
-        metadata_extraida = {
-            k: v for k, v in reg.items() if k not in ("texto", "fonte_documento_id") and v
+            metadata_extraida = {
+                k: v for k, v in reg.items() if k not in ("texto", "fonte_documento_id") and v
+            }
+            entrada = JurisprudenciaIngerida(
+                fonte="stj_dados_abertos",
+                fonte_documento_id=fonte_documento_id,
+                collection_alvo="jurisprudencia",
+                metadata_extraida=metadata_extraida,
+                status="PENDENTE",
+            )
+            db.add(entrada)
+            await db.flush()
+
+            # Classificação (Fase 138.5) tem try/except próprio, separado do de
+            # ingestão logo abaixo — uma falha aqui nunca deve marcar o
+            # documento como FALHOU (bloquearia reingestão por um problema
+            # cosmético, não fatal). `classificar_acordao` já é fail-soft e não
+            # lança, mas o resultado ainda pode ser None.
+            classificacao = await classificar_acordao(reg["texto"])
+            if classificacao is None:
+                nao_classificados += 1
+            else:
+                custo_total += classificacao.get("custo_usd", 0.0)
+
+            try:
+                qdrant_metadata = {"tribunal": "STJ", **metadata_extraida}
+                if classificacao is not None:
+                    qdrant_metadata["favoravel"] = classificacao["favoravel"]
+                    qdrant_metadata["area_direito"] = classificacao["area_direito"]
+                await ingest_document(
+                    content=reg["texto"], collection="jurisprudencia",
+                    metadata=qdrant_metadata, document_id=fonte_documento_id,
+                )
+                entrada.status = "EMBEDDED"
+                processados += 1
+            except Exception as exc:
+                entrada.status = "FALHOU"
+                entrada.erro = str(exc)[:500]
+                falhas += 1
+                log.warning("stj_ingest_falhou", fonte_documento_id=fonte_documento_id, error=str(exc))
+            entrada.processed_at = datetime.now(timezone.utc)
+            await db.commit()
+    except Exception as exc:
+        log.error("stj_sync_loop_falhou", error=str(exc))
+        stats = {
+            "processados": processados, "pulados": pulados, "falhas": falhas,
+            "nao_classificados": nao_classificados,
+            "custo_classificacao_usd": round(custo_total, 4),
+            "erro": str(exc)[:300],
         }
-        entrada = JurisprudenciaIngerida(
-            fonte="stj_dados_abertos",
-            fonte_documento_id=fonte_documento_id,
-            collection_alvo="jurisprudencia",
-            metadata_extraida=metadata_extraida,
-            status="PENDENTE",
-        )
-        db.add(entrada)
-        await db.flush()
-
-        # Classificação (Fase 138.5) tem try/except próprio, separado do de
-        # ingestão logo abaixo — uma falha aqui nunca deve marcar o
-        # documento como FALHOU (bloquearia reingestão por um problema
-        # cosmético, não fatal). `classificar_acordao` já é fail-soft e não
-        # lança, mas o resultado ainda pode ser None.
-        classificacao = await classificar_acordao(reg["texto"])
-        if classificacao is None:
-            nao_classificados += 1
-        else:
-            custo_total += classificacao.get("custo_usd", 0.0)
-
-        try:
-            qdrant_metadata = {"tribunal": "STJ", **metadata_extraida}
-            if classificacao is not None:
-                qdrant_metadata["favoravel"] = classificacao["favoravel"]
-                qdrant_metadata["area_direito"] = classificacao["area_direito"]
-            await ingest_document(
-                content=reg["texto"], collection="jurisprudencia",
-                metadata=qdrant_metadata, document_id=fonte_documento_id,
-            )
-            entrada.status = "EMBEDDED"
-            processados += 1
-        except Exception as exc:
-            entrada.status = "FALHOU"
-            entrada.erro = str(exc)[:500]
-            falhas += 1
-            log.warning("stj_ingest_falhou", fonte_documento_id=fonte_documento_id, error=str(exc))
-        entrada.processed_at = datetime.now(timezone.utc)
+        await finalizar_sync(db, run, "ERRO", stats)
         await db.commit()
+        raise
 
     stats = {
         "processados": processados, "pulados": pulados, "falhas": falhas,

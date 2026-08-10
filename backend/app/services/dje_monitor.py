@@ -92,119 +92,136 @@ async def scan_publicacoes(db, tenant_id: uuid.UUID | None = None, dias_retro: i
 
     novas = 0
     casadas = 0
-    for oab_numero, oab_uf, t_id in oabs:
-        if not breaker.allow():
-            puladas_circuito += 1
-            continue
-
-        st: dict = {}
-        comunicacoes = await buscar_comunicacoes(oab_numero, oab_uf, data_inicio, hoje, stats=st)
-        if st.get("requests") and not st.get("ok"):
-            breaker.record_failure()
-        else:
-            breaker.record_success()
-        await asyncio.sleep(_INTERVALO_ENTRE_OABS_S)
-
-        pmap = await _proc_map(t_id) if comunicacoes else {}
-
-        for c in comunicacoes:
-            h = c.hash_dedupe()
-            # dedupe por hash + tenant
-            existe = (await db.execute(
-                select(Intimacao.id).where(Intimacao.hash == h, Intimacao.tenant_id == t_id)
-            )).scalar_one_or_none()
-            if existe:
+    # Fase 167 — sem este try/except em volta do loop inteiro, uma exceção
+    # não tratada no meio da lista de OABs (o circuit breaker da Fase 142
+    # só evita chamadas REPETIDAS após falhas consecutivas, não intercepta
+    # exceções) propagava direto pra fora de `scan_publicacoes`, pulando o
+    # `finalizar_sync("OK", ...)` no final — o SyncRun ficava preso em
+    # RUNNING pra sempre.
+    try:
+        for oab_numero, oab_uf, t_id in oabs:
+            if not breaker.allow():
+                puladas_circuito += 1
                 continue
 
-            dt_disp = None
-            if c.data_disponibilizacao:
-                try:
-                    dt_disp = date.fromisoformat(c.data_disponibilizacao[:10])
-                except Exception:
-                    dt_disp = None
+            st: dict = {}
+            comunicacoes = await buscar_comunicacoes(oab_numero, oab_uf, data_inicio, hoje, stats=st)
+            if st.get("requests") and not st.get("ok"):
+                breaker.record_failure()
+            else:
+                breaker.record_success()
+            await asyncio.sleep(_INTERVALO_ENTRE_OABS_S)
 
-            match = pmap.get(c.numero_cnj or "")
-            process_id, responsavel_id = (match if match else (None, None))
+            pmap = await _proc_map(t_id) if comunicacoes else {}
 
-            intim = Intimacao(
-                tenant_id=t_id,
-                process_id=process_id,
-                oab=f"{_digits(oab_numero)}/{oab_uf.upper()}",
-                numero_cnj=c.numero_cnj,
-                numero_cnj_fmt=c.numero_cnj_fmt,
-                texto=c.texto,
-                data_disponibilizacao=dt_disp,
-                tribunal=c.tribunal,
-                tipo_comunicacao=c.tipo_comunicacao,
-                orgao=c.orgao,
-                link=c.link,
-                hash=h,
-                status="NOVA",
-            )
-            db.add(intim)
-            novas += 1
-
-            # Casou com um processo: vira andamento + notificação ao responsável.
-            if process_id:
-                casadas += 1
-                dm = datetime.combine(dt_disp or hoje, datetime.min.time()).replace(tzinfo=timezone.utc)
-                # dedupe CANÔNICO do movimento (Fase 72 — mesmo hash do importador
-                # único; um andamento importado pelo polling não duplica como intimação)
-                from app.services.movements_import import dedup_hash as _dh
-                desc = (c.texto or c.tipo_comunicacao or "Intimação")[:2000]
-                h_mov = _dh(dm, desc)
-                dup = (await db.execute(
-                    select(ProcessMovement.id).where(
-                        ProcessMovement.process_id == process_id,
-                        ProcessMovement.dedup_hash == h_mov,
-                    )
+            for c in comunicacoes:
+                h = c.hash_dedupe()
+                # dedupe por hash + tenant
+                existe = (await db.execute(
+                    select(Intimacao.id).where(Intimacao.hash == h, Intimacao.tenant_id == t_id)
                 )).scalar_one_or_none()
-                if not dup:
-                    db.add(ProcessMovement(
-                        process_id=process_id,
-                        data_movimento=dm,
-                        descricao=desc,
-                        tipo="INTIMACAO",
-                        documento_url=c.link,
-                        dedup_hash=h_mov,
-                    ))
-                # Notifica o responsável E toda a equipe do processo (dedup).
-                from app.models.process import ProcessTeamMember
-                equipe_ids = {
-                    r[0] for r in (await db.execute(
-                        select(ProcessTeamMember.user_id).where(ProcessTeamMember.process_id == process_id)
-                    )).all()
-                }
-                if responsavel_id:
-                    equipe_ids.add(responsavel_id)
-                from app.services.notification import publish_notification_ws
-                for uid in equipe_ids:
-                    notif = Notification(
-                        user_id=uid,
-                        tenant_id=t_id,
-                        tipo="NOVO_ANDAMENTO",
-                        titulo=f"Nova intimação: {c.numero_cnj_fmt or 'processo'}",
-                        corpo=(c.tipo_comunicacao or "Intimação") + (f" · {c.tribunal}" if c.tribunal else "") + " — revise e defina o prazo.",
-                        priority="HIGH",
-                        link="/publicacoes",
-                    )
-                    db.add(notif)
-                    await publish_notification_ws(notif)
-                # WhatsApp best-effort para quem tem telefone cadastrado
-                if equipe_ids:
-                    from app.models.user import User as _User
-                    from app.services.whatsapp import enviar_whatsapp
-                    tels = (await db.execute(
-                        select(_User.telefone).where(
-                            _User.id.in_(equipe_ids), _User.telefone.isnot(None)
+                if existe:
+                    continue
+
+                dt_disp = None
+                if c.data_disponibilizacao:
+                    try:
+                        dt_disp = date.fromisoformat(c.data_disponibilizacao[:10])
+                    except Exception:
+                        dt_disp = None
+
+                match = pmap.get(c.numero_cnj or "")
+                process_id, responsavel_id = (match if match else (None, None))
+
+                intim = Intimacao(
+                    tenant_id=t_id,
+                    process_id=process_id,
+                    oab=f"{_digits(oab_numero)}/{oab_uf.upper()}",
+                    numero_cnj=c.numero_cnj,
+                    numero_cnj_fmt=c.numero_cnj_fmt,
+                    texto=c.texto,
+                    data_disponibilizacao=dt_disp,
+                    tribunal=c.tribunal,
+                    tipo_comunicacao=c.tipo_comunicacao,
+                    orgao=c.orgao,
+                    link=c.link,
+                    hash=h,
+                    status="NOVA",
+                )
+                db.add(intim)
+                novas += 1
+
+                # Casou com um processo: vira andamento + notificação ao responsável.
+                if process_id:
+                    casadas += 1
+                    dm = datetime.combine(dt_disp or hoje, datetime.min.time()).replace(tzinfo=timezone.utc)
+                    # dedupe CANÔNICO do movimento (Fase 72 — mesmo hash do importador
+                    # único; um andamento importado pelo polling não duplica como intimação)
+                    from app.services.movements_import import dedup_hash as _dh
+                    desc = (c.texto or c.tipo_comunicacao or "Intimação")[:2000]
+                    h_mov = _dh(dm, desc)
+                    dup = (await db.execute(
+                        select(ProcessMovement.id).where(
+                            ProcessMovement.process_id == process_id,
+                            ProcessMovement.dedup_hash == h_mov,
                         )
-                    )).scalars().all()
-                    for tel in tels:
-                        await enviar_whatsapp(
-                            db, t_id, tel,
-                            f"Nova intimação: {c.numero_cnj_fmt or 'processo'} "
-                            f"({c.tipo_comunicacao or 'Intimação'}) — revise e defina o prazo em Publicações.",
+                    )).scalar_one_or_none()
+                    if not dup:
+                        db.add(ProcessMovement(
+                            process_id=process_id,
+                            data_movimento=dm,
+                            descricao=desc,
+                            tipo="INTIMACAO",
+                            documento_url=c.link,
+                            dedup_hash=h_mov,
+                        ))
+                    # Notifica o responsável E toda a equipe do processo (dedup).
+                    from app.models.process import ProcessTeamMember
+                    equipe_ids = {
+                        r[0] for r in (await db.execute(
+                            select(ProcessTeamMember.user_id).where(ProcessTeamMember.process_id == process_id)
+                        )).all()
+                    }
+                    if responsavel_id:
+                        equipe_ids.add(responsavel_id)
+                    from app.services.notification import publish_notification_ws
+                    for uid in equipe_ids:
+                        notif = Notification(
+                            user_id=uid,
+                            tenant_id=t_id,
+                            tipo="NOVO_ANDAMENTO",
+                            titulo=f"Nova intimação: {c.numero_cnj_fmt or 'processo'}",
+                            corpo=(c.tipo_comunicacao or "Intimação") + (f" · {c.tribunal}" if c.tribunal else "") + " — revise e defina o prazo.",
+                            priority="HIGH",
+                            link="/publicacoes",
                         )
+                        db.add(notif)
+                        await publish_notification_ws(notif)
+                    # WhatsApp best-effort para quem tem telefone cadastrado
+                    if equipe_ids:
+                        from app.models.user import User as _User
+                        from app.services.whatsapp import enviar_whatsapp
+                        tels = (await db.execute(
+                            select(_User.telefone).where(
+                                _User.id.in_(equipe_ids), _User.telefone.isnot(None)
+                            )
+                        )).scalars().all()
+                        for tel in tels:
+                            await enviar_whatsapp(
+                                db, t_id, tel,
+                                f"Nova intimação: {c.numero_cnj_fmt or 'processo'} "
+                                f"({c.tipo_comunicacao or 'Intimação'}) — revise e defina o prazo em Publicações.",
+                            )
+    except Exception as exc:
+        log.error("dje_scan_loop_falhou", tenant=str(tenant_id) if tenant_id else "all", error=str(exc))
+        resultado = {
+            "oabs_monitoradas": len(oabs), "intimacoes_novas": novas, "casadas_com_processo": casadas,
+            "comunica_bloqueada": breaker.state != "closed", "oabs_puladas_circuito": puladas_circuito,
+            "erro": str(exc)[:300],
+        }
+        await finalizar_sync(db, sync, "ERRO", resultado)
+        await db.commit()
+        raise
 
     resultado = {
         "oabs_monitoradas": len(oabs),
