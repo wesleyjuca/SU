@@ -36,6 +36,29 @@ def normalizar_telefone(telefone: str | None) -> str | None:
     return digitos if 12 <= len(digitos) <= 15 else None
 
 
+async def testar_credenciais(access_token: str | None, phone_number_id: str | None) -> tuple[bool, str]:
+    """Sonda leve pra validar access_token+phone_number_id (distingue
+    401/403 de sucesso) — usada pelo botão "Testar conexão" do hub (Fase
+    168). Não envia mensagem nenhuma, só confirma que o número responde
+    com esse token."""
+    if not access_token or not phone_number_id:
+        return (False, "credenciais incompletas")
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            resp = await client.get(
+                f"{_GRAPH}/{phone_number_id}",
+                params={"fields": "verified_name"},
+                headers={"Authorization": f"Bearer {access_token}"},
+            )
+    except Exception as exc:
+        return (False, str(exc)[:120])
+    if resp.status_code == 200:
+        return (True, "ok")
+    if resp.status_code in (401, 403):
+        return (False, "token inválido ou expirado")
+    return (False, f"HTTP {resp.status_code}: {resp.text[:200]}")
+
+
 async def enviar_whatsapp(db: AsyncSession, tenant_id, telefone: str | None, texto: str) -> bool:
     """Envia `texto` via template afj_notificacao (fallback: texto simples)."""
     numero = normalizar_telefone(telefone)
