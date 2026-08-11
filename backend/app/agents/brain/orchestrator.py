@@ -61,15 +61,19 @@ async def node_retrieve_memory(state: OrchestratorState) -> OrchestratorState:
     return state
 
 
-async def node_execute_agent(state: OrchestratorState) -> OrchestratorState:
-    ctx = state["context"]
-    route = state["route"]
-    chain = state.get("chain") or [route]
-    chain_index = state.get("chain_index", 0)
+async def execute_chain_step(ctx: AgentContext, chain: list[str], chain_index: int) -> AgentResult:
+    """Executa 1 passo de uma chain: resolve o agente, roda com sessão/redis/
+    qdrant/BYOK próprios, persiste o `AgentStep` correspondente.
 
-    agent_class = _resolve_agent_class(route)
+    Extraído do loop do orquestrador (Fase 169.2) porque a retomada pós-
+    aprovação (`app/services/chain_resume.py`) precisa exatamente desta
+    mesma unidade de trabalho fora do grafo LangGraph — mesmo passo, 2
+    chamadores (o loop `node_execute_agent` abaixo, e a retomada)."""
+    route = chain[chain_index]
+
+    agent_class = resolve_agent_class(route)
     if not agent_class:
-        return {**state, "error": f"Agente não encontrado: {route}", "done": True}
+        return AgentResult(status=AgentStatus.FAILED, agent_name=route, error=f"Agente não encontrado: {route}")
 
     # Injeta dependências reais: sem isto o RAG (recall) retorna [] e nada é
     # persistido (Document/Petition/AgentMemory ficam órfãos).
@@ -119,6 +123,17 @@ async def node_execute_agent(state: OrchestratorState) -> OrchestratorState:
         except Exception as exc:
             await session.rollback()
             log.error("agent_step_persist_failed", route=route, error=str(exc))
+
+    return result
+
+
+async def node_execute_agent(state: OrchestratorState) -> OrchestratorState:
+    ctx = state["context"]
+    route = state["route"]
+    chain = state.get("chain") or [route]
+    chain_index = state.get("chain_index", 0)
+
+    result = await execute_chain_step(ctx, chain, chain_index)
 
     results = state.get("agent_results", []) + [result]
 
@@ -277,8 +292,11 @@ async def _get_qdrant_if_configured():
         return None
 
 
-def _resolve_agent_class(route: str):
-    """Resolve a classe do agente pela rota (sem instanciar)."""
+def resolve_agent_class(route: str):
+    """Resolve a classe do agente pela rota (sem instanciar).
+
+    Público (Fase 169.2) — usado tanto por `execute_chain_step` (acima)
+    quanto por `app/services/chain_resume.py`."""
     agent_map = {
         # Rota-padrão de tarefas ambíguas (classify_task cai aqui) — precisa
         # resolver, senão qualquer tarefa não mapeada quebra ("Agente não encontrado").

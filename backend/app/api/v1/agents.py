@@ -118,6 +118,11 @@ async def trigger_agent(
         input_data=body.task_input,
         status="RUNNING",
         tenant_id=current_user.tenant_id,
+        # Fase 169.2 — necessários pra retomar a chain após aprovação humana
+        # num request separado (ver app/services/chain_resume.py).
+        task_type=body.task_type,
+        process_id=process_uuid,
+        client_id=client_uuid,
     )
     db.add(agent_run)
 

@@ -65,7 +65,7 @@ async def test_node_injects_db_redis_and_commits_on_success(monkeypatch):
     async def _fake_redis():
         return "REDIS"
     monkeypatch.setattr(dbredis, "get_redis", _fake_redis)
-    monkeypatch.setattr(orch, "_resolve_agent_class", lambda route: FakeAgent)
+    monkeypatch.setattr(orch, "resolve_agent_class", lambda route: FakeAgent)
 
     out = await orch.node_execute_agent(_base_state())
 
@@ -91,7 +91,7 @@ async def test_node_rolls_back_on_failure(monkeypatch):
     async def _fake_redis():
         return None
     monkeypatch.setattr(dbredis, "get_redis", _fake_redis)
-    monkeypatch.setattr(orch, "_resolve_agent_class", lambda route: FailAgent)
+    monkeypatch.setattr(orch, "resolve_agent_class", lambda route: FailAgent)
 
     out = await orch.node_execute_agent(_base_state("fail_agent"))
 
@@ -104,6 +104,6 @@ async def test_node_rolls_back_on_failure(monkeypatch):
 
 
 async def test_node_unknown_route_returns_error(monkeypatch):
-    monkeypatch.setattr(orch, "_resolve_agent_class", lambda route: None)
+    monkeypatch.setattr(orch, "resolve_agent_class", lambda route: None)
     out = await orch.node_execute_agent(_base_state("nao_existe"))
     assert out["done"] is True and "não encontrado" in out["error"]

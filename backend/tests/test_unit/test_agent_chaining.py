@@ -130,7 +130,7 @@ async def _drive_chain(monkeypatch, task_type, results_by_route, task_input=None
 
     def _resolve(route):
         return _fake_agent_class(route, results_by_route[route])
-    monkeypatch.setattr(orch, "_resolve_agent_class", _resolve)
+    monkeypatch.setattr(orch, "resolve_agent_class", _resolve)
 
     ctx = AgentContext(task_type=task_type, task_input=task_input or {})
     state = {

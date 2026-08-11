@@ -9,7 +9,7 @@ import uuid
 from app.db.base import get_db
 from app.dependencies import get_current_user, require_role
 from app.models.user import User
-from app.models.agent_run import Approval
+from app.models.agent_run import Approval, AgentRun
 from app.core.exceptions import NotFoundError, ValidationError
 
 router = APIRouter(prefix="/approvals", tags=["approvals"])
@@ -120,14 +120,30 @@ async def resolve_approval(
     approval.rejection_reason = body.rejection_reason
     approval.resolved_at = datetime.now(timezone.utc)
 
+    # Fase 169.2 — precisa do AgentRun tanto pra retomar o resto da chain
+    # na aprovação quanto pra fechar o status na rejeição (antes disso,
+    # resolve_approval nunca olhava o AgentRun — um run rejeitado ficava
+    # preso em AWAITING_APPROVAL pra sempre).
+    agent_run: AgentRun | None = None
+    if approval.run_id:
+        agent_run = await db.get(AgentRun, approval.run_id)
+
     # Executa a ação de forma síncrona (substitui a retomada por checkpoint LangGraph,
     # que era código morto). A ação crítica só ocorre AQUI, após decisão humana.
     from app.services.approval import execute_approved_action, mark_rejected_action
     execution: dict | None = None
+    resume: dict | None = None
     if body.approved:
         execution = await execute_approved_action(db, approval, body.modifications)
+        if agent_run:
+            from app.services.chain_resume import resume_chain_after_approval
+            resume = await resume_chain_after_approval(db, agent_run, approval, body.modifications)
     else:
         await mark_rejected_action(db, approval)
+        if agent_run and agent_run.status not in ("SUCCESS", "FAILED", "CANCELADO"):
+            agent_run.status = "FAILED"
+            agent_run.error_message = f"Rejeitado: {body.rejection_reason}"
+            agent_run.completed_at = datetime.now(timezone.utc)
 
     await db.flush()
 
@@ -137,6 +153,7 @@ async def resolve_approval(
         "approval_id": approval_id,
         "resolved_by": current_user.full_name,
         "execution": execution,
+        "chain_resume": resume,
     }
 
 

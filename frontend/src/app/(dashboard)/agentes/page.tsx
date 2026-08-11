@@ -278,8 +278,11 @@ export default function AgentesPage() {
         </div>
       )}
 
-      {/* Fase 169.1 — progresso passo-a-passo de uma chain (só aparece quando
-          o run é multi-agente; AgentStep é gravado 1 linha por passo). */}
+      {/* Fase 169.1/169.2 — progresso passo-a-passo de uma chain (só aparece
+          quando o run é multi-agente; AgentStep é gravado 1 linha por
+          passo). Passos após um gate HITL retomam automaticamente depois
+          da aprovação (169.2) — este painel só não reflete isso ao vivo se
+          a aprovação acontecer numa aba/sessão diferente da que disparou. */}
       {runSteps && runSteps.length > 0 && (
         <div className="afj-card p-4 space-y-2">
           <h3 className="text-xs font-semibold text-afj-black/50 uppercase tracking-wider">
@@ -305,8 +308,8 @@ export default function AgentesPage() {
           </ol>
           {runStatus === "AWAITING_APPROVAL" && (
             <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2.5 py-1.5 mt-2">
-              Aguardando aprovação humana. Passos seguintes da cadeia (se houver) não são
-              retomados automaticamente após a aprovação nesta versão.
+              Aguardando aprovação humana em /aprovacoes. Os passos seguintes da
+              cadeia (se houver) continuam automaticamente assim que for aprovada.
             </p>
           )}
         </div>

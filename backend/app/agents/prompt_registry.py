@@ -82,7 +82,7 @@ AGENT_PROMPT_SLOTS: dict[str, list[dict]] = {
 
 def resolve_default_prompt(default_ref: str) -> str | None:
     """Resolve o texto padrão de um slot a partir do caminho pontilhado até
-    sua constante Python. Mesmo padrão de `_resolve_agent_class`
+    sua constante Python. Mesmo padrão de `resolve_agent_class`
     (app/agents/brain/orchestrator.py) — importlib + getattr — mas
     resolvendo uma constante em vez de uma classe. Fail-soft: caminho
     inválido/módulo quebrado devolve None em vez de derrubar o endpoint."""

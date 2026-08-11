@@ -1,0 +1,175 @@
+"""Fase 169.2 — retomada de chains após aprovação humana.
+
+`resolve_approval` (`app/api/v1/approvals.py`) roda numa request totalmente
+separada da execução original do orquestrador — o grafo LangGraph já
+terminou (`awaiting_approval → END`, ver `orchestrator.py`) quando o humano
+aprova. Retomar os passos restantes de uma chain não reinvoca o grafo (o
+`MemorySaver` configurado nele não sobrevive entre processos/requests,
+mesma limitação já documentada em `app/services/approval.py`) — em vez
+disso, reconstrói o `AgentContext` a partir do que ficou persistido
+(`AgentRun.task_type`/`process_id`/`client_id`, Fase 169.2) e roda os
+passos restantes com `execute_chain_step`, a mesma unidade de trabalho que
+o orquestrador usa internamente.
+"""
+from datetime import datetime
+from decimal import Decimal
+
+import structlog
+
+from app.agents.base.result import AgentResult, AgentStatus
+from app.agents.brain.chain_projectors import project_output
+from app.agents.brain.context import AgentContext
+from app.agents.brain.orchestrator import execute_chain_step
+from app.agents.brain.router import get_chain
+from app.workers.task_lock import TaskLock
+
+log = structlog.get_logger()
+
+
+async def resume_chain_after_approval(db, agent_run, approval, modifications: dict | None = None) -> dict:
+    """Roda os passos restantes de uma chain depois que o passo protegido
+    por HITL foi aprovado. Auto-protegido: no-op (`resumed=False`) se o run
+    não tem `task_type` persistido (runs anteriores à Fase 169.2), se já
+    está num estado terminal (ex.: cancelado enquanto a aprovação estava
+    pendente), ou se o gate era o último passo da chain — o call site
+    (`resolve_approval`) não precisa checar nenhuma dessas condições antes
+    de chamar.
+    """
+    if not agent_run or not agent_run.task_type:
+        return {"resumed": False, "reason": "run sem task_type persistido (anterior à Fase 169.2)"}
+    if agent_run.status == "CANCELADO":
+        return {"resumed": False, "reason": "run cancelado"}
+
+    chain = get_chain(agent_run.task_type, agent_run.input_data or {})
+
+    from sqlalchemy import select
+    from app.models.agent_run import AgentStep
+
+    steps = (await db.execute(
+        select(AgentStep).where(AgentStep.run_id == agent_run.id).order_by(AgentStep.step_number)
+    )).scalars().all()
+    if not steps:
+        return {"resumed": False, "reason": "run sem AgentStep gravado"}
+
+    last_step = steps[-1]
+    next_index = last_step.step_number + 1
+
+    if next_index >= len(chain):
+        # Gate era o último passo — nada a retomar, só fecha o run se ainda
+        # não estiver num estado terminal (sem isso, aprovar o gate de uma
+        # chain de 1-passo-com-gate deixaria o run preso em
+        # AWAITING_APPROVAL pra sempre).
+        if agent_run.status not in ("SUCCESS", "FAILED", "CANCELADO"):
+            agent_run.status = "SUCCESS"
+            agent_run.completed_at = datetime.utcnow()
+        return {"resumed": False, "reason": "gate era o último passo da chain"}
+
+    lock = TaskLock(f"agent_run_resume:{agent_run.id}", ttl_seconds=300)
+    if not await lock.acquire():
+        log.warning("chain_resume_lock_busy", run_id=str(agent_run.id))
+        return {"resumed": False, "reason": "retomada já em andamento"}
+
+    try:
+        return await _run_remaining_steps(db, agent_run, chain, last_step, next_index, modifications)
+    finally:
+        await lock.release()
+
+
+async def _run_remaining_steps(db, agent_run, chain, last_step, next_index, modifications) -> dict:
+    gated_output = dict(last_step.output_json or {})
+    gated_output.pop("_status", None)
+    if modifications:
+        # Edição humana na hora de aprovar deve valer pros passos seguintes
+        # da chain, não só pro artefato salvo — `execute_approved_action`
+        # (app/services/approval.py) já aplica `modifications` no
+        # Document/Petition/Contract; aqui é o mesmo dado alimentando o
+        # próximo passo do orquestrador, pra não perder a edição a caminho.
+        gated_output.update(modifications)
+
+    gated_result = AgentResult(status=AgentStatus.SUCCESS, agent_name=last_step.step_name, output=gated_output)
+
+    ctx = AgentContext(
+        run_id=agent_run.id,
+        triggered_by=agent_run.triggered_by,
+        task_type=agent_run.task_type,
+        task_input=dict(agent_run.input_data or {}),
+        tenant_id=agent_run.tenant_id,
+        process_id=agent_run.process_id,
+        client_id=agent_run.client_id,
+    )
+    ctx.task_input = project_output(last_step.step_name, chain[next_index], gated_result, ctx)
+
+    results = []
+    for i in range(next_index, len(chain)):
+        result = await execute_chain_step(ctx, chain, i)
+        results.append(result)
+
+        if result.status == AgentStatus.FAILED:
+            agent_run.status = "FAILED"
+            agent_run.error_message = result.error
+            agent_run.completed_at = datetime.utcnow()
+            _accumulate_usage(agent_run, ctx)
+            await db.commit()
+            return {"resumed": True, "final_status": "FAILED", "steps_run": len(results)}
+
+        if result.status == AgentStatus.AWAITING_APPROVAL:
+            # Limitação assumida (Fase 169.2): nenhuma das 3 chains hoje
+            # declaradas em TASK_ROUTE_MAP tem 2 gates HITL — o modelo de
+            # idempotência de create_approval_from_state (approval.py)
+            # assume 1 Approval por AgentRun. Generalizar pra múltiplos
+            # gates fica pra uma fase futura, se algum dia existir uma
+            # chain assim.
+            agent_run.status = "FAILED"
+            agent_run.error_message = (
+                f"Chain com múltiplos gates HITL ainda não suportada "
+                f"(passo '{chain[i]}' também precisaria de aprovação)."
+            )
+            agent_run.completed_at = datetime.utcnow()
+            _accumulate_usage(agent_run, ctx)
+            await db.commit()
+            log.warning("chain_resume_multi_gate_unsupported", run_id=str(agent_run.id), step=chain[i])
+            return {"resumed": True, "final_status": "FAILED", "steps_run": len(results)}
+
+        next_i = i + 1
+        if next_i < len(chain):
+            ctx.task_input = project_output(chain[i], chain[next_i], result, ctx)
+
+    agent_run.status = "SUCCESS"
+    agent_run.completed_at = datetime.utcnow()
+    agent_run.output_data = {
+        "run_id": str(agent_run.id),
+        "task_type": agent_run.task_type,
+        "agents_invoked": ctx.agents_invoked,
+        "total_tokens": ctx.total_tokens,
+        "total_cost_usd": ctx.total_cost_usd,
+        "results": [r.to_dict() for r in results],
+    }
+    _accumulate_usage(agent_run, ctx)
+    await db.commit()
+
+    await _publish_completion(agent_run)
+    return {"resumed": True, "final_status": "SUCCESS", "steps_run": len(results)}
+
+
+def _accumulate_usage(agent_run, ctx: AgentContext) -> None:
+    """Soma o consumo dos passos retomados ao que já estava gravado dos
+    passos pré-gate (o `AgentRun.tokens_used`/`cost_usd` originais já
+    refletem os passos até o gate — ver `_run_agent_task`/`_run_async`)."""
+    agent_run.tokens_used = (agent_run.tokens_used or 0) + ctx.total_tokens
+    added_cost = Decimal(str(ctx.total_cost_usd)) if ctx.total_cost_usd else Decimal("0")
+    agent_run.cost_usd = (agent_run.cost_usd or Decimal("0")) + added_cost
+
+
+async def _publish_completion(agent_run) -> None:
+    if not agent_run.triggered_by:
+        return
+    try:
+        from app.api.v1.ws import publish_event
+        await publish_event(str(agent_run.triggered_by), "AGENT_RUN_COMPLETED", {
+            "run_id": str(agent_run.id),
+            "status": agent_run.status,
+            "task_type": agent_run.task_type,
+            "agent_name": agent_run.agent_name,
+        })
+    except Exception as exc:
+        log.warning("chain_resume_ws_publish_failed", run_id=str(agent_run.id), error=str(exc))
