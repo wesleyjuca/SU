@@ -32,10 +32,17 @@ async def create_approval_from_state(db, agent_run, final_state) -> "uuid.UUID |
     # ack), o agente reroda do zero (mesmo agent_run.id, já existente) e
     # chegaria aqui de novo — sem essa checagem criaria uma 2ª Approval (e,
     # no caso de petition_agent/contract_agent, um 2º Document) pro mesmo
-    # run lógico. Qualquer Approval pré-existente pra esse run_id (em
-    # qualquer status) é sinal de que já processamos — não duplicar.
+    # gate. Fase 171 — a checagem só precisa cobrir esse cenário (o
+    # redelivery só é um risco enquanto o gate atual segue PENDENTE, pois
+    # é aí que reprocessar do zero recriaria a mesma Approval); por isso
+    # ela é restrita a status=PENDENTE, não "qualquer Approval pra esse
+    # run_id" como antes. Isso é o que permite uma chain com múltiplos
+    # gates HITL: depois que o gate 1 é resolvido (APROVADO/REJEITADO),
+    # ele deixa de contar como pendência em aberto e uma nova Approval
+    # pro gate 2 (chamada por app/services/chain_resume.py na retomada)
+    # deixa de ser barrada como "duplicata".
     existente = (await db.execute(
-        select(Approval.id).where(Approval.run_id == agent_run.id)
+        select(Approval.id).where(Approval.run_id == agent_run.id, Approval.status == "PENDENTE")
     )).scalar_one_or_none()
     if existente is not None:
         log.warning("approval_ja_existe_para_run", run_id=str(agent_run.id), approval_id=str(existente))

@@ -10,6 +10,12 @@ disso, reconstrói o `AgentContext` a partir do que ficou persistido
 (`AgentRun.task_type`/`process_id`/`client_id`, Fase 169.2) e roda os
 passos restantes com `execute_chain_step`, a mesma unidade de trabalho que
 o orquestrador usa internamente.
+
+Fase 171 — se um passo retomado também pedir aprovação humana (2º gate na
+mesma chain), a retomada cria uma nova Approval e pausa de novo em vez de
+falhar; `resolve_approval` já chama esta função incondicionalmente a cada
+aprovação, então um 3º gate (ou mais) funciona pelo mesmo mecanismo, sem
+código adicional.
 """
 from datetime import datetime
 from decimal import Decimal
@@ -113,22 +119,23 @@ async def _run_remaining_steps(db, agent_run, chain, last_step, next_index, modi
             return {"resumed": True, "final_status": "FAILED", "steps_run": len(results)}
 
         if result.status == AgentStatus.AWAITING_APPROVAL:
-            # Limitação assumida (Fase 169.2): nenhuma das 3 chains hoje
-            # declaradas em TASK_ROUTE_MAP tem 2 gates HITL — o modelo de
-            # idempotência de create_approval_from_state (approval.py)
-            # assume 1 Approval por AgentRun. Generalizar pra múltiplos
-            # gates fica pra uma fase futura, se algum dia existir uma
-            # chain assim.
-            agent_run.status = "FAILED"
-            agent_run.error_message = (
-                f"Chain com múltiplos gates HITL ainda não suportada "
-                f"(passo '{chain[i]}' também precisaria de aprovação)."
-            )
-            agent_run.completed_at = datetime.utcnow()
+            # Fase 171 — um 2º (ou N-ésimo) gate HITL na mesma chain: cria
+            # uma nova Approval reaproveitando create_approval_from_state
+            # (mesma função que o orquestrador usa pro 1º gate), montando
+            # um "final_state" mínimo no formato que ela já espera. A
+            # idempotência dela (relaxada na Fase 171 pra checar só
+            # Approval PENDENTE) não barra isso: o gate anterior já foi
+            # resolvido, então não conta mais como pendência em aberto.
+            from app.services.approval import create_approval_from_state
+            pseudo_state = {"pending_approval": result.approval_required or {}, "agent_results": [result]}
+            await create_approval_from_state(db, agent_run, pseudo_state)
+
+            agent_run.status = "AWAITING_APPROVAL"
+            agent_run.requires_approval = True
             _accumulate_usage(agent_run, ctx)
             await db.commit()
-            log.warning("chain_resume_multi_gate_unsupported", run_id=str(agent_run.id), step=chain[i])
-            return {"resumed": True, "final_status": "FAILED", "steps_run": len(results)}
+            await _publish_completion(agent_run)
+            return {"resumed": True, "final_status": "AWAITING_APPROVAL", "steps_run": len(results)}
 
         next_i = i + 1
         if next_i < len(chain):

@@ -12,7 +12,7 @@ import app.db.base as dbbase
 import app.db.redis as dbredis
 import app.services.chain_resume as chain_resume
 from app.agents.base.result import AgentResult, AgentStatus
-from app.models.agent_run import AgentRun, AgentStep
+from app.models.agent_run import AgentRun, AgentStep, Approval
 from app.services.chain_resume import resume_chain_after_approval
 
 
@@ -205,6 +205,110 @@ async def test_resume_propagates_modifications_to_next_step(monkeypatch):
     )
 
     assert captured["review_agent"]["conteudo_texto"] == "texto editado pelo humano"
+
+
+# ─── Fase 171 — múltiplos gates HITL na mesma chain ────────────────────────
+
+class _FakeResultFlexible:
+    """Resultado de query mais genérico que _FakeStepsResult — suporta tanto
+    `.scalars().all()` (SELECT AgentStep, SELECT User.id) quanto
+    `.scalar_one_or_none()` (checagem de idempotência do create_approval_from_state)."""
+    def __init__(self, *, scalars_list=None, scalar_value=None):
+        self._scalars_list = scalars_list
+        self._scalar_value = scalar_value
+
+    def scalars(self):
+        items = self._scalars_list or []
+
+        class _S:
+            def all(self_inner):
+                return items
+        return _S()
+
+    def scalar_one_or_none(self):
+        return self._scalar_value
+
+
+class _FakeDBQueue:
+    """DB fake que devolve resultados de uma fila, em ordem — necessário
+    quando a retomada também cria uma nova Approval (dispara consultas
+    extras dentro de create_approval_from_state/_notify_tenant_of_approval),
+    não só o SELECT de AgentStep que _FakeDB (acima) cobre."""
+    def __init__(self, results):
+        self._results = list(results)
+        self.added = []
+        self.commits = 0
+
+    async def execute(self, stmt):
+        return self._results.pop(0) if self._results else _FakeResultFlexible()
+
+    def add(self, obj):
+        self.added.append(obj)
+
+    async def flush(self):
+        pass
+
+    async def commit(self):
+        self.commits += 1
+
+
+async def test_resume_creates_second_approval_when_step_also_needs_approval(monkeypatch):
+    agent_run = _make_agent_run("generate_and_review_petition")
+    steps = [
+        _make_step(0, "jurisprudence_agent", "SUCCESS"),
+        _make_step(1, "petition_agent", "AWAITING_APPROVAL", {"document_id": "abc"}),
+    ]
+    gate2_result = AgentResult(
+        status=AgentStatus.AWAITING_APPROVAL, agent_name="review_agent", output={"revisado": True},
+        approval_required={"tipo": "PETITION_REVIEW", "titulo": "Revisão pede aprovação também", "descricao": "d"},
+    )
+    _patch_step_execution(monkeypatch, {"review_agent": gate2_result})
+
+    db = _FakeDBQueue([
+        _FakeResultFlexible(scalars_list=steps),   # SELECT AgentStep
+        _FakeResultFlexible(scalar_value=None),    # idempotência: nenhuma Approval PENDENTE pra esse run
+        _FakeResultFlexible(scalars_list=[]),      # _notify_tenant_of_approval: sem staff cadastrado
+    ])
+
+    result = await resume_chain_after_approval(db, agent_run, approval=None)
+
+    assert result == {"resumed": True, "final_status": "AWAITING_APPROVAL", "steps_run": 1}
+    assert agent_run.status == "AWAITING_APPROVAL"
+    assert agent_run.requires_approval is True
+    novas_approvals = [o for o in db.added if isinstance(o, Approval)]
+    assert len(novas_approvals) == 1
+    assert novas_approvals[0].status == "PENDENTE"
+    assert novas_approvals[0].tipo == "PETITION_REVIEW"
+
+
+async def test_resume_full_roundtrip_through_two_gates(monkeypatch):
+    """1ª retomada acha um 2º gate e pausa de novo; 2ª retomada (simulando
+    o humano aprovar esse 2º gate) completa a chain com sucesso."""
+    monkeypatch.setattr(chain_resume, "get_chain", lambda task_type, task_input=None: ["a_agent", "b_agent", "c_agent"])
+    agent_run = _make_agent_run("chain_sintetica_2_gates")
+
+    steps_apos_gate1 = [_make_step(0, "a_agent", "AWAITING_APPROVAL", {"x": 1})]
+    gate2 = AgentResult(
+        status=AgentStatus.AWAITING_APPROVAL, agent_name="b_agent", output={"y": 2},
+        approval_required={"tipo": "X", "titulo": "T", "descricao": "d"},
+    )
+    _patch_step_execution(monkeypatch, {"b_agent": gate2})
+    db1 = _FakeDBQueue([
+        _FakeResultFlexible(scalars_list=steps_apos_gate1),
+        _FakeResultFlexible(scalar_value=None),
+        _FakeResultFlexible(scalars_list=[]),
+    ])
+    r1 = await resume_chain_after_approval(db1, agent_run, approval=None)
+    assert r1["final_status"] == "AWAITING_APPROVAL"
+    assert agent_run.status == "AWAITING_APPROVAL"
+
+    steps_apos_gate2 = steps_apos_gate1 + [_make_step(1, "b_agent", "AWAITING_APPROVAL", {"y": 2})]
+    _patch_step_execution(monkeypatch, {"c_agent": AgentResult(status=AgentStatus.SUCCESS, agent_name="c_agent", output={})})
+    db2 = _FakeDBQueue([_FakeResultFlexible(scalars_list=steps_apos_gate2)])
+
+    r2 = await resume_chain_after_approval(db2, agent_run, approval=None)
+    assert r2 == {"resumed": True, "final_status": "SUCCESS", "steps_run": 1}
+    assert agent_run.status == "SUCCESS"
 
 
 async def test_resume_noop_when_lock_busy(monkeypatch):
