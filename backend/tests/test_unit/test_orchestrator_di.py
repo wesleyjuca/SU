@@ -15,12 +15,16 @@ class _FakeSession:
     def __init__(self):
         self.committed = False
         self.rolledback = False
+        self.added = []
 
     async def __aenter__(self):
         return self
 
     async def __aexit__(self, *a):
         return False
+
+    def add(self, obj):
+        self.added.append(obj)
 
     async def commit(self):
         self.committed = True
@@ -33,6 +37,8 @@ def _base_state(route="fake_agent"):
     return {
         "context": AgentContext(task_type="x"),
         "route": route,
+        "chain": [route],
+        "chain_index": 0,
         "agent_results": [],
         "pending_approval": None,
         "final_output": None,
@@ -89,7 +95,11 @@ async def test_node_rolls_back_on_failure(monkeypatch):
 
     out = await orch.node_execute_agent(_base_state("fail_agent"))
 
-    assert sess.rolledback is True and sess.committed is False
+    # A falha do agente em si é revertida (rollback), mas o AgentStep que
+    # registra "esse passo falhou" ainda é gravado numa transação própria
+    # depois — daí `committed` também ficar True (Fase 169.1).
+    assert sess.rolledback is True and sess.committed is True
+    assert len(sess.added) == 1
     assert out["error"] == "boom" and out["done"] is True
 
 

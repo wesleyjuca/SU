@@ -14,6 +14,7 @@ from app.models.client import Client
 from app.models.process import LegalProcess
 from app.agents.brain.context import AgentContext
 from app.agents.brain.orchestrator import get_orchestrator_graph
+from app.agents.brain.router import get_chain
 from app.core.exceptions import NotFoundError
 
 router = APIRouter(prefix="/agents", tags=["agents"])
@@ -47,6 +48,14 @@ class TriggerAgentRequest(BaseModel):
     priority: str = "NORMAL"
 
 
+class AgentStepResponse(BaseModel):
+    step_number: int
+    step_name: str | None
+    status: str
+    duration_ms: int | None
+    output: dict | None
+
+
 class AgentRunResponse(BaseModel):
     run_id: str
     agent_name: str
@@ -58,6 +67,7 @@ class AgentRunResponse(BaseModel):
     output: dict | None
     error_message: str | None
     requires_approval: bool
+    steps: list[AgentStepResponse] | None = None
 
 
 @router.post("/trigger", status_code=202)
@@ -93,11 +103,17 @@ async def trigger_agent(
         client_id=client_uuid,
     )
 
+    # Fase 169.1 — chain de verdade: trigger_type reflete se a tarefa dispara
+    # múltiplos agentes em sequência (antes só "MANUAL" existia na prática,
+    # embora "CHAINED" já estivesse documentado no modelo).
+    chain = get_chain(body.task_type, task_input)
+    trigger_type = "CHAINED" if len(chain) > 1 else "MANUAL"
+
     # Criar registro inicial no DB
     agent_run = AgentRun(
         id=run_id,
         agent_name="orchestration_agent",
-        trigger_type="MANUAL",
+        trigger_type=trigger_type,
         triggered_by=current_user.id,
         input_data=body.task_input,
         status="RUNNING",
@@ -155,11 +171,18 @@ async def get_run(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(AgentRun).where(AgentRun.id == uuid.UUID(run_id)))
+    from sqlalchemy.orm import selectinload
+
+    result = await db.execute(
+        select(AgentRun)
+        .options(selectinload(AgentRun.steps))
+        .where(AgentRun.id == uuid.UUID(run_id))
+    )
     run = result.scalar_one_or_none()
     if not run or run.tenant_id != current_user.tenant_id:
         raise NotFoundError("AgentRun", run_id)
-    return _run_to_response(run)
+    steps = sorted(run.steps, key=lambda s: s.step_number)
+    return _run_to_response(run, steps=steps)
 
 
 # Estados finais — uma run nesses status não pode mais ser cancelada
@@ -252,7 +275,19 @@ async def _run_agent_task(ctx: AgentContext, run_id: str):
             log.error("agent_run_update_failed", run_id=run_id, error=str(exc))
 
 
-def _run_to_response(run: AgentRun) -> AgentRunResponse:
+def _step_to_response(step) -> AgentStepResponse:
+    output = dict(step.output_json or {})
+    status = output.pop("_status", "SUCCESS")
+    return AgentStepResponse(
+        step_number=step.step_number,
+        step_name=step.step_name,
+        status=status,
+        duration_ms=step.duration_ms,
+        output=output or None,
+    )
+
+
+def _run_to_response(run: AgentRun, steps: list | None = None) -> AgentRunResponse:
     return AgentRunResponse(
         run_id=str(run.id),
         agent_name=run.agent_name,
@@ -264,4 +299,5 @@ def _run_to_response(run: AgentRun) -> AgentRunResponse:
         output=run.output_data,
         error_message=run.error_message,
         requires_approval=run.requires_approval,
+        steps=[_step_to_response(s) for s in steps] if steps else None,
     )

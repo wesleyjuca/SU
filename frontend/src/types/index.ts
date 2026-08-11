@@ -153,6 +153,14 @@ export type AgentStatus =
   | "awaiting_approval"
   | "paused";
 
+export interface AgentStepResponse {
+  step_number: number;
+  step_name: string | null;
+  status: string;
+  duration_ms: number | null;
+  output: Record<string, unknown> | null;
+}
+
 export interface AgentRun {
   id: string;
   agent_name: string;
@@ -169,6 +177,8 @@ export interface AgentRun {
   requires_approval: boolean;
   started_at: string;
   completed_at: string | null;
+  // Fase 169.1 — presente só em GET /agents/runs/{id} (não na listagem)
+  steps?: AgentStepResponse[];
 }
 
 export interface Approval {
