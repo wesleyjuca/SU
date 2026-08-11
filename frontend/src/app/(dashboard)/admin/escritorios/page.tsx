@@ -13,6 +13,7 @@ interface TenantItem {
   name: string;
   slug: string;
   plan: string;
+  isento: boolean;
   is_active: boolean;
   max_users: number;
   users: number;
@@ -175,6 +176,7 @@ export default function EscritoriosPage() {
                       {t.is_unit && <GitBranch size={13} className="text-afj-black/30 flex-shrink-0" />}
                       <span className="font-medium text-afj-black">{t.name}</span>
                       {t.is_root && <span className="text-[10px] uppercase tracking-wide bg-afj-gold/15 text-afj-gold-dark px-1.5 py-0.5 rounded-sm">raiz</span>}
+                      {t.isento && <span className="text-[10px] uppercase tracking-wide bg-afj-gold/15 text-afj-gold-dark px-1.5 py-0.5 rounded-sm">isento</span>}
                     </div>
                     {t.unit_label && <span className="text-xs text-afj-black/40">{t.unit_label}</span>}
                   </td>

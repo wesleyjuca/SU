@@ -294,7 +294,9 @@ async def _get_or_create_config(db: AsyncSession, current_user: User) -> tuple[T
             select(Tenant).where(Tenant.slug == DEFAULT_TENANT_SLUG, Tenant.is_active == True)
         )).scalar_one_or_none()
     if not tenant:
-        tenant = Tenant(name="Almeida, Freire & Jucá Advogados", slug=DEFAULT_TENANT_SLUG, plan="ENTERPRISE")
+        # Fase 170 — mesmo invariante do backfill em app/core/events.py:
+        # o tenant raiz sempre nasce no plano Máximo e isento.
+        tenant = Tenant(name="Almeida, Freire & Jucá Advogados", slug=DEFAULT_TENANT_SLUG, plan="MAXIMO", isento=True)
         db.add(tenant)
         await db.flush()
 
@@ -700,8 +702,10 @@ async def _billing_summary(db: AsyncSession, tenant: Tenant) -> dict:
     from datetime import date
     from app.models.billing import BillingAccount
 
-    # Tenant raiz da plataforma é isento de cobrança.
-    if tenant.slug == DEFAULT_TENANT_SLUG:
+    # Fase 170 — isenção de cobrança agora é a coluna Tenant.isento (o tenant
+    # raiz da plataforma sempre tem isento=True, garantido pelo backfill em
+    # app/core/events.py), não mais um caso especial hardcoded por slug.
+    if tenant.isento:
         return {"status": "ISENTO", "valor_mensal": None, "proximo_vencimento": None, "dias_para_vencimento": None}
 
     acc = (await db.execute(

@@ -30,6 +30,10 @@ PLAN_TIERS: dict[str, dict[str, int]] = {
     "STANDARD": {"max_users": 10, "max_storage_gb": 50},
     "PRO": {"max_users": 25, "max_storage_gb": 200},
     "ENTERPRISE": {"max_users": 0, "max_storage_gb": 0},  # ilimitado + filiais self-serve
+    # Fase 170 — exclusivo do tenant raiz da plataforma (slug="afj"); nunca
+    # oferecido/aceito na criação ou edição de um escritório-cliente comum
+    # (ver _provision() e update_tenant() abaixo).
+    "MAXIMO": {"max_users": 0, "max_storage_gb": 0},
 }
 
 
@@ -84,6 +88,11 @@ async def _provision(
     if (await db.execute(select(User.id).where(User.email == email))).scalar_one_or_none():
         raise HTTPException(status_code=409, detail="Já existe um usuário com este e-mail.")
 
+    # Fase 170 — "MAXIMO" é exclusivo do tenant raiz da plataforma, nunca de
+    # um escritório-cliente provisionado por aqui.
+    if (body.plan or "").strip().upper() == "MAXIMO":
+        raise HTTPException(status_code=422, detail="O plano Máximo é exclusivo do escritório raiz da plataforma.")
+
     slug = await _unique_slug(db, body.name)
     tier = _tier_limits(body.plan) or PLAN_TIERS["STANDARD"]
     tenant = Tenant(
@@ -133,6 +142,7 @@ async def list_tenants(
             "name": t.name,
             "slug": t.slug,
             "plan": t.plan,
+            "isento": t.isento,
             "is_active": t.is_active,
             "max_users": t.max_users,
             "users": int(counts.get(t.id, 0)),
@@ -190,6 +200,15 @@ async def update_tenant(
     updates = body.model_dump(exclude_none=True)
     if updates.get("is_active") is False and tenant.slug == DEFAULT_TENANT_SLUG:
         raise HTTPException(status_code=422, detail="O escritório raiz da plataforma não pode ser desativado.")
+
+    # Fase 170 — "MAXIMO" é fixo pro tenant raiz (garantido pelo backfill em
+    # app/core/events.py) e proibido pra qualquer outro escritório.
+    if "plan" in updates:
+        novo_plano = (updates["plan"] or "").strip().upper()
+        if tenant.slug == DEFAULT_TENANT_SLUG and novo_plano != "MAXIMO":
+            raise HTTPException(status_code=422, detail="O escritório raiz da plataforma sempre usa o plano Máximo.")
+        if tenant.slug != DEFAULT_TENANT_SLUG and novo_plano == "MAXIMO":
+            raise HTTPException(status_code=422, detail="O plano Máximo é exclusivo do escritório raiz da plataforma.")
 
     # Mudou o plano sem informar max_users? Re-deriva os limites do tier.
     if "plan" in updates and "max_users" not in updates:
