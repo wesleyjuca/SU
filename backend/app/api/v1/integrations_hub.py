@@ -200,6 +200,44 @@ async def hub_oauth_callback(
     return RedirectResponse(url=f"{base}/integracoes?hub_oauth={provider}_ok")
 
 
+# ─── Login direto do PDPJ (Keycloak, grant_type=password) — Fase 177.1 ───────
+class PdpjLoginBody(BaseModel):
+    username: str
+    password: str
+
+
+@router.post("/pdpj/oauth/login")
+async def hub_pdpj_oauth_login(
+    body: PdpjLoginBody,
+    current_user: User = Depends(require_role("ADMIN")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Login direto com usuário/senha do CNJ Corporativo — troca por um
+    access_token/refresh_token via Keycloak (grant_type=password) e salva
+    cifrado, igual ao form manual. A senha em si nunca é persistida: só
+    passa pela requisição, é usada 1x nesta troca e descartada."""
+    if not integration_hub.is_oauth_configured("pdpj"):
+        raise HTTPException(
+            status_code=422,
+            detail="Login com CNJ Corporativo ainda não configurado nesta plataforma. "
+                   "Use \"Colar token manualmente\" ou peça ao administrador da plataforma "
+                   "para cadastrar client_id/client_secret do PDPJ (obtidos com o CNJ).",
+        )
+    import httpx as _httpx
+    try:
+        tokens = await integration_hub.exchange_oauth_password("pdpj", body.username, body.password)
+    except _httpx.HTTPStatusError as exc:
+        if exc.response.status_code in (400, 401, 403):
+            raise HTTPException(status_code=422, detail="Usuário ou senha do CNJ Corporativo inválidos.")
+        raise HTTPException(status_code=502, detail="CNJ/PDPJ indisponível no momento. Tente novamente em instantes.")
+    except _httpx.HTTPError:
+        raise HTTPException(status_code=502, detail="Não foi possível contatar o serviço de login do CNJ. Tente novamente.")
+
+    await integration_hub.save_oauth_tokens(db, current_user.tenant_id, "pdpj", tokens, connected_by=current_user.id)
+    await db.commit()
+    return {"message": "PDPJ conectado via CNJ Corporativo.", "provider": "pdpj", "status": "CONECTADA"}
+
+
 # ─── Receiver público de webhooks ─────────────────────────────────────────────
 @webhooks_router.post("/{provider}")
 async def receive_webhook(

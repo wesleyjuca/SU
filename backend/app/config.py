@@ -98,6 +98,15 @@ class Settings(BaseSettings):
     # (3º redirect cadastrado no mesmo client_id — Google permite múltiplos).
     # Deve apontar para /api/v1/integrations/hub/google_workspace/oauth/callback.
     GOOGLE_WORKSPACE_OAUTH_REDIRECT_URI: str = ""
+    # Fase 177.1 — login OAuth2 (Keycloak, grant_type=password) do PDPJ/CNJ
+    # Corporativo, mesmo padrão de "só liga quando configurado" dos outros
+    # OAuth acima. Sem redirect_uri: o SSO do PJe-KC aceita usuário+senha
+    # direto no POST do token endpoint (não é o fluxo authorization_code com
+    # redirect que Stripe/Mercado Pago/Google usam) — client_id/client_secret
+    # precisam ser obtidos com o CNJ (integracaopdpj@cnj.jus.br).
+    PDPJ_OAUTH_CLIENT_ID: str = ""
+    PDPJ_OAUTH_CLIENT_SECRET: str = ""
+    PDPJ_OAUTH_TOKEN_URL: str = "https://sso.cloud.pje.jus.br/auth/realms/pje/protocol/openid-connect/token"
     DEFAULT_EMBEDDING_MODEL: str = "text-embedding-3-large"
     EMBEDDING_DIMENSIONS: int = 3072
 

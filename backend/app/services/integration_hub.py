@@ -104,6 +104,11 @@ PROVIDERS: dict[str, dict] = {
                 "dos processos (autor, réu, advogados) — dado que a base pública do "
                 "DataJud não expõe. Opcional e por escritório.",
         "tipo": "api_key",
+        # Fase 177.1 — alternativa de login direto (usuário+senha do CNJ
+        # Corporativo, sem redirect) em paralelo ao form de colar token
+        # abaixo (fallback sempre disponível) — mesmo espírito do Stripe/
+        # Mercado Pago acima, só que via grant_type=password, não redirect.
+        "oauth_disponivel": True,
         "fields": [
             {"key": "sso_token", "label": "Token SSO (Bearer) do PDPJ/CNJ Corporativo", "secret": True},
             {"key": "base_url", "label": "URL base da API PDPJ (opcional)", "secret": False},
@@ -252,6 +257,46 @@ async def get_credentials(db: AsyncSession, tenant_id, provider: str) -> dict | 
     return creds
 
 
+async def _notify_integration_error(db: AsyncSession, integ: TenantIntegration, meta: dict, detalhe: str | None) -> None:
+    """Avisa ADMIN/SOCIO/SUPERADMIN do tenant que uma credencial parou de
+    funcionar (Fase 177.2) — antes só virava um badge vermelho passivo na
+    página de Integrações, sem notificar ninguém (podia ficar quebrada por
+    semanas até alguém abrir a página por acaso). Só o papel que pode de
+    fato reconectar (mesmo guard de `require_role("ADMIN")` nos endpoints de
+    conectar/testar/desconectar) — diferente do público mais amplo de
+    `approval.py::_notify_tenant_of_approval` (HITL, que qualquer staff pode
+    resolver). Construído inline (não `notification.create_batch`, que
+    comita sozinho) pra entrar na mesma transação do caller. Fail-soft: uma
+    falha ao notificar (inclusive na própria query de destinatários) nunca
+    pode propagar — os chamadores (`registrar_uso`/`testar_conexao`) contam
+    com isso pra garantir que a atualização de `status` sempre se salve."""
+    try:
+        from app.models.user import User
+        from app.models.notification import Notification
+        from app.services.notification import publish_notification_ws
+
+        user_ids = (await db.execute(
+            select(User.id).where(
+                User.tenant_id == integ.tenant_id,
+                User.role.in_(("ADMIN", "SOCIO", "SUPERADMIN")),
+                User.is_active == True,  # noqa: E712
+            )
+        )).scalars().all()
+        for uid in user_ids:
+            notif = Notification(
+                user_id=uid,
+                tipo="INTEGRACAO_ERRO",
+                titulo=f"Integração {meta['nome']} parou de funcionar",
+                corpo=detalhe or "A credencial precisa ser reconectada em Integrações.",
+                priority="ALTA",
+                link="/integracoes",
+            )
+            db.add(notif)
+            await publish_notification_ws(notif)
+    except Exception as exc:
+        log.warning("integration_error_notification_failed", provider=getattr(integ, "provider", "?"), error=str(exc))
+
+
 async def registrar_uso(db: AsyncSession, tenant_id, provider: str, sucesso: bool, detalhe: str | None = None) -> None:
     """Marca `last_success_at`/`last_error_at` a partir de um uso REAL da
     credencial (envio de e-mail/WhatsApp, captura de partes etc.) — não só
@@ -269,6 +314,7 @@ async def registrar_uso(db: AsyncSession, tenant_id, provider: str, sucesso: boo
         integ = await get_integration(db, tenant_id, provider)
         if not integ:
             return
+        era_erro = integ.status == "ERRO"
         agora = datetime.now(timezone.utc)
         if sucesso:
             integ.last_success_at = agora
@@ -277,6 +323,12 @@ async def registrar_uso(db: AsyncSession, tenant_id, provider: str, sucesso: boo
             integ.last_error_at = agora
             integ.last_error_detail = (detalhe or "")[:500]
             integ.status = "ERRO"
+            # Fase 177.2 — só na TRANSIÇÃO pra ERRO (evita notificar de novo
+            # a cada chamada falhando enquanto já está em erro).
+            if not era_erro:
+                meta = PROVIDERS.get(provider)
+                if meta:
+                    await _notify_integration_error(db, integ, meta, detalhe)
         await db.commit()
     except Exception as exc:
         log.warning("integration_registrar_uso_falhou", provider=provider, error=str(exc))
@@ -336,6 +388,7 @@ async def testar_conexao(db: AsyncSession, tenant_id, provider: str) -> dict:
         return {"ok": True, "status": integ.status,
                 "detail": "teste automático não disponível para este provedor"}
 
+    era_erro = integ.status == "ERRO"
     try:
         ok, detail = await fonte.testar()
     except Exception as exc:
@@ -347,6 +400,11 @@ async def testar_conexao(db: AsyncSession, tenant_id, provider: str) -> dict:
     else:
         integ.last_error_at = agora
         integ.last_error_detail = (detail or "")[:500]
+        # Fase 177.2 — mesma checagem de transição de registrar_uso() acima.
+        if not era_erro:
+            meta = PROVIDERS.get(provider)
+            if meta:
+                await _notify_integration_error(db, integ, meta, detail)
     await db.flush()
     log.info("integration_test", provider=provider, tenant_id=str(tenant_id), ok=ok)
     return {"ok": ok, "status": integ.status, "detail": detail}
@@ -461,18 +519,37 @@ OAUTH_PROVIDERS: dict[str, dict] = {
         "redirect_uri_setting": "GOOGLE_WORKSPACE_OAUTH_REDIRECT_URI",
         "token_field": "access_token",
     },
+    # Fase 177.1 — Keycloak/PJe-KC SSO do PDPJ: `grant_type=password` na 1ª
+    # conexão (login direto, sem redirect — ver `exchange_oauth_password`
+    # abaixo) e `grant_type=refresh_token` depois, via `_exchange_oauth_refresh`
+    # já genérico — por isso não tem `authorize_url`/`redirect_uri_setting`
+    # (não é o fluxo authorization_code que os provedores acima usam).
+    # `token_url_setting` (em vez de `token_url` fixo) porque o endpoint SSO
+    # tem variante staging/produção — configurável sem mudar código.
+    "pdpj": {
+        "token_url_setting": "PDPJ_OAUTH_TOKEN_URL",
+        "client_id_setting": "PDPJ_OAUTH_CLIENT_ID",
+        "client_secret_setting": "PDPJ_OAUTH_CLIENT_SECRET",
+        "token_field": "sso_token",
+    },
 }
+
+
+def _resolve_token_url(cfg: dict) -> str:
+    return cfg.get("token_url") or getattr(settings, cfg.get("token_url_setting", ""), "")
 
 
 def is_oauth_configured(provider: str) -> bool:
     cfg = OAUTH_PROVIDERS.get(provider)
     if not cfg:
         return False
-    return bool(
+    ok = bool(
         getattr(settings, cfg["client_id_setting"], "")
         and getattr(settings, cfg["client_secret_setting"], "")
-        and getattr(settings, cfg["redirect_uri_setting"], "")
     )
+    if cfg.get("redirect_uri_setting"):
+        ok = ok and bool(getattr(settings, cfg["redirect_uri_setting"], ""))
+    return ok
 
 
 def build_oauth_url(provider: str, state: str) -> str:
@@ -509,7 +586,7 @@ async def exchange_oauth_code(provider: str, code: str) -> dict:
         data["client_id"] = getattr(settings, cfg["client_id_setting"])
         data["redirect_uri"] = getattr(settings, cfg["redirect_uri_setting"])
     async with httpx.AsyncClient(timeout=15) as client:
-        resp = await client.post(cfg["token_url"], data=data)
+        resp = await client.post(_resolve_token_url(cfg), data=data)
         resp.raise_for_status()
         return resp.json()
 
@@ -523,7 +600,27 @@ async def _exchange_oauth_refresh(provider: str, refresh_token: str) -> dict:
         "refresh_token": refresh_token,
     }
     async with httpx.AsyncClient(timeout=15) as client:
-        resp = await client.post(cfg["token_url"], data=data)
+        resp = await client.post(_resolve_token_url(cfg), data=data)
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def exchange_oauth_password(provider: str, username: str, password: str) -> dict:
+    """Troca usuário+senha por tokens via `grant_type=password` (Fase 177.1 —
+    login direto do PDPJ/Keycloak, sem redirect). A senha nunca é persistida:
+    usada 1x nesta chamada e descartada — só o `access_token`/`refresh_token`
+    devolvido é guardado (via `save_oauth_tokens`, mesmo caminho já usado pelo
+    fluxo `authorization_code` dos outros provedores)."""
+    cfg = OAUTH_PROVIDERS[provider]
+    data = {
+        "client_id": getattr(settings, cfg["client_id_setting"]),
+        "client_secret": getattr(settings, cfg["client_secret_setting"]),
+        "grant_type": "password",
+        "username": username,
+        "password": password,
+    }
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.post(_resolve_token_url(cfg), data=data)
         resp.raise_for_status()
         return resp.json()
 
