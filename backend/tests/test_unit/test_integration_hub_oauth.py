@@ -85,6 +85,8 @@ def _limpar_settings_oauth():
     settings.GOOGLE_CLIENT_SECRET = ""
     settings.GOOGLE_DRIVE_OAUTH_REDIRECT_URI = ""
     settings.GOOGLE_WORKSPACE_OAUTH_REDIRECT_URI = ""
+    settings.PDPJ_OAUTH_CLIENT_ID = ""
+    settings.PDPJ_OAUTH_CLIENT_SECRET = ""
 
 
 def test_is_oauth_configured_falso_sem_settings():
@@ -426,6 +428,109 @@ def test_get_credentials_marcador_oauth_presente_aciona_refresh():
 
     assert called["refresh"] is True
     assert creds["renovado"] is True
+
+
+def test_is_oauth_configured_pdpj_falso_sem_settings():
+    """PDPJ não tem redirect_uri_setting (grant_type=password, sem redirect) —
+    is_oauth_configured não pode exigir uma chave que o provider não declara."""
+    from app.services import integration_hub as ih
+    _limpar_settings_oauth()
+    assert ih.is_oauth_configured("pdpj") is False
+
+
+def test_is_oauth_configured_pdpj_true_com_settings_sem_redirect_uri():
+    from app.services import integration_hub as ih
+    from app.config import settings
+    _limpar_settings_oauth()
+    settings.PDPJ_OAUTH_CLIENT_ID = "cnj-client"
+    settings.PDPJ_OAUTH_CLIENT_SECRET = "cnj-secret"
+    assert ih.is_oauth_configured("pdpj") is True
+    _limpar_settings_oauth()
+
+
+def test_exchange_oauth_password_pdpj_grant_type_e_token_url_corretos():
+    """Fase 177.1 — login direto do PDPJ via Keycloak (grant_type=password)."""
+    from app.services import integration_hub as ih
+    from app.config import settings
+    _limpar_settings_oauth()
+    settings.PDPJ_OAUTH_CLIENT_ID = "cnj-client"
+    settings.PDPJ_OAUTH_CLIENT_SECRET = "cnj-secret"
+
+    _FakeAsyncClient.calls = []
+    _FakeAsyncClient.next_response = _FakeResponse({"access_token": "tok_pdpj", "refresh_token": "ref_pdpj", "expires_in": 300})
+    original_client = ih.httpx.AsyncClient
+    ih.httpx.AsyncClient = _FakeAsyncClient
+    try:
+        result = asyncio.run(ih.exchange_oauth_password("pdpj", "usuario.cnj", "senha123"))
+    finally:
+        ih.httpx.AsyncClient = original_client
+        _limpar_settings_oauth()
+
+    assert result["access_token"] == "tok_pdpj"
+    url, data = _FakeAsyncClient.calls[0]
+    assert url == "https://sso.cloud.pje.jus.br/auth/realms/pje/protocol/openid-connect/token"
+    assert data["grant_type"] == "password"
+    assert data["username"] == "usuario.cnj"
+    assert data["password"] == "senha123"
+    assert data["client_id"] == "cnj-client"
+    assert data["client_secret"] == "cnj-secret"
+
+
+def test_exchange_oauth_password_propaga_erro_http(monkeypatch):
+    """Credencial inválida (401 do Keycloak) deve propagar — quem trata e
+    traduz pra mensagem amigável é o endpoint (integrations_hub.py)."""
+    from app.services import integration_hub as ih
+    from app.config import settings
+    _limpar_settings_oauth()
+    settings.PDPJ_OAUTH_CLIENT_ID = "cnj-client"
+    settings.PDPJ_OAUTH_CLIENT_SECRET = "cnj-secret"
+
+    _FakeAsyncClient.calls = []
+    _FakeAsyncClient.next_response = _FakeResponse({"error": "invalid_grant"}, status_code=401)
+    original_client = ih.httpx.AsyncClient
+    ih.httpx.AsyncClient = _FakeAsyncClient
+    try:
+        with __import__("pytest").raises(RuntimeError):
+            asyncio.run(ih.exchange_oauth_password("pdpj", "usuario.cnj", "senha-errada"))
+    finally:
+        ih.httpx.AsyncClient = original_client
+        _limpar_settings_oauth()
+
+
+def test_oauth_tokens_to_credentials_pdpj_usa_sso_token_como_token_field():
+    from app.services import integration_hub as ih
+    creds = ih._oauth_tokens_to_credentials("pdpj", {"access_token": "tok_pdpj", "refresh_token": "ref_pdpj", "expires_in": 300})
+    assert creds["__oauth__"] is True
+    assert creds["sso_token"] == "tok_pdpj"
+    assert creds["oauth_refresh_token"] == "ref_pdpj"
+    assert "oauth_expires_at" in creds
+
+
+def test_refresh_oauth_if_needed_pdpj_usa_token_url_configuravel():
+    """O refresh do PDPJ reaproveita _exchange_oauth_refresh (já genérico) —
+    só precisa resolver o token_url via settings (token_url_setting), não
+    um literal fixo como os demais provedores."""
+    from app.services import integration_hub as ih
+    from app.config import settings
+    _limpar_settings_oauth()
+    settings.PDPJ_OAUTH_CLIENT_ID = "cnj-client"
+    settings.PDPJ_OAUTH_CLIENT_SECRET = "cnj-secret"
+
+    _FakeAsyncClient.calls = []
+    _FakeAsyncClient.next_response = _FakeResponse({"access_token": "tok_novo", "refresh_token": "ref_novo", "expires_in": 300})
+    original_client = ih.httpx.AsyncClient
+    ih.httpx.AsyncClient = _FakeAsyncClient
+    try:
+        result = asyncio.run(ih._exchange_oauth_refresh("pdpj", "ref_velho"))
+    finally:
+        ih.httpx.AsyncClient = original_client
+        _limpar_settings_oauth()
+
+    assert result["access_token"] == "tok_novo"
+    url, data = _FakeAsyncClient.calls[0]
+    assert url == settings.PDPJ_OAUTH_TOKEN_URL
+    assert data["grant_type"] == "refresh_token"
+    assert data["refresh_token"] == "ref_velho"
 
 
 def test_list_status_oauth_disponivel_false_sem_settings_configuradas():

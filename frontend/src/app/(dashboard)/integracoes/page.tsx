@@ -82,6 +82,12 @@ function HubCards() {
   const [working, setWorking] = useState(false);
   const [testando, setTestando] = useState<string | null>(null);
   const [oauthConectando, setOauthConectando] = useState<string | null>(null);
+  // Fase 177.1 — login direto do PDPJ (CNJ Corporativo): grant_type=password,
+  // sem redirect, então não cabe no fluxo genérico de conectarOAuth() abaixo
+  // (que abre uma aba pro site do provedor).
+  const [pdpjLogin, setPdpjLogin] = useState<HubIntegracao | null>(null);
+  const [pdpjForm, setPdpjForm] = useState({ username: "", password: "" });
+  const [pdpjWorking, setPdpjWorking] = useState(false);
   const [modulos, setModulos] = useState<Record<string, boolean>>({});
   const [folderInputs, setFolderInputs] = useState<Record<string, string>>({});
   const [salvandoPasta, setSalvandoPasta] = useState<string | null>(null);
@@ -134,6 +140,27 @@ function HubCards() {
       else toast.error(d.detail || "Login por conta não disponível no momento.");
     } catch { toast.error("Falha de conexão."); }
     finally { setOauthConectando(null); }
+  }
+
+  async function loginPdpj() {
+    if (!pdpjLogin) return;
+    setPdpjWorking(true);
+    try {
+      const res = await fetch("/api/v1/integrations/hub/pdpj/oauth/login", {
+        method: "POST", headers: authH(),
+        body: JSON.stringify(pdpjForm),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (res.ok) {
+        toast.success(d.message || "PDPJ conectado.");
+        setPdpjLogin(null);
+        setPdpjForm({ username: "", password: "" });
+        fetchHub();
+      } else {
+        toast.error(d.detail || "Erro ao entrar com o CNJ Corporativo.");
+      }
+    } catch { toast.error("Falha de conexão."); }
+    finally { setPdpjWorking(false); }
   }
 
   async function conectar() {
@@ -325,14 +352,15 @@ function HubCards() {
                 </p>
               ) : isAdmin && it.oauth_disponivel ? (
                 <>
-                  <button onClick={() => conectarOAuth(it)} disabled={oauthConectando === it.provider}
+                  <button onClick={() => it.provider === "pdpj" ? setPdpjLogin(it) : conectarOAuth(it)} disabled={oauthConectando === it.provider}
                     className="btn-afj-primary text-sm py-2 px-4 rounded-sm flex items-center gap-2 disabled:opacity-50">
-                    {oauthConectando === it.provider ? <Loader2 size={14} className="animate-spin" /> : <Link2 size={14} />} Conectar com login
+                    {oauthConectando === it.provider ? <Loader2 size={14} className="animate-spin" /> : <Link2 size={14} />}
+                    {it.provider === "pdpj" ? "Entrar com CNJ Corporativo" : "Conectar com login"}
                   </button>
                   {it.fields.length > 0 && (
                     <button onClick={() => abrirConectar(it)} disabled={working}
                       className="text-xs text-afj-black/45 hover:text-afj-black/70 underline underline-offset-2">
-                      ou colar chave manualmente
+                      ou colar token manualmente
                     </button>
                   )}
                 </>
@@ -382,6 +410,49 @@ function HubCards() {
               <button onClick={conectar} disabled={working}
                 className="btn-afj-primary text-xs py-1.5 px-4 rounded-sm flex items-center gap-1.5 disabled:opacity-50">
                 {working ? <Loader2 size={12} className="animate-spin" /> : <Link2 size={12} />} Conectar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Login direto do PDPJ (usuário/senha do CNJ Corporativo) — Fase 177.1 */}
+      {pdpjLogin && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => !pdpjWorking && setPdpjLogin(null)}>
+          <div className="bg-white rounded-sm shadow-xl w-full max-w-md p-5" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-1">
+              <h3 className="font-semibold text-afj-black text-sm">Entrar com CNJ Corporativo</h3>
+              <button onClick={() => setPdpjLogin(null)} disabled={pdpjWorking} className="text-afj-black/40 hover:text-afj-black p-1"><X size={16} /></button>
+            </div>
+            <p className="text-xs text-afj-black/50 mb-4">
+              Use o mesmo usuário e senha do acesso ao CNJ Corporativo/PDPJ. O token de acesso
+              gerado se renova sozinho depois — sem precisar colar um novo token manualmente.
+            </p>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-medium text-afj-black/70 mb-1">Usuário do CNJ Corporativo</label>
+                <input type="text" value={pdpjForm.username}
+                  onChange={(e) => setPdpjForm((prev) => ({ ...prev, username: e.target.value }))}
+                  className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold"
+                  autoComplete="off" />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-afj-black/70 mb-1">Senha</label>
+                <input type="password" value={pdpjForm.password}
+                  onChange={(e) => setPdpjForm((prev) => ({ ...prev, password: e.target.value }))}
+                  className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold"
+                  autoComplete="off" />
+              </div>
+            </div>
+            <p className="text-[11px] text-afj-black/45 mt-3">
+              Sua senha é usada só nesta troca com o CNJ e nunca é guardada — só o token de
+              acesso resultante fica salvo, cifrado.
+            </p>
+            <div className="flex justify-end gap-2 mt-4">
+              <button onClick={() => setPdpjLogin(null)} disabled={pdpjWorking} className="btn-afj-outline text-xs py-1.5 px-3 rounded-sm">Cancelar</button>
+              <button onClick={loginPdpj} disabled={pdpjWorking || !pdpjForm.username || !pdpjForm.password}
+                className="btn-afj-primary text-xs py-1.5 px-4 rounded-sm flex items-center gap-1.5 disabled:opacity-50">
+                {pdpjWorking ? <Loader2 size={12} className="animate-spin" /> : <Link2 size={12} />} Entrar
               </button>
             </div>
           </div>
