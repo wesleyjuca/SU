@@ -179,10 +179,24 @@ Histórico:
   só a verificação feita durante a implementação), caça a regressão na
   interação entre eles, e fechamento das 3 lacunas deixadas pela Fase 173
   (LGPD aprofundado, perf/`time_limit`, e — pela primeira vez — o
-  frontend real subido e navegado via Playwright, o que revelou um achado
-  novo: `frontend/next.config.js` tem um fallback de API local morto,
-  fazendo `npm run dev` sem a env var `API_URL` (não `NEXT_PUBLIC_API_URL`)
-  conversar com o backend de PRODUÇÃO em vez do local).
+  frontend real subido e navegado via Playwright). Achado imediato só de
+  subir o frontend de verdade: `frontend/next.config.js` tem um fallback
+  de API local morto, fazendo `npm run dev` sem a env var `API_URL` (não
+  `NEXT_PUBLIC_API_URL`) conversar com o backend de PRODUÇÃO em vez do
+  local. A 2ª rodada de auditoria paralela (mesma técnica da 173, desta
+  vez citando explicitamente o diff da 174 pro achado não virar
+  auto-referência) achou que o próprio fix da 174.6 (retomada após
+  retry) só cobre o caso `último passo = SUCCESS` — o caso mais comum de
+  uma chain HITL pausar (`AWAITING_APPROVAL`) cai no branch antigo e
+  reexecuta a chain inteira do zero; também achou uma regressão de
+  contagem de custo introduzida pelo próprio fix (`tokens_used`/
+  `cost_usd` sobrescritos em vez de somados no caminho de retomada), um
+  gap real de LGPD (`erase_client_data` não alcança `ClientInteraction`/
+  `ClientContact`, que continuam exportáveis com PII depois do
+  "esquecimento"), uma race real em `cancel_run` (só checa `CANCELADO`
+  1x no início de `resume_chain_after_approval`, não dentro do loop), e
+  um banner do frontend que nunca atualiza pra disparo direto (não-chain)
+  de agente. 6 achados confirmados → candidatos a virar Fase 176.
 
 ## Riscos conhecidos / débito técnico
 
