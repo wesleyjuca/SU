@@ -197,6 +197,17 @@ Histórico:
   1x no início de `resume_chain_after_approval`, não dentro do loop), e
   um banner do frontend que nunca atualiza pra disparo direto (não-chain)
   de agente. 6 achados confirmados → candidatos a virar Fase 176.
+- **Fase 176** — implementação dos 6 achados da Fase 175, cada um
+  reproduzido e reverificado empiricamente no momento da própria correção
+  (Postgres/Redis reais para 176.1-176.3/176.5, incluindo 2 sessões
+  concorrentes para reproduzir a race de 176.5; `npm run dev` real +
+  Playwright/curl para 176.4/176.6). Não repetiu uma rodada de teste geral
+  nova — próxima rodada deve reconfirmar estes 6 fixes de forma
+  independente (mesmo padrão da transição 174→175) antes de ir atrás de
+  achados novos, e considerar aprofundar uma frente que ainda não teve
+  simulação de volume/concorrência real: múltiplos runs concorrentes
+  disputando o mesmo `TaskLock` de retomada sob carga (só testado de forma
+  sintética/isolada até aqui, nunca com volume).
 
 ## Riscos conhecidos / débito técnico
 
