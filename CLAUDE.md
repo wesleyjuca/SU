@@ -208,6 +208,45 @@ Histórico:
   simulação de volume/concorrência real: múltiplos runs concorrentes
   disputando o mesmo `TaskLock` de retomada sob carga (só testado de forma
   sintética/isolada até aqui, nunca com volume).
+- **Fase 177** — evolução de Integrações a pedido do usuário (não uma
+  rodada de teste geral): login OAuth2/Keycloak (`grant_type=password`) do
+  PDPJ reaproveitando o mecanismo de renovação automática já usado por
+  Google/Mercado Pago, e aviso a ADMIN/SOCIO/SUPERADMIN na transição de
+  qualquer credencial pra `ERRO` (antes só um badge vermelho passivo).
+  Verificado com HTTP simulado + Postgres real no momento da implementação.
+- **Fase 178** — reconfirmação independente dos 8 fixes das Fases 176+177,
+  e fechamento da lacuna de volume/concorrência no `TaskLock` deixada pela
+  Fase 176 (20 chamadas concorrentes reais contra Redis real → 1 executa,
+  19 corretamente bloqueadas, sem duplicar `AgentStep` nem custo). Achado
+  operacional importante desta rodada: o `Workflow` usado nas Fases
+  173/175 para a auditoria paralela **não funcionou** desta vez — todos os
+  ~19 subagentes lançados receberam um lembrete de "plan mode ativo"
+  injetado no próprio contexto deles (mesmo a sessão principal não estando
+  de fato restrita — commits/pushes/edições diretas continuaram
+  funcionando o tempo todo) e corretamente se recusaram a escrever no
+  Postgres/Redis real, devolvendo só leitura estática de código. A
+  reconfirmação dos 8 fixes e o teste de volume do `TaskLock` tiveram que
+  ser refeitos manualmente pela sessão principal (não delegados) depois
+  desse achado. Isso também pegou um falso-positivo real no meio do
+  caminho: a 1ª tentativa do teste de volume do `TaskLock` "achou" que 20
+  chamadas concorrentes conseguiam `resumed=True` ao mesmo tempo — na
+  verdade era o próprio script de teste esquecendo de exportar `REDIS_URL`
+  no processo, fazendo o lock cair no fail-open por design (sem Redis
+  configurado); corrigido e re-executado antes de virar achado. Por causa
+  do bloqueio de subagentes, a auditoria de achados novos desta rodada foi
+  mais estreita que o normal (3 checagens pontuais feitas manualmente:
+  isolamento cross-tenant da notificação de erro de integração, vazamento
+  de PII/credencial em audit_logs/logs estruturados, e regressão visual em
+  `/integracoes` — todas limpas, nenhum achado novo) em vez do leque de 4
+  frentes paralelas com verificação adversarial das rodadas anteriores.
+  **Próxima rodada deve**: (a) verificar se o bloqueio de plan mode em
+  subagentes ainda ocorre antes de tentar `Workflow` de novo (pode ser
+  transitório desta sessão) — se persistir, é um problema de harness a
+  reportar, não algo pra contornar silenciosamente toda vez; (b) cobrir as
+  frentes que ficaram de fora aqui por causa do bloqueio: casos de borda
+  de múltiplos gates HITL em sequência (3+), resolve_approval concorrente
+  na MESMA Approval (distinto do TaskLock de retomada, nunca testado), e
+  rejeição no meio de uma chain com retry parcial já aplicado.
 
 ## Riscos conhecidos / débito técnico
 
