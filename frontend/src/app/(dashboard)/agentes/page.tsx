@@ -130,13 +130,24 @@ export default function AgentesPage() {
   const [cancelling, setCancelling] = useState(false);
   const [runSteps, setRunSteps] = useState<RunStep[] | null>(null);
   const [runStatus, setRunStatus] = useState<string | null>(null);
+  const [lastRunWasChain, setLastRunWasChain] = useState(false);
   const isChain = CHAIN_TASK_TYPES.some((c) => c.value === taskType);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
 
-  // Fase 169.1 — só faz sentido pollar passo-a-passo pra chains (uma rota
-  // única continua com o feedback simples de sempre).
+  // Fase 176.4 — achado da Fase 175: o banner de resultado ("Run iniciado:
+  // X") nunca era atualizado pra disparos de agente único (não-chain) — só
+  // a lista de passos de uma chain reagia ao polling. Agora o próprio
+  // banner reflete o status terminal de QUALQUER run, chain ou não.
+  useEffect(() => {
+    if (!runStatus || !lastRunId) return;
+    if (runStatus === "SUCCESS") setResult(`Run ${lastRunId} concluído com sucesso.`);
+    else if (runStatus === "FAILED") setResult(`Run ${lastRunId} falhou.`);
+    else if (runStatus === "AWAITING_APPROVAL") setResult(`Run ${lastRunId} aguardando aprovação humana.`);
+    else if (runStatus === "CANCELADO") setResult(`Run ${lastRunId} cancelado.`);
+  }, [runStatus, lastRunId]);
+
   function pollRunSteps(runId: string) {
     if (pollRef.current) clearInterval(pollRef.current);
     let attempts = 0;
@@ -169,6 +180,7 @@ export default function AgentesPage() {
     setLastRunId(null);
     setRunSteps(null);
     setRunStatus(null);
+    setLastRunWasChain(false);
     setTriggering(agentName);
     try {
       const token = localStorage.getItem("afj_access_token");
@@ -191,7 +203,8 @@ export default function AgentesPage() {
         const data = await res.json();
         setLastRunId(data.run_id);
         setResult(`Run iniciado: ${data.run_id}`);
-        if (isChain) pollRunSteps(data.run_id);
+        setLastRunWasChain(isChain);
+        pollRunSteps(data.run_id);
       } else {
         toast.error(`Erro ao iniciar agente: ${res.status}`);
       }
@@ -283,7 +296,7 @@ export default function AgentesPage() {
           passo). Passos após um gate HITL retomam automaticamente depois
           da aprovação (169.2) — este painel só não reflete isso ao vivo se
           a aprovação acontecer numa aba/sessão diferente da que disparou. */}
-      {runSteps && runSteps.length > 0 && (
+      {lastRunWasChain && runSteps && runSteps.length > 0 && (
         <div className="afj-card p-4 space-y-2">
           <h3 className="text-xs font-semibold text-afj-black/50 uppercase tracking-wider">
             Progresso da cadeia ({runSteps.length} {runSteps.length === 1 ? "passo" : "passos"})

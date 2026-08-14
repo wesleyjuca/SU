@@ -96,7 +96,25 @@ async def _run_async(
             select(AgentStep).where(AgentStep.run_id == uuid.UUID(run_id)).order_by(AgentStep.step_number)
         )
         existing_steps = existing_steps_result.scalars().all()
-        resumable_retry = bool(existing_steps) and (existing_steps[-1].output_json or {}).get("_status") == "SUCCESS"
+        last_step_status = (existing_steps[-1].output_json or {}).get("_status") if existing_steps else None
+
+        # Fase 176.1 — achado da Fase 175: a 174.6 só reconhecia
+        # last_step_status=="SUCCESS" como "retry com progresso salvo". Mas o
+        # jeito mais comum de uma chain HITL parar no meio é justamente
+        # terminar em AWAITING_APPROVAL (é o próprio propósito do gate) —
+        # nesse caso o retry caía no branch antigo (reinvoca o grafo do
+        # zero), reexecutando os passos já concluídos. A tentativa anterior
+        # já deixou o run corretamente pausado (Approval já criada por
+        # `create_approval_from_state`, idempotente — Fase 132/171); uma
+        # redelivery aqui não deve reexecutar nada (duplicaria efeito
+        # colateral) NEM avançar pro próximo passo (pularia o gate humano
+        # sem aprovação) — só reconhece o estado já correto e não faz nada.
+        if last_step_status == "AWAITING_APPROVAL":
+            log.info("agent_task_retry_noop_awaiting_approval", run_id=run_id,
+                      step=existing_steps[-1].step_number)
+            return
+
+        resumable_retry = last_step_status == "SUCCESS"
 
         started = datetime.utcnow()
         final_state: dict = {}
@@ -165,9 +183,25 @@ async def _run_async(
             agent_run.error_message = error_msg
             agent_run.completed_at = datetime.utcnow()
             agent_run.duration_ms = int((datetime.utcnow() - started).total_seconds() * 1000)
-            agent_run.tokens_used = ctx.total_tokens
             from decimal import Decimal
-            agent_run.cost_usd = Decimal(str(ctx.total_cost_usd)) if ctx.total_cost_usd else None
+            if resumable_retry:
+                # Fase 176.2 — achado da Fase 175: no caminho de retomada
+                # (_resume_chain_from_steps), `ctx` só contabiliza os passos
+                # que rodaram NESTA invocação — os passos pulados (já
+                # persistidos numa tentativa anterior) não entram em
+                # ctx.total_tokens/total_cost_usd. Uma atribuição direta aqui
+                # substituía (perdia) o tokens_used/cost_usd já gravado da
+                # tentativa anterior; soma, mesmo padrão de
+                # chain_resume.py::_accumulate_usage.
+                agent_run.tokens_used = (agent_run.tokens_used or 0) + ctx.total_tokens
+                added_cost = Decimal(str(ctx.total_cost_usd)) if ctx.total_cost_usd else Decimal("0")
+                agent_run.cost_usd = (agent_run.cost_usd or Decimal("0")) + added_cost
+            else:
+                # Primeira tentativa (ou retry com reinvocação completa do
+                # zero): ctx já reflete o total da chain inteira desta
+                # invocação — atribuição direta continua correta aqui.
+                agent_run.tokens_used = ctx.total_tokens
+                agent_run.cost_usd = Decimal(str(ctx.total_cost_usd)) if ctx.total_cost_usd else None
             agent_run.requires_approval = ctx.requires_approval
             # HITL: cria o Approval PENDENTE na mesma transação (não p/ run cancelado)
             if not canceled and status == "AWAITING_APPROVAL":

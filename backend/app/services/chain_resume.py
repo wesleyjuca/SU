@@ -21,12 +21,14 @@ from datetime import datetime
 from decimal import Decimal
 
 import structlog
+from sqlalchemy import select
 
 from app.agents.base.result import AgentResult, AgentStatus
 from app.agents.brain.chain_projectors import project_output
 from app.agents.brain.context import AgentContext
 from app.agents.brain.orchestrator import execute_chain_step
 from app.agents.brain.router import get_chain
+from app.models.agent_run import AgentRun
 from app.workers.task_lock import TaskLock
 
 log = structlog.get_logger()
@@ -107,6 +109,25 @@ async def _run_remaining_steps(db, agent_run, chain, last_step, next_index, modi
 
     results = []
     for i in range(next_index, len(chain)):
+        # Fase 176.5 — achado da Fase 175: `resume_chain_after_approval` só
+        # checava CANCELADO 1x, antes deste loop começar — um cancelamento
+        # cooperativo (`POST /agents/runs/{id}/cancel`, endpoint documenta a
+        # intenção: "não aborta uma chamada de IA já em voo") pedido
+        # enquanto a chain retomada estava entre passos nunca era observado
+        # aqui, e o loop terminava sobrescrevendo CANCELADO com
+        # SUCCESS/FAILED/AWAITING_APPROVAL. Query direta na coluna (não
+        # `db.refresh(agent_run)`) pra enxergar o commit de outra
+        # sessão/request sob READ COMMITTED sem tocar nos atributos já
+        # carregados no objeto ORM em memória.
+        current_status = (await db.execute(
+            select(AgentRun.status).where(AgentRun.id == agent_run.id)
+        )).scalar_one_or_none()
+        if current_status == "CANCELADO":
+            log.info("chain_resume_cancelled_mid_loop", run_id=str(agent_run.id), next_step=i)
+            _accumulate_usage(agent_run, ctx)
+            await db.commit()
+            return {"resumed": True, "final_status": "CANCELADO", "steps_run": len(results)}
+
         result = await execute_chain_step(ctx, chain, i)
         results.append(result)
 

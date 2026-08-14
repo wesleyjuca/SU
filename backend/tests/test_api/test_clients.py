@@ -212,3 +212,41 @@ async def test_lgpd_data_erasure_anonymizes_pii(client: AsyncClient, auth_header
     erase_res = await client.delete(f"/api/v1/lgpd/clients/{client_id}/data", headers=auth_headers)
     # May be 200 (data erased) or 403 (requires ADMIN role) — both are acceptable
     assert erase_res.status_code in (200, 403, 404)
+
+
+async def test_lgpd_data_erasure_reaches_contacts_and_interactions(client: AsyncClient, auth_headers: dict):
+    # Fase 176.3 — achado da Fase 175: erase_client_data só anonimizava o
+    # próprio Client, deixando ClientContact/ClientInteraction exportáveis
+    # com PII depois do "esquecimento".
+    create_res = await client.post(
+        "/api/v1/clients",
+        json={"tipo": "PJ", "nome_completo": "Empresa Para Apagar", "lgpd_consent": True},
+        headers=auth_headers,
+    )
+    if create_res.status_code != 201:
+        pytest.skip("Could not create client")
+    client_id = create_res.json()["id"]
+
+    contact_res = await client.post(
+        f"/api/v1/clients/{client_id}/contacts",
+        json={"nome": "Contato Sensível", "email": "contato@empresa.test", "telefone": "11988887777"},
+        headers=auth_headers,
+    )
+    interaction_res = await client.post(
+        f"/api/v1/clients/{client_id}/interactions",
+        json={"tipo": "LIGACAO", "descricao": "Ligou de 11988887777 pedindo desconto"},
+        headers=auth_headers,
+    )
+    if contact_res.status_code != 201 or interaction_res.status_code != 201:
+        pytest.skip("Could not create contact/interaction")
+
+    erase_res = await client.delete(f"/api/v1/lgpd/clients/{client_id}/data", headers=auth_headers)
+    if erase_res.status_code != 200:
+        pytest.skip("Erasure not permitted for this role")
+
+    export_res = await client.get(f"/api/v1/lgpd/clients/{client_id}/export", headers=auth_headers)
+    assert export_res.status_code == 200
+    exported = export_res.json()
+    assert "11988887777" not in str(exported)
+    assert "Contato Sensível" not in str(exported)
+    assert "desconto" not in str(exported)

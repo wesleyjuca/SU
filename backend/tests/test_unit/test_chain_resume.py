@@ -29,15 +29,31 @@ class _FakeStepsResult:
         return _S()
 
 
-class _FakeDB:
-    """`db` externo passado a resume_chain_after_approval — só precisa
-    responder o SELECT de AgentStep e commit()."""
+class _FakeScalarResult:
+    def __init__(self, value):
+        self._value = value
 
-    def __init__(self, steps):
+    def scalar_one_or_none(self):
+        return self._value
+
+
+class _FakeDB:
+    """`db` externo passado a resume_chain_after_approval — responde o SELECT
+    de AgentStep e, desde a Fase 176.5, também o SELECT(AgentRun.status)
+    (checagem de cancelamento concorrente dentro do loop de retomada) — e
+    commit(). `run_status` simula o valor que uma OUTRA sessão/request teria
+    commitado nesse meio-tempo (default: nenhum cancelamento concorrente, pra
+    não alterar o comportamento dos testes já existentes)."""
+
+    def __init__(self, steps, run_status: str = "AWAITING_APPROVAL"):
         self._steps = steps
+        self.run_status = run_status
         self.commits = 0
 
     async def execute(self, stmt):
+        cols = stmt.column_descriptions
+        if len(cols) == 1 and cols[0].get("name") == "status":
+            return _FakeScalarResult(self.run_status)
         return _FakeStepsResult(self._steps)
 
     async def commit(self):
@@ -276,6 +292,7 @@ async def test_resume_creates_second_approval_when_step_also_needs_approval(monk
 
     db = _FakeDBQueue([
         _FakeResultFlexible(scalars_list=steps),   # SELECT AgentStep
+        _FakeResultFlexible(scalar_value="AWAITING_APPROVAL"),  # Fase 176.5: checagem de cancelamento concorrente no loop
         _FakeResultFlexible(scalar_value=None),    # idempotência: nenhuma Approval PENDENTE pra esse run
         _FakeResultFlexible(scalars_list=[]),      # _notify_tenant_of_approval: sem staff cadastrado
     ])
@@ -305,6 +322,7 @@ async def test_resume_full_roundtrip_through_two_gates(monkeypatch):
     _patch_step_execution(monkeypatch, {"b_agent": gate2})
     db1 = _FakeDBQueue([
         _FakeResultFlexible(scalars_list=steps_apos_gate1),
+        _FakeResultFlexible(scalar_value="AWAITING_APPROVAL"),  # Fase 176.5
         _FakeResultFlexible(scalar_value=None),
         _FakeResultFlexible(scalars_list=[]),
     ])
@@ -314,11 +332,36 @@ async def test_resume_full_roundtrip_through_two_gates(monkeypatch):
 
     steps_apos_gate2 = steps_apos_gate1 + [_make_step(1, "b_agent", "AWAITING_APPROVAL", {"y": 2})]
     _patch_step_execution(monkeypatch, {"c_agent": AgentResult(status=AgentStatus.SUCCESS, agent_name="c_agent", output={})})
-    db2 = _FakeDBQueue([_FakeResultFlexible(scalars_list=steps_apos_gate2)])
+    db2 = _FakeDBQueue([
+        _FakeResultFlexible(scalars_list=steps_apos_gate2),
+        _FakeResultFlexible(scalar_value="AWAITING_APPROVAL"),  # Fase 176.5
+    ])
 
     r2 = await resume_chain_after_approval(db2, agent_run, approval=None)
     assert r2 == {"resumed": True, "final_status": "SUCCESS", "steps_run": 1}
     assert agent_run.status == "SUCCESS"
+
+
+async def test_resume_stops_when_cancelled_mid_loop(monkeypatch):
+    # Fase 176.5 — achado da Fase 175: resume_chain_after_approval só checava
+    # CANCELADO 1x, antes do loop de passos restantes começar. Um cancelamento
+    # concorrente (`POST /agents/runs/{id}/cancel` numa sessão/request
+    # diferente, commitado enquanto esta retomada está entre passos) deve ser
+    # observado dentro do loop, sem sobrescrever CANCELADO com
+    # SUCCESS/FAILED/AWAITING_APPROVAL.
+    agent_run = _make_agent_run("full_contract_flow")
+    agent_run.status = "AWAITING_APPROVAL"  # objeto em memória ainda não sabe do cancelamento concorrente
+    steps = [_make_step(0, "contract_agent", "AWAITING_APPROVAL", {"document_id": "xyz"})]
+    _patch_step_execution(monkeypatch, {
+        "review_agent": AgentResult(status=AgentStatus.SUCCESS, agent_name="review_agent", output={"reviewed": True}),
+    })
+
+    db = _FakeDB(steps, run_status="CANCELADO")
+    result = await resume_chain_after_approval(db, agent_run, approval=None)
+
+    assert result == {"resumed": True, "final_status": "CANCELADO", "steps_run": 0}
+    # não sobrescreve o CANCELADO já commitado pela outra sessão
+    assert agent_run.status == "AWAITING_APPROVAL"
 
 
 async def test_resume_noop_when_lock_busy(monkeypatch):
