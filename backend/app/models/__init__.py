@@ -1,3 +1,4 @@
+from app.models.tenant import Tenant, TenantConfig
 from app.models.user import User, UserPermission, Session
 from app.models.client import Client, ClientContact, ClientInteraction
 from app.models.process import LegalProcess, ProcessMovement, ProcessDeadline, ProcessParty, ProcessTeamMember
@@ -21,6 +22,7 @@ from app.models.agent_prompt import AgentPromptConfig, AgentPromptVersion, Agent
 from app.models.custom_agent import CustomAgent
 
 __all__ = [
+    "Tenant", "TenantConfig",
     "User", "UserPermission", "Session",
     "Client", "ClientContact", "ClientInteraction",
     "LegalProcess", "ProcessMovement", "ProcessDeadline", "ProcessParty",

@@ -1,7 +1,7 @@
 """Endpoints para triggar, consultar e gerenciar execuções de agentes."""
 from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc
+from sqlalchemy import select, desc, func
 from pydantic import BaseModel
 from typing import Any
 import uuid
@@ -68,6 +68,14 @@ class AgentRunResponse(BaseModel):
     error_message: str | None
     requires_approval: bool
     steps: list[AgentStepResponse] | None = None
+    # Fase 174.5 — list_runs (usado pelo dashboard/grid de agentes) nunca
+    # carregava `steps` (só get_run por id fazia isso), então mesmo depois
+    # da Fase 174.2 corrigir o `status` do run pra refletir falha real, a
+    # listagem ainda não mostrava QUAL passo falhou. Leve o bastante pra
+    # não pagar N+1/payload cheio numa lista de até 200 runs — ver
+    # `_load_last_steps`.
+    last_step_name: str | None = None
+    last_step_status: str | None = None
 
 
 @router.post("/trigger", status_code=202)
@@ -167,7 +175,38 @@ async def list_runs(
 
     result = await db.execute(query)
     runs = result.scalars().all()
-    return [_run_to_response(r) for r in runs]
+    last_steps = await _load_last_steps(db, [r.id for r in runs])
+    return [_run_to_response(r, last_step=last_steps.get(r.id)) for r in runs]
+
+
+async def _load_last_steps(db: AsyncSession, run_ids: list[uuid.UUID]) -> dict[uuid.UUID, tuple[str | None, str | None]]:
+    """1 query pra pegar o último `AgentStep` (por step_number) de cada run
+    da página atual — via row_number() particionado por run_id, não N+1
+    (uma query por run) nem `selectinload` do histórico inteiro (que seria
+    o payload de todos os steps de até 200 runs numa lista)."""
+    if not run_ids:
+        return {}
+    from app.models.agent_run import AgentStep
+
+    ranked = (
+        select(
+            AgentStep.run_id,
+            AgentStep.step_name,
+            AgentStep.output_json,
+            func.row_number().over(
+                partition_by=AgentStep.run_id, order_by=AgentStep.step_number.desc()
+            ).label("rn"),
+        )
+        .where(AgentStep.run_id.in_(run_ids))
+        .subquery()
+    )
+    result = await db.execute(
+        select(ranked.c.run_id, ranked.c.step_name, ranked.c.output_json).where(ranked.c.rn == 1)
+    )
+    return {
+        row.run_id: (row.step_name, (row.output_json or {}).get("_status"))
+        for row in result
+    }
 
 
 @router.get("/runs/{run_id}", response_model=AgentRunResponse)
@@ -292,7 +331,13 @@ def _step_to_response(step) -> AgentStepResponse:
     )
 
 
-def _run_to_response(run: AgentRun, steps: list | None = None) -> AgentRunResponse:
+def _run_to_response(
+    run: AgentRun, steps: list | None = None, last_step: tuple[str | None, str | None] | None = None,
+) -> AgentRunResponse:
+    if last_step is None and steps:
+        last_step_obj = max(steps, key=lambda s: s.step_number)
+        last_step = (last_step_obj.step_name, (last_step_obj.output_json or {}).get("_status"))
+    last_step_name, last_step_status = last_step or (None, None)
     return AgentRunResponse(
         run_id=str(run.id),
         agent_name=run.agent_name,
@@ -305,4 +350,6 @@ def _run_to_response(run: AgentRun, steps: list | None = None) -> AgentRunRespon
         error_message=run.error_message,
         requires_approval=run.requires_approval,
         steps=[_step_to_response(s) for s in steps] if steps else None,
+        last_step_name=last_step_name,
+        last_step_status=last_step_status,
     )

@@ -290,9 +290,20 @@ async def _get_or_create_config(db: AsyncSession, current_user: User) -> tuple[T
             select(Tenant).where(Tenant.id == current_user.tenant_id)
         )).scalar_one_or_none()
     if not tenant:
+        # Fase 174.9 — sem filtrar por is_active, se o tenant raiz existisse
+        # mas estivesse is_active=False (só alcançável hoje via tamper direto
+        # no Postgres — update_tenant() bloqueia isso via API pro tenant
+        # raiz), esta query não encontrava a linha e o bloco abaixo tentava
+        # inserir um 2º Tenant(slug="afj"), estourando IntegrityError não
+        # tratada (slug é unique) — um 500 genérico em vez de reaproveitar a
+        # linha existente.
         tenant = (await db.execute(
-            select(Tenant).where(Tenant.slug == DEFAULT_TENANT_SLUG, Tenant.is_active == True)
+            select(Tenant).where(Tenant.slug == DEFAULT_TENANT_SLUG)
         )).scalar_one_or_none()
+        if tenant and not tenant.is_active:
+            # O tenant raiz nunca deveria ficar inativo (Fase 170) — reativa
+            # em vez de deixar a inconsistência se propagar.
+            tenant.is_active = True
     if not tenant:
         # Fase 170 — mesmo invariante do backfill em app/core/events.py:
         # o tenant raiz sempre nasce no plano Máximo e isento.

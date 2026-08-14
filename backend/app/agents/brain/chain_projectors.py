@@ -62,10 +62,71 @@ def _strategy_to_crm(result: AgentResult, ctx: AgentContext) -> dict:
     return overrides
 
 
+def _petition_to_review(result: AgentResult, ctx: AgentContext) -> dict:
+    """petition_agent (tipo_peticao/citacoes) → review_agent (tipo_documento/
+    jurisprudencia_verificada).
+
+    Fase 174.3 — sem esta ponte, review_agent.execute() (que lê
+    `task.get("tipo_documento", "PETICAO")` e
+    `task.get("jurisprudencia_verificada", [])`) sempre caía nos defaults:
+    tratava qualquer petição como "PETICAO" genérica e nunca via nenhuma
+    citação como verificada — mesmo as que petition_agent já tinha checado
+    via `verificar_citacoes` — fazendo `_etapa_consistencia` marcar toda
+    citação real como [NÃO VERIFICADO] (bloqueador ALTA por padrão) e
+    `pode_protocolar` ficar sistematicamente False. Como uma ponte custom
+    substitui inteiramente o `_default_projector` (que copiaria o output
+    bruto), ela também precisa repassar o texto do documento explicitamente
+    — senão review_agent recebe `conteudo=""` e falha imediatamente
+    ("Conteúdo do documento não fornecido para revisão"). Prioriza
+    `conteudo_texto` (a chave usada pela edição humana no momento da
+    aprovação — `_aplicar_modificacoes`/`chain_resume.py::_run_remaining_steps`
+    mesclam `modifications` por cima do `output` original do passo com gate,
+    exatamente sob essa chave) sobre `conteudo` (o texto original gerado
+    pela IA) — sem essa prioridade, uma edição humana seria descartada e
+    review_agent revisaria o rascunho velho, não o texto que o usuário
+    realmente aprovou.
+    """
+    output = result.output or {}
+    overrides: dict = {}
+    conteudo = output.get("conteudo_texto") or output.get("conteudo")
+    if conteudo:
+        overrides["conteudo"] = conteudo
+    tipo_peticao = output.get("tipo_peticao")
+    if tipo_peticao:
+        overrides["tipo_documento"] = tipo_peticao
+    citacoes = output.get("citacoes") or []
+    verificadas = [
+        {"numero": c.get("referencia"), "tribunal": c.get("tribunal") or "N/A"}
+        for c in citacoes
+        if c.get("status") == "confirmada"
+    ]
+    if verificadas:
+        overrides["jurisprudencia_verificada"] = verificadas
+    return overrides
+
+
+def _contract_to_review(result: AgentResult, ctx: AgentContext) -> dict:
+    """contract_agent (tipo/conteudo) → review_agent (tipo_documento/
+    conteudo). Mesma prioridade de `conteudo_texto` (edição humana) sobre
+    `conteudo` (original da IA) que `_petition_to_review` usa — ver
+    docstring lá. Contratos não têm citações a propagar."""
+    output = result.output or {}
+    overrides: dict = {}
+    conteudo = output.get("conteudo_texto") or output.get("conteudo")
+    if conteudo:
+        overrides["conteudo"] = conteudo
+    tipo = output.get("tipo")
+    if tipo:
+        overrides["tipo_documento"] = tipo
+    return overrides
+
+
 CHAIN_PROJECTORS: dict[tuple[str, str], Bridge] = {
     ("process_agent", "jurisprudence_agent"): _process_to_jurisprudence,
     ("jurisprudence_agent", "strategy_agent"): _jurisprudence_to_strategy,
     ("strategy_agent", "crm_agent"): _strategy_to_crm,
+    ("petition_agent", "review_agent"): _petition_to_review,
+    ("contract_agent", "review_agent"): _contract_to_review,
 }
 
 

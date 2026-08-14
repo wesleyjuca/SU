@@ -114,6 +114,11 @@ async def _run_remaining_steps(db, agent_run, chain, last_step, next_index, modi
             agent_run.status = "FAILED"
             agent_run.error_message = result.error
             agent_run.completed_at = datetime.utcnow()
+            # Fase 174.7 — requires_approval fica True desde que o 1º gate
+            # pausou a chain (setado em agent_tasks.py::_run_async); se o
+            # passo retomado depois FALHA, a chain já terminou — sem isso o
+            # flag ficava travado em True pra sempre num run já FAILED.
+            agent_run.requires_approval = False
             _accumulate_usage(agent_run, ctx)
             await db.commit()
             return {"resumed": True, "final_status": "FAILED", "steps_run": len(results)}
@@ -143,6 +148,9 @@ async def _run_remaining_steps(db, agent_run, chain, last_step, next_index, modi
 
     agent_run.status = "SUCCESS"
     agent_run.completed_at = datetime.utcnow()
+    # Fase 174.7 — mesma correção do branch FAILED acima: a chain terminou
+    # com sucesso, não precisa mais de atenção humana.
+    agent_run.requires_approval = False
     agent_run.output_data = {
         "run_id": str(agent_run.id),
         "task_type": agent_run.task_type,

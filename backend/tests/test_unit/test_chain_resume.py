@@ -121,6 +121,10 @@ def _patch_step_execution(monkeypatch, results_by_route: dict):
 
 async def test_resume_generate_and_review_petition_after_approval(monkeypatch):
     agent_run = _make_agent_run("generate_and_review_petition")
+    # Fase 174.7 — simula o estado real deixado pelo 1º gate (agent_tasks.py
+    # seta requires_approval=True quando a chain pausa pela 1ª vez); a
+    # retomada bem-sucedida deve resetar pra False, não deixar travado.
+    agent_run.requires_approval = True
     steps = [
         _make_step(0, "jurisprudence_agent", "SUCCESS", {"resultados": []}),
         _make_step(1, "petition_agent", "AWAITING_APPROVAL", {"document_id": "abc", "conteudo_texto": "rascunho"}),
@@ -134,6 +138,7 @@ async def test_resume_generate_and_review_petition_after_approval(monkeypatch):
     assert result == {"resumed": True, "final_status": "SUCCESS", "steps_run": 1}
     assert agent_run.status == "SUCCESS"
     assert agent_run.completed_at is not None
+    assert agent_run.requires_approval is False
 
 
 async def test_resume_full_contract_flow_after_approval(monkeypatch):
@@ -177,6 +182,7 @@ async def test_resume_noop_when_gate_was_last_step():
 
 async def test_resume_stops_on_failed_step(monkeypatch):
     agent_run = _make_agent_run("full_contract_flow")
+    agent_run.requires_approval = True  # Fase 174.7 — ver comentário no teste de sucesso acima.
     steps = [_make_step(0, "contract_agent", "AWAITING_APPROVAL", {"document_id": "xyz"})]
     _patch_step_execution(monkeypatch, {
         "review_agent": AgentResult(status=AgentStatus.FAILED, agent_name="review_agent", error="revisão falhou"),
@@ -185,6 +191,7 @@ async def test_resume_stops_on_failed_step(monkeypatch):
     result = await resume_chain_after_approval(_FakeDB(steps), agent_run, approval=None)
 
     assert result == {"resumed": True, "final_status": "FAILED", "steps_run": 1}
+    assert agent_run.requires_approval is False
     assert agent_run.status == "FAILED"
     assert agent_run.error_message == "revisão falhou"
 
@@ -204,7 +211,10 @@ async def test_resume_propagates_modifications_to_next_step(monkeypatch):
         modifications={"conteudo_texto": "texto editado pelo humano"},
     )
 
-    assert captured["review_agent"]["conteudo_texto"] == "texto editado pelo humano"
+    # Fase 174.3 — a ponte (petition_agent, review_agent) projeta a edição
+    # humana (chave "conteudo_texto", a mesma que _aplicar_modificacoes usa)
+    # pra "conteudo", a chave que review_agent.execute() de fato lê.
+    assert captured["review_agent"]["conteudo"] == "texto editado pelo humano"
 
 
 # ─── Fase 171 — múltiplos gates HITL na mesma chain ────────────────────────

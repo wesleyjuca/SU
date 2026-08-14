@@ -225,6 +225,15 @@ async def node_post_process(state: OrchestratorState) -> OrchestratorState:
         "total_cost_usd": ctx.total_cost_usd,
         "results": [r.to_dict() for r in results],
     }
+    # Fase 174.2 — `state["error"]` já era setado por node_execute_agent
+    # quando um passo FAILED (ver linha ~141), mas nada lia depois: o run
+    # inteiro era gravado como SUCCESS mesmo com a chain interrompida por
+    # falha real de um passo. Propagar pro final_output, que é o que
+    # _run_async (app/workers/tasks/agent_tasks.py) de fato inspeciona pra
+    # decidir o status final.
+    error = state.get("error")
+    if error:
+        final_output["error"] = error
     return {**state, "final_output": final_output, "done": True}
 
 

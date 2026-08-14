@@ -144,10 +144,34 @@ async def resolve_approval(
             agent_run.status = "FAILED"
             agent_run.error_message = f"Rejeitado: {body.rejection_reason}"
             agent_run.completed_at = datetime.now(timezone.utc)
-
-    await db.flush()
+            # Fase 174.7 — rejeição fecha a chain; sem isto requires_approval
+            # ficava travado em True pra sempre num run já FAILED.
+            agent_run.requires_approval = False
 
     action = "APROVADO" if body.approved else "REJEITADO"
+
+    # Fase 174.8 — o AuditMiddleware genérico (app/core/middleware.py) já
+    # grava uma linha pra todo POST que muda estado, mas só com
+    # action=f"{method}:{path}" — nunca resource_type/resource_id/
+    # old_value/new_value (todos ficam NULL). Decisão HITL é ato jurídico
+    # (ver docstring da função) que merece rastro específico, no mesmo
+    # padrão manual já usado em lgpd.py/system.py, complementando (não
+    # substituindo) o registro genérico do middleware.
+    from app.models.audit_log import AuditLog
+    db.add(AuditLog(
+        user_id=current_user.id,
+        tenant_id=current_user.tenant_id,
+        agent_name=agent_run.agent_name if agent_run else None,
+        run_id=approval.run_id,
+        action=f"HITL:{action}",
+        resource_type="APPROVAL",
+        resource_id=approval.id,
+        old_value={"status": "PENDENTE"},
+        new_value={"status": approval.status, "rejection_reason": approval.rejection_reason},
+        success=True,
+    ))
+    await db.flush()
+
     return {
         "message": f"Aprovação {action} com sucesso",
         "approval_id": approval_id,
