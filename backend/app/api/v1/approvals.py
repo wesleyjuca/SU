@@ -9,7 +9,7 @@ import uuid
 from app.db.base import get_db
 from app.dependencies import get_current_user, require_role
 from app.models.user import User
-from app.models.agent_run import Approval
+from app.models.agent_run import Approval, AgentRun
 from app.core.exceptions import NotFoundError, ValidationError
 
 router = APIRouter(prefix="/approvals", tags=["approvals"])
@@ -120,23 +120,64 @@ async def resolve_approval(
     approval.rejection_reason = body.rejection_reason
     approval.resolved_at = datetime.now(timezone.utc)
 
+    # Fase 169.2 — precisa do AgentRun tanto pra retomar o resto da chain
+    # na aprovação quanto pra fechar o status na rejeição (antes disso,
+    # resolve_approval nunca olhava o AgentRun — um run rejeitado ficava
+    # preso em AWAITING_APPROVAL pra sempre).
+    agent_run: AgentRun | None = None
+    if approval.run_id:
+        agent_run = await db.get(AgentRun, approval.run_id)
+
     # Executa a ação de forma síncrona (substitui a retomada por checkpoint LangGraph,
     # que era código morto). A ação crítica só ocorre AQUI, após decisão humana.
     from app.services.approval import execute_approved_action, mark_rejected_action
     execution: dict | None = None
+    resume: dict | None = None
     if body.approved:
         execution = await execute_approved_action(db, approval, body.modifications)
+        if agent_run:
+            from app.services.chain_resume import resume_chain_after_approval
+            resume = await resume_chain_after_approval(db, agent_run, approval, body.modifications)
     else:
         await mark_rejected_action(db, approval)
-
-    await db.flush()
+        if agent_run and agent_run.status not in ("SUCCESS", "FAILED", "CANCELADO"):
+            agent_run.status = "FAILED"
+            agent_run.error_message = f"Rejeitado: {body.rejection_reason}"
+            agent_run.completed_at = datetime.now(timezone.utc)
+            # Fase 174.7 — rejeição fecha a chain; sem isto requires_approval
+            # ficava travado em True pra sempre num run já FAILED.
+            agent_run.requires_approval = False
 
     action = "APROVADO" if body.approved else "REJEITADO"
+
+    # Fase 174.8 — o AuditMiddleware genérico (app/core/middleware.py) já
+    # grava uma linha pra todo POST que muda estado, mas só com
+    # action=f"{method}:{path}" — nunca resource_type/resource_id/
+    # old_value/new_value (todos ficam NULL). Decisão HITL é ato jurídico
+    # (ver docstring da função) que merece rastro específico, no mesmo
+    # padrão manual já usado em lgpd.py/system.py, complementando (não
+    # substituindo) o registro genérico do middleware.
+    from app.models.audit_log import AuditLog
+    db.add(AuditLog(
+        user_id=current_user.id,
+        tenant_id=current_user.tenant_id,
+        agent_name=agent_run.agent_name if agent_run else None,
+        run_id=approval.run_id,
+        action=f"HITL:{action}",
+        resource_type="APPROVAL",
+        resource_id=approval.id,
+        old_value={"status": "PENDENTE"},
+        new_value={"status": approval.status, "rejection_reason": approval.rejection_reason},
+        success=True,
+    ))
+    await db.flush()
+
     return {
         "message": f"Aprovação {action} com sucesso",
         "approval_id": approval_id,
         "resolved_by": current_user.full_name,
         "execution": execution,
+        "chain_resume": resume,
     }
 
 

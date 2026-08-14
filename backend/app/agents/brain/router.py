@@ -55,29 +55,37 @@ INTENT_KEYWORDS: dict[str, list[str]] = {
 }
 
 
-def classify_task(task_type: str, task_input: dict) -> str:
+def get_chain(task_type: str, task_input: dict | None = None) -> list[str]:
     """
-    Retorna a rota (nome do agente ou chain) para a tarefa.
-    Se task_type já mapeado diretamente, usa ele.
-    Caso contrário, tenta inferir por palavras-chave no task_input.
+    Retorna a cadeia COMPLETA de agentes para a tarefa (1 elemento para
+    rotas diretas, N elementos para as chains multi-agente declaradas em
+    TASK_ROUTE_MAP). Quem só precisa do primeiro agente deve usar
+    classify_task() — get_chain() é a fonte de verdade para o orquestrador
+    encadear de verdade (Fase 169.1).
     """
-    # Fase 140.2 — agente customizado aprovado, resolvido dinamicamente
-    # (não é uma entrada fixa em TASK_ROUTE_MAP, task_input.custom_agent_id
-    # diz QUAL agente; a barreira de aprovação real vive dentro do próprio
-    # executor, não aqui — classify_task() é síncrono, sem acesso ao DB).
+    task_input = task_input or {}
+
     if task_type == "run_custom_agent":
-        return "custom_agent"
+        return ["custom_agent"]
 
     if task_type in TASK_ROUTE_MAP:
         route = TASK_ROUTE_MAP[task_type]
-        # Para chains, retorna o primeiro agente (orquestrador encadeia)
-        return route[0] if isinstance(route, list) else route
+        return list(route) if isinstance(route, list) else [route]
 
-    # Inferência por palavras-chave
     text = (task_input.get("descricao") or task_input.get("query") or "").lower()
     for intent, keywords in INTENT_KEYWORDS.items():
         if any(kw in text for kw in keywords):
             route = TASK_ROUTE_MAP.get(intent, "orchestration_agent")
-            return route[0] if isinstance(route, list) else route
+            return list(route) if isinstance(route, list) else [route]
 
-    return "orchestration_agent"
+    return ["orchestration_agent"]
+
+
+def classify_task(task_type: str, task_input: dict) -> str:
+    """
+    Retorna só o primeiro agente da rota/chain para a tarefa — uso legado
+    por quem não precisa encadear (ex.: chamadores fora do orquestrador
+    LangGraph). O orquestrador em si usa get_chain() para rodar a chain
+    inteira, não só o primeiro passo.
+    """
+    return get_chain(task_type, task_input)[0]

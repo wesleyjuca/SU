@@ -16,6 +16,17 @@ log = structlog.get_logger()
     max_retries=3,
     default_retry_delay=30,
     acks_late=True,
+    # Fase 174.4 — sem time_limit/soft_time_limit, uma chamada de LLM travada
+    # (rede pendurada, provedor sem resposta) segurava o slot do worker
+    # indefinidamente — nenhum outro run daquele worker avançava. Margem
+    # acima do timeout interno (`asyncio.wait_for(..., timeout=300.0)` em
+    # `_run_async`) pra ele ter a chance de agir primeiro e persistir
+    # FAILED/"Agent timeout after 300s" antes do Celery matar a task à
+    # força; `SoftTimeLimitExceeded` (perto de soft_time_limit) e o kill
+    # duro (perto de time_limit) já caem no `except Exception`/retry
+    # existente abaixo, mesmo padrão das outras tasks agendadas (Fase 147).
+    soft_time_limit=330,
+    time_limit=360,
 )
 def run_agent_task(self, run_id: str, task_type: str, task_input: dict,
                    triggered_by: str | None = None, process_id: str | None = None,
@@ -50,7 +61,7 @@ async def _run_async(
     from app.db.base import AsyncSessionLocal
     from app.agents.brain.context import AgentContext
     from app.agents.brain.orchestrator import get_orchestrator_graph
-    from app.models.agent_run import AgentRun
+    from app.models.agent_run import AgentRun, AgentStep
     from sqlalchemy import select
 
     async with AsyncSessionLocal() as db:
@@ -70,28 +81,81 @@ async def _run_async(
             client_id=uuid.UUID(client_id) if client_id else None,
         )
 
-        state = {
-            "context": ctx,
-            "route": "",
-            "agent_results": [],
-            "pending_approval": None,
-            "final_output": None,
-            "error": None,
-            "done": False,
-        }
-        config = {"configurable": {"thread_id": run_id}}
+        # Fase 174.6 — Celery retenta `run_agent_task` do zero (self.retry())
+        # em QUALQUER exceção, incluindo uma que só acontece DEPOIS de passos
+        # anteriores já terem sido persistidos com sucesso (ex.: achado
+        # CRÍTICO da Fase 173, corrigido na 174.1). Sem checar isso, cada
+        # retry reexecutava a chain inteira desde o passo 0 — inclusive
+        # passos com efeito colateral externo real (ex.: process_agent
+        # buscando andamentos de verdade) — deixando `AgentStep` duplicado e
+        # gastando chamadas externas à toa. Se já há passos persistidos e o
+        # último terminou SUCCESS, retoma do próximo passo em vez de
+        # reinvocar o grafo do zero — mesma unidade de trabalho
+        # (`execute_chain_step`) que o orquestrador e `chain_resume.py` usam.
+        existing_steps_result = await db.execute(
+            select(AgentStep).where(AgentStep.run_id == uuid.UUID(run_id)).order_by(AgentStep.step_number)
+        )
+        existing_steps = existing_steps_result.scalars().all()
+        last_step_status = (existing_steps[-1].output_json or {}).get("_status") if existing_steps else None
 
-        orchestrator_graph = get_orchestrator_graph()
+        # Fase 176.1 — achado da Fase 175: a 174.6 só reconhecia
+        # last_step_status=="SUCCESS" como "retry com progresso salvo". Mas o
+        # jeito mais comum de uma chain HITL parar no meio é justamente
+        # terminar em AWAITING_APPROVAL (é o próprio propósito do gate) —
+        # nesse caso o retry caía no branch antigo (reinvoca o grafo do
+        # zero), reexecutando os passos já concluídos. A tentativa anterior
+        # já deixou o run corretamente pausado (Approval já criada por
+        # `create_approval_from_state`, idempotente — Fase 132/171); uma
+        # redelivery aqui não deve reexecutar nada (duplicaria efeito
+        # colateral) NEM avançar pro próximo passo (pularia o gate humano
+        # sem aprovação) — só reconhece o estado já correto e não faz nada.
+        if last_step_status == "AWAITING_APPROVAL":
+            log.info("agent_task_retry_noop_awaiting_approval", run_id=run_id,
+                      step=existing_steps[-1].step_number)
+            return
+
+        resumable_retry = last_step_status == "SUCCESS"
+
         started = datetime.utcnow()
         final_state: dict = {}
         try:
-            final_state = await asyncio.wait_for(
-                orchestrator_graph.ainvoke(state, config=config),
-                timeout=300.0,
-            )
-            status = "AWAITING_APPROVAL" if final_state.get("pending_approval") else "SUCCESS"
+            if resumable_retry:
+                log.info("agent_task_retry_resuming", run_id=run_id, from_step=existing_steps[-1].step_number + 1)
+                final_state = await asyncio.wait_for(
+                    _resume_chain_from_steps(ctx, task_type, task_input, existing_steps),
+                    timeout=300.0,
+                )
+            else:
+                state = {
+                    "context": ctx,
+                    "route": "",
+                    "agent_results": [],
+                    "pending_approval": None,
+                    "final_output": None,
+                    "error": None,
+                    "done": False,
+                }
+                config = {"configurable": {"thread_id": run_id}}
+                orchestrator_graph = get_orchestrator_graph()
+                final_state = await asyncio.wait_for(
+                    orchestrator_graph.ainvoke(state, config=config),
+                    timeout=300.0,
+                )
             output = final_state.get("final_output") or {}
-            error_msg = None
+            # Fase 174.2 — antes só se decidia entre AWAITING_APPROVAL e
+            # SUCCESS: se um passo da chain falhasse (node_execute_agent seta
+            # state["error"], propagado agora por node_post_process em
+            # final_output["error"] — ver orchestrator.py), o run inteiro
+            # ainda era gravado como SUCCESS, escondendo a falha real.
+            if final_state.get("pending_approval"):
+                status = "AWAITING_APPROVAL"
+                error_msg = None
+            elif final_state.get("error") or output.get("error"):
+                status = "FAILED"
+                error_msg = final_state.get("error") or output.get("error")
+            else:
+                status = "SUCCESS"
+                error_msg = None
         except asyncio.TimeoutError:
             status = "FAILED"
             output = {}
@@ -119,9 +183,25 @@ async def _run_async(
             agent_run.error_message = error_msg
             agent_run.completed_at = datetime.utcnow()
             agent_run.duration_ms = int((datetime.utcnow() - started).total_seconds() * 1000)
-            agent_run.tokens_used = ctx.total_tokens
             from decimal import Decimal
-            agent_run.cost_usd = Decimal(str(ctx.total_cost_usd)) if ctx.total_cost_usd else None
+            if resumable_retry:
+                # Fase 176.2 — achado da Fase 175: no caminho de retomada
+                # (_resume_chain_from_steps), `ctx` só contabiliza os passos
+                # que rodaram NESTA invocação — os passos pulados (já
+                # persistidos numa tentativa anterior) não entram em
+                # ctx.total_tokens/total_cost_usd. Uma atribuição direta aqui
+                # substituía (perdia) o tokens_used/cost_usd já gravado da
+                # tentativa anterior; soma, mesmo padrão de
+                # chain_resume.py::_accumulate_usage.
+                agent_run.tokens_used = (agent_run.tokens_used or 0) + ctx.total_tokens
+                added_cost = Decimal(str(ctx.total_cost_usd)) if ctx.total_cost_usd else Decimal("0")
+                agent_run.cost_usd = (agent_run.cost_usd or Decimal("0")) + added_cost
+            else:
+                # Primeira tentativa (ou retry com reinvocação completa do
+                # zero): ctx já reflete o total da chain inteira desta
+                # invocação — atribuição direta continua correta aqui.
+                agent_run.tokens_used = ctx.total_tokens
+                agent_run.cost_usd = Decimal(str(ctx.total_cost_usd)) if ctx.total_cost_usd else None
             agent_run.requires_approval = ctx.requires_approval
             # HITL: cria o Approval PENDENTE na mesma transação (não p/ run cancelado)
             if not canceled and status == "AWAITING_APPROVAL":
@@ -144,3 +224,79 @@ async def _run_async(
             pass
 
         log.info("agent_task_done", run_id=run_id, status=status)
+
+
+async def _resume_chain_from_steps(ctx, task_type: str, task_input: dict, existing_steps: list) -> dict:
+    """Fase 174.6 — retoma uma chain a partir do próximo passo não executado,
+    reconstruindo `agent_results` dos passos já persistidos em vez de
+    reexecutá-los. Devolve um dict no mesmo formato que
+    `orchestrator_graph.ainvoke(...)` devolveria (`final_output`/
+    `pending_approval`/`error`), pra `_run_async` decidir status e persistir
+    sem precisar saber qual dos dois caminhos rodou."""
+    from app.agents.brain.orchestrator import execute_chain_step
+    from app.agents.brain.router import get_chain
+    from app.agents.brain.chain_projectors import project_output
+    from app.agents.base.result import AgentResult, AgentStatus
+
+    chain = get_chain(task_type, task_input)
+    agent_results = [
+        AgentResult(
+            status=AgentStatus((s.output_json or {}).get("_status", "SUCCESS")),
+            agent_name=s.step_name,
+            output={k: v for k, v in (s.output_json or {}).items() if k != "_status"},
+            duration_ms=s.duration_ms or 0,
+        )
+        for s in existing_steps
+    ]
+    last_step = existing_steps[-1]
+    next_index = last_step.step_number + 1
+
+    if next_index >= len(chain):
+        # A tentativa anterior já tinha concluído todos os passos da chain —
+        # só faltou o commit final do AgentRun antes do worker morrer/retry.
+        return {
+            "final_output": {
+                "run_id": str(ctx.run_id),
+                "task_type": ctx.task_type,
+                "agents_invoked": ctx.agents_invoked,
+                "total_tokens": ctx.total_tokens,
+                "total_cost_usd": ctx.total_cost_usd,
+                "results": [r.to_dict() for r in agent_results],
+            },
+            "pending_approval": None,
+            "error": None,
+            "agent_results": agent_results,
+        }
+
+    ctx.task_input = project_output(last_step.step_name, chain[next_index], agent_results[-1], ctx)
+
+    for i in range(next_index, len(chain)):
+        result = await execute_chain_step(ctx, chain, i)
+        agent_results.append(result)
+
+        if result.status == AgentStatus.FAILED:
+            return {"final_output": None, "pending_approval": None, "error": result.error, "agent_results": agent_results}
+
+        if result.status == AgentStatus.AWAITING_APPROVAL:
+            # `agent_results` precisa estar presente pro caller
+            # (create_approval_from_state, ver app/services/approval.py)
+            # conseguir montar `ai_suggestion` a partir do último resultado.
+            return {"final_output": None, "pending_approval": result.approval_required, "error": None, "agent_results": agent_results}
+
+        next_i = i + 1
+        if next_i < len(chain):
+            ctx.task_input = project_output(chain[i], chain[next_i], result, ctx)
+
+    return {
+        "final_output": {
+            "run_id": str(ctx.run_id),
+            "task_type": ctx.task_type,
+            "agents_invoked": ctx.agents_invoked,
+            "total_tokens": ctx.total_tokens,
+            "total_cost_usd": ctx.total_cost_usd,
+            "results": [r.to_dict() for r in agent_results],
+        },
+        "pending_approval": None,
+        "error": None,
+        "agent_results": agent_results,
+    }

@@ -20,12 +20,16 @@ const nextConfig = {
         : null;
     const productionFallback =
       process.env.VERCEL || process.env.VERCEL_ENV === "production"
-        ? "https://su-production-4561.up.railway.app"
+        ? CANONICAL_API_URL
         : "http://localhost:8000";
+    // Fase 176.6 — achado da Fase 175: productionFallback já resolvia certo
+    // (localhost:8000 fora do Vercel), mas nunca era usado — apiBase caía
+    // direto em CANONICAL_API_URL, fazendo `npm run dev` sem a env var
+    // API_URL conversar com o backend de PRODUÇÃO em vez do local.
     const apiBase =
       process.env.API_URL ||
       previewBackend ||
-      CANONICAL_API_URL;
+      productionFallback;
     return [
       {
         source: "/api/v1/:path*",

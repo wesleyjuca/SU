@@ -76,12 +76,24 @@ async def require_active_tenant(
     """Bloqueio suave: escritório SUSPENSO por pendência financeira não escreve.
 
     Leitura (GET/HEAD/OPTIONS) sempre passa; só métodos de escrita são barrados.
-    SUPERADMIN (dono da plataforma) nunca é bloqueado. Ausência de conta de
+    SUPERADMIN (dono da plataforma) nunca é bloqueado. Tenant isento (Fase
+    170 — hoje só o tenant raiz) também nunca é bloqueado, mesmo que exista
+    uma BillingAccount SUSPENSO associada por engano. Ausência de conta de
     cobrança ou qualquer status != SUSPENSO também passa.
     """
     if current_user.role == "SUPERADMIN" or request.method not in _WRITE_METHODS:
         return current_user
     if not current_user.tenant_id:
+        return current_user
+
+    # Fase 170 — defesa em profundidade: um tenant isento (hoje só o
+    # tenant raiz da plataforma) nunca é bloqueado por escrita, mesmo que
+    # exista por engano uma BillingAccount SUSPENSO associada a ele.
+    from app.models.tenant import Tenant
+    isento = (await db.execute(
+        select(Tenant.isento).where(Tenant.id == current_user.tenant_id)
+    )).scalar_one_or_none()
+    if isento:
         return current_user
 
     from app.models.billing import BillingAccount

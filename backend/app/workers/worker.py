@@ -4,6 +4,16 @@ from celery import Celery
 from celery.schedules import crontab
 from app.config import settings
 
+# Fase 174.1 — garante que TODOS os models (incluindo Tenant/TenantConfig,
+# registrados no Base.metadata só quando a classe é importada) estejam
+# carregados antes de qualquer task rodar. Sem isto, o processo do worker
+# nunca tocava app.models.tenant (nenhuma task incluída abaixo importa
+# Tenant), e o primeiro commit envolvendo uma FK pra "tenants"
+# (agent_runs.tenant_id, sync_runs.tenant_id) explodia com
+# NoReferencedTableError — o processo do FastAPI só escapava disso porque
+# app/core/events.py::lifespan importa Tenant explicitamente no boot.
+import app.models  # noqa: F401
+
 log = structlog.get_logger()
 
 # Fase 163 — Sentry só era inicializado em main.py (processo web); exceções

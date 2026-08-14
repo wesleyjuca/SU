@@ -15,12 +15,16 @@ class _FakeSession:
     def __init__(self):
         self.committed = False
         self.rolledback = False
+        self.added = []
 
     async def __aenter__(self):
         return self
 
     async def __aexit__(self, *a):
         return False
+
+    def add(self, obj):
+        self.added.append(obj)
 
     async def commit(self):
         self.committed = True
@@ -33,6 +37,8 @@ def _base_state(route="fake_agent"):
     return {
         "context": AgentContext(task_type="x"),
         "route": route,
+        "chain": [route],
+        "chain_index": 0,
         "agent_results": [],
         "pending_approval": None,
         "final_output": None,
@@ -59,7 +65,7 @@ async def test_node_injects_db_redis_and_commits_on_success(monkeypatch):
     async def _fake_redis():
         return "REDIS"
     monkeypatch.setattr(dbredis, "get_redis", _fake_redis)
-    monkeypatch.setattr(orch, "_resolve_agent_class", lambda route: FakeAgent)
+    monkeypatch.setattr(orch, "resolve_agent_class", lambda route: FakeAgent)
 
     out = await orch.node_execute_agent(_base_state())
 
@@ -85,15 +91,19 @@ async def test_node_rolls_back_on_failure(monkeypatch):
     async def _fake_redis():
         return None
     monkeypatch.setattr(dbredis, "get_redis", _fake_redis)
-    monkeypatch.setattr(orch, "_resolve_agent_class", lambda route: FailAgent)
+    monkeypatch.setattr(orch, "resolve_agent_class", lambda route: FailAgent)
 
     out = await orch.node_execute_agent(_base_state("fail_agent"))
 
-    assert sess.rolledback is True and sess.committed is False
+    # A falha do agente em si é revertida (rollback), mas o AgentStep que
+    # registra "esse passo falhou" ainda é gravado numa transação própria
+    # depois — daí `committed` também ficar True (Fase 169.1).
+    assert sess.rolledback is True and sess.committed is True
+    assert len(sess.added) == 1
     assert out["error"] == "boom" and out["done"] is True
 
 
 async def test_node_unknown_route_returns_error(monkeypatch):
-    monkeypatch.setattr(orch, "_resolve_agent_class", lambda route: None)
+    monkeypatch.setattr(orch, "resolve_agent_class", lambda route: None)
     out = await orch.node_execute_agent(_base_state("nao_existe"))
     assert out["done"] is True and "não encontrado" in out["error"]

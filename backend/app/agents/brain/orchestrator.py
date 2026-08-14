@@ -2,9 +2,19 @@
 AFJ_CORE_BRAIN — Orquestrador Central com LangGraph.
 
 Fluxo:
-  classify_intent → retrieve_memory → execute_agent → check_approval
-  → [INTERRUPT para aprovação humana, se necessário]
+  classify_intent → retrieve_memory → execute_agent ⟲ (loop pelos passos da
+  chain enquanto houver próximo passo e o passo atual tiver sucedido) →
+  check_approval → [INTERRUPT para aprovação humana, se necessário]
   → post_process → audit_close
+
+`route`/`chain`/`chain_index` (Fase 169.1): `chain` é a lista completa de
+agentes da tarefa (1 elemento pra rotas diretas, N pra uma chain declarada em
+`TASK_ROUTE_MAP`); `chain_index` é o passo corrente; `route` é sempre
+`chain[chain_index]`. `execute_agent` avança `chain_index`/`route` e volta
+pra si mesmo (via `route_after_execute_agent`) enquanto o passo anterior
+tiver sido SUCCESS e restar passo — uma chain com gate HITL no meio/fim para
+naturalmente em `check_approval` como uma rota única pararia, sem pular pro
+próximo passo (retomada automática pós-aprovação é a Fase 169.2).
 
 Chamador padrão: `agents/orchestration/orchestration_agent.py` (API
 `/agents/trigger`, worker Celery) — monta o `AgentContext` e delega a
@@ -17,7 +27,8 @@ from langgraph.checkpoint.memory import MemorySaver
 import structlog
 
 from app.agents.brain.context import AgentContext
-from app.agents.brain.router import classify_task
+from app.agents.brain.router import get_chain
+from app.agents.brain.chain_projectors import project_output
 from app.agents.base.result import AgentResult, AgentStatus
 
 log = structlog.get_logger()
@@ -26,6 +37,8 @@ log = structlog.get_logger()
 class OrchestratorState(TypedDict):
     context: AgentContext
     route: str
+    chain: list[str]
+    chain_index: int
     agent_results: list[AgentResult]
     pending_approval: dict | None
     final_output: dict | None
@@ -35,9 +48,9 @@ class OrchestratorState(TypedDict):
 
 async def node_classify_intent(state: OrchestratorState) -> OrchestratorState:
     ctx = state["context"]
-    route = classify_task(ctx.task_type, ctx.task_input)
-    log.info("orchestrator_route", task=ctx.task_type, route=route)
-    return {**state, "route": route}
+    chain = get_chain(ctx.task_type, ctx.task_input)
+    log.info("orchestrator_route", task=ctx.task_type, chain=chain)
+    return {**state, "chain": chain, "chain_index": 0, "route": chain[0]}
 
 
 async def node_retrieve_memory(state: OrchestratorState) -> OrchestratorState:
@@ -48,13 +61,19 @@ async def node_retrieve_memory(state: OrchestratorState) -> OrchestratorState:
     return state
 
 
-async def node_execute_agent(state: OrchestratorState) -> OrchestratorState:
-    ctx = state["context"]
-    route = state["route"]
+async def execute_chain_step(ctx: AgentContext, chain: list[str], chain_index: int) -> AgentResult:
+    """Executa 1 passo de uma chain: resolve o agente, roda com sessão/redis/
+    qdrant/BYOK próprios, persiste o `AgentStep` correspondente.
 
-    agent_class = _resolve_agent_class(route)
+    Extraído do loop do orquestrador (Fase 169.2) porque a retomada pós-
+    aprovação (`app/services/chain_resume.py`) precisa exatamente desta
+    mesma unidade de trabalho fora do grafo LangGraph — mesmo passo, 2
+    chamadores (o loop `node_execute_agent` abaixo, e a retomada)."""
+    route = chain[chain_index]
+
+    agent_class = resolve_agent_class(route)
     if not agent_class:
-        return {**state, "error": f"Agente não encontrado: {route}", "done": True}
+        return AgentResult(status=AgentStatus.FAILED, agent_name=route, error=f"Agente não encontrado: {route}")
 
     # Injeta dependências reais: sem isto o RAG (recall) retorna [] e nada é
     # persistido (Document/Petition/AgentMemory ficam órfãos).
@@ -65,6 +84,8 @@ async def node_execute_agent(state: OrchestratorState) -> OrchestratorState:
     qdrant = await _get_qdrant_if_configured()
 
     from app.integrations.byok import user_ai_creds
+
+    step_input_snapshot = dict(ctx.task_input)
 
     async with AsyncSessionLocal() as session:
         # BYOK: se o usuário disparador tem IA própria ativa, usa a chave dele
@@ -81,12 +102,74 @@ async def node_execute_agent(state: OrchestratorState) -> OrchestratorState:
             await session.rollback()
             log.error("agent_session_commit_failed", route=route, error=str(exc))
 
+        # Fase 169.1 — ativa o modelo AgentStep (existia, nunca era gravado):
+        # 1 linha por passo executado, chain ou rota única, pra dar
+        # visibilidade real de progresso a uma execução multi-agente.
+        try:
+            from app.models.agent_run import AgentStep
+            # `_status` embutido no output_json (não é um campo real do
+            # output do agente) — AgentStep não tem coluna de status própria;
+            # em vez de migrar o schema só pra isso, a API (agents.py) extrai
+            # essa chave ao montar AgentStepResponse.
+            session.add(AgentStep(
+                run_id=ctx.run_id,
+                step_number=chain_index,
+                step_name=route,
+                input_json=step_input_snapshot,
+                output_json={"_status": result.status.value, **(result.output or {})},
+                duration_ms=result.duration_ms,
+            ))
+            await session.commit()
+        except Exception as exc:
+            await session.rollback()
+            log.error("agent_step_persist_failed", route=route, error=str(exc))
+
+    return result
+
+
+async def node_execute_agent(state: OrchestratorState) -> OrchestratorState:
+    ctx = state["context"]
+    route = state["route"]
+    chain = state.get("chain") or [route]
+    chain_index = state.get("chain_index", 0)
+
+    result = await execute_chain_step(ctx, chain, chain_index)
+
     results = state.get("agent_results", []) + [result]
 
     if result.status == AgentStatus.FAILED:
-        return {**state, "agent_results": results, "error": result.error, "done": True}
+        return {**state, "agent_results": results, "chain_index": chain_index, "error": result.error, "done": True}
 
-    return {**state, "agent_results": results}
+    next_index = chain_index + 1
+    if result.status == AgentStatus.SUCCESS and next_index < len(chain):
+        next_route = chain[next_index]
+        ctx.task_input = project_output(route, next_route, result, ctx)
+        return {**state, "agent_results": results, "chain_index": next_index, "route": next_route}
+
+    return {**state, "agent_results": results, "chain_index": chain_index}
+
+
+def route_after_execute_agent(state: OrchestratorState) -> str:
+    """Fase 169.1 — decide se ainda há passo pendente na chain.
+
+    Só continua o loop quando o último passo teve SUCCESS: FAILED já marca
+    `done=True` (o grafo do LangGraph segue os edges mesmo assim, mas o nó
+    seguinte vê `error` setado); AWAITING_APPROVAL precisa parar em
+    `check_approval` pra criar a Approval antes de decidir o que fazer —
+    nunca pula pro próximo passo sem gate humano resolvido.
+    """
+    chain = state.get("chain") or []
+    results = state.get("agent_results", [])
+    last_result = results[-1] if results else None
+
+    # `results` acumula 1 entrada por passo já executado — enquanto for menor
+    # que o tamanho da chain, ainda há passo pendente (`chain_index`, nesse
+    # ponto, já foi avançado por node_execute_agent para APONTAR pro próximo
+    # passo, então comparar contra `len(results)` em vez de `chain_index` é o
+    # que evita pular o último passo por off-by-one).
+    if last_result and last_result.status == AgentStatus.SUCCESS and len(results) < len(chain):
+        return "execute_agent"
+    return "check_approval"
 
 
 async def node_check_approval(state: OrchestratorState) -> OrchestratorState:
@@ -110,11 +193,23 @@ def route_after_approval_check(state: OrchestratorState) -> str:
 async def node_awaiting_approval(state: OrchestratorState) -> OrchestratorState:
     """
     Nó de interrupt — suspende o workflow aqui.
-    O workflow é retomado pela API de aprovações quando o humano decide.
-    O estado é serializado no Redis via LangGraph checkpoint.
+
+    O grafo TERMINA (edge `awaiting_approval → END`), não fica pausado em
+    memória: a `Approval` já foi criada por `node_check_approval` e a
+    resolução humana (`app/api/v1/approvals.py::resolve_approval`) age
+    diretamente sobre o registro correspondente (Document/Petition/Contract),
+    de forma síncrona — não existe retomada deste grafo LangGraph via
+    checkpoint (o `MemorySaver` configurado em `get_orchestrator_graph` não é
+    usado para isso; ver docstring de `app/services/approval.py`). Numa chain
+    com gate no meio, os passos restantes NÃO são executados automaticamente
+    após a aprovação — isso é a Fase 169.2.
     """
-    log.info("orchestrator_awaiting_approval", run_id=str(state["context"].run_id))
-    # LangGraph interrupt() mantém o estado aqui até retomada
+    log.info(
+        "orchestrator_awaiting_approval",
+        run_id=str(state["context"].run_id),
+        chain_index=state.get("chain_index", 0),
+        chain_len=len(state.get("chain") or []),
+    )
     return state
 
 
@@ -130,6 +225,15 @@ async def node_post_process(state: OrchestratorState) -> OrchestratorState:
         "total_cost_usd": ctx.total_cost_usd,
         "results": [r.to_dict() for r in results],
     }
+    # Fase 174.2 — `state["error"]` já era setado por node_execute_agent
+    # quando um passo FAILED (ver linha ~141), mas nada lia depois: o run
+    # inteiro era gravado como SUCCESS mesmo com a chain interrompida por
+    # falha real de um passo. Propagar pro final_output, que é o que
+    # _run_async (app/workers/tasks/agent_tasks.py) de fato inspeciona pra
+    # decidir o status final.
+    error = state.get("error")
+    if error:
+        final_output["error"] = error
     return {**state, "final_output": final_output, "done": True}
 
 
@@ -159,7 +263,11 @@ def build_orchestrator_graph() -> StateGraph:
     graph.set_entry_point("classify_intent")
     graph.add_edge("classify_intent", "retrieve_memory")
     graph.add_edge("retrieve_memory", "execute_agent")
-    graph.add_edge("execute_agent", "check_approval")
+    graph.add_conditional_edges(
+        "execute_agent",
+        route_after_execute_agent,
+        {"execute_agent": "execute_agent", "check_approval": "check_approval"},
+    )
     graph.add_conditional_edges(
         "check_approval",
         route_after_approval_check,
@@ -193,8 +301,11 @@ async def _get_qdrant_if_configured():
         return None
 
 
-def _resolve_agent_class(route: str):
-    """Resolve a classe do agente pela rota (sem instanciar)."""
+def resolve_agent_class(route: str):
+    """Resolve a classe do agente pela rota (sem instanciar).
+
+    Público (Fase 169.2) — usado tanto por `execute_chain_step` (acima)
+    quanto por `app/services/chain_resume.py`."""
     agent_map = {
         # Rota-padrão de tarefas ambíguas (classify_task cai aqui) — precisa
         # resolver, senão qualquer tarefa não mapeada quebra ("Agente não encontrado").

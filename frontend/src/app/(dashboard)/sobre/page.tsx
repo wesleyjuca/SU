@@ -1,8 +1,14 @@
 "use client";
+// Fase 172 — sincronizado com o código até a Fase 171 (ver git log). Esta
+// página é 100% estática (nenhum fetch — tudo nos arrays abaixo); ficou
+// congelada na Fase 92 por ~80 fases até esta sincronização. Ao entregar
+// uma fase que mude recurso visível ao usuário, atualize os arrays abaixo
+// E o marcador "Atualizado até a Fase N" no cabeçalho — é o que evita essa
+// página ficar defasada de novo sem ninguém perceber.
 import {
   Compass, CheckCircle2, Wrench, Clock, Lightbulb, Scale, Bot, DollarSign,
   Users, BookOpen, Shield, Shapes, FileText, KeyRound, CheckSquare, UserCircle,
-  BarChart2, Sparkles, ScanLine,
+  BarChart2, Sparkles, ScanLine, AlertTriangle, Workflow,
 } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 
@@ -24,7 +30,7 @@ const AREAS: { titulo: string; recursos: Recurso[] }[] = [
       { icon: Scale, nome: "Equipe por Processo & Minha Área", desc: "Cada processo tem um responsável e colaboradores; intimações notificam a equipe toda. O filtro \"Meus\" em Processos/Agenda/Publicações e a página Minha Área mostram só o que é seu.", estado: "operacional" },
       { icon: BookOpen, nome: "Publicações & Intimações (DJe)", desc: "Monitoramento automático do Diário de Justiça Eletrônico (DJEN/Comunica) pelas OABs do escritório: cada intimação vira andamento no processo e notifica o responsável; a triagem confirma tipo e dias e gera o prazo.", estado: "operacional" },
       { icon: FileText, nome: "Petições & Contratos", desc: "Geração com IA, editor, versionamento, PDF e ciclo de vida (arquivar/excluir).", estado: "operacional" },
-      { icon: BookOpen, nome: "Pesquisa Jurídica (RAG)", desc: "Busca semântica em jurisprudência, legislação, doutrina e memórias — petições aprovadas e documentos digitalizados (OCR) entram automaticamente; ADMIN pode indexar manualmente jurisprudência, legislação, doutrina e memórias, com cobertura por base visível na busca.", estado: "parcial" },
+      { icon: BookOpen, nome: "Pesquisa Jurídica (RAG)", desc: "Busca semântica em jurisprudência (inclusive sincronização automática do STJ via dados abertos, com favorabilidade de precedentes por relator), legislação federal (LexML), doutrina privada do escritório (sincronizada do Google Drive), memórias e petições aprovadas/documentos digitalizados (OCR) — ADMIN também pode indexar manualmente, com cobertura por base visível na busca.", estado: "parcial" },
       { icon: FileText, nome: "Modelos de Petição", desc: "Biblioteca de modelos reutilizados pela IA — importe do Word (.docx), edite no app ou baixe para editar no Word.", estado: "operacional" },
       { icon: ScanLine, nome: "Digitalização & OCR", desc: "PDFs e imagens enviados são digitalizados automaticamente: o texto é extraído em segundo plano, fica pesquisável e pode ser conferido na hora.", estado: "operacional" },
       { icon: Shapes, nome: "Visual Law", desc: "Fluxogramas e linhas do tempo jurídicas geradas por IA.", estado: "operacional" },
@@ -33,9 +39,10 @@ const AREAS: { titulo: string; recursos: Recurso[] }[] = [
   {
     titulo: "Inteligência Artificial",
     recursos: [
-      { icon: Bot, nome: "19 Agentes + Orquestrador", desc: "Agentes especializados coordenados via LangGraph, com cancelamento de execução.", estado: "operacional" },
-      { icon: KeyRound, nome: "BYOK (Minha IA)", desc: "Traga sua própria chave (Gemini/Claude), com modelo ajustável por área de trabalho.", estado: "operacional" },
-      { icon: CheckSquare, nome: "Aprovações (HITL)", desc: "Ações críticas exigem decisão humana antes de executar.", estado: "operacional" },
+      { icon: Bot, nome: "19 Agentes + Orquestrador", desc: "Agentes especializados coordenados via LangGraph, com cancelamento de execução e agentes customizados sob demanda (ADMIN propõe, SUPERADMIN aprova).", estado: "operacional" },
+      { icon: Workflow, nome: "Encadeamento de Agentes (Chains)", desc: "Fluxos automáticos que rodam vários agentes em sequência (ex.: entrada de processo → jurisprudência → estratégia → CRM), passando o resultado de um pro próximo — retoma sozinho de onde parou depois de uma aprovação humana, mesmo quando a cadeia tem mais de um ponto de aprovação.", estado: "operacional" },
+      { icon: KeyRound, nome: "BYOK (Minha IA)", desc: "Traga sua própria chave — 7 provedores suportados (Claude, GPT, Gemini e outros) —, com balanceamento automático de custo entre chave própria e do sistema, estatísticas de uso e modelo ajustável por área de trabalho.", estado: "operacional" },
+      { icon: CheckSquare, nome: "Aprovações (HITL)", desc: "Ações críticas exigem decisão humana antes de executar; aprovar retoma automaticamente o restante de um fluxo encadeado.", estado: "operacional" },
     ],
   },
   {
@@ -52,7 +59,7 @@ const AREAS: { titulo: string; recursos: Recurso[] }[] = [
   {
     titulo: "Plataforma & Segurança",
     recursos: [
-      { icon: Shield, nome: "Multi-tenant & Auditoria", desc: "Isolamento total entre escritórios e log imutável de ações.", estado: "operacional" },
+      { icon: Shield, nome: "Multi-tenant & Auditoria", desc: "Isolamento total entre escritórios, log imutável de ações e CPF/CNPJ criptografado em repouso. Planos por escritório (STANDARD/PRO/ENTERPRISE) — o escritório dono da plataforma sempre opera no plano Máximo, isento de cobrança, com essa garantia restaurada automaticamente mesmo se alterada por engano.", estado: "operacional" },
       { icon: Sparkles, nome: "Cérebro (SuperAdmin)", desc: "Painel exclusivo do dono da plataforma: mapa vivo de módulos em camadas concêntricas, integrações e infraestrutura (Celery, Redis, Qdrant, Postgres) em tempo real, insights proativos por IA (a própria plataforma analisa saúde, riscos e sugere evolução), assistente de IA com RAG da documentação e conversa por voz — todo acesso autenticado, autorizado e auditado.", estado: "operacional" },
       { icon: KeyRound, nome: "Autenticação JWT", desc: "Tokens de acesso/refresh com sessões estáveis.", estado: "operacional" },
       { icon: Shield, nome: "Ética, Controle & Integridade", desc: "Código de Conduta com aceite registrado, Canal de Denúncias anônimo e controles técnicos ativos (HITL, auditoria, LGPD).", estado: "operacional" },
@@ -86,6 +93,24 @@ const ROADMAP: { fase: string; itens: string; estado: Estado }[] = [
   { fase: "Mobile / PWA / App nativo", itens: "PWA instalável e offline; base Capacitor pronta para publicar Android/iOS", estado: "operacional" },
   { fase: "Integrações Externas", itens: "Hub de conexão pronto (credenciais cifradas por escritório); pagamento, assinatura e WhatsApp ativam com a conta do provedor", estado: "parcial" },
   { fase: "Multi-unidade & SaaS", itens: "P1+P2 entregues (isolamento, provisionamento, cobrança manual) · P3 em curso: relatórios consolidados da banca com exportação PDF/Excel/CSV entregues; gateway de pagamento e subdomínios seguem", estado: "parcial" },
+  { fase: "IA multi-provedor & orçamento", itens: "7 provedores de IA suportados (BYOK), balanceamento automático entre chave própria e do sistema, estatísticas de uso e teto de custo por usuário", estado: "operacional" },
+  { fase: "Base de conhecimento jurídica expandida", itens: "Jurisprudência do STJ (dados abertos) com favorabilidade por relator, legislação federal (LexML) e doutrina privada do escritório (Google Drive) somam-se à busca semântica", estado: "operacional" },
+  { fase: "Agentes de IA customizados", itens: "ADMIN propõe um agente sob medida, SUPERADMIN aprova; execução com barreira de custo e RAG opcional", estado: "operacional" },
+  { fase: "Armazenamento de documentos em nuvem", itens: "Documentos e timbrado do escritório migram de base64-no-banco pra object storage S3-compatível", estado: "operacional" },
+  { fase: "Encadeamento automático de agentes", itens: "Fluxos multi-agente (chains) com retomada automática após aprovação humana, inclusive com mais de um ponto de aprovação na mesma cadeia", estado: "operacional" },
+  { fase: "Plano exclusivo da plataforma", itens: "O escritório dono da plataforma sempre opera no plano Máximo, isento de cobrança, com garantia automática contra alteração acidental", estado: "operacional" },
+  { fase: "Endurecimento de segurança & desempenho", itens: "Criptografia de CPF/CNPJ, correções de isolamento entre escritórios, paginação real (documentos/financeiro/CRM/auditoria) e monitoramento de erros em produção", estado: "operacional" },
+];
+
+const PENDENCIAS: { titulo: string; desc: string }[] = [
+  { titulo: "Retenção dos logs de auditoria (LGPD)", desc: "O log de auditoria é imutável e cresce sem limite — o prazo de expurgo/arquivamento ainda depende de orientação jurídica do escritório antes de ser implementado." },
+  { titulo: "Anexos de agentes de IA em base64", desc: "Diferente dos documentos do processo (já migrados pra armazenamento em nuvem), os anexos usados pelos agentes de IA ainda ficam salvos como base64 direto no banco." },
+  { titulo: "Aprovação pendente não expira sozinha", desc: "Uma aprovação esquecida por muito tempo não expira nem escala automaticamente pra outra pessoa — ainda depende de alguém lembrar de resolvê-la." },
+  { titulo: "Ação aprovada não dispara o passo externo sozinha", desc: "Aprovar uma petição ou contrato deixa o documento pronto, mas o protocolo no tribunal ou o envio ao cliente continuam manuais." },
+  { titulo: "Descoberta automática de processos novos por OAB", desc: "A busca por OAB nos provedores credenciados (Jusbrasil/Escavador) ainda não alimenta sozinha a descoberta de processos novos vinculados ao advogado." },
+  { titulo: "Google Vertex AI como provedor de IA", desc: "Não implementado — exigiria configuração própria de projeto Google Cloud (billing/IAM) por escritório." },
+  { titulo: "Resposta de IA em streaming", desc: "Hoje a resposta da IA chega pronta; aparecer aos poucos (como em um chat) ainda não está implementado nos fluxos de agentes." },
+  { titulo: "Editar agente de IA customizado já aprovado", desc: "Só é possível propor um agente novo — não dá pra editar um que já foi aprovado, só recriar." },
 ];
 
 const SUGESTOES: { titulo: string; desc: string }[] = [
@@ -120,13 +145,14 @@ export default function SobrePage() {
           <p className="text-afj-black/45 text-sm mt-1">
             Tudo que o AFJ CORE oferece — o que já está em operação, o que está em evolução e o que vem a seguir.
           </p>
+          <p className="text-afj-black/30 text-xs mt-1">Atualizado até a Fase 171.</p>
         </div>
       </div>
 
       {/* KPIs */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {[
-          { n: "19", l: "Agentes IA" },
+          { n: "19", l: "Agentes especializados" },
           { n: String(totalRecursos), l: "Áreas de recurso" },
           { n: `${operacionais}`, l: "Em operação" },
           { n: "100%", l: "Isolamento multi-tenant" },
@@ -186,6 +212,27 @@ export default function SobrePage() {
               </div>
             );
           })}
+        </div>
+      </div>
+
+      {/* O que falta — lacunas conhecidas em recursos que já existem, separado
+          de "Sugestões" (que são ideias de recurso novo) de propósito. */}
+      <div>
+        <h2 className="afj-section-header flex items-center gap-2">
+          <AlertTriangle size={16} className="text-amber-600" /> O que falta / débito técnico conhecido
+        </h2>
+        <p className="text-xs text-afj-black/45 mt-1 mb-3">
+          Lacunas já identificadas em recursos que existem hoje — não são bugs escondidos, são limites conhecidos e documentados.
+        </p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {PENDENCIAS.map((p) => (
+            <div key={p.titulo} className="afj-card p-4 border-l-2 border-amber-400/50">
+              <p className="font-semibold text-afj-black text-sm flex items-center gap-1.5">
+                <AlertTriangle size={13} className="text-amber-600" /> {p.titulo}
+              </p>
+              <p className="text-xs text-afj-black/55 mt-1 leading-relaxed">{p.desc}</p>
+            </div>
+          ))}
         </div>
       </div>
 

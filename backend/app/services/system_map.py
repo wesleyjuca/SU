@@ -18,11 +18,11 @@ def _contar_routers() -> int:
 
 def _agentes() -> list[str]:
     try:
-        from app.agents.brain.orchestrator import _resolve_agent_class  # noqa: F401
+        from app.agents.brain.orchestrator import resolve_agent_class  # noqa: F401
         # o mapa de agentes vive no orchestrator; reflete via introspecção do módulo
         import app.agents.brain.orchestrator as orch
         import inspect
-        src = inspect.getsource(orch._resolve_agent_class)
+        src = inspect.getsource(orch.resolve_agent_class)
         # extrai as chaves "xxx_agent": do agent_map
         import re
         return re.findall(r'"(\w+_agent)"\s*:', src)

@@ -15,6 +15,9 @@ class Tenant(Base):
     slug: Mapped[str] = mapped_column(String(100), unique=True, nullable=False, index=True)
     subdomain: Mapped[str | None] = mapped_column(String(100), unique=True, nullable=True)
     plan: Mapped[str] = mapped_column(String(50), default="STANDARD")
+    # Fase 170 — só o tenant raiz (slug="afj") deve ter isento=True; garantido
+    # pelo backfill idempotente em app/core/events.py, não editável via API.
+    isento: Mapped[bool] = mapped_column(Boolean, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     # Unidades da mesma banca: unidade (child) aponta para a banca-mãe (parent).
     # Isolamento de dados preservado (cada tenant filtra por tenant_id); o vínculo

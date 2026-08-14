@@ -1,7 +1,7 @@
 """Endpoints para triggar, consultar e gerenciar execuções de agentes."""
 from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc
+from sqlalchemy import select, desc, func
 from pydantic import BaseModel
 from typing import Any
 import uuid
@@ -14,6 +14,7 @@ from app.models.client import Client
 from app.models.process import LegalProcess
 from app.agents.brain.context import AgentContext
 from app.agents.brain.orchestrator import get_orchestrator_graph
+from app.agents.brain.router import get_chain
 from app.core.exceptions import NotFoundError
 
 router = APIRouter(prefix="/agents", tags=["agents"])
@@ -47,6 +48,14 @@ class TriggerAgentRequest(BaseModel):
     priority: str = "NORMAL"
 
 
+class AgentStepResponse(BaseModel):
+    step_number: int
+    step_name: str | None
+    status: str
+    duration_ms: int | None
+    output: dict | None
+
+
 class AgentRunResponse(BaseModel):
     run_id: str
     agent_name: str
@@ -58,6 +67,15 @@ class AgentRunResponse(BaseModel):
     output: dict | None
     error_message: str | None
     requires_approval: bool
+    steps: list[AgentStepResponse] | None = None
+    # Fase 174.5 — list_runs (usado pelo dashboard/grid de agentes) nunca
+    # carregava `steps` (só get_run por id fazia isso), então mesmo depois
+    # da Fase 174.2 corrigir o `status` do run pra refletir falha real, a
+    # listagem ainda não mostrava QUAL passo falhou. Leve o bastante pra
+    # não pagar N+1/payload cheio numa lista de até 200 runs — ver
+    # `_load_last_steps`.
+    last_step_name: str | None = None
+    last_step_status: str | None = None
 
 
 @router.post("/trigger", status_code=202)
@@ -93,15 +111,26 @@ async def trigger_agent(
         client_id=client_uuid,
     )
 
+    # Fase 169.1 — chain de verdade: trigger_type reflete se a tarefa dispara
+    # múltiplos agentes em sequência (antes só "MANUAL" existia na prática,
+    # embora "CHAINED" já estivesse documentado no modelo).
+    chain = get_chain(body.task_type, task_input)
+    trigger_type = "CHAINED" if len(chain) > 1 else "MANUAL"
+
     # Criar registro inicial no DB
     agent_run = AgentRun(
         id=run_id,
         agent_name="orchestration_agent",
-        trigger_type="MANUAL",
+        trigger_type=trigger_type,
         triggered_by=current_user.id,
         input_data=body.task_input,
         status="RUNNING",
         tenant_id=current_user.tenant_id,
+        # Fase 169.2 — necessários pra retomar a chain após aprovação humana
+        # num request separado (ver app/services/chain_resume.py).
+        task_type=body.task_type,
+        process_id=process_uuid,
+        client_id=client_uuid,
     )
     db.add(agent_run)
 
@@ -146,7 +175,38 @@ async def list_runs(
 
     result = await db.execute(query)
     runs = result.scalars().all()
-    return [_run_to_response(r) for r in runs]
+    last_steps = await _load_last_steps(db, [r.id for r in runs])
+    return [_run_to_response(r, last_step=last_steps.get(r.id)) for r in runs]
+
+
+async def _load_last_steps(db: AsyncSession, run_ids: list[uuid.UUID]) -> dict[uuid.UUID, tuple[str | None, str | None]]:
+    """1 query pra pegar o último `AgentStep` (por step_number) de cada run
+    da página atual — via row_number() particionado por run_id, não N+1
+    (uma query por run) nem `selectinload` do histórico inteiro (que seria
+    o payload de todos os steps de até 200 runs numa lista)."""
+    if not run_ids:
+        return {}
+    from app.models.agent_run import AgentStep
+
+    ranked = (
+        select(
+            AgentStep.run_id,
+            AgentStep.step_name,
+            AgentStep.output_json,
+            func.row_number().over(
+                partition_by=AgentStep.run_id, order_by=AgentStep.step_number.desc()
+            ).label("rn"),
+        )
+        .where(AgentStep.run_id.in_(run_ids))
+        .subquery()
+    )
+    result = await db.execute(
+        select(ranked.c.run_id, ranked.c.step_name, ranked.c.output_json).where(ranked.c.rn == 1)
+    )
+    return {
+        row.run_id: (row.step_name, (row.output_json or {}).get("_status"))
+        for row in result
+    }
 
 
 @router.get("/runs/{run_id}", response_model=AgentRunResponse)
@@ -155,11 +215,18 @@ async def get_run(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(AgentRun).where(AgentRun.id == uuid.UUID(run_id)))
+    from sqlalchemy.orm import selectinload
+
+    result = await db.execute(
+        select(AgentRun)
+        .options(selectinload(AgentRun.steps))
+        .where(AgentRun.id == uuid.UUID(run_id))
+    )
     run = result.scalar_one_or_none()
     if not run or run.tenant_id != current_user.tenant_id:
         raise NotFoundError("AgentRun", run_id)
-    return _run_to_response(run)
+    steps = sorted(run.steps, key=lambda s: s.step_number)
+    return _run_to_response(run, steps=steps)
 
 
 # Estados finais — uma run nesses status não pode mais ser cancelada
@@ -252,7 +319,25 @@ async def _run_agent_task(ctx: AgentContext, run_id: str):
             log.error("agent_run_update_failed", run_id=run_id, error=str(exc))
 
 
-def _run_to_response(run: AgentRun) -> AgentRunResponse:
+def _step_to_response(step) -> AgentStepResponse:
+    output = dict(step.output_json or {})
+    status = output.pop("_status", "SUCCESS")
+    return AgentStepResponse(
+        step_number=step.step_number,
+        step_name=step.step_name,
+        status=status,
+        duration_ms=step.duration_ms,
+        output=output or None,
+    )
+
+
+def _run_to_response(
+    run: AgentRun, steps: list | None = None, last_step: tuple[str | None, str | None] | None = None,
+) -> AgentRunResponse:
+    if last_step is None and steps:
+        last_step_obj = max(steps, key=lambda s: s.step_number)
+        last_step = (last_step_obj.step_name, (last_step_obj.output_json or {}).get("_status"))
+    last_step_name, last_step_status = last_step or (None, None)
     return AgentRunResponse(
         run_id=str(run.id),
         agent_name=run.agent_name,
@@ -264,4 +349,7 @@ def _run_to_response(run: AgentRun) -> AgentRunResponse:
         output=run.output_data,
         error_message=run.error_message,
         requires_approval=run.requires_approval,
+        steps=[_step_to_response(s) for s in steps] if steps else None,
+        last_step_name=last_step_name,
+        last_step_status=last_step_status,
     )

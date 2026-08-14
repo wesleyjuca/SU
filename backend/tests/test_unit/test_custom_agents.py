@@ -1,6 +1,6 @@
 """Fase 140.2 — ADMIN propõe agentes de IA customizados, SUPERADMIN aprova.
 CRUD/aprovação (mesmo padrão _FakeDB de test_agent_prompts.py), roteamento
-(classify_task/_resolve_agent_class), e o executor genérico (barreira de
+(classify_task/resolve_agent_class), e o executor genérico (barreira de
 aprovação, teto de custo, RAG opcional)."""
 import datetime
 import uuid
@@ -248,7 +248,7 @@ async def test_require_role_superadmin_bloqueia_admin_comum():
         await checker(current_user=_FakeUser(role="ADMIN"))
 
 
-# ─── Roteamento: classify_task + _resolve_agent_class ──────────────────────
+# ─── Roteamento: classify_task + resolve_agent_class ────────────────────────
 
 def test_classify_task_run_custom_agent():
     from app.agents.brain.router import classify_task
@@ -256,8 +256,8 @@ def test_classify_task_run_custom_agent():
 
 
 def test_resolve_agent_class_custom_agent():
-    from app.agents.brain.orchestrator import _resolve_agent_class
-    assert _resolve_agent_class("custom_agent") is CustomAgentExecutor
+    from app.agents.brain.orchestrator import resolve_agent_class
+    assert resolve_agent_class("custom_agent") is CustomAgentExecutor
 
 
 # ─── CustomAgentExecutor.execute() ─────────────────────────────────────────

@@ -25,6 +25,12 @@ class AgentRun(Base):
     duration_ms: Mapped[int | None] = mapped_column(Integer)
     requires_approval: Mapped[bool] = mapped_column(Boolean, default=False)
     tenant_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("tenants.id"), nullable=True, index=True)
+    # Fase 169.2 — sem isso, retomar uma chain após aprovação humana (numa
+    # request/processo totalmente separado da execução original) não tem
+    # como saber qual chain era nem reconstruir o AgentContext original.
+    task_type: Mapped[str | None] = mapped_column(String(100))
+    process_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("legal_processes.id"))
+    client_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("clients.id"))
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 

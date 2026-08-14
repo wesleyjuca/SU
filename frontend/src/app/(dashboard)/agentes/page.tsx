@@ -1,6 +1,6 @@
 "use client";
-import { useEffect, useState } from "react";
-import { Play, Loader2, XCircle, Sparkles, Plus } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Play, Loader2, XCircle, Sparkles, Plus, CheckCircle2, Circle, AlertCircle } from "lucide-react";
 import { AgentStatusCard } from "@/components/agents/AgentStatusCard";
 import { AgentDetailDrawer } from "@/components/agents/AgentDetailDrawer";
 import { ProposeCustomAgentModal } from "@/components/agents/ProposeCustomAgentModal";
@@ -88,6 +88,22 @@ const AGENTS: AgentCardData[] = [
   { name: "coding_agent", label: "Código", desc: "Geração e correção de código", category: "SUPORTE" },
 ];
 
+// Fase 169.1 — chains reais (TASK_ROUTE_MAP em router.py), antes inalcançáveis
+// pela UI (só rodavam via chamada direta à API, e mesmo assim truncavam pro
+// primeiro agente).
+const CHAIN_TASK_TYPES: { value: string; label: string }[] = [
+  { value: "new_process_intake", label: "Entrada de novo processo (processo → jurisprudência → estratégia → CRM)" },
+  { value: "generate_and_review_petition", label: "Gerar e revisar petição (jurisprudência → petição → revisão)" },
+  { value: "full_contract_flow", label: "Fluxo completo de contrato (contrato → revisão)" },
+];
+
+interface RunStep {
+  step_number: number;
+  step_name: string | null;
+  status: string;
+  duration_ms: number | null;
+}
+
 const CATEGORY_COLORS: Record<string, string> = {
   CORE: "bg-afj-gold/10 text-afj-gold border-afj-gold/20",
   JURIDICO: "bg-blue-50 text-blue-700 border-blue-100",
@@ -112,10 +128,59 @@ export default function AgentesPage() {
   const [triggering, setTriggering] = useState<string | null>(null);
   const [lastRunId, setLastRunId] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState(false);
+  const [runSteps, setRunSteps] = useState<RunStep[] | null>(null);
+  const [runStatus, setRunStatus] = useState<string | null>(null);
+  const [lastRunWasChain, setLastRunWasChain] = useState(false);
+  const isChain = CHAIN_TASK_TYPES.some((c) => c.value === taskType);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
+
+  // Fase 176.4 — achado da Fase 175: o banner de resultado ("Run iniciado:
+  // X") nunca era atualizado pra disparos de agente único (não-chain) — só
+  // a lista de passos de uma chain reagia ao polling. Agora o próprio
+  // banner reflete o status terminal de QUALQUER run, chain ou não.
+  useEffect(() => {
+    if (!runStatus || !lastRunId) return;
+    if (runStatus === "SUCCESS") setResult(`Run ${lastRunId} concluído com sucesso.`);
+    else if (runStatus === "FAILED") setResult(`Run ${lastRunId} falhou.`);
+    else if (runStatus === "AWAITING_APPROVAL") setResult(`Run ${lastRunId} aguardando aprovação humana.`);
+    else if (runStatus === "CANCELADO") setResult(`Run ${lastRunId} cancelado.`);
+  }, [runStatus, lastRunId]);
+
+  function pollRunSteps(runId: string) {
+    if (pollRef.current) clearInterval(pollRef.current);
+    let attempts = 0;
+    const token = localStorage.getItem("afj_access_token");
+    pollRef.current = setInterval(async () => {
+      if (++attempts > 60) {
+        if (pollRef.current) clearInterval(pollRef.current);
+        return;
+      }
+      try {
+        const res = await fetch(`/api/v1/agents/runs/${runId}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.ok) {
+          const run = await res.json();
+          setRunStatus(run.status);
+          setRunSteps(run.steps ?? null);
+          if (["SUCCESS", "FAILED", "AWAITING_APPROVAL", "CANCELADO"].includes(run.status)) {
+            if (pollRef.current) clearInterval(pollRef.current);
+          }
+        }
+      } catch {
+        // fail-soft: só para de atualizar os passos, não quebra a página
+      }
+    }, 3000);
+  }
 
   async function triggerAgent(agentName: string) {
     setResult(null);
     setLastRunId(null);
+    setRunSteps(null);
+    setRunStatus(null);
+    setLastRunWasChain(false);
     setTriggering(agentName);
     try {
       const token = localStorage.getItem("afj_access_token");
@@ -138,6 +203,8 @@ export default function AgentesPage() {
         const data = await res.json();
         setLastRunId(data.run_id);
         setResult(`Run iniciado: ${data.run_id}`);
+        setLastRunWasChain(isChain);
+        pollRunSteps(data.run_id);
       } else {
         toast.error(`Erro ao iniciar agente: ${res.status}`);
       }
@@ -158,8 +225,11 @@ export default function AgentesPage() {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (res.ok) {
+        if (pollRef.current) clearInterval(pollRef.current);
         setResult(`Execução ${lastRunId} cancelada.`);
         setLastRunId(null);
+        setRunSteps(null);
+        setRunStatus(null);
       } else {
         const data = await res.json().catch(() => ({}));
         toast.error(data.detail || "Não foi possível cancelar a execução.");
@@ -221,6 +291,43 @@ export default function AgentesPage() {
         </div>
       )}
 
+      {/* Fase 169.1/169.2 — progresso passo-a-passo de uma chain (só aparece
+          quando o run é multi-agente; AgentStep é gravado 1 linha por
+          passo). Passos após um gate HITL retomam automaticamente depois
+          da aprovação (169.2) — este painel só não reflete isso ao vivo se
+          a aprovação acontecer numa aba/sessão diferente da que disparou. */}
+      {lastRunWasChain && runSteps && runSteps.length > 0 && (
+        <div className="afj-card p-4 space-y-2">
+          <h3 className="text-xs font-semibold text-afj-black/50 uppercase tracking-wider">
+            Progresso da cadeia ({runSteps.length} {runSteps.length === 1 ? "passo" : "passos"})
+          </h3>
+          <ol className="space-y-1.5">
+            {runSteps.map((s) => (
+              <li key={s.step_number} className="flex items-center gap-2 text-sm">
+                {s.status === "SUCCESS" ? (
+                  <CheckCircle2 size={14} className="text-green-600 flex-shrink-0" />
+                ) : s.status === "FAILED" ? (
+                  <AlertCircle size={14} className="text-red-600 flex-shrink-0" />
+                ) : (
+                  <Circle size={14} className="text-afj-black/30 flex-shrink-0" />
+                )}
+                <span className="text-afj-black/40">{s.step_number + 1}.</span>
+                <span className="text-afj-black">{s.step_name}</span>
+                {s.duration_ms != null && (
+                  <span className="text-afj-black/40 text-xs">({(s.duration_ms / 1000).toFixed(1)}s)</span>
+                )}
+              </li>
+            ))}
+          </ol>
+          {runStatus === "AWAITING_APPROVAL" && (
+            <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2.5 py-1.5 mt-2">
+              Aguardando aprovação humana em /aprovacoes. Os passos seguintes da
+              cadeia (se houver) continuam automaticamente assim que for aprovada.
+            </p>
+          )}
+        </div>
+      )}
+
       {/* Painel de disparo rápido */}
       <div className="afj-card-premium p-5">
         <h2 className="font-semibold text-sm text-afj-black mb-3 flex items-center gap-2">
@@ -245,6 +352,11 @@ export default function AgentesPage() {
               <option value="innovation_proposal">Proposta de Inovação</option>
               <option value="generate_code">Gerar Código</option>
               <option value="marketing_campaign">Campanha de Marketing</option>
+              <optgroup label="Fluxos encadeados">
+                {CHAIN_TASK_TYPES.map((c) => (
+                  <option key={c.value} value={c.value}>{c.label}</option>
+                ))}
+              </optgroup>
             </select>
             <button
               onClick={() => triggerAgent("orchestration_agent")}

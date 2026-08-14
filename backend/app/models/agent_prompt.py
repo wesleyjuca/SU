@@ -2,7 +2,7 @@
 
 Tabelas plataforma-wide (sem tenant_id) — os 19 agentes são um catálogo
 único, compartilhado por todos os escritórios do SaaS (app/agents/brain/
-orchestrator.py::_resolve_agent_class), não há registro por tenant hoje."""
+orchestrator.py::resolve_agent_class), não há registro por tenant hoje."""
 from sqlalchemy import String, ForeignKey, Text, Integer, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
@@ -16,7 +16,7 @@ class AgentPromptConfig(Base):
     """Override do system prompt de um agente nativo.
 
     Chave estável = agent_name (mesma string usada no `agent_map` de
-    _resolve_agent_class) + prompt_slot (quase todo agente só tem
+    resolve_agent_class) + prompt_slot (quase todo agente só tem
     "primary"; crm_agent é a exceção). prompt_text NULL = "usa o default
     hardcoded em Python" — fail-soft por design, nunca quebra um agente
     por falta de linha na tabela."""

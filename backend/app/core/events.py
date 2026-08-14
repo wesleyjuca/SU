@@ -306,6 +306,23 @@ async def lifespan(app: FastAPI):
             "ALTER TABLE tenant_integrations ADD COLUMN IF NOT EXISTS last_success_at TIMESTAMPTZ",
             "ALTER TABLE tenant_integrations ADD COLUMN IF NOT EXISTS last_error_at TIMESTAMPTZ",
             "ALTER TABLE tenant_integrations ADD COLUMN IF NOT EXISTS last_error_detail VARCHAR(500)",
+            # Fase 169.2 — sem task_type/process_id/client_id persistidos,
+            # retomar uma chain após aprovação humana (request separado da
+            # execução original) não tem como reconstruir o AgentContext.
+            # Sem backfill possível (nunca existiu antes) — runs antigos
+            # ficam NULL, tratado como "nada a retomar" pelo chain_resume.
+            "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS task_type VARCHAR(100)",
+            "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS process_id UUID "
+            "REFERENCES legal_processes(id)",
+            "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS client_id UUID "
+            "REFERENCES clients(id)",
+            # Fase 170 — coluna nova + backfill que roda em TODO boot (não só
+            # na criação): é o que garante "o AFJ sempre tem plano Máximo e é
+            # isento" mesmo que alguém edite a linha direto no Postgres — o
+            # próximo restart da aplicação restaura o invariante.
+            "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS isento BOOLEAN NOT NULL DEFAULT false",
+            "UPDATE tenants SET plan = 'MAXIMO', isento = true WHERE slug = 'afj' "
+            "AND (plan IS DISTINCT FROM 'MAXIMO' OR isento IS DISTINCT FROM true)",
         ]:
             try:
                 async with engine.begin() as conn:

@@ -9,7 +9,7 @@ import uuid
 from app.db.base import get_db
 from app.dependencies import get_current_user, require_role
 from app.models.user import User
-from app.models.client import Client, ClientInteraction
+from app.models.client import Client, ClientContact, ClientInteraction
 from app.core.exceptions import NotFoundError
 from app.core.crypto import decrypt_or_raw
 
@@ -53,6 +53,36 @@ async def erase_client_data(
     client.whatsapp = None
     client.observacoes = None
     client.status = "INATIVO"
+
+    # Fase 176.3 — achado da Fase 175: o esquecimento só apagava o próprio
+    # `Client`. `ClientContact` (contatos de PJ — nome/email/telefone) e
+    # `ClientInteraction` (histórico livre, `descricao` pode conter PII em
+    # texto — telefone citado numa ligação, nome de terceiro etc.) ficavam
+    # de fora, e `GET /lgpd/clients/{id}/export` continuava devolvendo essas
+    # linhas com PII completo depois do "esquecimento" — direito ao
+    # esquecimento incompleto na prática.
+    contacts_result = await db.execute(
+        select(ClientContact).where(ClientContact.client_id == uuid.UUID(client_id))
+    )
+    for contact in contacts_result.scalars().all():
+        contact.nome = f"[ANONIMIZADO-{client_id[:8]}]"
+        contact.cargo = None
+        contact.email = None
+        contact.telefone = None
+
+    interactions_result = await db.execute(
+        select(ClientInteraction).where(
+            ClientInteraction.client_id == uuid.UUID(client_id),
+            or_(
+                ClientInteraction.tenant_id == current_user.tenant_id,
+                ClientInteraction.tenant_id.is_(None),
+            ),
+        )
+    )
+    for interaction in interactions_result.scalars().all():
+        interaction.descricao = "[Conteúdo removido — LGPD art. 18 IV]"
+        interaction.metadata_json = None
+
     await db.flush()
 
     # Registra auditoria (tenant-scoped — antes nascia sem tenant_id e sumia do
