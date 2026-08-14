@@ -138,6 +138,52 @@ Secrets do **GitHub Actions** (usados pelos workflows acima): `VERCEL_TOKEN`, `R
 
 Secrets de **runtime da aplicação** (configurados direto na plataforma — Railway dashboard ou `.env.prod` no self-host, NÃO no GitHub Actions): `SECRET_KEY`, `ENCRYPTION_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `DATABASE_URL`, `REDIS_URL`, `QDRANT_URL`/`QDRANT_API_KEY`.
 
+## Teste geral do sistema (metodologia)
+
+Periodicamente (quando uma área grande do sistema muda, ou a pedido do
+usuário) rodamos um "teste geral do sistema": simulação real (Postgres +
+Redis + Celery + uvicorn + frontend reais, nunca só leitura de código) +
+auditoria paralela adversarial (`Workflow`, várias frentes rodando em
+paralelo, cada achado cético-verificado antes de entrar no relatório).
+Entregável é sempre um relatório de achados — nenhuma correção acontece
+na mesma fase; achados viram fases novas só depois que o usuário confirma
+quais valem a pena.
+
+**Regra fixa: cada rodada tem que ser mais inteligente que a anterior —
+nunca repetir o mesmo teste do zero.** Antes de planejar uma nova rodada:
+1. Releia o que a rodada anterior cobriu e, principalmente, o que ela
+   **deixou de cobrir** (frentes cortadas por limite de sessão/tempo,
+   partes só verificadas por leitura de código em vez de execução real,
+   ambientes que nunca chegaram a subir — ex.: a Fase 173 nunca subiu o
+   frontend de verdade).
+2. Toda rodada nova tem que: (a) reconfirmar de forma independente o que
+   a rodada anterior corrigiu (não assumir que o fix "resolvido antes"
+   continua resolvido), (b) fechar pelo menos uma lacuna real que ficou
+   pra trás, (c) ir mais fundo/mais adversarial em pelo menos uma frente
+   do que a rodada anterior foi capaz.
+3. Registre abaixo, em 1-2 linhas por rodada, o que foi coberto e o que
+   ficou pra trás de propósito — é o que a PRÓXIMA rodada deve ler antes
+   de começar.
+
+Histórico:
+- **Fase 148-163** (5 meses / 2 escritórios, 6 auditorias) — primeira
+  rodada. Todos os achados viraram fases e foram entregues.
+- **Fase 173** — simulação real de chains/HITL/plano Máximo (área mais
+  nova na época) + 6 frentes paralelas. 3 das 6 frentes (LGPD, perf,
+  frontend) tiveram a verificação adversarial cortada por limite de
+  sessão; frontend nunca chegou a subir de verdade (só leitura estática).
+  9 achados confirmados → viraram Fase 174.
+- **Fase 174** — implementação dos 9 achados da Fase 173, cada um
+  reverificado empiricamente no momento da própria correção.
+- **Fase 175** — reconfirmação independente dos 9 fixes da Fase 174 (não
+  só a verificação feita durante a implementação), caça a regressão na
+  interação entre eles, e fechamento das 3 lacunas deixadas pela Fase 173
+  (LGPD aprofundado, perf/`time_limit`, e — pela primeira vez — o
+  frontend real subido e navegado via Playwright, o que revelou um achado
+  novo: `frontend/next.config.js` tem um fallback de API local morto,
+  fazendo `npm run dev` sem a env var `API_URL` (não `NEXT_PUBLIC_API_URL`)
+  conversar com o backend de PRODUÇÃO em vez do local).
+
 ## Riscos conhecidos / débito técnico
 
 Achados de uma simulação de volume (2 escritórios, ~10 processos/dia, 1 ano —
