@@ -247,6 +247,56 @@ Histórico:
   de múltiplos gates HITL em sequência (3+), resolve_approval concorrente
   na MESMA Approval (distinto do TaskLock de retomada, nunca testado), e
   rejeição no meio de uma chain com retry parcial já aplicado.
+- **Fase 183** — reconfirmação independente das Fases 179-182 (todas OK,
+  sem regressão de interação entre elas) e fechamento das 3 frentes que a
+  Fase 178 deixou pra trás — desta vez com `Agent` (não `Workflow`) rodando
+  em paralelo sem o bloqueio de plan mode da rodada anterior (achado (a) da
+  178 confirmado como transitório daquela sessão, não recorrente). 2 das 3
+  frentes viraram **achados reais confirmados empiricamente contra Postgres
+  real** (não hipótese de leitura de código):
+  - **3+ gates HITL em sequência QUEBRA** — `execute_approved_action`
+    (`app/services/approval.py`) só dá `db.flush()` nos branches
+    PETITION_REVIEW/PETITION_FILING/CONTRACT_REVIEW/CONTRACT_SIGN; como
+    `AsyncSessionLocal` roda com `autoflush=False` (`app/db/base.py`), pra
+    qualquer outro tipo de Approval (ou seja, qualquer 2º/3º gate HITL de
+    uma chain multi-agente cujo passo não é petição/contrato — ex.:
+    `new_process_intake`) a mudança de status pra APROVADO nunca é
+    flushada antes de `resume_chain_after_approval` → `create_approval_
+    from_state` reler a Approval — a checagem de idempotência (Fase 132/
+    171, `app/services/approval.py`) vê a linha ainda como PENDENTE,
+    conclui "já existe aprovação pra esse run" e **não cria a Approval do
+    próximo gate**. A chain fica travada em AWAITING_APPROVAL pra sempre,
+    zero Approval pendente pra resolver — precisa de intervenção manual no
+    banco. Reproduzido de ponta a ponta com uma chain real de 4 passos
+    contra Postgres real.
+  - **`AgentRun` não tem lock de linha (só a `Approval` tem, Fase 132)** —
+    confirmado que um retry do Celery em voo (`app/workers/tasks/
+    agent_tasks.py`, linhas 174-211: `refresh` → mutação de status/
+    tokens_used/cost_usd → `commit`, sem `FOR UPDATE`) pode commitar POR
+    CIMA de uma rejeição humana que já tinha sido commitada segundos
+    antes na mesma `AgentRun` — a `Approval` fica corretamente REJEITADO,
+    mas o `AgentRun.status` acaba refletindo o que o retry calculou (ex.:
+    SUCCESS) em vez de FAILED, e `requires_approval` volta a `False`
+    incorretamente. Estado final inconsistente: auditoria diz rejeitado,
+    o run diz sucesso.
+  - `resolve_approval` concorrente na MESMA Approval (cenário (b)) segue
+    protegido pelo lock da Fase 132 — confirmado, sem achado novo aqui.
+  Auditoria paralela adicional (isolamento cross-tenant das 4 features
+  novas, LGPD/PII no export do Google, frontend real via Playwright): tudo
+  limpo, nenhum achado novo — só uma observação de design (não bug): o
+  rastro de auditoria dos 2 endpoints novos do Google (Fase 182) é
+  genérico (`AuditMiddleware`, sabe quem/quando mas não quais registros
+  saíram) em vez de granular como o padrão manual já usado em HITL, e
+  `FinancialEntry.descricao` é campo livre que pode conter PII e passa a
+  sair do perímetro de criptografia do sistema ao virar Google Sheets.
+  6 achados no total (2 confirmados por reprodução empírica real — os
+  mais graves desta rodada — + 2 de auditoria adicional, mais leves).
+  Nenhuma correção feita nesta fase — decisão do usuário sobre quais viram
+  fase nova. **Próxima rodada deve**: se os fixes dos 2 achados HITL forem
+  implementados, reconfirmar especificamente (a) que um gate genérico
+  (não-petição/contrato) numa chain de 3+ passos completa corretamente
+  até SUCCESS, e (b) que uma rejeição sobrevive a um retry concorrente do
+  Celery mesmo quando o retry calcula um status terminal diferente.
 
 ## Riscos conhecidos / débito técnico
 

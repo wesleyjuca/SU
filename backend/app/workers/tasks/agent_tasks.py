@@ -173,11 +173,25 @@ async def _run_async(
 
         # Atualizar status no DB
         if agent_run:
-            # Se o run foi CANCELADO enquanto executava, não sobrescrever o
-            # status final (senão um cancelamento "revive" como SUCCESS/AWAITING).
-            await db.refresh(agent_run)
-            canceled = agent_run.status == "CANCELADO"
-            if not canceled:
+            # Fase 183 — achado empírico: SELECT ... FOR UPDATE (não só
+            # db.refresh) — a AgentRun nunca teve lock de linha nenhum (só a
+            # Approval tem, Fase 132), então esta persistência final podia
+            # commitar por cima de uma rejeição humana concorrente
+            # (resolve_approval) que já tinha fechado a run como FAILED. Com
+            # o lock, esta transação espera a rejeição terminar e então lê o
+            # estado já correto antes de decidir o que sobrescrever.
+            agent_run = (await db.execute(
+                select(AgentRun).where(AgentRun.id == agent_run.id).with_for_update()
+            )).scalar_one_or_none()
+            if not agent_run:
+                return
+            # Se o run já chegou num estado terminal por outro caminho
+            # enquanto esta invocação rodava — CANCELADO (Fase 176.5) ou
+            # SUCCESS/FAILED alcançado por uma rejeição humana concorrente
+            # (Fase 183) — não sobrescrever o status final (senão uma
+            # decisão já tomada "revive" como SUCCESS/AWAITING_APPROVAL).
+            already_terminal = agent_run.status in ("SUCCESS", "FAILED", "CANCELADO")
+            if not already_terminal:
                 agent_run.status = status
             agent_run.output_data = output
             agent_run.error_message = error_msg
@@ -202,11 +216,14 @@ async def _run_async(
                 # invocação — atribuição direta continua correta aqui.
                 agent_run.tokens_used = ctx.total_tokens
                 agent_run.cost_usd = Decimal(str(ctx.total_cost_usd)) if ctx.total_cost_usd else None
-            agent_run.requires_approval = ctx.requires_approval
-            # HITL: cria o Approval PENDENTE na mesma transação (não p/ run cancelado)
-            if not canceled and status == "AWAITING_APPROVAL":
-                from app.services.approval import create_approval_from_state
-                await create_approval_from_state(db, agent_run, final_state)
+            # Fase 183 — mesma proteção: não reabrir requires_approval nem
+            # criar uma Approval nova pra um run que já fechou por outro
+            # caminho (rejeição humana concorrente incluída).
+            if not already_terminal:
+                agent_run.requires_approval = ctx.requires_approval
+                if status == "AWAITING_APPROVAL":
+                    from app.services.approval import create_approval_from_state
+                    await create_approval_from_state(db, agent_run, final_state)
             await db.commit()
             status = agent_run.status  # reflete o status realmente persistido
 

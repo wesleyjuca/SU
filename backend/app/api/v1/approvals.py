@@ -120,10 +120,33 @@ async def resolve_approval(
     approval.rejection_reason = body.rejection_reason
     approval.resolved_at = datetime.now(timezone.utc)
 
+    # Fase 183 — achado empírico: `AsyncSessionLocal` roda com autoflush=False
+    # (app/db/base.py), então sem este flush explícito a mudança de status
+    # acima só chegaria ao banco no commit final da request. Isso quebrava
+    # qualquer 2º+ gate HITL cujo Approval não seja PETITION_*/CONTRACT_*
+    # (únicos branches de `execute_approved_action` que já davam flush por
+    # conta própria): `resume_chain_after_approval` → `create_approval_
+    # from_state` relia (Fase 132/171) num SELECT WHERE status='PENDENTE'
+    # pra checar duplicata — via sem o flush, ele via a linha ainda como
+    # PENDENTE, concluía "já existe aprovação pra esse run" e não criava a
+    # Approval do próximo gate. A chain ficava presa em AWAITING_APPROVAL
+    # pra sempre, sem nenhuma Approval pendente pra resolver.
+    await db.flush()
+
     # Fase 169.2 — precisa do AgentRun tanto pra retomar o resto da chain
     # na aprovação quanto pra fechar o status na rejeição (antes disso,
     # resolve_approval nunca olhava o AgentRun — um run rejeitado ficava
     # preso em AWAITING_APPROVAL pra sempre).
+    # Fase 183 — SEM FOR UPDATE aqui de propósito: essa 1ª tentativa de fix
+    # tentou travar a linha logo neste ponto e causou um deadlock real
+    # (achado empírico) — no caminho de aprovação, `resume_chain_after_
+    # approval` chama `execute_chain_step` pra cada passo seguinte, que
+    # abre sua PRÓPRIA sessão/transação pra persistir o AgentStep; o INSERT
+    # precisa de um lock de FK na linha pai (agent_runs), que ficaria
+    # esperando este lock liberar — mas este lock só libera no commit
+    # final desta função, que por sua vez está esperando aquele INSERT
+    # terminar. Autotravamento. Ver a nota mais abaixo no branch de
+    # rejeição pra onde o lock realmente entra.
     agent_run: AgentRun | None = None
     if approval.run_id:
         agent_run = await db.get(AgentRun, approval.run_id)
@@ -140,6 +163,21 @@ async def resolve_approval(
             resume = await resume_chain_after_approval(db, agent_run, approval, body.modifications)
     else:
         await mark_rejected_action(db, approval)
+        if agent_run:
+            # Fase 183 — achado empírico: SELECT ... FOR UPDATE só aqui, no
+            # branch de rejeição (que nunca chama execute_chain_step, então
+            # não corre o risco de deadlock explicado acima). O lock da
+            # Fase 132 só cobre a linha Approval; a AgentRun nunca teve
+            # lock nenhum, então um retry do Celery em voo (agent_tasks.py,
+            # mutação de status/tokens_used/cost_usd no fim de `_run_async`)
+            # podia commitar por cima desta rejeição — a Approval ficava
+            # corretamente REJEITADO, mas a AgentRun acabava com o status
+            # que o retry calculou (ex.: SUCCESS) em vez de FAILED. Re-lê a
+            # linha travada (pode já ter mudado desde o SELECT sem lock
+            # acima) antes de decidir.
+            agent_run = (await db.execute(
+                select(AgentRun).where(AgentRun.id == agent_run.id).with_for_update()
+            )).scalar_one_or_none()
         if agent_run and agent_run.status not in ("SUCCESS", "FAILED", "CANCELADO"):
             agent_run.status = "FAILED"
             agent_run.error_message = f"Rejeitado: {body.rejection_reason}"

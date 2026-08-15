@@ -173,6 +173,20 @@ async def save_document_as_google_doc(
         meta["google_doc_id"] = result.get("id")
         meta["google_doc_url"] = result.get("link")
         doc.metadata_json = meta
+        # Fase 184 — o AuditMiddleware genérico só grava action=POST:/path (sem
+        # resource_type/resource_id), mesma lacuna já corrigida em approvals.py
+        # (Fase 174.8): exportar o conteúdo de um documento pra fora do sistema
+        # (Drive do escritório) merece rastro específico de qual documento saiu.
+        from app.models.audit_log import AuditLog
+        db.add(AuditLog(
+            user_id=current_user.id,
+            tenant_id=current_user.tenant_id,
+            action="GOOGLE_EXPORT:DOCUMENT_AS_DOC",
+            resource_type="DOCUMENT",
+            resource_id=doc.id,
+            new_value={"google_doc_id": result.get("id"), "google_doc_url": result.get("link")},
+            success=True,
+        ))
         await db.flush()
         return {"message": "Documento salvo como Google Doc no Drive do escritório.", **result}
     except GoogleNotConnected as exc:

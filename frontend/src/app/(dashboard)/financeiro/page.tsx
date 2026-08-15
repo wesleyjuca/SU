@@ -103,8 +103,14 @@ export default function FinanceiroPage() {
         headers: { Authorization: `Bearer ${token}` },
       });
       const d = await res.json().catch(() => ({}));
-      if (res.ok) toast.success("Lançamentos exportados pro Google Sheets.");
-      else toast.error(d.detail || "Erro ao exportar pro Google Sheets.");
+      if (res.ok) {
+        toast.success("Lançamentos exportados pro Google Sheets.");
+        // Fase 184 — aviso heurístico (não bloqueia): alguma descrição
+        // exportada parece conter CPF/CNPJ.
+        if (d.aviso_pii) toast.warning(d.aviso_pii);
+      } else {
+        toast.error(d.detail || "Erro ao exportar pro Google Sheets.");
+      }
     } catch { toast.error("Erro de conexão."); }
     finally { setExportingSheets(false); }
   }
