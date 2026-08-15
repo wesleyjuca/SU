@@ -100,15 +100,20 @@ async def calendar_create_allday_event(token: str, titulo: str, descricao: str, 
         return {"id": d.get("id"), "link": d.get("htmlLink")}
 
 
-async def drive_upload_pdf(token: str, nome: str, pdf_bytes: bytes) -> dict:
-    """Sobe um PDF ao Drive do escritório (multipart upload)."""
-    metadata = {"name": f"{nome}.pdf", "mimeType": "application/pdf"}
+async def _drive_upload(token: str, nome: str, content_bytes: bytes, source_mime: str, target_mime: str) -> dict:
+    """Sobe um arquivo ao Drive do escritório (multipart upload). Quando
+    `target_mime` é um formato nativo do Google (Doc/Sheet), a própria Drive
+    API converte automaticamente durante o upload — evita chamar a Docs API
+    ou a Sheets API diretamente, que exigiriam escopos OAuth próprios
+    (`.../documents`, `.../spreadsheets`) não concedidos hoje. O escopo
+    `drive.file` já autorizado (Fase 139) cobre esse upload+conversão."""
+    metadata = {"name": nome, "mimeType": target_mime}
     boundary = "afjcoreboundary"
     body = (
         f"--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n"
         f"{json.dumps(metadata)}\r\n"
-        f"--{boundary}\r\nContent-Type: application/pdf\r\n\r\n"
-    ).encode() + pdf_bytes + f"\r\n--{boundary}--".encode()
+        f"--{boundary}\r\nContent-Type: {source_mime}\r\n\r\n"
+    ).encode() + content_bytes + f"\r\n--{boundary}--".encode()
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(
             "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink",
@@ -121,6 +126,27 @@ async def drive_upload_pdf(token: str, nome: str, pdf_bytes: bytes) -> dict:
         resp.raise_for_status()
         d = resp.json()
         return {"id": d.get("id"), "link": d.get("webViewLink")}
+
+
+async def drive_upload_pdf(token: str, nome: str, pdf_bytes: bytes) -> dict:
+    """Sobe um PDF ao Drive do escritório (multipart upload)."""
+    return await _drive_upload(token, f"{nome}.pdf", pdf_bytes, "application/pdf", "application/pdf")
+
+
+async def drive_upload_doc(token: str, nome: str, html_content: str) -> dict:
+    """Sobe HTML ao Drive convertendo pro formato nativo Google Doc (Fase 182)
+    — vira um documento colaborável de verdade, editável no Google Docs."""
+    return await _drive_upload(
+        token, nome, html_content.encode("utf-8"), "text/html", "application/vnd.google-apps.document",
+    )
+
+
+async def drive_upload_sheet(token: str, nome: str, csv_bytes: bytes) -> dict:
+    """Sobe CSV ao Drive convertendo pro formato nativo Google Sheets (Fase 182)
+    — vira uma planilha colaborável de verdade, editável no Google Sheets."""
+    return await _drive_upload(
+        token, nome, csv_bytes, "text/csv", "application/vnd.google-apps.spreadsheet",
+    )
 
 
 async def gmail_send(token: str, to: str, subject: str, html_body: str) -> bool:

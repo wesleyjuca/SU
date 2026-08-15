@@ -137,3 +137,45 @@ async def save_document_to_drive(
         raise HTTPException(status_code=422, detail=str(exc))
     except Exception:
         raise HTTPException(status_code=502, detail="Erro ao salvar no Google Drive.")
+
+
+@router.post("/drive-save-doc/{doc_id}", status_code=201)
+async def save_document_as_google_doc(
+    doc_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Fase 182 — salva o documento como Google Doc colaborável (não PDF): a
+    Drive API converte o HTML automaticamente no upload, sob o mesmo escopo
+    `drive.file` já concedido — sem timbrado (isso continua exclusivo do PDF
+    baixado/protocolado, via `/drive-save`)."""
+    from app.services.google_workspace import get_valid_token, drive_upload_doc, GoogleNotConnected
+    from app.models.document import Document
+    from app.core.exceptions import NotFoundError
+
+    if not await _google_enabled(db, current_user.tenant_id):
+        raise HTTPException(status_code=422, detail=_MODULE_DISABLED)
+
+    doc = (await db.execute(
+        select(Document).where(
+            Document.id == uuid.UUID(doc_id),
+            Document.tenant_id == current_user.tenant_id,
+        )
+    )).scalar_one_or_none()
+    if not doc:
+        raise NotFoundError("Documento", doc_id)
+
+    conteudo = doc.conteudo_html or "".join(f"<p>{linha}</p>" for linha in (doc.conteudo_texto or "").split("\n"))
+    try:
+        token = await get_valid_token(db, current_user.tenant_id)
+        result = await drive_upload_doc(token, doc.titulo[:80], conteudo)
+        meta = dict(doc.metadata_json or {})
+        meta["google_doc_id"] = result.get("id")
+        meta["google_doc_url"] = result.get("link")
+        doc.metadata_json = meta
+        await db.flush()
+        return {"message": "Documento salvo como Google Doc no Drive do escritório.", **result}
+    except GoogleNotConnected as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except Exception:
+        raise HTTPException(status_code=502, detail="Erro ao salvar como Google Doc.")

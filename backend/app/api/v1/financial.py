@@ -215,6 +215,65 @@ async def export_financial(
     )
 
 
+@router.post("/export/google-sheets", status_code=201)
+async def export_financial_to_google_sheets(
+    tipo: str | None = None,
+    status: str | None = None,
+    current_user: User = Depends(require_role("ADMIN", "SOCIO", "GESTOR")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Fase 182 — mesma exportação de /export, mas sobe direto pro Google
+    Drive do escritório já como planilha colaborável: a Drive API converte o
+    CSV automaticamente no upload, sob o escopo drive.file já concedido
+    (Fase 139) — sem precisar da Sheets API nem de reconexão."""
+    import csv
+    import io
+    from app.models.tenant import TenantConfig
+    from app.services.google_workspace import get_valid_token, drive_upload_sheet, GoogleNotConnected
+
+    cfg = (await db.execute(
+        select(TenantConfig).where(TenantConfig.tenant_id == current_user.tenant_id)
+    )).scalar_one_or_none()
+    if not (cfg and (cfg.modules_enabled or {}).get("google_workspace", False)):
+        raise HTTPException(
+            status_code=422,
+            detail="A integração Google Workspace está desabilitada para este escritório. "
+                   "O administrador pode habilitá-la em Integrações.",
+        )
+
+    query = (
+        select(FinancialEntry)
+        .where(FinancialEntry.tenant_id == current_user.tenant_id)
+        .order_by(desc(FinancialEntry.created_at))
+    )
+    if tipo:
+        query = query.where(FinancialEntry.tipo == tipo)
+    if status:
+        query = query.where(FinancialEntry.status == status)
+    entries = (await db.execute(query)).scalars().all()
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["ID", "Tipo", "Categoria", "Descrição", "Valor", "Status", "Vencimento", "Pagamento", "Criado em"])
+    for e in entries:
+        writer.writerow([
+            str(e.id), e.tipo, e.categoria or "", e.descricao, float(e.valor),
+            e.status,
+            e.data_vencimento.isoformat() if e.data_vencimento else "",
+            e.data_pagamento.isoformat() if e.data_pagamento else "",
+            e.created_at.isoformat(),
+        ])
+
+    try:
+        token = await get_valid_token(db, current_user.tenant_id)
+        result = await drive_upload_sheet(token, "financeiro", output.getvalue().encode("utf-8-sig"))
+        return {"message": "Lançamentos exportados pro Google Sheets do escritório.", **result}
+    except GoogleNotConnected as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except Exception:
+        raise HTTPException(status_code=502, detail="Erro ao exportar pro Google Sheets.")
+
+
 @router.post("/{entry_id}/mark-paid")
 async def mark_paid(
     entry_id: str,

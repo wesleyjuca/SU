@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import { DollarSign, TrendingUp, TrendingDown, Plus, CheckCircle, Clock, Trash2, FileDown, BarChart3, Pencil, AlertTriangle, Receipt } from "lucide-react";
+import { DollarSign, TrendingUp, TrendingDown, Plus, CheckCircle, Clock, Trash2, FileDown, FileSpreadsheet, BarChart3, Pencil, AlertTriangle, Receipt } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
@@ -68,6 +68,10 @@ export default function FinanceiroPage() {
   const [showModal, setShowModal] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  // Fase 182 — "Exportar pro Sheets" só aparece pra quem já conectou o
+  // Google Workspace do escritório (mesmo padrão de documentos/page.tsx).
+  const [googleConnected, setGoogleConnected] = useState(false);
+  const [exportingSheets, setExportingSheets] = useState(false);
 
   const {
     register: registerFin,
@@ -81,6 +85,29 @@ export default function FinanceiroPage() {
 
   useEffect(() => { fetchEntries(0, false); fetchSummary(); }, [filtroTipo, filtroStatus]);
   useEffect(() => { fetchMonthly(); fetchOverdue(); }, []);
+
+  useEffect(() => {
+    const token = localStorage.getItem("afj_access_token");
+    fetch("/api/v1/integrations/google/status", { headers: { Authorization: `Bearer ${token}` } })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => setGoogleConnected(Boolean(d?.connected)))
+      .catch(() => {});
+  }, []);
+
+  async function exportarSheets() {
+    setExportingSheets(true);
+    try {
+      const token = localStorage.getItem("afj_access_token");
+      const res = await fetch("/api/v1/financial/export/google-sheets", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const d = await res.json().catch(() => ({}));
+      if (res.ok) toast.success("Lançamentos exportados pro Google Sheets.");
+      else toast.error(d.detail || "Erro ao exportar pro Google Sheets.");
+    } catch { toast.error("Erro de conexão."); }
+    finally { setExportingSheets(false); }
+  }
 
   async function fetchOverdue() {
     try {
@@ -252,6 +279,18 @@ export default function FinanceiroPage() {
             <FileDown size={14} />
             Exportar
           </button>
+          {googleConnected && (
+            <button
+              onClick={exportarSheets}
+              disabled={exportingSheets}
+              className="btn-afj-outline rounded-md flex items-center gap-2 disabled:opacity-40"
+              title="Exportar pro Google Sheets do escritório"
+              aria-label="Exportar lançamentos pro Google Sheets"
+            >
+              <FileSpreadsheet size={14} />
+              Sheets
+            </button>
+          )}
           <button onClick={abrirNovo} className="btn-afj-primary rounded-md flex items-center gap-2">
             <Plus size={15} />
             Novo Lançamento
