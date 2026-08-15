@@ -23,6 +23,16 @@ log = structlog.get_logger()
 
 router = APIRouter(prefix="/integrations/hub", tags=["integrations-hub"])
 webhooks_router = APIRouter(prefix="/integrations/webhooks", tags=["integrations-webhooks"])
+# Fase 180.x — /oauth/callback precisa ficar num router PÚBLICO separado:
+# é o navegador do usuário sendo redirecionado pelo provedor (Google/Stripe/
+# Mercado Pago), sem header Authorization — se ficasse no `router` acima
+# (montado com dependencies=_BLOCK_STAFF em api/v1/router.py), a própria
+# rota de callback exigiria o JWT do sistema e nunca completaria a conexão
+# pra NENHUM provedor OAuth deste hub. Mesmo padrão já usado por
+# ai_oauth.router (ver comentário em api/v1/router.py). O código já
+# identifica o usuário via `state` assinado (verify_oauth_state), não
+# precisa do JWT nesta requisição específica.
+callback_router = APIRouter(prefix="/integrations/hub", tags=["integrations-hub"])
 
 
 def _frontend_base_url() -> str:
@@ -162,7 +172,7 @@ async def hub_oauth_connect(
     return {"auth_url": integration_hub.build_oauth_url(provider, state)}
 
 
-@router.get("/{provider}/oauth/callback")
+@callback_router.get("/{provider}/oauth/callback")
 async def hub_oauth_callback(
     provider: str,
     code: str = Query(...),

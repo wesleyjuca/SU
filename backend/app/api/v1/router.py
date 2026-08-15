@@ -49,6 +49,15 @@ api_router.include_router(petition_templates.router, dependencies=_BLOCK_STAFF)
 api_router.include_router(integrity.router, dependencies=_BLOCK_STAFF)
 api_router.include_router(google_integration.router, dependencies=_BLOCK_STAFF)
 api_router.include_router(integrations_hub.router, dependencies=_BLOCK_STAFF)
+# Fase 180.x — achado ao testar a conexão real do Google Workspace: o
+# /oauth/callback do hub estava dentro do router acima (com _BLOCK_STAFF),
+# então a própria rota de callback exigia o JWT do sistema — mas quem bate
+# nela é o navegador sendo redirecionado pelo provedor (Google/Stripe/
+# Mercado Pago), sem header Authorization nenhum. Isso quebrava a conexão
+# OAuth de QUALQUER provedor deste hub, silenciosamente (só ficava óbvio
+# testando o fluxo de verdade). Router separado, sem dependencies — mesmo
+# motivo do ai_oauth.router logo abaixo.
+api_router.include_router(integrations_hub.callback_router)
 # Sem dependencies aqui de propósito: /callback é o navegador do usuário sendo
 # redirecionado pelo OpenRouter (sem header Authorization), precisa ficar
 # público; /connect exige auth no próprio parâmetro do endpoint (ai_oauth.py).
