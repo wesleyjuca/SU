@@ -75,6 +75,13 @@ export default function ProcessoDetailPage() {
   const [clienteResultados, setClienteResultados] = useState<{ id: string; nome_completo: string; cpf: string | null; cnpj: string | null }[]>([]);
   const [buscandoCliente, setBuscandoCliente] = useState(false);
   const clienteDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Fase 181 — vínculo automático por CPF/CNPJ exato + sugestão por nome,
+  // a partir dos próprios campos "Nome"/"CPF/CNPJ" da parte (sem precisar
+  // abrir a busca manual acima).
+  const [sugestoesParte, setSugestoesParte] = useState<{ id: string; nome_completo: string }[]>([]);
+  const [vinculoAutomatico, setVinculoAutomatico] = useState(false);
+  const [clienteAutoDismissado, setClienteAutoDismissado] = useState<string | null>(null);
+  const matchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [showProcessoModal, setShowProcessoModal] = useState(false);
   const [savingProcesso, setSavingProcesso] = useState(false);
   const [processoForm, setProcessoForm] = useState(PROCESSO_FORM_VAZIO);
@@ -179,6 +186,9 @@ export default function ProcessoDetailPage() {
     }
     setClienteQuery("");
     setClienteResultados([]);
+    setSugestoesParte([]);
+    setVinculoAutomatico(false);
+    setClienteAutoDismissado(null);
     setShowParteModal(true);
   }
 
@@ -207,12 +217,50 @@ export default function ProcessoDetailPage() {
     setClienteVinculadoNome(c.nome_completo);
     setClienteQuery("");
     setClienteResultados([]);
+    setSugestoesParte([]);
   }
 
   function removerVinculoCliente() {
+    setClienteAutoDismissado(parteForm.client_id || null);
     setParteForm((f) => ({ ...f, client_id: "" }));
     setClienteVinculadoNome(null);
+    setVinculoAutomatico(false);
   }
+
+  // Fase 181 — a partir do que já está sendo digitado em Nome/CPF-CNPJ da
+  // parte, procura cliente já cadastrado: CPF/CNPJ exato linka sozinho,
+  // nome parecido vira sugestão clicável (nunca linka sozinho por nome).
+  useEffect(() => {
+    if (!showParteModal || parteForm.client_id) { setSugestoesParte([]); return; }
+    const cpfCnpj = parteForm.cpf_cnpj.trim();
+    const nome = parteForm.nome.trim();
+    if (matchDebounceRef.current) clearTimeout(matchDebounceRef.current);
+    if (!cpfCnpj && nome.length < 3) { setSugestoesParte([]); return; }
+    matchDebounceRef.current = setTimeout(async () => {
+      try {
+        const token = localStorage.getItem("afj_access_token");
+        const params = new URLSearchParams();
+        if (cpfCnpj) params.set("cpf_cnpj", cpfCnpj);
+        if (nome.length >= 3) params.set("nome", nome);
+        const res = await fetch(`/api/v1/clients/match?${params.toString()}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) return;
+        const d = await res.json();
+        if (d.match && d.match.id !== clienteAutoDismissado) {
+          selecionarClienteParaParte({ id: d.match.id, nome_completo: d.match.nome_completo, cpf: null, cnpj: null });
+          setVinculoAutomatico(true);
+        } else if (d.match) {
+          setSugestoesParte([{ id: d.match.id, nome_completo: d.match.nome_completo }]);
+        } else {
+          setSugestoesParte(d.sugestoes || []);
+        }
+      } catch { /* silencioso — não deve travar o cadastro manual */ }
+    }, 400);
+    return () => {
+      if (matchDebounceRef.current) clearTimeout(matchDebounceRef.current);
+    };
+  }, [parteForm.cpf_cnpj, parteForm.nome, parteForm.client_id, showParteModal, clienteAutoDismissado]);
 
   async function salvarParte(e: React.FormEvent) {
     e.preventDefault();
@@ -1135,11 +1183,18 @@ export default function ProcessoDetailPage() {
               <div>
                 <label className="text-xs text-afj-black/60 block mb-1">Vincular a um cliente existente (opcional)</label>
                 {parteForm.client_id ? (
-                  <div className="flex items-center justify-between gap-2 border border-afj-cream-dark rounded-sm px-3 py-2 text-sm bg-afj-cream/40">
-                    <span className="text-afj-black/80">{clienteVinculadoNome ?? "Cliente vinculado"}</span>
-                    <button type="button" onClick={removerVinculoCliente} className="text-xs text-afj-black/40 hover:text-red-600">
-                      Remover vínculo
-                    </button>
+                  <div className="border border-afj-cream-dark rounded-sm px-3 py-2 text-sm bg-afj-cream/40">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-afj-black/80">{clienteVinculadoNome ?? "Cliente vinculado"}</span>
+                      <button type="button" onClick={removerVinculoCliente} className="text-xs text-afj-black/40 hover:text-red-600">
+                        Remover vínculo
+                      </button>
+                    </div>
+                    {vinculoAutomatico && (
+                      <p className="text-[10px] text-afj-gold-dark mt-1">
+                        Vinculado automaticamente — mesmo CPF/CNPJ de um cliente já cadastrado.
+                      </p>
+                    )}
                   </div>
                 ) : (
                   <div className="relative">
@@ -1186,6 +1241,21 @@ export default function ProcessoDetailPage() {
                   placeholder="Nome completo ou razão social"
                   className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold"
                 />
+                {sugestoesParte.length > 0 && (
+                  <div className="mt-1.5 flex flex-wrap gap-1.5">
+                    <span className="text-[10px] text-afj-black/40 self-center">Cliente parecido:</span>
+                    {sugestoesParte.map((s) => (
+                      <button
+                        type="button"
+                        key={s.id}
+                        onClick={() => selecionarClienteParaParte({ id: s.id, nome_completo: s.nome_completo, cpf: null, cnpj: null })}
+                        className="text-[11px] px-2 py-1 rounded-full border border-afj-gold/40 text-afj-gold-dark hover:bg-afj-gold/10"
+                      >
+                        {s.nome_completo}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>

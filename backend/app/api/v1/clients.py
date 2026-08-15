@@ -120,6 +120,56 @@ async def create_client(
     return _to_response(client)
 
 
+@router.get("/match")
+async def match_client(
+    cpf_cnpj: str | None = None,
+    nome: str | None = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Fase 181 — vínculo automático de cliente ao cadastrar parte de processo.
+
+    `Client.cpf`/`cnpj` são cifrados (Fase 149, Fernet — IV aleatório a cada
+    encrypt()), então não dá pra comparar via WHERE no banco: decifra as
+    linhas do tenant e compara os dígitos normalizados em Python, mesmo
+    caminho que `_to_response`/exportação LGPD já usam."""
+    import re
+
+    match = None
+    cpf_cnpj_norm = re.sub(r"\D", "", cpf_cnpj) if cpf_cnpj else ""
+    if len(cpf_cnpj_norm) >= 11:
+        rows = (await db.execute(
+            select(Client.id, Client.nome_completo, Client.cpf, Client.cnpj).where(
+                Client.tenant_id == current_user.tenant_id,
+                or_(Client.cpf.isnot(None), Client.cnpj.isnot(None)),
+            )
+        )).all()
+        for cid, nome_completo, cpf_enc, cnpj_enc in rows:
+            cpf_dec = re.sub(r"\D", "", decrypt_or_raw(cpf_enc) or "")
+            cnpj_dec = re.sub(r"\D", "", decrypt_or_raw(cnpj_enc) or "")
+            if cpf_cnpj_norm in (cpf_dec, cnpj_dec) and (cpf_dec or cnpj_dec):
+                match = {"id": str(cid), "nome_completo": nome_completo}
+                break
+
+    sugestoes = []
+    nome_busca = (nome or "").strip()
+    if len(nome_busca) >= 3:
+        query = (
+            select(Client.id, Client.nome_completo)
+            .where(
+                Client.tenant_id == current_user.tenant_id,
+                Client.nome_completo.ilike(f"%{nome_busca}%"),
+            )
+            .limit(5)
+        )
+        if match:
+            query = query.where(Client.id != uuid.UUID(match["id"]))
+        rows = (await db.execute(query)).all()
+        sugestoes = [{"id": str(cid), "nome_completo": nome_completo} for cid, nome_completo in rows]
+
+    return {"match": match, "sugestoes": sugestoes}
+
+
 @router.get("/{client_id}", response_model=ClientResponse)
 async def get_client(
     client_id: str,
