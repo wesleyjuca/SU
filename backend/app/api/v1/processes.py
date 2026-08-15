@@ -142,6 +142,15 @@ async def _validar_client_id(db: AsyncSession, client_id: str | None, tenant_id)
     return cid
 
 
+async def _nome_cliente(db: AsyncSession, client_id: uuid.UUID | None) -> str | None:
+    if not client_id:
+        return None
+    from app.models.client import Client
+    return (await db.execute(
+        select(Client.nome_completo).where(Client.id == client_id)
+    )).scalar_one_or_none()
+
+
 async def _validar_tese_id(db: AsyncSession, tese_id: str | None, tenant_id) -> uuid.UUID | None:
     """Garante que a tese (se informada) pertence ao tenant — mesmo espírito
     de `_validar_client_id`, evita linkar o processo à tese de outro escritório."""
@@ -485,11 +494,13 @@ async def get_partes(
     )
     if not proc_check.scalar_one_or_none():
         raise NotFoundError("Processo", process_id)
+    from app.models.client import Client
     rows = (await db.execute(
-        select(ProcessParty)
+        select(ProcessParty, Client.nome_completo)
+        .outerjoin(Client, Client.id == ProcessParty.client_id)
         .where(ProcessParty.process_id == uuid.UUID(process_id))
         .order_by(ProcessParty.polo, ProcessParty.tipo)
-    )).scalars().all()
+    )).all()
     return [
         {
             "id": str(p.id),
@@ -499,8 +510,10 @@ async def get_partes(
             "oab": p.oab,
             "polo": p.polo,
             "origem": p.origem,
+            "client_id": str(p.client_id) if p.client_id else None,
+            "cliente_nome": cliente_nome,
         }
-        for p in rows
+        for p, cliente_nome in rows
     ]
 
 
@@ -510,6 +523,7 @@ class PartyCreate(BaseModel):
     polo: str | None = None
     cpf_cnpj: str | None = None
     oab: str | None = None
+    client_id: str | None = None
 
 
 @router.post("/{process_id}/partes", status_code=201)
@@ -531,6 +545,7 @@ async def create_parte(
     if not proc_check.scalar_one_or_none():
         raise NotFoundError("Processo", process_id)
 
+    client_id = await _validar_client_id(db, body.client_id, current_user.tenant_id)
     party = ProcessParty(
         process_id=uuid.UUID(process_id),
         tipo=body.tipo[:20],
@@ -539,6 +554,7 @@ async def create_parte(
         cpf_cnpj=body.cpf_cnpj,
         oab=body.oab,
         origem="MANUAL",
+        client_id=client_id,
     )
     db.add(party)
     await db.flush()
@@ -550,6 +566,8 @@ async def create_parte(
         "oab": party.oab,
         "polo": party.polo,
         "origem": party.origem,
+        "client_id": str(party.client_id) if party.client_id else None,
+        "cliente_nome": await _nome_cliente(db, party.client_id),
     }
 
 
@@ -582,11 +600,13 @@ async def update_parte(
     """Edita uma parte (manual ou importada — corrigir um dado errado da
     importação é um caso de uso legítimo, não só cadastro manual)."""
     party = await _get_parte_do_tenant(db, process_id, parte_id, current_user.tenant_id)
+    client_id = await _validar_client_id(db, body.client_id, current_user.tenant_id)
     party.tipo = body.tipo[:20]
     party.nome = body.nome[:500]
     party.polo = body.polo
     party.cpf_cnpj = body.cpf_cnpj
     party.oab = body.oab
+    party.client_id = client_id
     await db.flush()
     return {
         "id": str(party.id),
@@ -596,6 +616,8 @@ async def update_parte(
         "oab": party.oab,
         "polo": party.polo,
         "origem": party.origem,
+        "client_id": str(party.client_id) if party.client_id else None,
+        "cliente_nome": await _nome_cliente(db, party.client_id),
     }
 
 

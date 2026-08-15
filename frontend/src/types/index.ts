@@ -96,6 +96,8 @@ export interface Parte {
   oab: string | null;
   polo: string | null;     // ATIVO, PASSIVO
   origem: string | null;   // MANUAL, PDPJ, ESCAVADOR, JUDIT, JUSBRASIL, IMPORTADO
+  client_id: string | null;
+  cliente_nome: string | null;
 }
 
 // ─── Documentos ──────────────────────────────────────────────────────────────

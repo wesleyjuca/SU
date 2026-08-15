@@ -125,5 +125,10 @@ class ProcessParty(Base):
     oab: Mapped[str | None] = mapped_column(String(20))
     polo: Mapped[str | None] = mapped_column(String(10))
     origem: Mapped[str | None] = mapped_column(String(20))  # MANUAL, PDPJ, ESCAVADOR, JUDIT, JUSBRASIL, IMPORTADO
+    # Fase 179 — vínculo opcional a um cliente já cadastrado (autor/réu que
+    # também é cliente do escritório). SET NULL ao apagar o cliente: a parte
+    # continua existindo no histórico do processo, só perde o vínculo.
+    client_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("clients.id", ondelete="SET NULL"), nullable=True, index=True)
 
     process: Mapped["LegalProcess"] = relationship(back_populates="parties")
+    client: Mapped["Client | None"] = relationship()

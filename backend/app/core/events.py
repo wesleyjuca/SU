@@ -323,6 +323,13 @@ async def lifespan(app: FastAPI):
             "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS isento BOOLEAN NOT NULL DEFAULT false",
             "UPDATE tenants SET plan = 'MAXIMO', isento = true WHERE slug = 'afj' "
             "AND (plan IS DISTINCT FROM 'MAXIMO' OR isento IS DISTINCT FROM true)",
+            # Fase 179 — parte do processo (autor/réu/etc.) pode ser vinculada a
+            # um Client já cadastrado, em vez de só texto livre. SET NULL ao
+            # apagar o cliente (não CASCADE): a parte continua no histórico do
+            # processo, só perde o vínculo.
+            "ALTER TABLE process_parties ADD COLUMN IF NOT EXISTS client_id UUID "
+            "REFERENCES clients(id) ON DELETE SET NULL",
+            "CREATE INDEX IF NOT EXISTS ix_process_parties_client_id ON process_parties (client_id)",
         ]:
             try:
                 async with engine.begin() as conn:
