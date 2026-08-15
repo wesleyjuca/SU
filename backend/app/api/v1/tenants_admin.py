@@ -78,6 +78,9 @@ class TenantPatch(BaseModel):
     is_active: bool | None = None
     plan: str | None = None
     max_users: int | None = None
+    # Fase 180 — trava de segurança contra exclusão permanente (ver
+    # processes.py::excluir_processo_permanente / users.py::excluir_usuario_permanente)
+    em_producao: bool | None = None
 
 
 async def _provision(
@@ -144,6 +147,7 @@ async def list_tenants(
             "plan": t.plan,
             "isento": t.isento,
             "is_active": t.is_active,
+            "em_producao": t.em_producao,
             "max_users": t.max_users,
             "users": int(counts.get(t.id, 0)),
             "is_unit": t.parent_tenant_id is not None,

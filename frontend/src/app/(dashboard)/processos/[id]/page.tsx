@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { ArrowLeft, Scale, AlertTriangle, Calendar, Clock, Plus, CheckCircle, Loader2, Edit3, X, RefreshCw, Users, Trash2 } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
@@ -21,7 +21,7 @@ const TIPOS_MOVIMENTO = [
 ];
 
 const TIPOS_PARTE = ["AUTOR", "REU", "ADVOGADO", "JUIZ", "MP", "PARTE"];
-const PARTE_FORM_VAZIO = { nome: "", tipo: "AUTOR", polo: "", cpf_cnpj: "", oab: "" };
+const PARTE_FORM_VAZIO = { nome: "", tipo: "AUTOR", polo: "", cpf_cnpj: "", oab: "", client_id: "" };
 
 const SITUACOES_PROCESSO = ["ATIVO", "SUSPENSO", "ARQUIVADO", "ENCERRADO"];
 const PROCESSO_FORM_VAZIO = {
@@ -68,6 +68,13 @@ export default function ProcessoDetailPage() {
   const [editingParteId, setEditingParteId] = useState<string | null>(null);
   const [parteForm, setParteForm] = useState(PARTE_FORM_VAZIO);
   const [excluindoParteId, setExcluindoParteId] = useState<string | null>(null);
+  // Fase 179 — vincular a parte a um cliente já cadastrado (busca com debounce,
+  // mesmo padrão de processos/page.tsx)
+  const [clienteVinculadoNome, setClienteVinculadoNome] = useState<string | null>(null);
+  const [clienteQuery, setClienteQuery] = useState("");
+  const [clienteResultados, setClienteResultados] = useState<{ id: string; nome_completo: string; cpf: string | null; cnpj: string | null }[]>([]);
+  const [buscandoCliente, setBuscandoCliente] = useState(false);
+  const clienteDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [showProcessoModal, setShowProcessoModal] = useState(false);
   const [savingProcesso, setSavingProcesso] = useState(false);
   const [processoForm, setProcessoForm] = useState(PROCESSO_FORM_VAZIO);
@@ -163,12 +170,48 @@ export default function ProcessoDetailPage() {
   function abrirModalParte(parte?: Parte) {
     if (parte) {
       setEditingParteId(parte.id);
-      setParteForm({ nome: parte.nome, tipo: parte.tipo, polo: parte.polo ?? "", cpf_cnpj: parte.cpf_cnpj ?? "", oab: parte.oab ?? "" });
+      setParteForm({ nome: parte.nome, tipo: parte.tipo, polo: parte.polo ?? "", cpf_cnpj: parte.cpf_cnpj ?? "", oab: parte.oab ?? "", client_id: parte.client_id ?? "" });
+      setClienteVinculadoNome(parte.cliente_nome ?? null);
     } else {
       setEditingParteId(null);
       setParteForm(PARTE_FORM_VAZIO);
+      setClienteVinculadoNome(null);
     }
+    setClienteQuery("");
+    setClienteResultados([]);
     setShowParteModal(true);
+  }
+
+  // Fase 179 — busca de cliente com debounce (mesmo padrão de processos/page.tsx)
+  useEffect(() => {
+    if (!showParteModal) return;
+    if (clienteDebounceRef.current) clearTimeout(clienteDebounceRef.current);
+    if (!clienteQuery.trim()) { setClienteResultados([]); return; }
+    clienteDebounceRef.current = setTimeout(async () => {
+      setBuscandoCliente(true);
+      try {
+        const token = localStorage.getItem("afj_access_token");
+        const res = await fetch(`/api/v1/clients?search=${encodeURIComponent(clienteQuery)}&limit=8`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.ok) setClienteResultados(await res.json());
+      } finally { setBuscandoCliente(false); }
+    }, 300);
+    return () => {
+      if (clienteDebounceRef.current) clearTimeout(clienteDebounceRef.current);
+    };
+  }, [clienteQuery, showParteModal]);
+
+  function selecionarClienteParaParte(c: { id: string; nome_completo: string; cpf: string | null; cnpj: string | null }) {
+    setParteForm((f) => ({ ...f, client_id: c.id, nome: c.nome_completo, cpf_cnpj: c.cpf || c.cnpj || f.cpf_cnpj }));
+    setClienteVinculadoNome(c.nome_completo);
+    setClienteQuery("");
+    setClienteResultados([]);
+  }
+
+  function removerVinculoCliente() {
+    setParteForm((f) => ({ ...f, client_id: "" }));
+    setClienteVinculadoNome(null);
   }
 
   async function salvarParte(e: React.FormEvent) {
@@ -189,6 +232,7 @@ export default function ProcessoDetailPage() {
           polo: parteForm.polo || undefined,
           cpf_cnpj: parteForm.cpf_cnpj || undefined,
           oab: parteForm.oab || undefined,
+          client_id: parteForm.client_id || undefined,
         }),
       });
       if (res.ok) {
@@ -588,6 +632,15 @@ export default function ProcessoDetailPage() {
                       {p.nome}
                       {p.oab && <span className="text-afj-black/40"> · OAB {p.oab}</span>}
                       {p.origem === "MANUAL" && <span className="text-afj-black/30"> · manual</span>}
+                      {p.client_id && (
+                        <a
+                          href={`/clientes/${p.client_id}`}
+                          className="ml-1.5 text-afj-gold hover:underline"
+                          title={`Vinculado ao cliente ${p.cliente_nome ?? ""}`}
+                        >
+                          · cliente: {p.cliente_nome ?? "vinculado"}
+                        </a>
+                      )}
                     </span>
                     <div className="flex items-center gap-1.5 flex-shrink-0">
                       <span className="text-[10px] uppercase tracking-wider text-afj-black/35">{p.tipo}</span>
@@ -1079,6 +1132,51 @@ export default function ProcessoDetailPage() {
               </button>
             </div>
             <form onSubmit={salvarParte} className="p-5 space-y-4">
+              <div>
+                <label className="text-xs text-afj-black/60 block mb-1">Vincular a um cliente existente (opcional)</label>
+                {parteForm.client_id ? (
+                  <div className="flex items-center justify-between gap-2 border border-afj-cream-dark rounded-sm px-3 py-2 text-sm bg-afj-cream/40">
+                    <span className="text-afj-black/80">{clienteVinculadoNome ?? "Cliente vinculado"}</span>
+                    <button type="button" onClick={removerVinculoCliente} className="text-xs text-afj-black/40 hover:text-red-600">
+                      Remover vínculo
+                    </button>
+                  </div>
+                ) : (
+                  <div className="relative">
+                    <input
+                      value={clienteQuery}
+                      onChange={(e) => setClienteQuery(e.target.value)}
+                      placeholder="Buscar por nome, e-mail ou razão social..."
+                      className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold"
+                    />
+                    {(buscandoCliente || clienteResultados.length > 0) && clienteQuery.trim() && (
+                      <div className="absolute z-10 mt-1 w-full bg-white border border-afj-cream-dark rounded-sm shadow-lg max-h-48 overflow-y-auto">
+                        {buscandoCliente ? (
+                          <div className="px-3 py-2 text-xs text-afj-black/40 flex items-center gap-2">
+                            <Loader2 size={11} className="animate-spin" /> Buscando...
+                          </div>
+                        ) : clienteResultados.length > 0 ? (
+                          clienteResultados.map((c) => (
+                            <button
+                              type="button"
+                              key={c.id}
+                              onClick={() => selecionarClienteParaParte(c)}
+                              className="w-full text-left px-3 py-2 text-xs hover:bg-afj-cream/60 border-b border-afj-cream-dark last:border-0"
+                            >
+                              {c.nome_completo}
+                            </button>
+                          ))
+                        ) : (
+                          <div className="px-3 py-2 text-xs text-afj-black/40">Nenhum cliente encontrado.</div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+                <p className="text-[10px] text-afj-black/35 mt-1">
+                  Ao vincular, nome e CPF/CNPJ abaixo são preenchidos automaticamente (você ainda pode editá-los).
+                </p>
+              </div>
               <div>
                 <label className="text-xs text-afj-black/60 block mb-1">Nome *</label>
                 <input

@@ -30,6 +30,19 @@ def tenant_a_headers(auth_headers):
 
 
 @pytest.fixture
+async def superadmin_headers(client):
+    """Fase 180 — endpoints de exclusão permanente exigem SUPERADMIN, um papel
+    que `test_user`/`auth_headers` (ADMIN) não cobre. Mesmo espírito de
+    `auth_headers`: pula (não falha) se o seed de SUPERADMIN não estiver
+    disponível no ambiente rodando os testes."""
+    res = await client.post("/api/v1/auth/login", json={"email": "super@afj.com.br", "password": "Super@123"})
+    if res.status_code != 200:
+        pytest.skip("Login SUPERADMIN falhou — seed data não disponível")
+    token = res.json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.fixture
 def tenant_b_process_id():
     return str(uuid.uuid4())
 

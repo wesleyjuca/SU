@@ -12,7 +12,7 @@ class Document(Base):
     __tablename__ = "documents"
 
     id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    process_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("legal_processes.id"))
+    process_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("legal_processes.id", ondelete="CASCADE"))
     client_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("clients.id"))
     tipo: Mapped[str | None] = mapped_column(String(50))   # PETICAO, CONTRATO, PROCURACAO, SENTENCA
     titulo: Mapped[str] = mapped_column(String(500), nullable=False)
@@ -33,7 +33,7 @@ class Document(Base):
     gerado_por_ia: Mapped[bool] = mapped_column(Boolean, default=False)
     agent_run_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True))
     metadata_json: Mapped[dict | None] = mapped_column(JSONB)
-    created_by: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id"))
+    created_by: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"))
     tenant_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("tenants.id"), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
@@ -52,7 +52,7 @@ class DocumentVersion(Base):
     versao: Mapped[int] = mapped_column(Integer, nullable=False)
     conteudo_html: Mapped[str | None] = mapped_column(Text)
     conteudo_texto: Mapped[str | None] = mapped_column(Text)
-    changed_by: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id"))
+    changed_by: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"))
     change_summary: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -64,14 +64,14 @@ class Petition(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     document_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, unique=True)
-    process_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("legal_processes.id"))
+    process_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("legal_processes.id", ondelete="CASCADE"))
     tipo_peticao: Mapped[str | None] = mapped_column(String(100))  # INICIAL, CONTESTACAO, RECURSO
     template_used: Mapped[str | None] = mapped_column(String(100))
     ai_prompt: Mapped[str | None] = mapped_column(Text)
     ai_model: Mapped[str | None] = mapped_column(String(50))
     ai_tokens_used: Mapped[int | None] = mapped_column(Integer)
     review_status: Mapped[str] = mapped_column(String(30), default="PENDENTE_REVISAO")
-    reviewed_by: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id"))
+    reviewed_by: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"))
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     review_notes: Mapped[str | None] = mapped_column(Text)
 
@@ -92,7 +92,7 @@ class PetitionTemplate(Base):
     descricao: Mapped[str | None] = mapped_column(Text)
     conteudo: Mapped[str] = mapped_column(Text, nullable=False)
     ativo: Mapped[bool] = mapped_column(Boolean, default=True)
-    created_by: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id"))
+    created_by: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

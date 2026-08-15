@@ -177,6 +177,93 @@ async def test_partes_manual_crud_e_tenant_isolation(client: AsyncClient, auth_h
     assert not any(p["id"] == parte_id for p in list_after_res.json())
 
 
+async def test_parte_vincular_cliente_do_mesmo_tenant(client: AsyncClient, auth_headers: dict):
+    """Fase 179 — vincular a parte a um Client existente do mesmo tenant."""
+    process_res = await client.post(
+        "/api/v1/processes",
+        json={"numero_cnj": "0000007-00.2024.8.26.0100", "tribunal": "TJSP"},
+        headers=auth_headers,
+    )
+    if process_res.status_code != 201:
+        pytest.skip("Could not create process")
+    process_id = process_res.json()["id"]
+
+    client_res = await client.post(
+        "/api/v1/clients",
+        json={"tipo": "PF", "nome_completo": "Maria das Partes"},
+        headers=auth_headers,
+    )
+    if client_res.status_code != 201:
+        pytest.skip("Could not create client")
+    client_id = client_res.json()["id"]
+
+    create_parte_res = await client.post(
+        f"/api/v1/processes/{process_id}/partes",
+        json={"nome": "Maria das Partes", "tipo": "AUTOR", "client_id": client_id},
+        headers=auth_headers,
+    )
+    assert create_parte_res.status_code == 201
+    parte = create_parte_res.json()
+    assert parte["client_id"] == client_id
+    assert parte["cliente_nome"] == "Maria das Partes"
+    parte_id = parte["id"]
+
+    # GET /partes traz cliente_nome sem round-trip extra
+    list_res = await client.get(f"/api/v1/processes/{process_id}/partes", headers=auth_headers)
+    assert list_res.status_code == 200
+    listada = next(p for p in list_res.json() if p["id"] == parte_id)
+    assert listada["client_id"] == client_id
+    assert listada["cliente_nome"] == "Maria das Partes"
+
+    # Desvincular (client_id omitido no PUT limpa o vínculo)
+    update_res = await client.put(
+        f"/api/v1/processes/{process_id}/partes/{parte_id}",
+        json={"nome": "Maria das Partes", "tipo": "AUTOR"},
+        headers=auth_headers,
+    )
+    assert update_res.status_code == 200
+    assert update_res.json()["client_id"] is None
+    assert update_res.json()["cliente_nome"] is None
+
+
+async def test_parte_vincular_cliente_de_outro_tenant_rejeitado(
+    client: AsyncClient, auth_headers: dict, tenant_b_client_id: str
+):
+    """Fase 179 — mesma proteção de `_validar_client_id` usada em `LegalProcess.client_id`:
+    não deixar vincular a parte a um cliente que não pertence ao tenant do usuário."""
+    process_res = await client.post(
+        "/api/v1/processes",
+        json={"numero_cnj": "0000008-00.2024.8.26.0100", "tribunal": "TJSP"},
+        headers=auth_headers,
+    )
+    if process_res.status_code != 201:
+        pytest.skip("Could not create process")
+    process_id = process_res.json()["id"]
+
+    create_res = await client.post(
+        f"/api/v1/processes/{process_id}/partes",
+        json={"nome": "Invasor", "tipo": "AUTOR", "client_id": tenant_b_client_id},
+        headers=auth_headers,
+    )
+    assert create_res.status_code == 404
+
+    # E também no PUT
+    ok_res = await client.post(
+        f"/api/v1/processes/{process_id}/partes",
+        json={"nome": "Parte válida", "tipo": "AUTOR"},
+        headers=auth_headers,
+    )
+    assert ok_res.status_code == 201
+    parte_id = ok_res.json()["id"]
+
+    update_res = await client.put(
+        f"/api/v1/processes/{process_id}/partes/{parte_id}",
+        json={"nome": "Parte válida", "tipo": "AUTOR", "client_id": tenant_b_client_id},
+        headers=auth_headers,
+    )
+    assert update_res.status_code == 404
+
+
 async def test_create_deadline_direct(client: AsyncClient, auth_headers: dict):
     create_res = await client.post(
         "/api/v1/processes",

@@ -47,5 +47,5 @@ class TenantPayment(Base):
     competencia: Mapped[str] = mapped_column(String(7), nullable=False)  # "YYYY-MM"
     pago_em: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     metodo: Mapped[str] = mapped_column(String(30), default="MANUAL")
-    registrado_por: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id"))
+    registrado_por: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"))
     observacao: Mapped[str | None] = mapped_column(Text, nullable=True)

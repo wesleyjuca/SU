@@ -32,7 +32,7 @@ class LegalProcess(Base):
     tese_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("teses.id", ondelete="SET NULL"), nullable=True, index=True)
     valor_causa: Mapped[Decimal | None] = mapped_column(Numeric(15, 2))
     client_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("clients.id"), index=True)
-    responsavel_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id"))
+    responsavel_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"))
     oab_responsavel: Mapped[str | None] = mapped_column(String(20))
     parte_contraria: Mapped[str | None] = mapped_column(String(500))
     polo: Mapped[str | None] = mapped_column(String(10))   # ATIVO, PASSIVO, LITISCONSORTE
@@ -52,7 +52,14 @@ class LegalProcess(Base):
     movements: Mapped[list["ProcessMovement"]] = relationship(back_populates="process", cascade="all, delete-orphan")
     deadlines: Mapped[list["ProcessDeadline"]] = relationship(back_populates="process", cascade="all, delete-orphan")
     parties: Mapped[list["ProcessParty"]] = relationship(back_populates="process", cascade="all, delete-orphan")
-    documents: Mapped[list["Document"]] = relationship(back_populates="process")
+    # Fase 180 — passive_deletes=True: sem isso, o SQLAlchemy carrega os
+    # documentos e zera process_id em Python ANTES do DELETE (comportamento
+    # padrão do ORM pra relationship sem cascade="delete"), sobrescrevendo o
+    # ON DELETE CASCADE do banco (achado real durante a verificação empírica
+    # da Fase 180 — o documento sobrevivia com process_id=NULL em vez de ser
+    # apagado junto do processo). Com passive_deletes, o ORM não gerencia a
+    # coleção no delete — confia inteiramente na constraint do banco.
+    documents: Mapped[list["Document"]] = relationship(back_populates="process", passive_deletes=True)
     team: Mapped[list["ProcessTeamMember"]] = relationship(back_populates="process", cascade="all, delete-orphan")
 
 
@@ -105,7 +112,7 @@ class ProcessDeadline(Base):
     data_fatal: Mapped[date | None] = mapped_column(Date)
     tipo: Mapped[str | None] = mapped_column(String(50))  # CONTESTACAO, RECURSO, MANIFESTACAO
     status: Mapped[str] = mapped_column(String(20), default="PENDENTE", index=True)
-    responsavel_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id"))
+    responsavel_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"))
     # Faixas de alerta (3/7/15 dias) já notificadas — evita reenvio diário e
     # torna o alerta resiliente a downtime do worker (não depende de data exata).
     alertas_enviados: Mapped[list | None] = mapped_column(JSONB, default=list)
@@ -125,5 +132,10 @@ class ProcessParty(Base):
     oab: Mapped[str | None] = mapped_column(String(20))
     polo: Mapped[str | None] = mapped_column(String(10))
     origem: Mapped[str | None] = mapped_column(String(20))  # MANUAL, PDPJ, ESCAVADOR, JUDIT, JUSBRASIL, IMPORTADO
+    # Fase 179 — vínculo opcional a um cliente já cadastrado (autor/réu que
+    # também é cliente do escritório). SET NULL ao apagar o cliente: a parte
+    # continua existindo no histórico do processo, só perde o vínculo.
+    client_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("clients.id", ondelete="SET NULL"), nullable=True, index=True)
 
     process: Mapped["LegalProcess"] = relationship(back_populates="parties")
+    client: Mapped["Client | None"] = relationship()

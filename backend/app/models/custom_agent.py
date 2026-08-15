@@ -37,9 +37,13 @@ class CustomAgent(Base):
     # (não o proponente no POST), evita um ADMIN se auto-conceder orçamento
     # alto que o aprovador aceita sem notar.
     max_cost_usd_per_run: Mapped[float] = mapped_column(Float, nullable=False, default=0.50)
-    created_by: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    # Fase 180 — nullable pra permitir exclusão real de usuário (SUPERADMIN):
+    # o agente aprovado é plataforma-wide, não pode ser apagado junto do
+    # proponente. NULL = "proponente removido", nunca escrito no fluxo normal
+    # de criação (o schema/endpoint de criação continua exigindo o autor).
+    created_by: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"))
     tenant_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("tenants.id"), nullable=True)  # auditoria — NÃO usado p/ escopo
-    approved_by: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id"))
+    approved_by: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"))
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     rejection_reason: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
