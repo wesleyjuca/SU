@@ -927,6 +927,62 @@ async def update_user(
     return {"message": "Usuário atualizado"}
 
 
+@router.delete("/{user_id}/permanente", status_code=204)
+async def excluir_usuario_permanente(
+    user_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Exclusão real (Fase 180) — apaga a linha, não só desativa. Restrita ao
+    SUPERADMIN, pensada pra limpar conta de teste enquanto o sistema ainda
+    está em construção. FKs que só marcavam autoria/responsável (documentos,
+    processos, aprovações, etc.) desvinculam via ON DELETE SET NULL — ver
+    events.py; nada real é apagado além da própria linha do usuário.
+    Bloqueada se o tenant do usuário já estiver `em_producao` (use
+    desativar — PUT /{user_id} com is_active=false — nesse caso)."""
+    if current_user.role != "SUPERADMIN":
+        raise HTTPException(status_code=403, detail="Acesso restrito ao SUPERADMIN")
+
+    result = await db.execute(select(User).where(User.id == uuid.UUID(user_id)))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="Usuário não encontrado")
+
+    if user.id == current_user.id:
+        raise HTTPException(status_code=422, detail="Você não pode excluir a própria conta.")
+
+    if user.tenant_id:
+        from app.models.tenant import Tenant
+        em_producao = (await db.execute(
+            select(Tenant.em_producao).where(Tenant.id == user.tenant_id)
+        )).scalar_one_or_none()
+        if em_producao:
+            raise HTTPException(
+                status_code=403,
+                detail="Este escritório está marcado como em produção — exclusão permanente desabilitada. Use desativar.",
+            )
+
+    # Mesma proteção de lockout do PUT /{user_id}: não apagar o último
+    # ADMIN/SUPERADMIN ativo do tenant do usuário-alvo.
+    if user.role in ("ADMIN", "SUPERADMIN") and user.is_active and user.tenant_id:
+        outros_admins = (await db.execute(
+            select(func.count(User.id)).where(
+                User.tenant_id == user.tenant_id,
+                User.role.in_(["ADMIN", "SUPERADMIN"]),
+                User.is_active == True,  # noqa: E712
+                User.id != user.id,
+            )
+        )).scalar_one() or 0
+        if outros_admins == 0:
+            raise HTTPException(
+                status_code=422,
+                detail="Este é o último administrador ativo do escritório — promova outro usuário a ADMIN antes de excluí-lo.",
+            )
+
+    await db.delete(user)
+    await db.commit()
+
+
 @router.post("/{user_id}/reset-password")
 async def reset_password(
     user_id: str,

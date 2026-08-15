@@ -32,9 +32,9 @@ class IntegrityReport(Base):
     categoria: Mapped[str] = mapped_column(String(40), nullable=False)  # ETICA, CONFLITO_INTERESSES, DADOS_LGPD, USO_DE_IA, ASSEDIO, OUTROS
     descricao: Mapped[str] = mapped_column(Text, nullable=False)
     anonimo: Mapped[bool] = mapped_column(Boolean, default=False)
-    created_by: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="ABERTO", index=True)  # ABERTO, EM_ANALISE, RESOLVIDO
     resolucao: Mapped[str | None] = mapped_column(Text)
-    resolved_by: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    resolved_by: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

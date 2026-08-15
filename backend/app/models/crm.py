@@ -23,7 +23,7 @@ class Opportunity(Base):
     estagio: Mapped[str] = mapped_column(String(20), default="LEAD", index=True)
     probabilidade: Mapped[int] = mapped_column(Integer, default=50)  # 0-100
     origem: Mapped[str | None] = mapped_column(String(100))
-    responsavel_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id"))
+    responsavel_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"))
     expected_close: Mapped[date | None] = mapped_column(Date)
     motivo_perda: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

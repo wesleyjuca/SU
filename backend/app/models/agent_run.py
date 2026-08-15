@@ -15,7 +15,7 @@ class AgentRun(Base):
     agent_name: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     session_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True))
     trigger_type: Mapped[str | None] = mapped_column(String(50))  # MANUAL, SCHEDULED, WEBHOOK, CHAINED
-    triggered_by: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id"))
+    triggered_by: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"))
     input_data: Mapped[dict] = mapped_column(JSONB, nullable=False)
     output_data: Mapped[dict | None] = mapped_column(JSONB)
     status: Mapped[str] = mapped_column(String(30), default="RUNNING")  # RUNNING, SUCCESS, FAILED, PAUSED, AWAITING_APPROVAL
@@ -29,7 +29,7 @@ class AgentRun(Base):
     # request/processo totalmente separado da execução original) não tem
     # como saber qual chain era nem reconstruir o AgentContext original.
     task_type: Mapped[str | None] = mapped_column(String(100))
-    process_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("legal_processes.id"))
+    process_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("legal_processes.id", ondelete="CASCADE"))
     client_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("clients.id"))
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -58,15 +58,15 @@ class Approval(Base):
     __tablename__ = "approvals"
 
     id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    run_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("agent_runs.id"))
+    run_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("agent_runs.id", ondelete="CASCADE"))
     tipo: Mapped[str | None] = mapped_column(String(100))  # PETITION_FILING, CLIENT_EMAIL, CONTRACT_SIGN
     titulo: Mapped[str] = mapped_column(Text, nullable=False)
     descricao: Mapped[str | None] = mapped_column(Text)
     ai_suggestion: Mapped[dict | None] = mapped_column(JSONB)
     prioridade: Mapped[str] = mapped_column(String(10), default="NORMAL")  # LOW, NORMAL, HIGH, URGENT
     status: Mapped[str] = mapped_column(String(20), default="PENDENTE", index=True)  # PENDENTE, APROVADO, REJEITADO
-    assignee_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id"))
-    approved_by: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id"))
+    assignee_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"))
+    approved_by: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"))
     rejection_reason: Mapped[str | None] = mapped_column(Text)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     tenant_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("tenants.id"), nullable=True, index=True)

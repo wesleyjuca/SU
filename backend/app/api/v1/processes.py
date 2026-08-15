@@ -1041,6 +1041,38 @@ async def archive_process(
     await db.flush()
 
 
+@router.delete("/{process_id}/permanente", status_code=204)
+async def excluir_processo_permanente(
+    process_id: str,
+    current_user: User = Depends(require_role("SUPERADMIN")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Exclusão real (Fase 180) — apaga a linha, não só arquiva. Restrita ao
+    SUPERADMIN, pensada pra limpar dado de teste enquanto o sistema ainda
+    está em construção. Cascata (FK ON DELETE CASCADE, ver events.py):
+    documentos/petições/faturas/lançamentos financeiros/execuções de agente
+    do processo somem junto. Bloqueada se o tenant do processo já estiver
+    marcado `em_producao` (ver Tenant.em_producao) — nesse caso, use
+    arquivar (DELETE /{process_id}) em vez disso."""
+    from fastapi import HTTPException
+    from app.models.tenant import Tenant
+    result = await db.execute(select(LegalProcess).where(LegalProcess.id == uuid.UUID(process_id)))
+    process = result.scalar_one_or_none()
+    if not process:
+        raise NotFoundError("Processo", process_id)
+    if process.tenant_id:
+        em_producao = (await db.execute(
+            select(Tenant.em_producao).where(Tenant.id == process.tenant_id)
+        )).scalar_one_or_none()
+        if em_producao:
+            raise HTTPException(
+                status_code=403,
+                detail="Este escritório está marcado como em produção — exclusão permanente desabilitada. Use arquivar.",
+            )
+    await db.delete(process)
+    await db.flush()
+
+
 class MovementCreate(BaseModel):
     descricao: str
     tipo: str | None = None

@@ -19,6 +19,13 @@ class Tenant(Base):
     # pelo backfill idempotente em app/core/events.py, não editável via API.
     isento: Mapped[bool] = mapped_column(Boolean, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Fase 180 — enquanto False ("em construção"), SUPERADMIN pode excluir
+    # processos/usuários de verdade (cascata real, dado de teste). Uma vez
+    # True ("em produção"), os 2 endpoints de exclusão permanente passam a
+    # recusar (403) e orientam usar arquivar/desativar — trava de segurança
+    # contra apagar dado real por engano depois que o escritório for pra
+    # produção. Editável só por SUPERADMIN via PUT /tenants/{id}.
+    em_producao: Mapped[bool] = mapped_column(Boolean, default=False)
     # Unidades da mesma banca: unidade (child) aponta para a banca-mãe (parent).
     # Isolamento de dados preservado (cada tenant filtra por tenant_id); o vínculo
     # serve só para agrupamento e relatórios consolidados futuros (P3).

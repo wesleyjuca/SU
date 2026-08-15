@@ -1,10 +1,11 @@
 "use client";
 import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
-import { Scale, Plus, AlertTriangle, Search, Pencil, Trash2, Download } from "lucide-react";
+import { Scale, Plus, AlertTriangle, Search, Pencil, Trash2, Download, Flame } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
 import { ViewToggle } from "@/components/ui/ViewToggle";
+import { useUserStore } from "@/store";
 
 const UF_LIST = ["AC","AL","AM","AP","BA","CE","DF","ES","GO","MA","MG","MS","MT","PA","PB","PE","PI","PR","RJ","RN","RO","RR","RS","SC","SE","SP","TO"];
 
@@ -50,6 +51,8 @@ const PAGE_SIZE = 50;
 
 export default function ProcessosPage() {
   const toast = useToast();
+  const { user: me } = useUserStore();
+  const [excluindoPermanenteId, setExcluindoPermanenteId] = useState<string | null>(null);
   const [processos, setProcessos] = useState<Processo[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -208,6 +211,34 @@ export default function ProcessosPage() {
     if (res.ok) { setDeletingId(null); setDesfecho(""); fetchProcessos(0, false); }
   }
 
+  // Fase 180 — exclusão PERMANENTE (apaga a linha e tudo em cascata:
+  // documentos, financeiro, execuções de agente), restrita ao SUPERADMIN.
+  // Diferente de excluirProcesso() acima, que só arquiva.
+  async function excluirPermanentemente(id: string) {
+    if (!confirm(
+      "Excluir este processo PERMANENTEMENTE?\n\nDocumentos, lançamentos financeiros/faturas e execuções de agente ligados a ele são apagados junto. Não é reversível."
+    )) return;
+    setExcluindoPermanenteId(id);
+    try {
+      const token = localStorage.getItem("afj_access_token");
+      const res = await fetch(`/api/v1/processes/${id}/permanente`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        toast.success("Processo excluído permanentemente.");
+        fetchProcessos(0, false);
+      } else {
+        const d = await res.json().catch(() => ({}));
+        toast.error(d.detail || "Erro ao excluir o processo.");
+      }
+    } catch {
+      toast.error("Falha de conexão.");
+    } finally {
+      setExcluindoPermanenteId(null);
+    }
+  }
+
   // Fase 160 — a busca (numero_cnj/tribunal) agora é feita server-side via
   // GET /processes?q=... (efeito com debounce acima); `processos` já vem
   // filtrado do backend, não precisa mais filtrar de novo aqui.
@@ -359,6 +390,17 @@ export default function ProcessosPage() {
                           >
                             <Trash2 size={13} />
                           </button>
+                          {me?.role === "SUPERADMIN" && (
+                            <button
+                              onClick={() => excluirPermanentemente(p.id)}
+                              disabled={excluindoPermanenteId === p.id}
+                              className="text-afj-black/30 hover:text-red-700 transition-colors disabled:opacity-40"
+                              aria-label="Excluir permanentemente"
+                              title="Excluir permanentemente (SUPERADMIN)"
+                            >
+                              <Flame size={13} />
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -417,6 +459,17 @@ export default function ProcessosPage() {
                   >
                     <Trash2 size={13} />
                   </button>
+                  {me?.role === "SUPERADMIN" && (
+                    <button
+                      onClick={() => excluirPermanentemente(p.id)}
+                      disabled={excluindoPermanenteId === p.id}
+                      className="text-afj-black/30 hover:text-red-700 transition-colors disabled:opacity-40"
+                      aria-label="Excluir permanentemente"
+                      title="Excluir permanentemente (SUPERADMIN)"
+                    >
+                      <Flame size={13} />
+                    </button>
+                  )}
                 </div>
               </div>
             );

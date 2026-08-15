@@ -20,7 +20,7 @@ class Client(Base):
     telefone: Mapped[str | None] = mapped_column(String(20))
     whatsapp: Mapped[str | None] = mapped_column(String(20))
     endereco_json: Mapped[dict | None] = mapped_column(JSONB)
-    responsavel_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id"))
+    responsavel_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"))
     tenant_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("tenants.id"), nullable=True, index=True)
     origem: Mapped[str | None] = mapped_column(String(100))   # site, indicacao, crm_agent
     status: Mapped[str] = mapped_column(String(50), default="PROSPECTO")
@@ -63,7 +63,7 @@ class ClientInteraction(Base):
     # conhecida hoje: os 2 caminhos de escrita já resolvem client_id dentro
     # do tenant do usuário antes de persistir). Nullable, sem backfill.
     tenant_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("tenants.id"), nullable=True, index=True)
-    user_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id"))
+    user_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"))
     tipo: Mapped[str | None] = mapped_column(String(50))  # EMAIL, LIGACAO, REUNIAO, WHATSAPP, SISTEMA
     descricao: Mapped[str] = mapped_column(Text, nullable=False)
     metadata_json: Mapped[dict | None] = mapped_column(JSONB)

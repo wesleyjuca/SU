@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import {
-  Building2, Plus, X, Copy, Check, Power, PowerOff, GitBranch, Loader2,
+  Building2, Plus, X, Copy, Check, Power, PowerOff, GitBranch, Loader2, ShieldCheck, ShieldOff,
 } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
@@ -15,6 +15,7 @@ interface TenantItem {
   plan: string;
   isento: boolean;
   is_active: boolean;
+  em_producao: boolean;
   max_users: number;
   users: number;
   is_unit: boolean;
@@ -115,6 +116,24 @@ export default function EscritoriosPage() {
     finally { setToggling(null); }
   }
 
+  // Fase 180 — trava de segurança: em produção, os endpoints de exclusão
+  // permanente (processo/usuário) recusam e orientam usar arquivar/desativar.
+  async function toggleProducao(t: TenantItem) {
+    const ligando = !t.em_producao;
+    if (ligando && !confirm(
+      `Marcar "${t.name}" como em produção?\n\nDepois disso, o SUPERADMIN não consegue mais excluir processos/usuários de verdade deste escritório — só arquivar/desativar.`
+    )) return;
+    setToggling(t.id);
+    try {
+      const res = await fetch(`/api/v1/tenants/${t.id}`, {
+        method: "PATCH", headers: authH(), body: JSON.stringify({ em_producao: ligando }),
+      });
+      if (res.ok) { toast.success(ligando ? "Escritório marcado como em produção." : "Trava de produção removida."); fetchTenants(); }
+      else { const d = await res.json(); toast.error(d.detail || "Erro ao atualizar."); }
+    } catch { toast.error("Falha de conexão."); }
+    finally { setToggling(null); }
+  }
+
   function copyCred() {
     if (!cred) return;
     navigator.clipboard.writeText(`${cred.email} / ${cred.pwd}`);
@@ -177,6 +196,7 @@ export default function EscritoriosPage() {
                       <span className="font-medium text-afj-black">{t.name}</span>
                       {t.is_root && <span className="text-[10px] uppercase tracking-wide bg-afj-gold/15 text-afj-gold-dark px-1.5 py-0.5 rounded-sm">raiz</span>}
                       {t.isento && <span className="text-[10px] uppercase tracking-wide bg-afj-gold/15 text-afj-gold-dark px-1.5 py-0.5 rounded-sm">isento</span>}
+                      {t.em_producao && <span className="text-[10px] uppercase tracking-wide bg-blue-50 text-blue-700 border border-blue-200 px-1.5 py-0.5 rounded-sm">em produção</span>}
                     </div>
                     {t.unit_label && <span className="text-xs text-afj-black/40">{t.unit_label}</span>}
                   </td>
@@ -197,6 +217,11 @@ export default function EscritoriosPage() {
                           <GitBranch size={15} />
                         </button>
                       )}
+                      <button onClick={() => toggleProducao(t)} disabled={toggling === t.id}
+                        title={t.em_producao ? "Remover trava de produção (permite exclusão permanente pelo SUPERADMIN)" : "Marcar como em produção (bloqueia exclusão permanente)"}
+                        className={`p-1.5 rounded hover:bg-afj-cream disabled:opacity-40 ${t.em_producao ? "text-blue-600 hover:text-blue-700" : "text-afj-black/30 hover:text-blue-600"}`}>
+                        {toggling === t.id ? <Loader2 size={15} className="animate-spin" /> : t.em_producao ? <ShieldCheck size={15} /> : <ShieldOff size={15} />}
+                      </button>
                       {!t.is_root && (
                         <button onClick={() => toggleActive(t)} disabled={toggling === t.id}
                           title={t.is_active ? "Desativar" : "Reativar"}

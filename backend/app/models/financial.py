@@ -15,14 +15,14 @@ class FinancialEntry(Base):
     tipo: Mapped[str] = mapped_column(String(20), nullable=False)  # RECEITA, DESPESA
     categoria: Mapped[str | None] = mapped_column(String(100))     # HONORARIOS, CUSTAS, DESLOCAMENTO
     client_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("clients.id"))
-    process_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("legal_processes.id"))
+    process_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("legal_processes.id", ondelete="CASCADE"))
     descricao: Mapped[str] = mapped_column(Text, nullable=False)
     valor: Mapped[Decimal] = mapped_column(Numeric(15, 2), nullable=False)
     data_vencimento: Mapped[date | None] = mapped_column(Date)
     data_pagamento: Mapped[date | None] = mapped_column(Date)
     status: Mapped[str] = mapped_column(String(20), default="PENDENTE")  # PENDENTE, PAGO, CANCELADO
     nf_numero: Mapped[str | None] = mapped_column(String(50))
-    created_by: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id"))
+    created_by: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"))
     tenant_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("tenants.id"), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -34,7 +34,7 @@ class BillingInvoice(Base):
     id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("tenants.id"), nullable=True, index=True)
     client_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("clients.id"))
-    process_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("legal_processes.id"))
+    process_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("legal_processes.id", ondelete="CASCADE"))
     numero: Mapped[str | None] = mapped_column(String(50), unique=True)
     descricao: Mapped[str | None] = mapped_column(Text)
     itens: Mapped[list | None] = mapped_column(JSONB)  # [{descricao, valor}]
@@ -47,7 +47,7 @@ class BillingInvoice(Base):
     payment_link: Mapped[str | None] = mapped_column(Text)
     payment_provider: Mapped[str | None] = mapped_column(String(30))     # stripe | mercadopago
     payment_external_id: Mapped[str | None] = mapped_column(String(150))  # checkout session / preference id
-    created_by: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id"))
+    created_by: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"))
     emitido_em: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     pago_em: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

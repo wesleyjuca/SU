@@ -330,6 +330,113 @@ async def lifespan(app: FastAPI):
             "ALTER TABLE process_parties ADD COLUMN IF NOT EXISTS client_id UUID "
             "REFERENCES clients(id) ON DELETE SET NULL",
             "CREATE INDEX IF NOT EXISTS ix_process_parties_client_id ON process_parties (client_id)",
+            # Fase 180 — exclusão PERMANENTE de processo/usuário, restrita ao
+            # SUPERADMIN (sistema ainda em construção, dado de teste). As FKs
+            # abaixo nasceram sem ON DELETE (RESTRICT/NO ACTION), o que
+            # bloquearia qualquer DELETE real enquanto existisse 1 linha
+            # referenciando o processo/usuário. Reaplicado em TODO boot
+            # (DROP+ADD do mesmo nome de constraint) pra garantir o invariante
+            # mesmo que alguém rode uma migration manual divergente — mesmo
+            # padrão de "roda em todo boot" já usado pelo backfill da Fase 170.
+            #
+            # Filhos diretos de legal_processes que ainda não cascateavam
+            # (CASCADE — apaga o processo, apaga o filho junto):
+            "ALTER TABLE agent_runs DROP CONSTRAINT IF EXISTS agent_runs_process_id_fkey",
+            "ALTER TABLE agent_runs ADD CONSTRAINT agent_runs_process_id_fkey "
+            "FOREIGN KEY (process_id) REFERENCES legal_processes(id) ON DELETE CASCADE",
+            "ALTER TABLE approvals DROP CONSTRAINT IF EXISTS approvals_run_id_fkey",
+            "ALTER TABLE approvals ADD CONSTRAINT approvals_run_id_fkey "
+            "FOREIGN KEY (run_id) REFERENCES agent_runs(id) ON DELETE CASCADE",
+            "ALTER TABLE documents DROP CONSTRAINT IF EXISTS documents_process_id_fkey",
+            "ALTER TABLE documents ADD CONSTRAINT documents_process_id_fkey "
+            "FOREIGN KEY (process_id) REFERENCES legal_processes(id) ON DELETE CASCADE",
+            "ALTER TABLE petitions DROP CONSTRAINT IF EXISTS petitions_process_id_fkey",
+            "ALTER TABLE petitions ADD CONSTRAINT petitions_process_id_fkey "
+            "FOREIGN KEY (process_id) REFERENCES legal_processes(id) ON DELETE CASCADE",
+            "ALTER TABLE financial_entries DROP CONSTRAINT IF EXISTS financial_entries_process_id_fkey",
+            "ALTER TABLE financial_entries ADD CONSTRAINT financial_entries_process_id_fkey "
+            "FOREIGN KEY (process_id) REFERENCES legal_processes(id) ON DELETE CASCADE",
+            "ALTER TABLE billing_invoices DROP CONSTRAINT IF EXISTS billing_invoices_process_id_fkey",
+            "ALTER TABLE billing_invoices ADD CONSTRAINT billing_invoices_process_id_fkey "
+            "FOREIGN KEY (process_id) REFERENCES legal_processes(id) ON DELETE CASCADE",
+            #
+            # Referências a `users` que hoje só "autoria"/"responsável" (SET
+            # NULL — apagar o usuário não pode apagar processo/documento/
+            # financeiro/etc. real, só desvincula a autoria):
+            "ALTER TABLE legal_processes DROP CONSTRAINT IF EXISTS legal_processes_responsavel_id_fkey",
+            "ALTER TABLE legal_processes ADD CONSTRAINT legal_processes_responsavel_id_fkey "
+            "FOREIGN KEY (responsavel_id) REFERENCES users(id) ON DELETE SET NULL",
+            "ALTER TABLE process_deadlines DROP CONSTRAINT IF EXISTS process_deadlines_responsavel_id_fkey",
+            "ALTER TABLE process_deadlines ADD CONSTRAINT process_deadlines_responsavel_id_fkey "
+            "FOREIGN KEY (responsavel_id) REFERENCES users(id) ON DELETE SET NULL",
+            "ALTER TABLE agent_runs DROP CONSTRAINT IF EXISTS agent_runs_triggered_by_fkey",
+            "ALTER TABLE agent_runs ADD CONSTRAINT agent_runs_triggered_by_fkey "
+            "FOREIGN KEY (triggered_by) REFERENCES users(id) ON DELETE SET NULL",
+            "ALTER TABLE approvals DROP CONSTRAINT IF EXISTS approvals_assignee_id_fkey",
+            "ALTER TABLE approvals ADD CONSTRAINT approvals_assignee_id_fkey "
+            "FOREIGN KEY (assignee_id) REFERENCES users(id) ON DELETE SET NULL",
+            "ALTER TABLE approvals DROP CONSTRAINT IF EXISTS approvals_approved_by_fkey",
+            "ALTER TABLE approvals ADD CONSTRAINT approvals_approved_by_fkey "
+            "FOREIGN KEY (approved_by) REFERENCES users(id) ON DELETE SET NULL",
+            "ALTER TABLE documents DROP CONSTRAINT IF EXISTS documents_created_by_fkey",
+            "ALTER TABLE documents ADD CONSTRAINT documents_created_by_fkey "
+            "FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL",
+            "ALTER TABLE document_versions DROP CONSTRAINT IF EXISTS document_versions_changed_by_fkey",
+            "ALTER TABLE document_versions ADD CONSTRAINT document_versions_changed_by_fkey "
+            "FOREIGN KEY (changed_by) REFERENCES users(id) ON DELETE SET NULL",
+            "ALTER TABLE petitions DROP CONSTRAINT IF EXISTS petitions_reviewed_by_fkey",
+            "ALTER TABLE petitions ADD CONSTRAINT petitions_reviewed_by_fkey "
+            "FOREIGN KEY (reviewed_by) REFERENCES users(id) ON DELETE SET NULL",
+            "ALTER TABLE petition_templates DROP CONSTRAINT IF EXISTS petition_templates_created_by_fkey",
+            "ALTER TABLE petition_templates ADD CONSTRAINT petition_templates_created_by_fkey "
+            "FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL",
+            "ALTER TABLE financial_entries DROP CONSTRAINT IF EXISTS financial_entries_created_by_fkey",
+            "ALTER TABLE financial_entries ADD CONSTRAINT financial_entries_created_by_fkey "
+            "FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL",
+            "ALTER TABLE billing_invoices DROP CONSTRAINT IF EXISTS billing_invoices_created_by_fkey",
+            "ALTER TABLE billing_invoices ADD CONSTRAINT billing_invoices_created_by_fkey "
+            "FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL",
+            "ALTER TABLE clients DROP CONSTRAINT IF EXISTS clients_responsavel_id_fkey",
+            "ALTER TABLE clients ADD CONSTRAINT clients_responsavel_id_fkey "
+            "FOREIGN KEY (responsavel_id) REFERENCES users(id) ON DELETE SET NULL",
+            "ALTER TABLE client_interactions DROP CONSTRAINT IF EXISTS client_interactions_user_id_fkey",
+            "ALTER TABLE client_interactions ADD CONSTRAINT client_interactions_user_id_fkey "
+            "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL",
+            "ALTER TABLE opportunities DROP CONSTRAINT IF EXISTS opportunities_responsavel_id_fkey",
+            "ALTER TABLE opportunities ADD CONSTRAINT opportunities_responsavel_id_fkey "
+            "FOREIGN KEY (responsavel_id) REFERENCES users(id) ON DELETE SET NULL",
+            # custom_agents.created_by nasceu NOT NULL — precisa aceitar NULL
+            # antes da constraint SET NULL fazer sentido (senão o delete falha
+            # com not-null violation em vez de suceder desvinculando).
+            "ALTER TABLE custom_agents ALTER COLUMN created_by DROP NOT NULL",
+            "ALTER TABLE custom_agents DROP CONSTRAINT IF EXISTS custom_agents_created_by_fkey",
+            "ALTER TABLE custom_agents ADD CONSTRAINT custom_agents_created_by_fkey "
+            "FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL",
+            "ALTER TABLE custom_agents DROP CONSTRAINT IF EXISTS custom_agents_approved_by_fkey",
+            "ALTER TABLE custom_agents ADD CONSTRAINT custom_agents_approved_by_fkey "
+            "FOREIGN KEY (approved_by) REFERENCES users(id) ON DELETE SET NULL",
+            "ALTER TABLE agent_prompt_configs DROP CONSTRAINT IF EXISTS agent_prompt_configs_updated_by_fkey",
+            "ALTER TABLE agent_prompt_configs ADD CONSTRAINT agent_prompt_configs_updated_by_fkey "
+            "FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL",
+            "ALTER TABLE agent_prompt_versions DROP CONSTRAINT IF EXISTS agent_prompt_versions_changed_by_fkey",
+            "ALTER TABLE agent_prompt_versions ADD CONSTRAINT agent_prompt_versions_changed_by_fkey "
+            "FOREIGN KEY (changed_by) REFERENCES users(id) ON DELETE SET NULL",
+            "ALTER TABLE agent_attachments DROP CONSTRAINT IF EXISTS agent_attachments_uploaded_by_fkey",
+            "ALTER TABLE agent_attachments ADD CONSTRAINT agent_attachments_uploaded_by_fkey "
+            "FOREIGN KEY (uploaded_by) REFERENCES users(id) ON DELETE SET NULL",
+            "ALTER TABLE integrity_reports DROP CONSTRAINT IF EXISTS integrity_reports_created_by_fkey",
+            "ALTER TABLE integrity_reports ADD CONSTRAINT integrity_reports_created_by_fkey "
+            "FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL",
+            "ALTER TABLE integrity_reports DROP CONSTRAINT IF EXISTS integrity_reports_resolved_by_fkey",
+            "ALTER TABLE integrity_reports ADD CONSTRAINT integrity_reports_resolved_by_fkey "
+            "FOREIGN KEY (resolved_by) REFERENCES users(id) ON DELETE SET NULL",
+            "ALTER TABLE tenant_payments DROP CONSTRAINT IF EXISTS tenant_payments_registrado_por_fkey",
+            "ALTER TABLE tenant_payments ADD CONSTRAINT tenant_payments_registrado_por_fkey "
+            "FOREIGN KEY (registrado_por) REFERENCES users(id) ON DELETE SET NULL",
+            # Trava de segurança: enquanto False, SUPERADMIN pode excluir de
+            # verdade; True ("em produção") bloqueia os 2 endpoints de
+            # exclusão permanente (ver processes.py/users.py).
+            "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS em_producao BOOLEAN NOT NULL DEFAULT false",
         ]:
             try:
                 async with engine.begin() as conn:

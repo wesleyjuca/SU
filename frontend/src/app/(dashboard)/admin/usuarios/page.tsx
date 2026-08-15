@@ -3,10 +3,11 @@ import { useState, useEffect } from "react";
 import {
   Users, Plus, Pencil, UserCheck, UserX, Copy, Check, Search,
   KeyRound, History, ChevronRight, X, Filter, ClipboardCheck, AlertTriangle,
-  ArrowRightLeft, Briefcase, Loader2,
+  ArrowRightLeft, Briefcase, Loader2, Trash2,
 } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useUserStore } from "@/store";
+import { useToast } from "@/components/ui/Toast";
 
 const ROLES = ["ADMIN", "SOCIO", "ADVOGADO", "PARALEGAL", "ASSISTENTE", "GESTOR"];
 
@@ -71,7 +72,9 @@ const PAGE_SIZE = 50;
 
 export default function UsuariosPage() {
   const { user: me } = useUserStore();
+  const toast = useToast();
   const [users, setUsers] = useState<UserItem[]>([]);
+  const [excluindoId, setExcluindoId] = useState<string | null>(null);
   const [showRevisao, setShowRevisao] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -212,6 +215,34 @@ export default function UsuariosPage() {
     });
     setEditUser(null);
     fetchUsers(0, false);
+  }
+
+  // Fase 180 — exclusão PERMANENTE (apaga a linha, não só desativa), restrita
+  // ao SUPERADMIN. Bloqueada pelo backend se o escritório do usuário estiver
+  // marcado "em produção" (ver admin/escritorios).
+  async function excluirPermanente(u: UserItem) {
+    if (!confirm(
+      `Excluir "${u.full_name}" PERMANENTEMENTE?\n\nIsso apaga a conta de verdade (não é reversível). Documentos/processos onde ele aparece como autor/responsável continuam existindo, só perdem essa referência.`
+    )) return;
+    setExcluindoId(u.id);
+    try {
+      const token = localStorage.getItem("afj_access_token");
+      const res = await fetch(`/api/v1/users/${u.id}/permanente`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        toast.success("Usuário excluído permanentemente.");
+        fetchUsers(0, false);
+      } else {
+        const d = await res.json().catch(() => ({}));
+        toast.error(d.detail || "Erro ao excluir o usuário.");
+      }
+    } catch {
+      toast.error("Falha de conexão.");
+    } finally {
+      setExcluindoId(null);
+    }
   }
 
   async function handleResetPassword() {
@@ -478,6 +509,17 @@ export default function UsuariosPage() {
                     title={u.is_active ? "Desativar" : "Reativar"}
                   >
                     {u.is_active ? <UserX size={13} /> : <UserCheck size={13} />}
+                  </button>
+                )}
+                {me?.role === "SUPERADMIN" && u.id !== me?.id && (
+                  <button
+                    onClick={() => excluirPermanente(u)}
+                    disabled={excluindoId === u.id}
+                    className="text-afj-black/35 hover:text-red-600 hover:bg-red-50 transition-colors p-2 rounded-sm disabled:opacity-40"
+                    aria-label="Excluir permanentemente"
+                    title="Excluir permanentemente (SUPERADMIN)"
+                  >
+                    {excluindoId === u.id ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />}
                   </button>
                 )}
               </div>
