@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect, useRef } from "react";
-import { FolderOpen, Search, FileText, Download, Upload, ScanLine, X, CloudUpload, Eye, Plus, Pencil, Trash2, Save, Loader2, History, RotateCcw, Scale, CheckCircle2, AlertTriangle, HelpCircle, Paperclip } from "lucide-react";
+import { FolderOpen, Search, FileText, Download, Upload, ScanLine, X, CloudUpload, FilePlus, Eye, Plus, Pencil, Trash2, Save, Loader2, History, RotateCcw, Scale, CheckCircle2, AlertTriangle, HelpCircle, Paperclip } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
 
@@ -69,6 +69,7 @@ export default function DocumentosPage() {
   const [ocrRunning, setOcrRunning] = useState<string | null>(null);
   const [googleConnected, setGoogleConnected] = useState(false);
   const [savingDrive, setSavingDrive] = useState<string | null>(null);
+  const [savingDoc, setSavingDoc] = useState<string | null>(null);
   const [loadingTexto, setLoadingTexto] = useState<string | null>(null);
   const [textoModal, setTextoModal] = useState<{ titulo: string; texto: string } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -220,6 +221,23 @@ export default function DocumentosPage() {
       else toast.error(d.detail || "Erro ao salvar no Drive.");
     } catch { toast.error("Erro de conexão."); }
     finally { setSavingDrive(null); }
+  }
+
+  // Fase 182 — grava como Google Doc colaborável (a Drive API converte o
+  // HTML automaticamente), alternativa ao PDF timbrado de salvarNoDrive().
+  async function salvarComoGoogleDoc(docId: string, titulo: string) {
+    setSavingDoc(docId);
+    try {
+      const token = localStorage.getItem("afj_access_token");
+      const res = await fetch(`/api/v1/integrations/google/drive-save-doc/${docId}`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const d = await res.json().catch(() => ({}));
+      if (res.ok) toast.success(`"${titulo}" salvo como Google Doc.`);
+      else toast.error(d.detail || "Erro ao salvar como Google Doc.");
+    } catch { toast.error("Erro de conexão."); }
+    finally { setSavingDoc(null); }
   }
 
   async function fetchDocs(newOffset = 0, append = false) {
@@ -561,6 +579,17 @@ export default function DocumentosPage() {
                           aria-label="Salvar no Google Drive"
                         >
                           <CloudUpload size={14} />
+                        </button>
+                      )}
+                      {googleConnected && (
+                        <button
+                          onClick={() => salvarComoGoogleDoc(d.id, d.titulo)}
+                          disabled={savingDoc === d.id}
+                          className="tap-target text-afj-black/30 hover:text-afj-gold transition-colors disabled:opacity-40"
+                          title="Salvar como Google Doc (editável, sem timbrado)"
+                          aria-label="Salvar como Google Doc"
+                        >
+                          <FilePlus size={14} />
                         </button>
                       )}
                     </div>
