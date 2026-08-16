@@ -40,12 +40,6 @@ const PILARES_ATIVOS = [
   },
 ];
 
-const PROGRAMA_PLANEJADO = [
-  { icon: AlertTriangle, titulo: "Matriz de Riscos de Integridade", desc: "Mapeamento periódico de riscos com controles e responsáveis." },
-  { icon: GraduationCap, titulo: "Treinamentos Obrigatórios", desc: "Trilhas de ética, LGPD e uso responsável de IA com registro de conclusão." },
-  { icon: Users2, titulo: "Comitê de Integridade", desc: "Instância que avalia casos, aprova políticas e reporta à sociedade." },
-];
-
 const CATEGORIAS = [
   { value: "ETICA", label: "Violação ética" },
   { value: "CONFLITO_INTERESSES", label: "Conflito de interesses" },
@@ -57,6 +51,28 @@ const CATEGORIAS = [
 
 interface Conduct { text: string; version: number; updated_at: string | null; accepted: boolean; accepted_at: string | null }
 interface Report { id: string; categoria: string; descricao: string; anonimo: boolean; status: string; resolucao: string | null; created_at: string }
+
+// Fase 189 — "Próximos passos do programa" deixam de ser cards estáticos.
+interface Risk {
+  id: string; risco: string; categoria: string; probabilidade: string; impacto: string;
+  controles: string; responsavel_id: string | null; responsavel_nome: string | null;
+  status: string; ultima_revisao_em: string | null; created_at: string;
+}
+interface Training {
+  id: string; titulo: string; categoria: string; conteudo: string;
+  obrigatorio: boolean; ativo: boolean; concluido: boolean; concluido_em: string | null; created_at: string;
+}
+interface TrainingCompletions { titulo: string; total_usuarios_ativos: number; total_concluintes: number; concluintes: { nome: string; email: string; completed_at: string }[] }
+interface CommitteeCase {
+  id: string; report_id: string | null; titulo: string; descricao: string;
+  status: string; decisao: string | null; membros: string[]; decided_at: string | null; created_at: string;
+}
+
+const PROBABILIDADES = ["BAIXA", "MEDIA", "ALTA"];
+const IMPACTOS = ["BAIXO", "MEDIO", "ALTO"];
+const CATEGORIAS_TREINAMENTO = [
+  { value: "ETICA", label: "Ética" }, { value: "LGPD", label: "LGPD" }, { value: "USO_DE_IA", label: "Uso de IA" },
+];
 
 function authH(): HeadersInit {
   const t = typeof window !== "undefined" ? localStorage.getItem("afj_access_token") : null;
@@ -85,6 +101,26 @@ export default function EticaPage() {
   const [protocolo, setProtocolo] = useState<string | null>(null);
   const [reports, setReports] = useState<Report[]>([]);
 
+  // Matriz de Riscos (Fase 189.1)
+  const [risks, setRisks] = useState<Risk[]>([]);
+  const [showRiskForm, setShowRiskForm] = useState(false);
+  const [riskForm, setRiskForm] = useState({ risco: "", categoria: "ETICA", probabilidade: "MEDIA", impacto: "MEDIO", controles: "" });
+  const [savingRisk, setSavingRisk] = useState(false);
+
+  // Treinamentos Obrigatórios (Fase 189.2)
+  const [trainings, setTrainings] = useState<Training[]>([]);
+  const [showTrainingForm, setShowTrainingForm] = useState(false);
+  const [trainingForm, setTrainingForm] = useState({ titulo: "", categoria: "ETICA", conteudo: "", obrigatorio: true });
+  const [savingTraining, setSavingTraining] = useState(false);
+  const [completingId, setCompletingId] = useState<string | null>(null);
+  const [completionsAbertas, setCompletionsAbertas] = useState<Record<string, TrainingCompletions>>({});
+
+  // Comitê de Integridade (Fase 189.3)
+  const [cases, setCases] = useState<CommitteeCase[]>([]);
+  const [showCaseForm, setShowCaseForm] = useState(false);
+  const [caseForm, setCaseForm] = useState({ titulo: "", descricao: "", report_id: "", membros: "" });
+  const [savingCase, setSavingCase] = useState(false);
+
   const fetchTudo = useCallback(async () => {
     try {
       const me = await fetch("/api/v1/users/me", { headers: authH() });
@@ -95,11 +131,18 @@ export default function EticaPage() {
       const c = await fetch("/api/v1/integrity/conduct", { headers: authH() });
       if (c.ok) setConduct(await c.json());
 
+      const t = await fetch("/api/v1/integrity/trainings", { headers: authH() });
+      if (t.ok) setTrainings(await t.json());
+
       if (r === "ADMIN" || r === "SUPERADMIN" || r === "SOCIO") {
         const a = await fetch("/api/v1/integrity/conduct/acceptances", { headers: authH() });
         if (a.ok) setAceites(await a.json());
         const rep = await fetch("/api/v1/integrity/reports", { headers: authH() });
         if (rep.ok) setReports(await rep.json());
+        const rk = await fetch("/api/v1/integrity/risks", { headers: authH() });
+        if (rk.ok) setRisks(await rk.json());
+        const cs = await fetch("/api/v1/integrity/committee-cases", { headers: authH() });
+        if (cs.ok) setCases(await cs.json());
       }
     } catch { /* página segue com o que carregou */ }
   }, []);
@@ -160,6 +203,113 @@ export default function EticaPage() {
     EM_ANALISE: "bg-amber-50 text-amber-700 border-amber-200",
     RESOLVIDO: "bg-green-50 text-green-700 border-green-200",
   };
+
+  // ── Matriz de Riscos ──
+  async function criarRisco(e: React.FormEvent) {
+    e.preventDefault();
+    if (!riskForm.risco.trim() || !riskForm.controles.trim()) return;
+    setSavingRisk(true);
+    try {
+      const res = await fetch("/api/v1/integrity/risks", {
+        method: "POST", headers: authH(), body: JSON.stringify(riskForm),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (res.ok) {
+        toast.success("Risco registrado na matriz.");
+        setShowRiskForm(false);
+        setRiskForm({ risco: "", categoria: "ETICA", probabilidade: "MEDIA", impacto: "MEDIO", controles: "" });
+        fetchTudo();
+      } else toast.error(d.detail || "Erro ao registrar o risco.");
+    } catch { toast.error("Falha de conexão."); }
+    finally { setSavingRisk(false); }
+  }
+
+  async function atualizarRisco(id: string, body: Record<string, unknown>) {
+    try {
+      const res = await fetch(`/api/v1/integrity/risks/${id}`, {
+        method: "PUT", headers: authH(), body: JSON.stringify(body),
+      });
+      if (res.ok) fetchTudo();
+      else toast.error("Erro ao atualizar o risco.");
+    } catch { toast.error("Falha de conexão."); }
+  }
+
+  // ── Treinamentos Obrigatórios ──
+  async function criarTreinamento(e: React.FormEvent) {
+    e.preventDefault();
+    if (!trainingForm.titulo.trim() || !trainingForm.conteudo.trim()) return;
+    setSavingTraining(true);
+    try {
+      const res = await fetch("/api/v1/integrity/trainings", {
+        method: "POST", headers: authH(), body: JSON.stringify(trainingForm),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (res.ok) {
+        toast.success("Trilha de treinamento criada.");
+        setShowTrainingForm(false);
+        setTrainingForm({ titulo: "", categoria: "ETICA", conteudo: "", obrigatorio: true });
+        fetchTudo();
+      } else toast.error(d.detail || "Erro ao criar a trilha.");
+    } catch { toast.error("Falha de conexão."); }
+    finally { setSavingTraining(false); }
+  }
+
+  async function concluirTreinamento(id: string) {
+    setCompletingId(id);
+    try {
+      const res = await fetch(`/api/v1/integrity/trainings/${id}/complete`, { method: "POST", headers: authH() });
+      if (res.ok) { toast.success("Conclusão registrada."); fetchTudo(); }
+      else toast.error("Erro ao registrar a conclusão.");
+    } catch { toast.error("Falha de conexão."); }
+    finally { setCompletingId(null); }
+  }
+
+  async function alternarConclusoes(id: string) {
+    if (completionsAbertas[id]) {
+      setCompletionsAbertas((prev) => { const next = { ...prev }; delete next[id]; return next; });
+      return;
+    }
+    try {
+      const res = await fetch(`/api/v1/integrity/trainings/${id}/completions`, { headers: authH() });
+      if (res.ok) { const d = await res.json(); setCompletionsAbertas((prev) => ({ ...prev, [id]: d })); }
+      else toast.error("Erro ao carregar as conclusões.");
+    } catch { toast.error("Falha de conexão."); }
+  }
+
+  // ── Comitê de Integridade ──
+  async function criarCaso(e: React.FormEvent) {
+    e.preventDefault();
+    if (!caseForm.titulo.trim() || !caseForm.descricao.trim()) return;
+    setSavingCase(true);
+    try {
+      const res = await fetch("/api/v1/integrity/committee-cases", {
+        method: "POST", headers: authH(),
+        body: JSON.stringify({
+          titulo: caseForm.titulo, descricao: caseForm.descricao,
+          report_id: caseForm.report_id || null,
+          membros: caseForm.membros.split(",").map((m) => m.trim()).filter(Boolean),
+        }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (res.ok) {
+        toast.success("Caso registrado no Comitê.");
+        setShowCaseForm(false);
+        setCaseForm({ titulo: "", descricao: "", report_id: "", membros: "" });
+        fetchTudo();
+      } else toast.error(d.detail || "Erro ao registrar o caso.");
+    } catch { toast.error("Falha de conexão."); }
+    finally { setSavingCase(false); }
+  }
+
+  async function decidirCaso(id: string, decisao: string) {
+    try {
+      const res = await fetch(`/api/v1/integrity/committee-cases/${id}`, {
+        method: "PUT", headers: authH(), body: JSON.stringify({ status: "DECIDIDO", decisao }),
+      });
+      if (res.ok) { toast.success("Decisão registrada."); fetchTudo(); }
+      else toast.error("Erro ao registrar a decisão.");
+    } catch { toast.error("Falha de conexão."); }
+  }
 
   return (
     <div className="max-w-5xl mx-auto space-y-6">
@@ -344,26 +494,263 @@ export default function EticaPage() {
         </div>
       </div>
 
-      {/* Próximos passos do programa */}
+      {/* Próximos passos do programa — Fase 189: deixam de ser cards estáticos */}
       <div>
         <h2 className="afj-section-header flex items-center gap-2">
           <Clock size={15} className="text-afj-gold" /> Próximos passos do programa
         </h2>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
-          {PROGRAMA_PLANEJADO.map((p) => {
-            const Icon = p.icon;
-            return (
-              <div key={p.titulo} className="afj-card p-4 border-l-2 border-afj-gold/40">
-                <p className="font-semibold text-afj-black text-sm flex items-center gap-2">
-                  <Icon size={15} className="text-afj-gold" /> {p.titulo}
-                  <span className="text-[10px] uppercase tracking-wider text-afj-black/35 font-normal">Planejado</span>
-                </p>
-                <p className="text-xs text-afj-black/55 mt-1.5 leading-relaxed">{p.desc}</p>
-              </div>
-            );
-          })}
-        </div>
       </div>
+
+      {/* ── Matriz de Riscos de Integridade (gestor) ── */}
+      {isGestor && (
+        <div className="afj-card p-5 space-y-4">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <h2 className="font-semibold text-sm text-afj-black flex items-center gap-2">
+              <AlertTriangle size={16} className="text-afj-gold" /> Matriz de Riscos de Integridade
+            </h2>
+            <button onClick={() => setShowRiskForm((v) => !v)} className="btn-afj-outline text-xs py-1.5 px-3 rounded-sm">
+              {showRiskForm ? "Cancelar" : "Novo risco"}
+            </button>
+          </div>
+
+          {showRiskForm && (
+            <form onSubmit={criarRisco} className="space-y-3 border-b border-afj-cream-dark pb-4">
+              <input type="text" value={riskForm.risco} onChange={(e) => setRiskForm((f) => ({ ...f, risco: e.target.value }))}
+                placeholder="Descreva o risco (ex.: conflito de interesse não declarado)" required
+                className="w-full bg-afj-cream border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold" />
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <select value={riskForm.categoria} onChange={(e) => setRiskForm((f) => ({ ...f, categoria: e.target.value }))}
+                  className="bg-afj-cream border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold">
+                  {CATEGORIAS.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
+                </select>
+                <select value={riskForm.probabilidade} onChange={(e) => setRiskForm((f) => ({ ...f, probabilidade: e.target.value }))}
+                  className="bg-afj-cream border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold">
+                  {PROBABILIDADES.map((p) => <option key={p} value={p}>Probabilidade {p.toLowerCase()}</option>)}
+                </select>
+                <select value={riskForm.impacto} onChange={(e) => setRiskForm((f) => ({ ...f, impacto: e.target.value }))}
+                  className="bg-afj-cream border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold">
+                  {IMPACTOS.map((p) => <option key={p} value={p}>Impacto {p.toLowerCase()}</option>)}
+                </select>
+              </div>
+              <textarea value={riskForm.controles} onChange={(e) => setRiskForm((f) => ({ ...f, controles: e.target.value }))}
+                rows={2} placeholder="Controles adotados para mitigar este risco" required
+                className="w-full bg-afj-cream border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold resize-none" />
+              <button type="submit" disabled={savingRisk} className="btn-afj-primary rounded-sm text-sm flex items-center gap-2 disabled:opacity-50">
+                {savingRisk && <Loader2 size={13} className="animate-spin" />} Registrar risco
+              </button>
+            </form>
+          )}
+
+          {risks.length === 0 ? (
+            <p className="text-xs text-afj-black/45">Nenhum risco mapeado ainda.</p>
+          ) : (
+            <div className="space-y-2.5">
+              {risks.map((r) => (
+                <div key={r.id} className="border border-afj-cream-dark rounded-sm p-3 space-y-1.5">
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <span className="text-xs font-semibold text-afj-black">{r.risco}</span>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-sm border bg-afj-cream border-afj-cream-dark text-afj-black/50">
+                        Prob. {r.probabilidade.toLowerCase()}
+                      </span>
+                      <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-sm border bg-afj-cream border-afj-cream-dark text-afj-black/50">
+                        Impacto {r.impacto.toLowerCase()}
+                      </span>
+                      <select value={r.status} onChange={(e) => atualizarRisco(r.id, { status: e.target.value })}
+                        className="text-[11px] border border-afj-cream-dark rounded-sm px-1.5 py-1 bg-white focus:outline-none focus:border-afj-gold">
+                        <option value="ATIVO">Ativo</option>
+                        <option value="MITIGADO">Mitigado</option>
+                        <option value="ENCERRADO">Encerrado</option>
+                      </select>
+                    </div>
+                  </div>
+                  <p className="text-xs text-afj-black/55 leading-relaxed">{r.controles}</p>
+                  <div className="flex items-center justify-between gap-2 flex-wrap text-[10px] text-afj-black/35">
+                    <span>{r.responsavel_nome ? `Responsável: ${r.responsavel_nome}` : "Sem responsável definido"}</span>
+                    <button onClick={() => atualizarRisco(r.id, { marcar_revisado: true })} className="text-afj-gold hover:underline">
+                      {r.ultima_revisao_em ? `Revisado em ${new Date(r.ultima_revisao_em).toLocaleDateString("pt-BR")} — revisar agora` : "Marcar como revisado"}
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Treinamentos Obrigatórios ── */}
+      <div className="afj-card p-5 space-y-4">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <h2 className="font-semibold text-sm text-afj-black flex items-center gap-2">
+            <GraduationCap size={16} className="text-afj-gold" /> Treinamentos Obrigatórios
+          </h2>
+          {isGestor && (
+            <button onClick={() => setShowTrainingForm((v) => !v)} className="btn-afj-outline text-xs py-1.5 px-3 rounded-sm">
+              {showTrainingForm ? "Cancelar" : "Nova trilha"}
+            </button>
+          )}
+        </div>
+
+        {isGestor && showTrainingForm && (
+          <form onSubmit={criarTreinamento} className="space-y-3 border-b border-afj-cream-dark pb-4">
+            <input type="text" value={trainingForm.titulo} onChange={(e) => setTrainingForm((f) => ({ ...f, titulo: e.target.value }))}
+              placeholder="Título da trilha (ex.: Uso responsável de IA no escritório)" required
+              className="w-full bg-afj-cream border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold" />
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <select value={trainingForm.categoria} onChange={(e) => setTrainingForm((f) => ({ ...f, categoria: e.target.value }))}
+                className="bg-afj-cream border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold">
+                {CATEGORIAS_TREINAMENTO.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
+              </select>
+              <label className="flex items-center gap-2.5 cursor-pointer">
+                <input type="checkbox" checked={trainingForm.obrigatorio}
+                  onChange={(e) => setTrainingForm((f) => ({ ...f, obrigatorio: e.target.checked }))}
+                  className="accent-afj-gold w-4 h-4" />
+                <span className="text-sm text-afj-black/75">Obrigatório para toda a equipe</span>
+              </label>
+            </div>
+            <textarea value={trainingForm.conteudo} onChange={(e) => setTrainingForm((f) => ({ ...f, conteudo: e.target.value }))}
+              rows={4} placeholder="Conteúdo da trilha" required
+              className="w-full bg-afj-cream border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold resize-none" />
+            <button type="submit" disabled={savingTraining} className="btn-afj-primary rounded-sm text-sm flex items-center gap-2 disabled:opacity-50">
+              {savingTraining && <Loader2 size={13} className="animate-spin" />} Criar trilha
+            </button>
+          </form>
+        )}
+
+        {trainings.length === 0 ? (
+          <p className="text-xs text-afj-black/45">Nenhuma trilha publicada ainda.</p>
+        ) : (
+          <div className="space-y-2.5">
+            {trainings.map((t) => (
+              <div key={t.id} className="border border-afj-cream-dark rounded-sm p-3 space-y-2">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <span className="text-xs font-semibold text-afj-black flex items-center gap-2">
+                    {t.titulo}
+                    <span className="text-[10px] uppercase tracking-wider text-afj-black/35">
+                      {CATEGORIAS_TREINAMENTO.find((c) => c.value === t.categoria)?.label || t.categoria}
+                    </span>
+                    {t.obrigatorio && <span className="text-[10px] uppercase tracking-wider text-red-500/70">Obrigatório</span>}
+                  </span>
+                  {t.concluido ? (
+                    <span className="text-[10px] flex items-center gap-1 text-green-700 uppercase tracking-wider">
+                      <CheckCircle2 size={11} /> Concluído
+                    </span>
+                  ) : (
+                    <button onClick={() => concluirTreinamento(t.id)} disabled={completingId === t.id}
+                      className="btn-afj-primary text-xs py-1 px-2.5 rounded-sm flex items-center gap-1.5 disabled:opacity-50">
+                      {completingId === t.id && <Loader2 size={11} className="animate-spin" />} Marcar concluído
+                    </button>
+                  )}
+                </div>
+                <p className="text-xs text-afj-black/55 leading-relaxed">{t.conteudo}</p>
+                {isGestor && (
+                  <div>
+                    <button onClick={() => alternarConclusoes(t.id)} className="text-[11px] text-afj-gold hover:underline">
+                      {completionsAbertas[t.id] ? "Ocultar conclusões" : "Ver quem já concluiu"}
+                    </button>
+                    {completionsAbertas[t.id] && (
+                      <p className="text-[11px] text-afj-black/45 mt-1">
+                        {completionsAbertas[t.id].total_concluintes}/{completionsAbertas[t.id].total_usuarios_ativos} da equipe concluíram
+                        {completionsAbertas[t.id].concluintes.length > 0 && (
+                          <> — {completionsAbertas[t.id].concluintes.map((c) => c.nome).join(", ")}</>
+                        )}
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* ── Comitê de Integridade (gestor) ── */}
+      {isGestor && (
+        <div className="afj-card p-5 space-y-4">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <h2 className="font-semibold text-sm text-afj-black flex items-center gap-2">
+              <Users2 size={16} className="text-afj-gold" /> Comitê de Integridade
+            </h2>
+            <button onClick={() => setShowCaseForm((v) => !v)} className="btn-afj-outline text-xs py-1.5 px-3 rounded-sm">
+              {showCaseForm ? "Cancelar" : "Novo caso"}
+            </button>
+          </div>
+
+          {showCaseForm && (
+            <form onSubmit={criarCaso} className="space-y-3 border-b border-afj-cream-dark pb-4">
+              <input type="text" value={caseForm.titulo} onChange={(e) => setCaseForm((f) => ({ ...f, titulo: e.target.value }))}
+                placeholder="Título do caso ou deliberação" required
+                className="w-full bg-afj-cream border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold" />
+              {reports.length > 0 && (
+                <select value={caseForm.report_id} onChange={(e) => setCaseForm((f) => ({ ...f, report_id: e.target.value }))}
+                  className="w-full bg-afj-cream border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold">
+                  <option value="">Deliberação de política (sem relato vinculado)</option>
+                  {reports.map((r) => (
+                    <option key={r.id} value={r.id}>
+                      Relato {r.id.slice(0, 8).toUpperCase()} — {CATEGORIAS.find((c) => c.value === r.categoria)?.label || r.categoria}
+                    </option>
+                  ))}
+                </select>
+              )}
+              <textarea value={caseForm.descricao} onChange={(e) => setCaseForm((f) => ({ ...f, descricao: e.target.value }))}
+                rows={3} placeholder="Descrição do caso a ser avaliado" required
+                className="w-full bg-afj-cream border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold resize-none" />
+              <input type="text" value={caseForm.membros} onChange={(e) => setCaseForm((f) => ({ ...f, membros: e.target.value }))}
+                placeholder="Membros participantes, separados por vírgula"
+                className="w-full bg-afj-cream border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold" />
+              <button type="submit" disabled={savingCase} className="btn-afj-primary rounded-sm text-sm flex items-center gap-2 disabled:opacity-50">
+                {savingCase && <Loader2 size={13} className="animate-spin" />} Registrar caso
+              </button>
+            </form>
+          )}
+
+          {cases.length === 0 ? (
+            <p className="text-xs text-afj-black/45">Nenhum caso registrado ainda.</p>
+          ) : (
+            <div className="space-y-2.5">
+              {cases.map((c) => (
+                <CommitteeCaseCard key={c.id} case_={c} onDecidir={decidirCaso} />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CommitteeCaseCard({ case_, onDecidir }: { case_: CommitteeCase; onDecidir: (id: string, decisao: string) => void }) {
+  const [decisao, setDecisao] = useState(case_.decisao || "");
+  const decidido = case_.status === "DECIDIDO";
+  return (
+    <div className="border border-afj-cream-dark rounded-sm p-3 space-y-2">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <span className="text-xs font-semibold text-afj-black">{case_.titulo}</span>
+        <span className={`text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-sm border ${
+          decidido ? "bg-green-50 text-green-700 border-green-200" : "bg-amber-50 text-amber-700 border-amber-200"
+        }`}>
+          {decidido ? "Decidido" : "Em análise"}
+        </span>
+      </div>
+      <p className="text-xs text-afj-black/55 leading-relaxed">{case_.descricao}</p>
+      {case_.membros.length > 0 && (
+        <p className="text-[10px] text-afj-black/35">Membros: {case_.membros.join(", ")}</p>
+      )}
+      {decidido ? (
+        <p className="text-xs text-afj-black/70 bg-afj-cream/50 border border-afj-cream-dark rounded-sm px-2.5 py-1.5">
+          <strong>Decisão:</strong> {case_.decisao}
+        </p>
+      ) : (
+        <div className="flex items-center gap-2">
+          <input type="text" value={decisao} onChange={(e) => setDecisao(e.target.value)}
+            placeholder="Registrar a decisão do comitê..."
+            className="flex-1 border border-afj-cream-dark rounded-sm px-2.5 py-1.5 text-xs focus:outline-none focus:border-afj-gold" />
+          <button onClick={() => decisao.trim() && onDecidir(case_.id, decisao.trim())}
+            className="btn-afj-outline text-xs py-1.5 px-3 rounded-sm flex-shrink-0">
+            Decidir
+          </button>
+        </div>
+      )}
     </div>
   );
 }

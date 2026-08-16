@@ -7,7 +7,10 @@ from app.models.agent_run import AgentRun, AgentStep, Approval, AgentMemory
 from app.models.audit_log import AuditLog, LGPDConsentRecord
 from app.models.financial import FinancialEntry, BillingInvoice
 from app.models.notification import Notification
-from app.models.integrity import ConductAcceptance, IntegrityReport
+from app.models.integrity import (
+    ConductAcceptance, IntegrityReport,
+    IntegrityRisk, IntegrityTraining, IntegrityTrainingCompletion, IntegrityCommitteeCase,
+)
 from app.models.integrations import TenantIntegration
 from app.models.sync_run import SyncRun
 from app.models.assistant import AssistantConversation, AssistantMessage
@@ -32,6 +35,7 @@ __all__ = [
     "FinancialEntry", "BillingInvoice",
     "Notification",
     "ConductAcceptance", "IntegrityReport",
+    "IntegrityRisk", "IntegrityTraining", "IntegrityTrainingCompletion", "IntegrityCommitteeCase",
     "TenantIntegration",
     "SyncRun",
     "AssistantConversation",
