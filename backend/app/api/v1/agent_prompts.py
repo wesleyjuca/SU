@@ -17,6 +17,7 @@ from app.models.user import User
 from app.models.agent_prompt import AgentPromptConfig, AgentPromptVersion, AgentAttachment
 from app.agents.prompt_registry import AGENT_PROMPT_SLOTS, resolve_default_prompt
 from app.core.exceptions import NotFoundError
+from app.integrations import object_storage
 
 router = APIRouter(prefix="/agents", tags=["agent-prompts"])
 
@@ -197,10 +198,17 @@ async def upload_attachment(
     current_user: User = Depends(require_role("SUPERADMIN")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Mesmo padrão de POST /documents/upload: base64 data-URL em Text,
-    SHA-256, limite de 10MB, extração de texto só pra tipos textuais
-    simples (PDF/imagem fica armazenado mas fora do contexto do prompt
-    nesta fase — mesmo gap que documentos já têm com OCR pendente)."""
+    """Mesmo padrão de POST /documents/upload: SHA-256, limite de 10MB,
+    extração de texto só pra tipos textuais simples (PDF/imagem fica
+    armazenado mas fora do contexto do prompt nesta fase — mesmo gap que
+    documentos já têm com OCR pendente).
+
+    Fase 190 — mesmo padrão da Fase 141: o binário vai pro object storage
+    S3-compatível quando configurado (`storage_key` setado, `data_url`
+    fica None); sem S3 configurado, cai no caminho legado (base64 inline
+    em `data_url`, sem backfill do que já existe). AgentAttachment não
+    tem tenant_id (catálogo plataforma-wide, ver docstring do model) —
+    usa "agents" como segmento fixo na key em vez de um tenant real."""
     _validar_agente(name)
     contents = await file.read()
     if len(contents) > MAX_ATTACHMENT_BYTES:
@@ -209,13 +217,27 @@ async def upload_attachment(
         raise HTTPException(status_code=400, detail="Arquivo vazio.")
     content_type = file.content_type or "application/octet-stream"
     sha256 = hashlib.sha256(contents).hexdigest()
-    data_url = f"data:{content_type};base64," + base64.b64encode(contents).decode()
     extracted_text = None
     if content_type.startswith("text/") or content_type in ("application/json", "application/xml"):
         extracted_text = contents.decode("utf-8", errors="ignore") or None
+
+    att_id = uuid.uuid4()
+    data_url = None
+    storage_key = None
+    if object_storage.is_configured():
+        try:
+            storage_key = await object_storage.upload_bytes(
+                tenant_id="agents", document_id=att_id,
+                filename=file.filename or "arquivo", content_type=content_type, data=contents,
+            )
+        except object_storage.ObjectStorageError:
+            raise HTTPException(status_code=502, detail="Falha ao enviar o anexo para o armazenamento. Tente novamente.")
+    else:
+        data_url = f"data:{content_type};base64," + base64.b64encode(contents).decode()
+
     att = AgentAttachment(
-        agent_name=name, filename=file.filename or "arquivo", content_type=content_type,
-        size_bytes=len(contents), data_url=data_url, extracted_text=extracted_text,
+        id=att_id, agent_name=name, filename=file.filename or "arquivo", content_type=content_type,
+        size_bytes=len(contents), data_url=data_url, storage_key=storage_key, extracted_text=extracted_text,
         sha256=sha256, uploaded_by=current_user.id,
     )
     db.add(att)

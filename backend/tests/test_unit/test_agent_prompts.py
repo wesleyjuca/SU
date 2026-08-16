@@ -271,6 +271,52 @@ async def test_upload_attachment_muito_grande_400():
 
 
 @pytest.mark.asyncio
+async def test_upload_attachment_com_s3_configurado_usa_storage_key_sem_base64(monkeypatch):
+    """Fase 190 — com object storage configurado, o binário vai pro S3
+    (storage_key setado) e `data_url` fica None, em vez do caminho legado
+    de base64 inline em Text."""
+    from app.api.v1 import agent_prompts as mod
+
+    async def _fake_is_configured():
+        return True
+
+    async def _fake_upload_bytes(tenant_id, document_id, filename, content_type, data):
+        assert tenant_id == "agents"
+        return f"documents/agents/{document_id}/{filename}"
+
+    monkeypatch.setattr(mod.object_storage, "is_configured", lambda: True)
+    monkeypatch.setattr(mod.object_storage, "upload_bytes", _fake_upload_bytes)
+
+    db = _FakeDB()
+    file = _FakeUploadFile("contrato.pdf", "application/pdf", b"conteudo binario do anexo")
+    resp = await upload_attachment("petition_agent", file=file, current_user=_FakeUser(), db=db)
+
+    anexo = db.added[0]
+    assert anexo.data_url is None
+    assert anexo.storage_key is not None
+    assert anexo.storage_key.startswith("documents/agents/")
+    assert resp.filename == "contrato.pdf"
+
+
+@pytest.mark.asyncio
+async def test_upload_attachment_falha_no_s3_devolve_502(monkeypatch):
+    from app.api.v1 import agent_prompts as mod
+
+    async def _fake_upload_bytes_falha(**kwargs):
+        raise mod.object_storage.ObjectStorageError("falha simulada")
+
+    monkeypatch.setattr(mod.object_storage, "is_configured", lambda: True)
+    monkeypatch.setattr(mod.object_storage, "upload_bytes", _fake_upload_bytes_falha)
+
+    db = _FakeDB()
+    file = _FakeUploadFile("contrato.pdf", "application/pdf", b"conteudo binario do anexo")
+    with pytest.raises(HTTPException) as exc_info:
+        await upload_attachment("petition_agent", file=file, current_user=_FakeUser(), db=db)
+    assert exc_info.value.status_code == 502
+    assert db.added == []
+
+
+@pytest.mark.asyncio
 async def test_list_attachments_agente_desconhecido_404():
     with pytest.raises(HTTPException) as exc_info:
         await list_attachments("agente_inexistente", current_user=_FakeUser(), db=_FakeDB())

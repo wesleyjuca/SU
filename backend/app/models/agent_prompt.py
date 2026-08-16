@@ -67,6 +67,10 @@ class AgentAttachment(Base):
     content_type: Mapped[str | None] = mapped_column(String(100))
     size_bytes: Mapped[int | None] = mapped_column(Integer)
     data_url: Mapped[str | None] = mapped_column(Text)
+    # Fase 190 — mesmo padrão de Document.arquivo_storage_key (Fase 141):
+    # NULL = binário segue inline em data_url (caminho legado, sem backfill);
+    # setado = bytes vivem no object storage S3-compatível nessa key.
+    storage_key: Mapped[str | None] = mapped_column(String(500))
     extracted_text: Mapped[str | None] = mapped_column(Text)
     sha256: Mapped[str | None] = mapped_column(String(64))
     uploaded_by: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"))

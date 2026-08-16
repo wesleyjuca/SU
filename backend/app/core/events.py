@@ -437,6 +437,9 @@ async def lifespan(app: FastAPI):
             # verdade; True ("em produção") bloqueia os 2 endpoints de
             # exclusão permanente (ver processes.py/users.py).
             "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS em_producao BOOLEAN NOT NULL DEFAULT false",
+            # Fase 190 — mesmo padrão da Fase 141/143, pro anexo de contexto
+            # de agente de IA (AgentAttachment.data_url em base64 inline).
+            "ALTER TABLE agent_attachments ADD COLUMN IF NOT EXISTS storage_key VARCHAR(500)",
         ]:
             try:
                 async with engine.begin() as conn:
