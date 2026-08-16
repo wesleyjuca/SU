@@ -7,6 +7,8 @@ from decimal import Decimal
 from datetime import date
 import uuid
 
+import re
+
 from app.db.base import get_db
 from app.dependencies import require_role
 from app.models.user import User
@@ -15,6 +17,22 @@ from app.models.client import Client
 from app.models.process import LegalProcess
 
 router = APIRouter(prefix="/financial", tags=["financial"])
+
+# Fase 184 — heurística de PII pra avisar (não bloquear) antes de mandar a
+# descrição de um lançamento pra fora do sistema (Google Sheets do escritório
+# é de outro Google Workspace, não necessariamente sob o mesmo controle de
+# acesso do sistema). Casa CPF (3-3-3-2) e CNPJ (2-3-3-4-2) com ou sem a
+# pontuação usual — "ignorando formatação" não significa remover todos os
+# separadores antes (isso juntaria números não relacionados), só aceitar que
+# o dado apareça pontuado ou não.
+_CPF_CNPJ_LIKE_RE = re.compile(
+    r"\d{3}\.?\d{3}\.?\d{3}-?\d{2}"           # CPF: 11 dígitos
+    r"|\d{2}\.?\d{3}\.?\d{3}/?\d{4}-?\d{2}"   # CNPJ: 14 dígitos
+)
+
+
+def _descricoes_com_possivel_pii(entries) -> list[str]:
+    return [e.descricao for e in entries if e.descricao and _CPF_CNPJ_LIKE_RE.search(e.descricao)]
 
 
 async def _validar_client_id(db: AsyncSession, client_id: str | None, tenant_id) -> uuid.UUID | None:
@@ -264,14 +282,49 @@ async def export_financial_to_google_sheets(
             e.created_at.isoformat(),
         ])
 
+    # Fase 184 — aviso (não bloqueio) se alguma descrição parecer conter
+    # CPF/CNPJ: a planilha sobe pro Drive do escritório fora do controle de
+    # acesso por tenant deste sistema, então quem exporta deve saber antes/
+    # depois que pode estar levando dado pessoal junto.
+    descricoes_pii = _descricoes_com_possivel_pii(entries)
+
     try:
         token = await get_valid_token(db, current_user.tenant_id)
         result = await drive_upload_sheet(token, "financeiro", output.getvalue().encode("utf-8-sig"))
-        return {"message": "Lançamentos exportados pro Google Sheets do escritório.", **result}
     except GoogleNotConnected as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     except Exception:
         raise HTTPException(status_code=502, detail="Erro ao exportar pro Google Sheets.")
+
+    # Fase 184 — mesma lacuna de rastro específico já corrigida em
+    # approvals.py (Fase 174.8) e no /drive-save-doc (acima): o
+    # AuditMiddleware genérico não registra resource_type/resource_id, e
+    # exportar dado financeiro do escritório inteiro merece rastro próprio.
+    from app.models.audit_log import AuditLog
+    db.add(AuditLog(
+        user_id=current_user.id,
+        tenant_id=current_user.tenant_id,
+        action="GOOGLE_EXPORT:FINANCIAL_SHEET",
+        resource_type="FINANCIAL_EXPORT",
+        new_value={
+            "count": len(entries),
+            "tipo_filter": tipo,
+            "status_filter": status,
+            "google_sheet_id": result.get("id"),
+            "possivel_pii": bool(descricoes_pii),
+        },
+        contains_pii=bool(descricoes_pii),
+        success=True,
+    ))
+    await db.flush()
+
+    response = {"message": "Lançamentos exportados pro Google Sheets do escritório.", **result}
+    if descricoes_pii:
+        response["aviso_pii"] = (
+            f"{len(descricoes_pii)} lançamento(s) têm descrição com um padrão parecido "
+            "com CPF/CNPJ, que foi exportado junto pro Google Sheets do escritório."
+        )
+    return response
 
 
 @router.post("/{entry_id}/mark-paid")

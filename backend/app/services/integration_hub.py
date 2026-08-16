@@ -175,7 +175,7 @@ PROVIDERS: dict[str, dict] = {
         "oauth_disponivel": True,
         "fields": [],
         "ativa": [
-            "Ingestão automática diária dos arquivos da pasta configurada (DOCX/PDF)",
+            "Ingestão automática diária dos arquivos da pasta configurada (DOCX/PDF/Google Docs)",
             "Busca semântica na coleção privada de doutrina do escritório",
         ],
         "obter": "Clique em \"Conectar com login\" e escolha a conta Google do escritório. "

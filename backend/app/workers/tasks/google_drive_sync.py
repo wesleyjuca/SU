@@ -5,7 +5,13 @@ Itera todos os tenants com a integração `google_drive_doutrina` CONECTADA e
 uma pasta configurada (`extra_data.folder_id`) — um tenant sem token válido
 (refresh falhou, acesso revogado) é pulado sem derrubar a sincronização dos
 demais. Dentro de cada tenant, fail-soft por arquivo (1 arquivo malformado/
-tipo não suportado não impede os demais)."""
+tipo não suportado não impede os demais).
+
+Fase 185 — 2 correções: (a) Google Docs nativos (criados direto no Drive,
+não upload de arquivo) agora são baixados via `/export` em vez de
+`alt=media` (ver `client.py::baixar_conteudo`); (b) um arquivo que falhou
+uma vez não fica marcado `FALHOU` pra sempre — só arquivos já `EMBEDDED`
+são pulados, os demais são reprocessados na próxima sincronização."""
 from datetime import datetime, timezone
 from sqlalchemy import select
 import structlog
@@ -20,7 +26,7 @@ async def executar_sync_drive_doutrina(db) -> dict:
     from app.models.tenant import TenantConfig
     from app.models.jurisprudencia_ingerida import JurisprudenciaIngerida
     from app.services import integration_hub
-    from app.integrations.google_drive.client import listar_arquivos, baixar_arquivo, extrair_texto
+    from app.integrations.google_drive.client import listar_arquivos, baixar_conteudo, extrair_texto
     from app.rag.ingestion import ingest_document
     from app.services.movements_import import iniciar_sync, finalizar_sync
 
@@ -84,20 +90,31 @@ async def executar_sync_drive_doutrina(db) -> dict:
                         JurisprudenciaIngerida.fonte_documento_id == file_id,
                     )
                 )).scalar_one_or_none()
-                if existe:
-                    pulados += 1
-                    continue
-
+                # Só pula quem já terminou EMBEDDED — um FALHOU (tipo antes
+                # não suportado, download que deu erro transiente, etc.)
+                # ficava marcado assim pra sempre, porque esta checagem não
+                # olhava o `status`: nenhuma sincronização seguinte tentava
+                # de novo, mesmo depois da causa da falha ser corrigida.
+                # Reaproveita a linha existente em vez de inserir outra —
+                # `(fonte, fonte_documento_id)` é UNIQUE.
                 metadata = {"nome_arquivo": arq.get("name"), "google_file_id": file_id}
-                entrada = JurisprudenciaIngerida(
-                    tenant_id=integ.tenant_id, fonte=fonte, fonte_documento_id=file_id,
-                    collection_alvo="doutrina_privada", metadata_extraida=metadata, status="PENDENTE",
-                )
-                db.add(entrada)
+                if existe:
+                    if existe.status == "EMBEDDED":
+                        pulados += 1
+                        continue
+                    entrada = existe
+                    entrada.metadata_extraida = metadata
+                    entrada.erro = None
+                else:
+                    entrada = JurisprudenciaIngerida(
+                        tenant_id=integ.tenant_id, fonte=fonte, fonte_documento_id=file_id,
+                        collection_alvo="doutrina_privada", metadata_extraida=metadata, status="PENDENTE",
+                    )
+                    db.add(entrada)
                 await db.flush()
 
                 try:
-                    conteudo = await baixar_arquivo(creds["access_token"], file_id)
+                    conteudo = await baixar_conteudo(creds["access_token"], file_id, arq.get("mimeType"))
                     if conteudo is None:
                         raise RuntimeError("download do arquivo falhou")
                     texto = await extrair_texto(arq.get("mimeType"), conteudo)

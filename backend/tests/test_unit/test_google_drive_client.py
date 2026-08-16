@@ -4,7 +4,8 @@ texto por mimeType."""
 import pytest
 
 from app.integrations.google_drive.client import (
-    extrair_folder_id, listar_arquivos, extrair_texto, _MIME_DOCX, _MIME_PDF,
+    extrair_folder_id, listar_arquivos, extrair_texto, baixar_conteudo,
+    _MIME_DOCX, _MIME_PDF, _MIME_GDOC,
 )
 
 
@@ -100,3 +101,62 @@ async def test_extrair_texto_tipo_nao_suportado():
     assert await extrair_texto("application/vnd.ms-excel", b"x") is None
     assert await extrair_texto(None, b"x") is None
     assert await extrair_texto(_MIME_DOCX, b"") is None
+
+
+@pytest.mark.asyncio
+async def test_extrair_texto_google_doc_nativo(monkeypatch):
+    """Fase 185 — achado real: uma pasta de doutrina normalmente tem Google
+    Docs escritos direto no Drive (não upload de arquivo), e esse tipo
+    nunca tinha um case aqui — todo Google Doc virava 'tipo não suportado'
+    e o arquivo nunca era lido."""
+    texto = await extrair_texto(_MIME_GDOC, "conteúdo exportado como texto\n".encode("utf-8"))
+    assert texto == "conteúdo exportado como texto"
+
+
+@pytest.mark.asyncio
+async def test_extrair_texto_google_doc_vazio_vira_none():
+    assert await extrair_texto(_MIME_GDOC, b"   \n  ") is None
+
+
+class _FakeDownloadClient:
+    """Captura a URL/params da chamada — usado pra confirmar que
+    `baixar_conteudo` escolhe `/export` (Google Doc nativo) vs `alt=media`
+    (arquivo binário normal) conforme o mimeType."""
+    last_call = {}
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def get(self, url, params=None, headers=None):
+        _FakeDownloadClient.last_call = {"url": url, "params": params}
+        class _Resp:
+            status_code = 200
+            content = b"conteudo-fake"
+        return _Resp()
+
+
+@pytest.mark.asyncio
+async def test_baixar_conteudo_google_doc_usa_export(monkeypatch):
+    import httpx
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **k: _FakeDownloadClient())
+
+    resultado = await baixar_conteudo("token-fake", "file-123", _MIME_GDOC)
+
+    assert resultado == b"conteudo-fake"
+    assert _FakeDownloadClient.last_call["url"].endswith("/file-123/export")
+    assert _FakeDownloadClient.last_call["params"] == {"mimeType": "text/plain"}
+
+
+@pytest.mark.asyncio
+async def test_baixar_conteudo_arquivo_binario_usa_alt_media(monkeypatch):
+    import httpx
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **k: _FakeDownloadClient())
+
+    resultado = await baixar_conteudo("token-fake", "file-456", _MIME_PDF)
+
+    assert resultado == b"conteudo-fake"
+    assert _FakeDownloadClient.last_call["url"].endswith("/file-456")
+    assert _FakeDownloadClient.last_call["params"] == {"alt": "media"}

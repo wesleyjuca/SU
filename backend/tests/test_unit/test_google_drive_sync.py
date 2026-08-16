@@ -98,14 +98,14 @@ async def test_falha_no_meio_dos_arquivos_de_um_tenant_nao_aborta_os_demais(monk
                     {"id": "fa2", "name": "a2.pdf", "mimeType": "application/pdf"}]
         return [{"id": "fb1", "name": "b1.pdf", "mimeType": "application/pdf"}]
 
-    async def _fake_baixar_arquivo(access_token, file_id):
+    async def _fake_baixar_conteudo(access_token, file_id, mime_type):
         return b"bytes"
 
     async def _fake_extrair_texto(mimetype, conteudo):
         return "texto extraido"
 
     monkeypatch.setattr("app.integrations.google_drive.client.listar_arquivos", _fake_listar_arquivos)
-    monkeypatch.setattr("app.integrations.google_drive.client.baixar_arquivo", _fake_baixar_arquivo)
+    monkeypatch.setattr("app.integrations.google_drive.client.baixar_conteudo", _fake_baixar_conteudo)
     monkeypatch.setattr("app.integrations.google_drive.client.extrair_texto", _fake_extrair_texto)
 
     async def _fake_ingest(**kwargs):
@@ -140,3 +140,118 @@ async def test_falha_no_meio_dos_arquivos_de_um_tenant_nao_aborta_os_demais(monk
     assert "erro" in por_tenant[tenant_a][1]
     assert por_tenant[tenant_b][0] == "OK"
     assert por_tenant[tenant_b][1]["processados"] == 1
+
+
+class _FakeEntradaFalhou:
+    """Simula uma JurisprudenciaIngerida já existente com status FALHOU —
+    o cenário real da Fase 185: um Google Doc nativo falhou antes do fix
+    de `baixar_conteudo`/`extrair_texto`, e deveria voltar a ser tentado
+    (não ficar marcado FALHOU pra sempre)."""
+    def __init__(self):
+        self.status = "FALHOU"
+        self.erro = "tipo de arquivo não suportado ou sem texto extraível"
+        self.metadata_extraida = {"nome_arquivo": "antigo.gdoc", "google_file_id": "f1"}
+        self.processed_at = None
+
+
+@pytest.mark.asyncio
+async def test_arquivo_falhou_e_reprocessado_na_proxima_sincronizacao(monkeypatch):
+    """Fase 185 — achado real: a checagem de idempotência só olhava se a
+    linha existia (`fonte`+`fonte_documento_id`), nunca o `status` —
+    qualquer arquivo que falhou uma vez (ex.: tipo não suportado antes do
+    fix) ficava pulado pra sempre em toda sincronização seguinte, mesmo
+    depois da causa da falha ser corrigida."""
+    import app.workers.tasks.google_drive_sync as mod
+
+    tenant = uuid.uuid4()
+    integ = _FakeInteg(tenant, "folder_x")
+
+    async def _fake_iniciar_sync(db, tenant_id, fonte, tipo):
+        return type("Run", (), {"tenant_id": tenant_id})()
+
+    async def _fake_finalizar_sync(db, run, status, stats):
+        pass
+
+    monkeypatch.setattr("app.services.movements_import.iniciar_sync", _fake_iniciar_sync)
+    monkeypatch.setattr("app.services.movements_import.finalizar_sync", _fake_finalizar_sync)
+
+    async def _fake_get_credentials(db, tenant_id, provider):
+        return {"access_token": "tok"}
+
+    monkeypatch.setattr("app.services.integration_hub.get_credentials", _fake_get_credentials)
+
+    async def _fake_listar_arquivos(access_token, folder_id):
+        return [{"id": "f1", "name": "doutrina.gdoc", "mimeType": "application/vnd.google-apps.document"}]
+
+    async def _fake_baixar_conteudo(access_token, file_id, mime_type):
+        return "agora funciona".encode("utf-8")
+
+    async def _fake_extrair_texto(mimetype, conteudo):
+        return "agora funciona"
+
+    monkeypatch.setattr("app.integrations.google_drive.client.listar_arquivos", _fake_listar_arquivos)
+    monkeypatch.setattr("app.integrations.google_drive.client.baixar_conteudo", _fake_baixar_conteudo)
+    monkeypatch.setattr("app.integrations.google_drive.client.extrair_texto", _fake_extrair_texto)
+
+    async def _fake_ingest(**kwargs):
+        return None
+
+    monkeypatch.setattr("app.rag.ingestion.ingest_document", _fake_ingest)
+
+    entrada_falhou = _FakeEntradaFalhou()
+    db = _FakeDB([
+        _FakeScalarsResult([integ]),
+        _FakeScalarResult(_FakeCfg()),
+        _FakeScalarResult(entrada_falhou),  # dedup: já existe, mas FALHOU
+    ])
+
+    resultado = await mod.executar_sync_drive_doutrina(db)
+
+    assert resultado["processados"] == 1
+    assert resultado["pulados"] == 0
+    assert entrada_falhou.status == "EMBEDDED"
+    assert entrada_falhou.erro is None
+
+
+@pytest.mark.asyncio
+async def test_arquivo_ja_embedded_continua_sendo_pulado(monkeypatch):
+    """O fix não deve fazer a sincronização reprocessar tudo de novo —
+    só arquivos que ainda não terminaram EMBEDDED."""
+    import app.workers.tasks.google_drive_sync as mod
+
+    tenant = uuid.uuid4()
+    integ = _FakeInteg(tenant, "folder_x")
+
+    async def _fake_iniciar_sync(db, tenant_id, fonte, tipo):
+        return type("Run", (), {"tenant_id": tenant_id})()
+
+    async def _fake_finalizar_sync(db, run, status, stats):
+        pass
+
+    monkeypatch.setattr("app.services.movements_import.iniciar_sync", _fake_iniciar_sync)
+    monkeypatch.setattr("app.services.movements_import.finalizar_sync", _fake_finalizar_sync)
+
+    async def _fake_get_credentials(db, tenant_id, provider):
+        return {"access_token": "tok"}
+
+    monkeypatch.setattr("app.services.integration_hub.get_credentials", _fake_get_credentials)
+
+    async def _fake_listar_arquivos(access_token, folder_id):
+        return [{"id": "f1", "name": "ja-processado.pdf", "mimeType": "application/pdf"}]
+
+    monkeypatch.setattr("app.integrations.google_drive.client.listar_arquivos", _fake_listar_arquivos)
+
+    entrada_embedded = _FakeEntradaFalhou()
+    entrada_embedded.status = "EMBEDDED"
+    entrada_embedded.erro = None
+
+    db = _FakeDB([
+        _FakeScalarsResult([integ]),
+        _FakeScalarResult(_FakeCfg()),
+        _FakeScalarResult(entrada_embedded),  # dedup: já existe e já terminou
+    ])
+
+    resultado = await mod.executar_sync_drive_doutrina(db)
+
+    assert resultado["processados"] == 0
+    assert resultado["pulados"] == 1
