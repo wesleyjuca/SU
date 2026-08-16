@@ -19,9 +19,15 @@ _TIMEOUT = 30.0
 _breaker = CircuitBreaker(name="google_drive")
 
 # Tipos de arquivo suportados pra extração de texto (doutrina = livros/
-# artigos — DOCX/PDF cobre o caso realista; o resto é logado e pulado).
+# artigos — DOCX/PDF/Google Doc nativo cobre o caso realista; o resto é
+# logado e pulado).
 _MIME_DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 _MIME_PDF = "application/pdf"
+# Doc nativo do Google Workspace (criado/escrito direto no Drive, não é
+# upload de arquivo) — bem comum numa pasta de doutrina. Não é um blob
+# binário: `alt=media` falha pra esse tipo (ver `baixar_conteudo` abaixo),
+# precisa do endpoint `/export`.
+_MIME_GDOC = "application/vnd.google-apps.document"
 
 # Aceita URL completa (com ou sem /u/0/, com ou sem query string) ou ID cru.
 _PADRAO_URL_PASTA = re.compile(r"drive\.google\.com/drive/(?:u/\d+/)?folders/([a-zA-Z0-9_-]+)")
@@ -71,7 +77,8 @@ async def listar_arquivos(access_token: str, folder_id: str) -> list[dict] | Non
 
 
 async def baixar_arquivo(access_token: str, file_id: str) -> bytes | None:
-    """Baixa o conteúdo bruto de um arquivo (`alt=media`)."""
+    """Baixa o conteúdo bruto de um arquivo binário (`alt=media`) — NÃO
+    funciona pra Docs nativos do Google Workspace (usar `baixar_conteudo`)."""
     async def _f():
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
             resp = await client.get(
@@ -86,12 +93,44 @@ async def baixar_arquivo(access_token: str, file_id: str) -> bytes | None:
     return await _breaker.run(_f, default=None)
 
 
+async def _exportar_google_doc(access_token: str, file_id: str) -> bytes | None:
+    """Exporta um Google Doc nativo como texto plano — arquivos nativos do
+    Workspace (Docs/Sheets/Slides) não têm conteúdo binário próprio, então
+    `alt=media` devolve erro; é preciso o endpoint `/export`."""
+    async def _f():
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            resp = await client.get(
+                f"{DRIVE_FILES_URL}/{file_id}/export", params={"mimeType": "text/plain"},
+                headers={"Authorization": f"Bearer {access_token}"},
+            )
+            if resp.status_code != 200:
+                log.warning("drive_export_http", status=resp.status_code, file_id=file_id)
+                raise RuntimeError(f"drive export status {resp.status_code}")
+            return resp.content
+
+    return await _breaker.run(_f, default=None)
+
+
+async def baixar_conteudo(access_token: str, file_id: str, mime_type: str | None) -> bytes | None:
+    """Ponto único de download pro `google_drive_sync.py`: escolhe entre
+    `alt=media` (arquivos binários normais) e `/export` (Docs nativos do
+    Google) conforme o `mimeType`."""
+    if mime_type == _MIME_GDOC:
+        return await _exportar_google_doc(access_token, file_id)
+    return await baixar_arquivo(access_token, file_id)
+
+
 async def extrair_texto(mime_type: str | None, conteudo: bytes) -> str | None:
     """Extrai texto indexável do arquivo, conforme o `mimeType` que o Drive
     já devolve na listagem. `None` (não exceção) pra tipo não suportado ou
     extração vazia — o chamador loga e pula, fail-soft."""
     if not mime_type or not conteudo:
         return None
+    if mime_type == _MIME_GDOC:
+        # `conteudo` já chega como texto plano (exportado via `/export?
+        # mimeType=text/plain` por `baixar_conteudo`) — só decodificar.
+        texto = conteudo.decode("utf-8", errors="replace").strip()
+        return texto or None
     if mime_type == _MIME_DOCX:
         try:
             from app.utils.docx_text import extract_docx_text
