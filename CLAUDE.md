@@ -370,6 +370,80 @@ Histórico:
     também foram corrigidos pra `query_points()`. Reconfirmação da busca
     RAG de verdade (não só 200 vazio) com Qdrant real fica pra próxima
     rodada de teste geral, conforme a guidance acima.
+  - **Fases 188-196** — sequência contínua a pedido do usuário (não uma
+    rodada de teste geral): fecha os 2 achados da Fase 186 que ficaram
+    sem fase, implementa os "próximos passos do programa" de Ética e
+    Integridade, e trabalha a lista `PENDENCIAS` de `/sobre` inteira
+    (exceto retenção de auditoria LGPD, mantida travada — mesma decisão
+    do CLAUDE.md, não reaberta sob nenhuma leitura de "débito técnico").
+    Cada fase foi testada (unitário + verificação empírica contra
+    Postgres/Redis reais) e verificada (ruff/py_compile/pytest/tsc/eslint)
+    antes do commit, sem parar pra confirmar entre fases.
+    - **Fase 188** — fecha os 2 achados pendentes da Fase 186:
+      `google_drive_sync.py` chama `delete_document_chunks()` antes de
+      reingerir um arquivo `FALHOU` (fix da duplicação de chunks no
+      Qdrant, confirmado com Qdrant real em memória); novo endpoint
+      `GET .../google_drive_doutrina/last-sync` + card na tela de
+      Integrações mostrando o resultado da última sincronização de
+      doutrina (processados/pulados/falhas), fechando o gap de
+      observabilidade visto ao vivo via Playwright na Fase 186.
+    - **Fase 189** — próximos passos do programa de Ética e Integridade
+      (antes só cards estáticos em `PROGRAMA_PLANEJADO`): 3 modelos novos
+      (`IntegrityRisk`, `IntegrityTraining`+`IntegrityTrainingCompletion`,
+      `IntegrityCommitteeCase`) com CRUD completo e frontend real — Matriz
+      de Riscos de Integridade, Treinamentos Obrigatórios (com % de
+      conclusão da equipe) e Comitê de Integridade (casos ligados a
+      `IntegrityReport`, quando houver).
+    - **Fase 190** (débito A) — `AgentAttachment` ganha `storage_key`,
+      reaproveitando `object_storage.py` (padrão da Fase 141) com
+      fallback automático pro base64 legado quando S3 não está
+      configurado.
+    - **Fase 191** (débito B) — `Approval.expires_at` (existia, nunca era
+      lido) passa a ser setado em `create_approval_from_state`; novo
+      reaper periódico (`escalar_aprovacoes_vencidas`, Celery Beat)
+      **só escala/notifica** gestores do tenant quando uma aprovação
+      pendente vence — nunca auto-aprova/auto-rejeita, invariante HITL
+      do CLAUDE.md respeitado.
+    - **Fase 192** (débito C) — `execute_approved_action` no branch de
+      contrato dispara `enviar_para_assinatura` (Clicksign) automaticamente
+      após a aprovação humana, fail-soft (falha no envio nunca desfaz a
+      aprovação, só deixa "aprovado, aguardando envio manual").
+      Deliberadamente fora de escopo: protocolo automático em tribunal
+      (`PETITION_FILING`) — o próprio cliente PJe documenta isso como um
+      "NEVER" da integração; petição aprovada continua exigindo protocolo
+      manual, como antes.
+    - **Fase 193** (débito D) — novo modelo `CustomAgentVersion` (mesmo
+      padrão de snapshot de `AgentPromptVersion`) + `PATCH
+      /custom-agents/{id}` (SUPERADMIN-only) pra editar um agente de IA
+      customizado já `APROVADO` sem reabrir fluxo de aprovação.
+    - **Fase 194** (débito E) — `capturar_por_oab()` (já existia, só
+      disparava manual ou sob demanda) ganha uma task Celery Beat diária,
+      fail-soft por tenant.
+    - **Fase 195** (débito F) — Google Vertex AI como provedor BYOK em
+      `AI_PROVIDERS`, com branch dedicado em `llm_client.py`
+      (`_call_vertex_ai` — fluxo OAuth2 JWT Bearer + REST puro via httpx,
+      sem SDK novo, mesmo padrão das demais integrações Google do
+      projeto). Corrigiu de quebra um bug real exposto pelo novo
+      provedor: `minha-ia/page.tsx` decidia "precisa URL própria"
+      checando só `!base_url` (pensado só pro Ollama) — como Vertex
+      também tem `base_url` nulo (reaproveitado como região do GCP), o
+      formulário teria escondido o campo de credencial e mostrado em vez
+      disso o campo de URL de servidor do Ollama, tornando impossível
+      configurar Vertex pela UI.
+    - **Fase 196** (débito G) — resposta de IA em streaming nos agentes:
+      `BaseAgent.ask_llm()` usa `call_llm_stream` (WebSocket, evento
+      `AGENT_RUN_DELTA`) em vez de `call_claude` quando
+      `ctx.stream_enabled` — setado por `execute_chain_step` só pra
+      disparo direto (chain de 1 passo); chains multi-agente nunca
+      streamam (uma chain já usa a saída de um passo como entrada do
+      próximo antes do usuário ver qualquer coisa). Verificado com Redis
+      real (pub/sub de verdade, não mockado) confirmando os deltas
+      publicados/recebidos na ordem certa.
+    - Não repetiu nem tentou reconfirmar achados de rodadas de teste geral
+      anteriores (não era esse o objetivo desta sequência) — a próxima
+      rodada de teste geral deve reconfirmar os 9 itens acima de forma
+      independente antes de ir atrás de achados novos, no mesmo padrão
+      já estabelecido (174→175, 176→178, etc.).
 
 ## Riscos conhecidos / débito técnico
 
