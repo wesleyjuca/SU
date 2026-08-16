@@ -534,7 +534,8 @@ function AIConfigModal({
   const [saving, setSaving] = useState(false);
 
   const info = providers[provider];
-  const precisaUrlPropria = info && !info.base_url; // hoje só ollama
+  const credencialEJson = info?.auth_methods?.includes("service_account_json"); // Fase 195 — Vertex AI
+  const precisaUrlPropria = info && !info.base_url && !info.requires_key; // hoje só ollama — vertex_ai também tem base_url nulo mas usa credencial, não URL própria
   const [conectandoOAuth, setConectandoOAuth] = useState(false);
   const podeOAuth = mode === "add" && info?.oauth_disponivel;
 
@@ -631,21 +632,39 @@ function AIConfigModal({
         ) : (
           <div>
             <label className="text-[10px] font-semibold text-afj-black/55 uppercase tracking-widest flex items-center gap-1.5 mb-1.5">
-              <KeyRound size={12} /> Chave de API {config?.has_credential && <span className="text-green-600 normal-case tracking-normal font-normal">· chave configurada</span>}
+              <KeyRound size={12} /> {credencialEJson ? "Conta de serviço (JSON)" : "Chave de API"} {config?.has_credential && <span className="text-green-600 normal-case tracking-normal font-normal">· chave configurada</span>}
             </label>
-            <div className="relative">
-              <input type={showKey ? "text" : "password"} value={apiKey} onChange={(e) => setApiKey(e.target.value)}
-                placeholder={config?.has_credential ? "•••••••••• (deixe em branco para manter)" : "cole sua chave de API aqui"}
-                name="afj-ai-secret" autoComplete="new-password" data-lpignore="true" data-1p-ignore data-form-type="other"
-                spellCheck={false}
-                className="w-full bg-afj-cream border border-afj-cream-dark rounded-sm px-3 py-2.5 pr-11 text-sm placeholder:text-afj-black/25 focus:outline-none focus:border-afj-gold" />
-              <button type="button" onClick={() => setShowKey((v) => !v)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-afj-black/30 hover:text-afj-black/60"
-                aria-label={showKey ? "Ocultar chave" : "Mostrar chave"}>
-                {showKey ? <EyeOff size={15} /> : <Eye size={15} />}
-              </button>
-            </div>
+            {credencialEJson ? (
+              <textarea value={apiKey} onChange={(e) => setApiKey(e.target.value)}
+                placeholder={config?.has_credential ? "(deixe em branco para manter) cole o JSON da conta de serviço aqui" : '{"type": "service_account", "project_id": "...", ...}'}
+                name="afj-ai-secret" autoComplete="off" data-lpignore="true" data-1p-ignore data-form-type="other"
+                spellCheck={false} rows={6}
+                className="w-full bg-afj-cream border border-afj-cream-dark rounded-sm px-3 py-2.5 text-xs font-mono placeholder:text-afj-black/25 focus:outline-none focus:border-afj-gold" />
+            ) : (
+              <div className="relative">
+                <input type={showKey ? "text" : "password"} value={apiKey} onChange={(e) => setApiKey(e.target.value)}
+                  placeholder={config?.has_credential ? "•••••••••• (deixe em branco para manter)" : "cole sua chave de API aqui"}
+                  name="afj-ai-secret" autoComplete="new-password" data-lpignore="true" data-1p-ignore data-form-type="other"
+                  spellCheck={false}
+                  className="w-full bg-afj-cream border border-afj-cream-dark rounded-sm px-3 py-2.5 pr-11 text-sm placeholder:text-afj-black/25 focus:outline-none focus:border-afj-gold" />
+                <button type="button" onClick={() => setShowKey((v) => !v)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-afj-black/30 hover:text-afj-black/60"
+                  aria-label={showKey ? "Ocultar chave" : "Mostrar chave"}>
+                  {showKey ? <EyeOff size={15} /> : <Eye size={15} />}
+                </button>
+              </div>
+            )}
             {info?.obter && <p className="text-[11px] text-afj-black/40 mt-1.5">Obtenha a chave em {info.obter}</p>}
+          </div>
+        )}
+
+        {credencialEJson && (
+          <div>
+            <label className="text-[10px] font-semibold text-afj-black/55 uppercase tracking-widest block mb-1.5">Região do GCP (opcional)</label>
+            <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="us-central1"
+              name="afj-ai-region" autoComplete="off"
+              className="w-full bg-afj-cream border border-afj-cream-dark rounded-sm px-3 py-2.5 text-sm placeholder:text-afj-black/25 focus:outline-none focus:border-afj-gold" />
+            <p className="text-[11px] text-afj-black/40 mt-1.5">Deixe em branco para usar us-central1.</p>
           </div>
         )}
 
