@@ -27,7 +27,7 @@ async def executar_sync_drive_doutrina(db) -> dict:
     from app.models.jurisprudencia_ingerida import JurisprudenciaIngerida
     from app.services import integration_hub
     from app.integrations.google_drive.client import listar_arquivos, baixar_conteudo, extrair_texto
-    from app.rag.ingestion import ingest_document
+    from app.rag.ingestion import ingest_document, delete_document_chunks
     from app.services.movements_import import iniciar_sync, finalizar_sync
 
     integracoes = (await db.execute(
@@ -123,6 +123,14 @@ async def executar_sync_drive_doutrina(db) -> dict:
                         entrada.erro = "tipo de arquivo não suportado ou sem texto extraível"
                         falhas += 1
                     else:
+                        # Fase 188.1 — achado da Fase 186: reprocessar um
+                        # arquivo que já tinha `document_id` ingerido antes
+                        # (ex.: FALHOU depois do upsert ter subido, ou um
+                        # reprocessamento normal) duplicava chunks órfãos no
+                        # Qdrant — `point_id` é `uuid4()` não-determinístico,
+                        # então reingerir nunca sobrescreve o ponto antigo.
+                        # Idempotente mesmo se não havia nada pra apagar.
+                        await delete_document_chunks(collection="doutrina_privada", document_id=file_id)
                         await ingest_document(
                             content=texto, collection="doutrina_privada",
                             metadata={"tenant_id": str(integ.tenant_id), **metadata}, document_id=file_id,

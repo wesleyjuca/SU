@@ -132,6 +132,37 @@ async def hub_set_drive_folder(
     return {"folder_id": folder_id, "message": "Pasta configurada — a sincronização roda automaticamente todo dia."}
 
 
+@router.get("/google_drive_doutrina/last-sync")
+async def hub_drive_doutrina_last_sync(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Fase 188.2 — achado da Fase 186: a tela de Integrações não mostrava
+    nenhum resultado da sincronização de doutrina do Google Drive
+    (processados/pulados/falhas/erro), mesmo já registrado em `SyncRun`
+    (`google_drive_sync.py::executar_sync_drive_doutrina`, `fonte`
+    `google_drive:{tenant_id}`). Mesmo padrão de leitura já usado em
+    `system.py::tenant_infra` pra "última sincronização" de captura."""
+    from app.models.sync_run import SyncRun
+
+    ultimo = (await db.execute(
+        select(SyncRun)
+        .where(SyncRun.fonte == f"google_drive:{current_user.tenant_id}")
+        .order_by(SyncRun.started_at.desc())
+        .limit(1)
+    )).scalar_one_or_none()
+    if not ultimo:
+        return {"ultima_sincronizacao": None}
+    return {
+        "ultima_sincronizacao": {
+            "status": ultimo.status,
+            "stats": ultimo.stats or {},
+            "started_at": ultimo.started_at.isoformat() if ultimo.started_at else None,
+            "finished_at": ultimo.finished_at.isoformat() if ultimo.finished_at else None,
+        }
+    }
+
+
 # ─── OAuth "Conectar conta" — Fase 117 (Stripe Connect, Mercado Pago) ─────────
 async def _modulo_habilitado(db: AsyncSession, tenant_id, chave: str) -> bool:
     """Opt-in por escritório (mesmo padrão de google_integration.py::_google_enabled)."""
