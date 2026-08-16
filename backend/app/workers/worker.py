@@ -54,6 +54,7 @@ celery_app = Celery(
         "app.workers.tasks.infra_check",
         "app.workers.tasks.sync_reaper",
         "app.workers.tasks.approval_reaper",
+        "app.workers.tasks.oab_discovery",
     ],
 )
 
@@ -127,5 +128,12 @@ celery_app.conf.beat_schedule = {
     "escalar-aprovacoes-vencidas": {
         "task": "app.workers.tasks.approval_reaper.escalar_aprovacoes_vencidas",
         "schedule": crontab(hour="*/6", minute=15),
+    },
+    # Descoberta automática diária de processos novos por OAB (Fase 194) —
+    # capturar_por_oab() já existia desde a Fase 73/102, só disparava manual.
+    # Horário distinto de STJ (4h)/Drive (5h)/legislação (6h)/prazos (7h).
+    "descobrir-processos-por-oab": {
+        "task": "app.workers.tasks.oab_discovery.descobrir_processos_por_oab_periodico",
+        "schedule": crontab(hour=8, minute=0),
     },
 }
