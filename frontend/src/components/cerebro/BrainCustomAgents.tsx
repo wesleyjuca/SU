@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect, useCallback } from "react";
-import { Sparkles, RefreshCw, Check, X, ChevronDown, ChevronUp } from "lucide-react";
+import { Sparkles, RefreshCw, Check, X, ChevronDown, ChevronUp, Pencil, Loader2 } from "lucide-react";
 import { api } from "@/lib/api";
 import { useToast } from "@/components/ui/Toast";
 
@@ -29,6 +29,10 @@ export function BrainCustomAgents() {
   const [carregando, setCarregando] = useState(false);
   const [expandido, setExpandido] = useState<string | null>(null);
   const [resolvendo, setResolvendo] = useState<string | null>(null);
+  // Fase 193 — editar um agente já APROVADO (antes só dava pra recriar do zero).
+  const [editandoId, setEditandoId] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState({ description: "", system_prompt: "", rag_collections: "", max_cost_usd_per_run: "" });
+  const [salvandoEdicao, setSalvandoEdicao] = useState(false);
 
   const carregar = useCallback(async () => {
     setCarregando(true);
@@ -57,6 +61,39 @@ export function BrainCustomAgents() {
       toast.error(err?.message || "Erro ao resolver proposta.");
     } finally {
       setResolvendo(null);
+    }
+  }
+
+  function abrirEdicao(a: CustomAgentRow) {
+    setEditandoId(a.id);
+    setExpandido(a.id);
+    setEditForm({
+      description: a.description,
+      system_prompt: a.system_prompt,
+      rag_collections: (a.rag_collections || []).join(", "),
+      max_cost_usd_per_run: String(a.max_cost_usd_per_run),
+    });
+  }
+
+  async function salvarEdicao(id: string) {
+    setSalvandoEdicao(true);
+    try {
+      const rag_collections = editForm.rag_collections.trim()
+        ? editForm.rag_collections.split(",").map((s) => s.trim()).filter(Boolean)
+        : [];
+      const atualizado = await api.patch<CustomAgentRow>(`/custom-agents/${id}`, {
+        description: editForm.description,
+        system_prompt: editForm.system_prompt,
+        rag_collections,
+        max_cost_usd_per_run: Number(editForm.max_cost_usd_per_run) || 0,
+      });
+      toast.success("Agente atualizado.");
+      setAgentes((prev) => (prev ?? []).map((a) => (a.id === id ? atualizado : a)));
+      setEditandoId(null);
+    } catch (err: any) {
+      toast.error(err?.message || "Erro ao atualizar o agente.");
+    } finally {
+      setSalvandoEdicao(false);
     }
   }
 
@@ -129,8 +166,55 @@ export function BrainCustomAgents() {
                         </button>
                       </div>
                     )}
+                    {status === "APROVADO" && editandoId !== a.id && (
+                      <button
+                        onClick={() => abrirEdicao(a)}
+                        className="flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-sm bg-afj-cream text-afj-black/70 hover:bg-afj-cream-dark flex-shrink-0"
+                      >
+                        <Pencil size={12} /> Editar
+                      </button>
+                    )}
                   </div>
-                  {aberto && (
+                  {aberto && editandoId === a.id ? (
+                    <div className="mt-2.5 ml-6 space-y-2.5 text-xs">
+                      <div>
+                        <label className="text-afj-black/40 mb-1 block">Descrição</label>
+                        <input type="text" value={editForm.description}
+                          onChange={(e) => setEditForm((f) => ({ ...f, description: e.target.value }))}
+                          className="w-full border border-afj-cream-dark rounded-sm px-2.5 py-1.5 focus:outline-none focus:border-afj-gold" />
+                      </div>
+                      <div>
+                        <label className="text-afj-black/40 mb-1 block">Prompt de sistema</label>
+                        <textarea value={editForm.system_prompt} rows={8}
+                          onChange={(e) => setEditForm((f) => ({ ...f, system_prompt: e.target.value }))}
+                          className="w-full font-mono border border-afj-cream-dark rounded-sm px-2.5 py-1.5 focus:outline-none focus:border-afj-gold resize-none" />
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                        <div>
+                          <label className="text-afj-black/40 mb-1 block">Bases de conhecimento (separadas por vírgula)</label>
+                          <input type="text" value={editForm.rag_collections}
+                            onChange={(e) => setEditForm((f) => ({ ...f, rag_collections: e.target.value }))}
+                            className="w-full border border-afj-cream-dark rounded-sm px-2.5 py-1.5 focus:outline-none focus:border-afj-gold" />
+                        </div>
+                        <div>
+                          <label className="text-afj-black/40 mb-1 block">Teto de custo por execução (US$)</label>
+                          <input type="number" step="0.01" min="0" value={editForm.max_cost_usd_per_run}
+                            onChange={(e) => setEditForm((f) => ({ ...f, max_cost_usd_per_run: e.target.value }))}
+                            className="w-full border border-afj-cream-dark rounded-sm px-2.5 py-1.5 focus:outline-none focus:border-afj-gold" />
+                        </div>
+                      </div>
+                      <div className="flex gap-2">
+                        <button onClick={() => salvarEdicao(a.id)} disabled={salvandoEdicao}
+                          className="btn-afj-primary text-xs py-1.5 px-3 rounded-sm flex items-center gap-1.5 disabled:opacity-50">
+                          {salvandoEdicao && <Loader2 size={12} className="animate-spin" />} Salvar alterações
+                        </button>
+                        <button onClick={() => setEditandoId(null)} disabled={salvandoEdicao}
+                          className="btn-afj-outline text-xs py-1.5 px-3 rounded-sm">
+                          Cancelar
+                        </button>
+                      </div>
+                    </div>
+                  ) : aberto && (
                     <div className="mt-2.5 ml-6 space-y-2 text-xs">
                       <div>
                         <p className="text-afj-black/40 mb-1">Prompt de sistema:</p>
