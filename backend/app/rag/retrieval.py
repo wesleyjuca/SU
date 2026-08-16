@@ -79,15 +79,20 @@ async def retrieve(
         extra = {"tenant_id": str(tenant_id)} if (collection in PRIVATE_COLLECTIONS and tenant_id) else None
         qdrant_filter = _build_filter(filters, extra)
         try:
-            hits = await qdrant_client.search(
+            # Fase 187 — `.search()` foi removido do qdrant-client (a versão
+            # pinada em requirements.txt, 1.18.0, só tem `.query_points()`,
+            # a Query API que substituiu o método antigo). Sem essa troca
+            # toda busca aqui caía no `except` abaixo silenciosamente — 200
+            # OK com resultado sempre vazio, pra qualquer tenant/coleção.
+            response = await qdrant_client.query_points(
                 collection_name=collection,
-                query_vector=query_vector,
+                query=query_vector,
                 limit=k,
                 query_filter=qdrant_filter,
                 with_payload=True,
                 score_threshold=score_threshold,
             )
-            for hit in hits:
+            for hit in response.points:
                 all_results.append({
                     "collection": collection,
                     "score": hit.score,

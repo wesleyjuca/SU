@@ -356,6 +356,20 @@ Histórico:
   anteriores, não são dados reais, mas nunca foram limpas) e a decisão
   jurídica pendente sobre retenção de `audit_logs` (sem mudança desde a
   Fase 148).
+  - **Fase 187** (implementação do achado CRÍTICO acima, usuário optou
+    por não corrigir o achado ALTO da duplicação no Qdrant nem a
+    observabilidade de sincronização nesta rodada): `retrieval.py` e
+    `embeddings_compare.py` trocam `.search()` por `.query_points()` (a
+    Query API real do qdrant-client 1.18.0) nos 3 call sites. Novo teste
+    `test_rag_retrieval_real_qdrant.py` usa Qdrant real em memória
+    (`location=":memory:"`, não um Fake escrito à mão) — confirmado que
+    ele falha contra o código antigo (`AttributeError` capturado) e
+    passa com o fix, fechando exatamente a lacuna que permitiu o bug
+    passar despercebido. Os 2 Fakes existentes que tinham `search()`
+    manual (`test_rag_cache.py`, `test_reindex_test_collection.py`)
+    também foram corrigidos pra `query_points()`. Reconfirmação da busca
+    RAG de verdade (não só 200 vazio) com Qdrant real fica pra próxima
+    rodada de teste geral, conforme a guidance acima.
 
 ## Riscos conhecidos / débito técnico
 

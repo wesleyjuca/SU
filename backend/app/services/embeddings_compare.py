@@ -48,13 +48,15 @@ async def comparar_embeddings(queries: list[str], documentos: list[str]) -> dict
     resultados = []
     for query in queries:
         query_vector_local = await embed_text_local(query)
-        hits_local = await qdrant.search(
+        # Fase 187 — mesma troca de retrieval.py: `.search()` não existe
+        # mais no qdrant-client pinado (1.18.0), só `.query_points()`.
+        resp_local = await qdrant.query_points(
             collection_name=TEST_COLLECTION,
-            query_vector=query_vector_local,
+            query=query_vector_local,
             limit=5,
             with_payload=True,
         )
-        ranking_local = [{"text": h.payload.get("text", ""), "score": h.score} for h in hits_local]
+        ranking_local = [{"text": h.payload.get("text", ""), "score": h.score} for h in resp_local.points]
 
         query_vector_openai = await embed_text(query)
         ranking_openai = _rank_por_cosseno(query_vector_openai, vetores_openai, documentos)
@@ -162,13 +164,14 @@ async def buscar_teste(collection_real: str, query: str, limite: int = 5) -> dic
             }
 
         query_vector = await embed_text_local(query)
-        hits = await qdrant.search(
-            collection_name=test_collection, query_vector=query_vector, limit=limite, with_payload=True,
+        # Fase 187 — ver nota em comparar_embeddings() acima.
+        resp = await qdrant.query_points(
+            collection_name=test_collection, query=query_vector, limit=limite, with_payload=True,
         )
         return {
             "ok": True,
             "collection_teste": test_collection,
-            "resultados": [{"text": h.payload.get("text", ""), "score": h.score} for h in hits],
+            "resultados": [{"text": h.payload.get("text", ""), "score": h.score} for h in resp.points],
         }
     except Exception as exc:
         log.warning("buscar_teste_falhou", collection=collection_real, error=str(exc))

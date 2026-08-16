@@ -22,16 +22,23 @@ class _FakeRedis:
 
 
 class _FakeQdrantClient:
+    """Fase 187 — achado da Fase 186: a versão anterior deste Fake tinha um
+    método `search()` manual que nunca validou contra a API real da lib
+    instalada, mascarando que `AsyncQdrantClient.search()` não existe mais
+    (renomeado pra `.query_points()`, que devolve um objeto com `.points`,
+    não uma lista direta) — busca RAG real ficou quebrada silenciosamente
+    até a Fase 187 corrigir `retrieval.py`. Este Fake agora espelha a forma
+    real de `query_points()`."""
     def __init__(self):
         self.search_calls = 0
 
-    async def search(self, **kwargs):
+    async def query_points(self, **kwargs):
         self.search_calls += 1
         hit = type("Hit", (), {
             "score": 0.9, "id": "abc",
             "payload": {"text": "resultado real"},
         })()
-        return [hit]
+        return type("QueryResponse", (), {"points": [hit]})()
 
 
 @pytest.mark.asyncio
