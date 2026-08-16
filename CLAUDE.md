@@ -297,6 +297,65 @@ Histórico:
   (não-petição/contrato) numa chain de 3+ passos completa corretamente
   até SUCCESS, e (b) que uma rejeição sobrevive a um retry concorrente do
   Celery mesmo quando o retry calcula um status terminal diferente.
+- **Fase 186** — reconfirmação independente dos fixes das Fases 184
+  (flush + lock HITL, audit trail Google, aviso de PII) e 185 (doutrina
+  Google Drive), desta vez indo mais fundo que a rodada anterior: os 2
+  cenários HITL foram reproduzidos batendo em endpoints HTTP reais
+  (`uvicorn` numa 2ª porta com só `resolve_agent_class` monkeypatched,
+  requisições concorrentes via `httpx.AsyncClient` de verdade) em vez de
+  chamar as funções de serviço direto em processo como a Fase 184 fez —
+  e a lacuna de cobertura que isso expôs (nenhum teste commitado batia
+  Postgres real pra esses 2 bugs, só um script de scratchpad) foi
+  fechada com `tests/test_api/test_hitl_flush_and_lock.py`. Fases
+  179-182 reconfirmadas por um agente dedicado — tudo OK, sem regressão
+  de interação com 184/185. Frontend real via Playwright confirmou ao
+  vivo (não só leitura de código) que a tela de Integrações não mostra
+  nenhum resultado de sincronização da doutrina (processados/pulados/
+  falhas/erro) e que o modal de Aprovações exige justificativa pra
+  rejeitar, como esperado. 2 achados novos, ambos confirmados
+  empiricamente (não hipótese de leitura de código):
+  - **CRÍTICO — busca RAG inteira quebrada silenciosamente**: a versão
+    exata de `qdrant-client` pinada em `requirements.txt` (`1.18.0`,
+    confirmada instalada) **não tem mais o método `.search()`** em
+    `AsyncQdrantClient`/`QdrantClient` (renomeado pra `.query_points()`
+    numa versão anterior da lib) — confirmado por inspeção direta da
+    classe instalada (`'search' not in dir(AsyncQdrantClient)`) e
+    reprodução real com Qdrant em memória (motor de verdade, não mock).
+    `app/rag/retrieval.py:82` (usado por **todo** agente via
+    `BaseAgent.recall()`, pelo assistente do Cérebro em
+    `brain_assistant.py`, e pelo endpoint `/rag/...` da tela de busca
+    jurídica) chama `qdrant_client.search(...)`, que sempre lança
+    `AttributeError` — engolido silenciosamente por um `except
+    Exception: log.warning(...)` **por coleção**, então a busca RAG
+    devolve `200 OK` com resultado sempre vazio, pra todo tenant, em
+    toda coleção, sem nenhum erro visível. `app/services/
+    embeddings_compare.py` (ferramenta SUPERADMIN, Fase 4.2) tem os
+    mesmos 2 call sites sem esse try/except — quebra com 500 direto.
+    Nenhum teste commitado pegou isso porque todos usam um Fake client
+    próprio com um método `search()` definido à mão (nunca validou
+    contra a API real da lib instalada) — o mesmo padrão de risco
+    (mock diverge da API real de uma lib externa) vale a pena vasculhar
+    mais amplo numa rodada futura.
+  - **ALTO — achado introduzido pelo próprio fix da Fase 185**:
+    `google_drive_sync.py` agora reprocessa arquivos `FALHOU`
+    corretamente (Fase 185), mas nunca chama `delete_document_chunks()`
+    antes de re-ingerir, e `ingest_document()` usa `uuid4()` (não
+    determinístico) como point ID — confirmado empiricamente (Qdrant em
+    memória real): reingerir o mesmo `document_id` duplica os chunks
+    (2 pontos órfãos pro mesmo arquivo, 0 IDs em comum entre as 2
+    tentativas). `delete_document_chunks()` já existe e funciona
+    (testado no mesmo script), só nunca é chamado nesse caminho.
+  Nenhuma correção feita nesta fase — decisão do usuário sobre quais
+  viram fase nova. **Próxima rodada deve**: se o fix do `.search()`
+  for implementado, reconfirmar que a busca RAG volta resultados de
+  verdade (não só 200 vazio) em pelo menos 1 collection privada e 1
+  pública, e considerar auditar outros pontos onde um Fake de teste
+  pode ter divergido silenciosamente da API real de uma lib externa
+  pinada. Também ficou pra trás: 3 linhas de teste órfãs na tabela
+  `approvals` (tipo `GATE1`/`CONTRACT_REVIEW` — resíduo de sessões
+  anteriores, não são dados reais, mas nunca foram limpas) e a decisão
+  jurídica pendente sobre retenção de `audit_logs` (sem mudança desde a
+  Fase 148).
 
 ## Riscos conhecidos / débito técnico
 
