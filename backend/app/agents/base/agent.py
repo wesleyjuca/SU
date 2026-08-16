@@ -115,10 +115,20 @@ class BaseAgent(ABC):
         msgs = messages if messages is not None else self.build_messages(prompt or "", few_shot)
 
         call_start_ms = int(time.time() * 1000)
-        content, tokens_in, tokens_out, cost = await call_claude(
-            messages=msgs, system=system, model=model,
-            max_tokens=max_tokens, temperature=temperature,
-        )
+        # Fase 196 — disparo direto (não-chain, ctx.stream_enabled setado
+        # por execute_chain_step) publica cada pedaço da resposta via
+        # WebSocket conforme chega, em vez de só devolver o texto pronto
+        # no fim. Sem triggered_by não há pra quem publicar — segue o
+        # caminho normal.
+        if ctx.stream_enabled and ctx.triggered_by is not None:
+            content, tokens_in, tokens_out, cost = await self._ask_llm_streaming(
+                ctx, msgs, system, model, max_tokens, temperature,
+            )
+        else:
+            content, tokens_in, tokens_out, cost = await call_claude(
+                messages=msgs, system=system, model=model,
+                max_tokens=max_tokens, temperature=temperature,
+            )
         duration_ms = int(time.time() * 1000) - call_start_ms
         ctx.add_tokens(tokens_in + tokens_out, cost)
         ctx.add_audit_event("LLM_CALL", {
@@ -130,6 +140,39 @@ class BaseAgent(ABC):
         log.info("agent_llm_call", agent=self.name, tokens=tokens_in + tokens_out,
                  cost_usd=round(cost, 4), run_total_usd=round(ctx.total_cost_usd, 4))
         return content
+
+    async def _ask_llm_streaming(
+        self, ctx: AgentContext, messages: list[dict], system: str,
+        model: str | None, max_tokens: int, temperature: float,
+    ) -> tuple[str, int, int, float]:
+        """Mesma chamada que `call_claude` faria, mas publicando cada pedaço
+        da resposta via WebSocket (evento AGENT_RUN_DELTA) conforme chega —
+        só usada quando `ctx.stream_enabled` (Fase 196). `call_llm_stream`
+        já é multi-provider (BYOK) e já cai pra não-streaming sozinho se o
+        provedor não suportar; aqui só se acumula o texto final pro retorno
+        continuar valendo o mesmo contrato de `ask_llm()`."""
+        from app.integrations.llm_client import call_llm_stream
+        from app.api.v1.ws import publish_event
+
+        user_id = str(ctx.triggered_by)
+        run_id = str(ctx.run_id)
+        parts: list[str] = []
+        tokens_in = tokens_out = 0
+        cost = 0.0
+        async for kind, val in call_llm_stream(
+            messages=messages, system=system, model=model,
+            max_tokens=max_tokens, temperature=temperature,
+        ):
+            if kind == "delta":
+                parts.append(val)
+                await publish_event(user_id, "AGENT_RUN_DELTA", {
+                    "run_id": run_id, "agent_name": self.name, "delta": val,
+                })
+            elif kind == "done":
+                tokens_in = val.get("input_tokens", 0)
+                tokens_out = val.get("output_tokens", 0)
+                cost = val.get("cost_usd", 0.0)
+        return "".join(parts), tokens_in, tokens_out, cost
 
     # ─── Prompt editável por SUPERADMIN (Fase 140.1) ──────────────────────────
     async def resolve_system_prompt(self, default: str, slot: str = "primary") -> str:

@@ -25,6 +25,10 @@ export function useAgentStatus() {
   const [lastEvent, setLastEvent] = useState<AgentEvent | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [agentStatusMap, setAgentStatusMap] = useState<Record<string, string>>({});
+  // Fase 196 — texto acumulado por run_id conforme os pedaços chegam via
+  // WebSocket (AGENT_RUN_DELTA, só emitido pra disparo direto/não-chain).
+  // Limpo quando o run termina (AGENT_RUN_COMPLETED) pra não vazar entre execuções.
+  const [streamingText, setStreamingText] = useState<Record<string, string>>({});
 
   useEffect(() => {
     // O login grava o usuário como JSON em "afj_user" — a chave "afj_user_id"
@@ -53,20 +57,41 @@ export function useAgentStatus() {
       }
     };
 
+    const handleDelta = (data: Record<string, unknown>) => {
+      const runId = data.run_id as string | undefined;
+      const delta = data.delta as string | undefined;
+      if (!runId || !delta) return;
+      setStreamingText((prev) => ({ ...prev, [runId]: (prev[runId] || "") + delta }));
+    };
+
+    const handleCompleted = (data: Record<string, unknown>) => {
+      handleAgentEvent(data);
+      const runId = data.run_id as string | undefined;
+      if (runId) {
+        setStreamingText((prev) => {
+          if (!(runId in prev)) return prev;
+          const { [runId]: _omit, ...rest } = prev;
+          return rest;
+        });
+      }
+    };
+
     const unsubConnected = afjWS.on("CONNECTED", () => setIsConnected(true));
     const unsubStart = afjWS.on("AGENT_RUN_STARTED", handleAgentEvent);
     const unsubUpdate = afjWS.on("AGENT_STEP_UPDATE", handleAgentEvent);
-    const unsubDone = afjWS.on("AGENT_RUN_COMPLETED", handleAgentEvent);
+    const unsubDone = afjWS.on("AGENT_RUN_COMPLETED", handleCompleted);
+    const unsubDelta = afjWS.on("AGENT_RUN_DELTA", handleDelta);
 
     return () => {
       unsubConnected();
       unsubStart();
       unsubUpdate();
       unsubDone();
+      unsubDelta();
     };
   }, []);
 
   const clearEvents = useCallback(() => setEvents([]), []);
 
-  return { events, lastEvent, isConnected, clearEvents, agentStatusMap };
+  return { events, lastEvent, isConnected, clearEvents, agentStatusMap, streamingText };
 }

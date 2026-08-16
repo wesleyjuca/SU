@@ -91,6 +91,12 @@ async def execute_chain_step(ctx: AgentContext, chain: list[str], chain_index: i
         # BYOK: se o usuário disparador tem IA própria ativa, usa a chave dele
         # (economiza tokens do sistema). O contextvar propaga até o call_llm.
         agent = agent_class(db=session, redis=redis, qdrant=qdrant)
+        # Fase 196 — streaming de resposta via WebSocket só pra disparo
+        # direto (chain de 1 passo só): uma chain multi-agente já usa o
+        # texto de um passo como entrada do próximo (project_output) antes
+        # do usuário ver qualquer coisa, então não há "resposta ao vivo"
+        # útil pra streamar no meio do caminho.
+        ctx.stream_enabled = len(chain) == 1
         async with user_ai_creds(session, ctx.triggered_by, ctx.task_type):
             result = await agent.run(ctx)
         try:
