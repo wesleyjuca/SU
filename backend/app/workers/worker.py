@@ -53,6 +53,7 @@ celery_app = Celery(
         "app.workers.tasks.legislacao_sync",
         "app.workers.tasks.infra_check",
         "app.workers.tasks.sync_reaper",
+        "app.workers.tasks.approval_reaper",
     ],
 )
 
@@ -119,5 +120,12 @@ celery_app.conf.beat_schedule = {
     "reapear-syncs-travados": {
         "task": "app.workers.tasks.sync_reaper.reapear_syncs_travados_periodico",
         "schedule": crontab(minute="*/30"),
+    },
+    # Escalação de Approval PENDENTE vencida (Fase 191) — nunca aprova/rejeita
+    # sozinho, só notifica os gestores do escritório. Cadência mais espaçada
+    # que os reapers de sync (aprovações vencem em dias, não minutos).
+    "escalar-aprovacoes-vencidas": {
+        "task": "app.workers.tasks.approval_reaper.escalar_aprovacoes_vencidas",
+        "schedule": crontab(hour="*/6", minute=15),
     },
 }

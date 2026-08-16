@@ -440,6 +440,9 @@ async def lifespan(app: FastAPI):
             # Fase 190 — mesmo padrão da Fase 141/143, pro anexo de contexto
             # de agente de IA (AgentAttachment.data_url em base64 inline).
             "ALTER TABLE agent_attachments ADD COLUMN IF NOT EXISTS storage_key VARCHAR(500)",
+            # Fase 191 — marca a escalação de uma Approval vencida (nunca
+            # auto-resolve, só evita renotificar a cada rodada do reaper).
+            "ALTER TABLE approvals ADD COLUMN IF NOT EXISTS escalated_at TIMESTAMPTZ",
         ]:
             try:
                 async with engine.begin() as conn:

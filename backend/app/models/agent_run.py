@@ -72,6 +72,10 @@ class Approval(Base):
     tenant_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("tenants.id"), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Fase 191 — marca quando o reaper de aprovações vencidas já escalou
+    # esta Approval (nunca resolve sozinho, só notifica) — evita renotificar
+    # a cada execução periódica do reaper.
+    escalated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     run: Mapped["AgentRun"] = relationship(back_populates="approval")
 

@@ -8,6 +8,8 @@ sinaliza pending_approval; a resolução humana executa a ação de forma síncr
 Invariante (CLAUDE.md): a ação crítica só ocorre após aprovação humana explícita.
 """
 import uuid
+from datetime import datetime, timedelta, timezone
+
 import structlog
 
 log = structlog.get_logger()
@@ -56,6 +58,8 @@ async def create_approval_from_state(db, agent_run, final_state) -> "uuid.UUID |
     else:
         ai_suggestion = pend
 
+    from app.config import settings
+
     approval = Approval(
         run_id=agent_run.id,
         tenant_id=agent_run.tenant_id,
@@ -65,6 +69,7 @@ async def create_approval_from_state(db, agent_run, final_state) -> "uuid.UUID |
         ai_suggestion=ai_suggestion,
         status="PENDENTE",
         prioridade=pend.get("prioridade", "NORMAL"),
+        expires_at=datetime.now(timezone.utc) + timedelta(days=settings.APPROVAL_EXPIRY_DAYS),
     )
     db.add(approval)
     await db.flush()
@@ -81,9 +86,10 @@ async def _notify_tenant_of_approval(db, approval) -> None:
     1. `Notification` persistente (Fase 156) — sobrevive a reconexão/refresh e
        alimenta o sino de notificações (`GET /notifications`); sem isso, uma
        aprovação pendente só era vista se o revisor estivesse com a aba aberta
-       no exato momento do disparo do WebSocket (`Approval.expires_at` existe
-       no model mas nada lê/escala aprovações esquecidas — isso continua fora
-       de escopo aqui, é um lembrete/escalação seguinte, não implementado).
+       no exato momento do disparo do WebSocket (a escalação de aprovações
+       vencidas — `Approval.expires_at`, setado aqui, lido pelo reaper em
+       `app/workers/tasks/approval_reaper.py`, Fase 191 — é um mecanismo
+       separado, roda em background, não nesta notificação inicial).
        Construído inline (não via `services/notification.py::create_batch`,
        que faz seu próprio `db.commit()`) pra entrar na MESMA transação do
        `Approval` — commit é responsabilidade do caller de

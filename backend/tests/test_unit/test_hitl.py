@@ -65,6 +65,9 @@ async def test_create_approval_pending_with_scope():
     assert appr.tipo == "PETITION_REVIEW"
     assert appr.run_id == run.id and appr.tenant_id == run.tenant_id
     assert appr.ai_suggestion["document_id"] == doc_id
+    # Fase 191 — toda Approval nasce com expires_at pro reaper de escalação
+    # ter o que ler; nunca fica aberta indefinidamente sem prazo.
+    assert appr.expires_at is not None
 
 
 async def test_no_approval_when_not_pending():
