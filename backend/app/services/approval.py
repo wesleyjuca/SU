@@ -190,11 +190,58 @@ async def execute_approved_action(db, approval, modifications: dict | None = Non
         if con:
             con.status = "APROVADO"
         await db.flush()
+
+        # Fase 192 — dispara a assinatura eletrônica automaticamente quando
+        # dá pra fazer isso com segurança (cliente com e-mail cadastrado,
+        # Clicksign conectado). Fail-soft: qualquer motivo pra não conseguir
+        # deixa o contrato "aprovado, aguardando envio manual" — igual ao
+        # comportamento de antes desta fase — nunca bloqueia a aprovação.
+        # Protocolo automático em tribunal (PETITION_FILING) segue de fora,
+        # propositalmente: o próprio cliente PJe (app/integrations/
+        # tribunais/base.py) documenta isso como um "NEVER" da integração.
+        auto_enviado = False
+        nota = "Contrato aprovado — pronto para envio manual ao cliente."
+        if doc and con and con.client_id:
+            envio = await _tentar_envio_automatico_assinatura(db, approval.tenant_id, doc, con)
+            if envio.get("ok"):
+                auto_enviado = True
+                nota = f"Contrato aprovado — enviado automaticamente para assinatura de {envio['email']} via Clicksign."
+            else:
+                nota = f"Contrato aprovado — pronto para envio manual ao cliente (envio automático não disparou: {envio['motivo']})."
+
         return {"executed": "contract_approved", "document_id": doc_id,
-                "note": "Contrato aprovado — pronto para envio manual ao cliente."}
+                "note": nota, "auto_enviado_assinatura": auto_enviado}
 
     # Tipos sem execução automática (ex.: CLIENT_EMAIL): registrar aprovação sem simular envio.
     return {"executed": "approved", "note": "Aprovado. Ação externa deve ser realizada manualmente."}
+
+
+async def _tentar_envio_automatico_assinatura(db, tenant_id, doc, con) -> dict:
+    """Fase 192 — melhor esforço pra disparar `enviar_para_assinatura`
+    (app/services/esign.py) sem intervenção humana. Nunca levanta —
+    qualquer falha vira `{"ok": False, "motivo": ...}` pro caller decidir
+    a mensagem, e o contrato permanece "aprovado, aguardando envio manual"."""
+    from app.models.client import Client
+    from app.services import integration_hub
+
+    if not (doc.conteudo_html or doc.conteudo_texto):
+        return {"ok": False, "motivo": "contrato sem conteúdo gerado"}
+
+    client = await db.get(Client, con.client_id)
+    if not client or not client.email:
+        return {"ok": False, "motivo": "cliente vinculado sem e-mail cadastrado"}
+
+    creds = await integration_hub.get_credentials(db, tenant_id, "clicksign")
+    if not creds:
+        return {"ok": False, "motivo": "Clicksign não conectado em Integrações"}
+
+    try:
+        from app.services.esign import enviar_para_assinatura
+        resultado = await enviar_para_assinatura(db, tenant_id, doc, con, client.email, client.nome_completo)
+        return {"ok": True, "email": client.email, **resultado}
+    except Exception as exc:
+        log.warning("contract_auto_esign_failed", document_id=str(doc.id), error=str(exc))
+        return {"ok": False, "motivo": "falha ao enviar para o Clicksign"}
 
 
 async def mark_rejected_action(db, approval) -> None:

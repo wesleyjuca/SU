@@ -152,6 +152,12 @@ class _Doc:
 class _Pet:
     def __init__(self):
         self.review_status = "PENDENTE_REVISAO"
+        # Fase 192 — este fake também dobra de Contract nos testes de
+        # CONTRACT_REVIEW/CONTRACT_SIGN (mesmo _FakeDBDocs.execute() devolve
+        # ele pra qualquer SELECT); client_id=None faz o novo caminho de
+        # envio automático de assinatura ser pulado (comportamento igual ao
+        # de antes desta fase) sem precisar de um fake de Contract dedicado.
+        self.client_id = None
 
 
 class _Appr:
