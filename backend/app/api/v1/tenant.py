@@ -30,6 +30,7 @@ class ThemeResponse(BaseModel):
     app_name: str
     office_name: str | None = None
     slogan: str | None = None
+    is_demo: bool = False
 
 
 class TenantConfigResponse(ThemeResponse):
@@ -111,6 +112,7 @@ async def get_theme(
         app_name=config["app_name"],
         office_name=meta.get("office_name"),
         slogan=meta.get("slogan"),
+        is_demo=bool(config.get("is_demo", False)),
     )
 
 
@@ -163,6 +165,7 @@ async def update_branding(
         app_name=config.app_name,
         office_name=meta.get("office_name"),
         slogan=meta.get("slogan"),
+        is_demo=bool(tenant.is_demo),
     )
 
 

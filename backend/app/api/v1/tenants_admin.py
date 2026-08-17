@@ -226,3 +226,24 @@ async def update_tenant(
     await db.commit()
     await invalidate_tenant_cache(tenant.slug)
     return {"message": "Escritório atualizado.", "is_active": tenant.is_active, "plan": tenant.plan}
+
+
+@router.post("/demo/reset")
+async def reset_demo(
+    current_user: User = Depends(require_role("SUPERADMIN")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Reset manual do tenant público de demonstração (Fase 199) — apaga tudo
+    que foi gerado desde o último reset e re-semeia o conjunto fictício
+    original. Também roda diariamente via Celery Beat
+    (`app.workers.tasks.demo_reset`); este endpoint é só pra disparar sob
+    demanda. Restrito a SUPERADMIN real — o ADMIN do próprio tenant demo
+    nunca tem esse acesso."""
+    from app.services.demo_reset import resetar_tenant_demo
+
+    try:
+        resultado = await resetar_tenant_demo(db)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    await invalidate_tenant_cache("demo")
+    return resultado

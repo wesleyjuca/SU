@@ -55,6 +55,7 @@ celery_app = Celery(
         "app.workers.tasks.sync_reaper",
         "app.workers.tasks.approval_reaper",
         "app.workers.tasks.oab_discovery",
+        "app.workers.tasks.demo_reset",
     ],
 )
 
@@ -135,5 +136,12 @@ celery_app.conf.beat_schedule = {
     "descobrir-processos-por-oab": {
         "task": "app.workers.tasks.oab_discovery.descobrir_processos_por_oab_periodico",
         "schedule": crontab(hour=8, minute=0),
+    },
+    # Reset diário do tenant público de demonstração (Fase 199) — apaga tudo
+    # gerado desde o último reset e re-semeia o conjunto fictício original.
+    # Horário de madrugada, entre STJ (4h) e Google Drive (5h).
+    "resetar-tenant-demo": {
+        "task": "app.workers.tasks.demo_reset.resetar_tenant_demo_periodico",
+        "schedule": crontab(hour=4, minute=45),
     },
 }

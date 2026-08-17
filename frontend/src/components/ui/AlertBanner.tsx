@@ -1,11 +1,13 @@
 "use client";
-import { AlertTriangle, AlertCircle } from "lucide-react";
+import { AlertTriangle, AlertCircle, Info } from "lucide-react";
 
 // Banner de aviso full-width para o topo do dashboard. Reaproveita as cores de
-// aviso do Toast (amber/red). Usado para cobrança (inadimplência/suspensão).
+// aviso do Toast (amber/red). Usado para cobrança (inadimplência/suspensão) e,
+// desde a Fase 199, para o aviso de "modo demonstração" (variant "info").
 const VARIANTS = {
   warning: { cls: "bg-amber-50 border-amber-200 text-amber-800", Icon: AlertTriangle },
   danger: { cls: "bg-red-50 border-red-200 text-red-800", Icon: AlertCircle },
+  info: { cls: "bg-blue-50 border-blue-200 text-blue-800", Icon: Info },
 } as const;
 
 export type AlertVariant = keyof typeof VARIANTS;

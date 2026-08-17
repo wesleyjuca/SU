@@ -18,6 +18,12 @@ class Tenant(Base):
     # Fase 170 — só o tenant raiz (slug="afj") deve ter isento=True; garantido
     # pelo backfill idempotente em app/core/events.py, não editável via API.
     isento: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Fase 199 — tenant público de demonstração (slug="demo"). Garantido pelo
+    # mesmo backfill idempotente da Fase 170 (app/core/events.py), roda em
+    # todo boot; não editável via API. Incompatível com isento (nunca deve
+    # haver overlap entre "tenant raiz da plataforma" e "tenant de brinquedo
+    # público" — o próprio backfill garante isso).
+    is_demo: Mapped[bool] = mapped_column(Boolean, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     # Fase 180 — enquanto False ("em construção"), SUPERADMIN pode excluir
     # processos/usuários de verdade (cascata real, dado de teste). Uma vez

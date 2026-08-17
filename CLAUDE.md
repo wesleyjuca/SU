@@ -518,6 +518,85 @@ Histórico:
   tem o mesmo tipo de gap estrutural do 196 (feature implementada mas
   nunca alcançada pelo fluxo real) — não foi verificado de propósito
   além do próprio smoke test de cada um.
+- **Fase 198** — fecha os 2 achados críticos da Fase 197.
+  - **198.A** — `app/rag/collections.py::ensure_collections()` trocou
+    `{c.name for c in await qdrant_client.get_collections()}` por
+    `{c.name for c in (await qdrant_client.get_collections()).collections}`
+    (o retorno é um `CollectionsResponse` pydantic, não uma lista).
+    Novo teste `test_rag_ensure_collections_real_qdrant.py` com Qdrant
+    real em memória (não um Fake) confirma que falha contra o código
+    antigo e passa com o fix.
+  - **198.B** — por escolha do usuário ("Mover streaming pro
+    call_claude direto"), o streaming da Fase 196 deixou de depender de
+    `BaseAgent.ask_llm()` (que nenhum dos 19 agentes chama) e passou a
+    rodar por trás de `call_llm()` (`app/integrations/llm_client.py`) —
+    o único ponto que todo agente já atravessa, direto ou via
+    `ask_llm()`. Novo contextvar `agent_stream_ctx`, setado só pra
+    disparo direto (chain de 1 passo) em `execute_chain_step()`
+    (orchestrator.py). Verificado com um agente real no padrão de
+    produção (`call_claude` direto, `strategy_agent`) disparado via
+    HTTP+Celery real, confirmando `AGENT_RUN_DELTA` publicado via Redis
+    pub/sub — não só teste unitário.
+- **Fase 199** — dois pedidos do usuário, sem relação com o ciclo de
+  "teste geral": (1) reduzir o custo do Railway (hoje hospeda
+  Postgres+Redis+compute juntos no mesmo projeto) e (2) um tenant
+  público de demonstração, todas as funcionalidades liberadas mas sem
+  nenhum efeito externo real, resetável a qualquer momento.
+  - **Custo Railway**: runbook novo em `DEPLOY.md` (migrar Postgres pra
+    Neon/Supabase free e Redis pra Upstash free, mantendo só o compute
+    no Railway) — infraestrutura pura, sem mudança de código
+    necessária (`DATABASE_URL`/`REDIS_URL` já são genéricas). Não
+    executado nesta sessão — exige conta em provedor externo e acesso
+    ao dashboard do Railway, fora do alcance desta sessão.
+  - **Tenant demo**: `Tenant.is_demo` (mesmo padrão idempotente do
+    `isento` da Fase 170, `core/events.py`). **Achado de segurança do
+    Plan agent, confirmado em código**: `role == "SUPERADMIN"` neste
+    sistema é o dono da plataforma inteira (`DELETE /processes/{id}
+    /permanente` e o de usuário não filtram por tenant, só por
+    `em_producao`) — por isso o usuário demo é `role=ADMIN`, nunca
+    SUPERADMIN, confirmado explicitamente com o usuário. Novo
+    `app/services/demo_guard.py` (`tenant_is_demo`) bloqueia, sem
+    tocar nos call sites, os 4 pontos de efeito externo real:
+    `esign.py::enviar_para_assinatura`, `email.py::send_email`,
+    `payment_gateway.py::criar_link_pagamento`, e (achado extra do Plan
+    agent) `PUT /system/ai-budgets` — sem esse último, o próprio ADMIN
+    demo poderia remover o teto de IA da própria conta. Seed/reset
+    fatorados em `app/services/demo_fixtures.py`
+    (`criar_elenco_demo`/`gerar_dados_ficticios`, reaproveitados por
+    `scripts/seed_db.py`, agora idempotente) e
+    `app/services/demo_reset.py` (`resetar_tenant_demo` — não recebe
+    `tenant_id` como parâmetro, resolve o alvo internamente e aborta se
+    não for exatamente o tenant `demo`, eliminando por construção
+    qualquer risco de vazar pro tenant `afj`). Reset diário via Celery
+    Beat (`app/workers/tasks/demo_reset.py`, `crontab(hour=4,
+    minute=45)`) + endpoint manual `POST /tenants/demo/reset`
+    (`SUPERADMIN` real, nunca o ADMIN do próprio tenant demo). Frontend:
+    banner "modo demonstração" (`AlertBanner` variant `info` novo) e
+    botão "Entrar como visitante" na tela de login com a credencial
+    pública (`demo@afjdemo.com.br` / `Demo@2026`, documentada e
+    resetada periodicamente, não é secreta).
+  - **Achado real desta fase** (fora do escopo original, pego pelos
+    testes): `GET /tenant/theme`/`PUT /tenant/branding` quebravam com
+    `ValidationError` quando o objeto `Tenant` em memória não tinha
+    `is_demo` carregado do banco (`None` em vez de `bool`) — corrigido
+    com `bool(tenant.is_demo)`; pego por um teste pré-existente
+    (`test_tenant_logo_fase143.py`) que constrói um `Tenant()` sem
+    passar por sessão.
+  - Verificado com Postgres+Redis reais: seed idempotente (rodar 2x não
+    duplica), login público funcional, os 3 guards de I/O bloqueando
+    via HTTP real (fatura de teste emitida → `POST .../payment-link`
+    devolve 422 sem tentar Mercado Pago/Stripe; `PUT /system/ai-budgets`
+    devolve 403 pro próprio ADMIN demo), reset manual via SUPERADMIN
+    real confirmando que a contagem de linhas do tenant `afj` não muda
+    nem uma unidade antes/depois, e que o login público continua
+    funcionando imediatamente após o reset (usuários recriados com IDs
+    novos). Suíte completa: 809 passed — a flutuação de ~35-40
+    ERROR/FAILED entre rodadas é um artefato de infraestrutura
+    pré-existente e não relacionado (pool de conexão asyncpg reutilizado
+    entre event loops por-teste do pytest-asyncio), reproduzido de forma
+    idêntica isolando um teste já existente e não tocado nesta fase
+    (`test_hitl_flush_and_lock.py`) — todo teste novo desta fase passa
+    limpo quando rodado isolado.
 
 ## Riscos conhecidos / débito técnico
 

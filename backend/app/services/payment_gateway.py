@@ -34,6 +34,12 @@ def _base_url() -> str:
 # ─── Geração do link ──────────────────────────────────────────────────────────
 async def criar_link_pagamento(db: AsyncSession, tenant_id, inv: BillingInvoice) -> dict:
     """Cria o link no primeiro gateway conectado (stripe > mercadopago)."""
+    from app.services.demo_guard import tenant_is_demo
+    if await tenant_is_demo(db, tenant_id):
+        raise HTTPException(
+            status_code=422,
+            detail="Ambiente de demonstração: geração de link de pagamento real está desativada.",
+        )
     if inv.status != "EMITIDA":
         raise HTTPException(status_code=422, detail="Gere o link com a fatura EMITIDA (rascunho: emita primeiro).")
     if not inv.valor_total or float(inv.valor_total) <= 0:

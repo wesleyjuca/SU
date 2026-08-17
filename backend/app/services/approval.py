@@ -11,6 +11,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import structlog
+from fastapi import HTTPException
 
 log = structlog.get_logger()
 
@@ -239,6 +240,10 @@ async def _tentar_envio_automatico_assinatura(db, tenant_id, doc, con) -> dict:
         from app.services.esign import enviar_para_assinatura
         resultado = await enviar_para_assinatura(db, tenant_id, doc, con, client.email, client.nome_completo)
         return {"ok": True, "email": client.email, **resultado}
+    except HTTPException as exc:
+        # Fase 199: distingue o motivo real (ex. "ambiente de demonstração")
+        # do genérico "falha ao enviar" — mensagem melhor na UI de aprovação.
+        return {"ok": False, "motivo": exc.detail}
     except Exception as exc:
         log.warning("contract_auto_esign_failed", document_id=str(doc.id), error=str(exc))
         return {"ok": False, "motivo": "falha ao enviar para o Clicksign"}

@@ -940,6 +940,17 @@ async def set_ai_budget(
     if not (0 <= body.alert_pct <= 100):
         body.alert_pct = 80
 
+    # Fase 199: sem isso, o próprio ADMIN do tenant demo poderia remover ou
+    # inflar o teto de IA da sua conta via este endpoint (o alvo já é
+    # filtrado por tenant, sem excluir a si mesmo).
+    from fastapi import HTTPException
+    from app.services.demo_guard import tenant_is_demo
+    if await tenant_is_demo(db, current_user.tenant_id):
+        raise HTTPException(
+            status_code=403,
+            detail="Teto de IA do ambiente de demonstração não pode ser alterado.",
+        )
+
     target_id = _uuid.UUID(body.user_id)
     # Só permite gerir usuários do MESMO escritório (isolamento multi-tenant)
     target = (await db.execute(

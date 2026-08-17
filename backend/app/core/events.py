@@ -443,6 +443,14 @@ async def lifespan(app: FastAPI):
             # Fase 191 — marca a escalação de uma Approval vencida (nunca
             # auto-resolve, só evita renotificar a cada rodada do reaper).
             "ALTER TABLE approvals ADD COLUMN IF NOT EXISTS escalated_at TIMESTAMPTZ",
+            # Fase 199 — tenant público de demonstração (slug="demo"), mesmo
+            # padrão de invariante-em-todo-boot da Fase 170 (isento). A 3ª
+            # linha é uma trava redundante: garante que o tenant raiz nunca
+            # fique marcado como demo mesmo com edição manual no Postgres.
+            "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS is_demo BOOLEAN NOT NULL DEFAULT false",
+            "UPDATE tenants SET is_demo = true WHERE slug = 'demo' "
+            "AND is_demo IS DISTINCT FROM true",
+            "UPDATE tenants SET is_demo = false WHERE slug = 'afj' AND is_demo IS TRUE",
         ]:
             try:
                 async with engine.begin() as conn:

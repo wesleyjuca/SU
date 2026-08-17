@@ -43,6 +43,20 @@ async def superadmin_headers(client):
 
 
 @pytest.fixture
+async def demo_headers(client):
+    """Fase 199 — login com a credencial pública do tenant de demonstração.
+    Mesmo espírito de `superadmin_headers`: pula (não falha) se o seed do
+    tenant demo não estiver disponível no ambiente rodando os testes."""
+    from app.services.demo_fixtures import DEMO_ADMIN_EMAIL, DEMO_ADMIN_SENHA
+
+    res = await client.post("/api/v1/auth/login", json={"email": DEMO_ADMIN_EMAIL, "password": DEMO_ADMIN_SENHA})
+    if res.status_code != 200:
+        pytest.skip("Login do tenant demo falhou — seed data não disponível")
+    token = res.json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.fixture
 def tenant_b_process_id():
     return str(uuid.uuid4())
 
