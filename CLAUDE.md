@@ -444,6 +444,80 @@ Histórico:
       rodada de teste geral deve reconfirmar os 9 itens acima de forma
       independente antes de ir atrás de achados novos, no mesmo padrão
       já estabelecido (174→175, 176→178, etc.).
+- **Fase 197** — rodada de teste geral (ambiente real: Postgres+Redis+Celery
+  worker+uvicorn+frontend subidos de verdade). Reconfirmou de forma
+  independente, via HTTP real contra o backend rodando (não chamando
+  serviço em processo), os 9 itens das Fases 188-196: 188.2 (endpoint
+  last-sync), 189 (CRUD completo de risco/treinamento/comitê + isolamento
+  cross-tenant testado explicitamente), 190 (upload de anexo confirma
+  fallback base64 com S3 não configurado — `storage_key` NULL,
+  `data_url` populado), 191 (Approval vencida escala via Celery real,
+  nunca resolve sozinha, idempotente numa 2ª rodada do reaper), 192
+  (aprovação de contrato dispara tentativa de Clicksign, fail-soft
+  correto sem credencial configurada), 193 (propor→aprovar→PATCH→
+  snapshot de versão com o prompt ANTIGO, 403 pra não-SUPERADMIN), 194
+  (task Celery roda limpo contra 2 tenants reais, 0 OABs configuradas).
+  Também reconfirmou a Fase 187 (RAG real com Qdrant em memória, 1
+  collection pública + 1 privada, isolamento cross-tenant) e a Fase
+  188.1 (reingest não duplica chunks). Limpou os itens de "próxima
+  rodada" documentados pela Fase 186: as 3 linhas órfãs viraram 28 (residual
+  acumulado de várias rodadas anteriores, nunca limpo) — apagadas da
+  tabela `approvals`.
+  **2 achados novos, ambos CRÍTICOS e confirmados empiricamente:**
+  - **Fase 196 nunca ativa em nenhum agente real.** Streaming foi
+    implementado inteiramente dentro de `BaseAgent.ask_llm()`, mas
+    `grep -rn "\.ask_llm("` no código de produção mostra zero call
+    sites — todos os 19 agentes chamam `call_claude`/`call_llm`
+    diretamente e replicam manualmente o bookkeeping de tokens/auditoria
+    que `ask_llm()` faria (padrão estabelecido desde a Fase 125).
+    Confirmado ao vivo: disparo real de `generate_strategy` via HTTP
+    contra Celery real (com `call_llm_stream`/`call_llm` monkeypatchados
+    pra reconhecer qual caminho rodou) — zero eventos `AGENT_RUN_DELTA`
+    publicados; o agente usou o `call_llm` de fallback, não o stream.
+    A Fase 196 só "funcionava" no `_StubAgent` sintético dos próprios
+    testes, que é o único código de produção ou teste que chama
+    `self.ask_llm()` de verdade.
+  - **`ensure_collections()` (`app/rag/collections.py:105`) quebra
+    contra o qdrant-client 1.18.0 real.** `{c.name for c in await
+    qdrant_client.get_collections()}` itera o objeto pydantic
+    `CollectionsResponse` diretamente — isso não devolve a lista de
+    collections, devolve `[("collections", [...])]` (iteração padrão de
+    BaseModel), e `c.name` explode com `AttributeError: 'tuple' object
+    has no attribute 'name'`. Confirmado com Qdrant real em memória.
+    Só não derruba o boot porque `_background_warmup()`
+    (`app/core/events.py:154-162`) engole a exceção num
+    `except Exception: log.warning(...)` — mas isso significa que em
+    QUALQUER ambiente com `QDRANT_URL` real configurado (nunca foi o
+    caso deste sandbox nem, aparentemente, de nenhuma rodada anterior),
+    as collections nunca são criadas automaticamente no primeiro boot, e
+    toda ingestão/busca RAG subsequente falharia silenciosamente com
+    "collection not found" — engolido de novo pelos `except Exception`
+    já documentados em `retrieval.py` (Fase 186). É a mesma classe de
+    risco já achada na Fase 186 (Fake de teste divergindo da API real de
+    lib externa pinada): o teste da própria Fase 187
+    (`test_rag_retrieval_real_qdrant.py`) cria as collections
+    manualmente com `client.create_collection(...)`, nunca passando por
+    `ensure_collections()` — por isso esse bug sobreviveu mesmo num
+    teste que já usa Qdrant real.
+  Escopo cortado desta rodada por decisão de tempo: não rodou uma
+  auditoria paralela formal via `Workflow`/vários `Agent`s — os 2
+  achados foram todos encontrados por teste direto e leitura de código
+  guiada pelos resultados, mais rápido que armar um fan-out pra esta
+  rodada específica. Cross-tenant nos 3 modelos novos de Ética (Fase
+  189) foi testado manualmente (limpo, sem achado). Nenhuma correção
+  feita nesta fase — decisão do usuário sobre quais achados viram fase
+  nova. **Próxima rodada deve**: se o fix de `ensure_collections()` for
+  implementado, reconfirmar com Qdrant real que collections novas são
+  criadas no boot; se o fix da Fase 196 for implementado, decidir (e
+  documentar a decisão) se streaming passa a rodar por trás de
+  `call_claude`/`call_llm` diretamente (tocando todos os 19 agentes) ou
+  se os agentes passam a ser migrados pra usar `ask_llm()` de fato —
+  qualquer uma das duas é uma mudança bem maior que a Fase 196 original
+  presumiu. Considerar também levantar se algum dos outros itens
+  "reconfirmados" desta rodada (188.2, 189, 190, 191, 192, 193, 194)
+  tem o mesmo tipo de gap estrutural do 196 (feature implementada mas
+  nunca alcançada pelo fluxo real) — não foi verificado de propósito
+  além do próprio smoke test de cada um.
 
 ## Riscos conhecidos / débito técnico
 
