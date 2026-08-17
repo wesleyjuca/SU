@@ -597,6 +597,26 @@ Histórico:
     idêntica isolando um teste já existente e não tocado nesta fase
     (`test_hitl_flush_and_lock.py`) — todo teste novo desta fase passa
     limpo quando rodado isolado.
+- **Fase 200** — pedido do usuário: a entrada de visitante na tela de
+  login não devia mais exigir senha, já que os dados do tenant demo são
+  sempre temporários (resetados periodicamente) e não afetam usuários
+  reais. Novo endpoint `POST /auth/demo-login` (`app/api/v1/auth.py`),
+  sem nenhum parâmetro de entrada — resolve o único destino possível
+  (ADMIN do tenant `slug=="demo" AND is_demo=True`) internamente, mesmo
+  padrão de segurança do `resetar_tenant_demo` (Fase 199), tornando
+  estruturalmente impossível usar essa rota pra entrar em qualquer outro
+  tenant. Não participa do rate-limiter de senha errada (não há senha a
+  errar); ganhou teto próprio, só anti-abuso (20 requisições/5min por
+  IP), pra não virar gerador infinito de `Session` rows. O botão "Entrar
+  como visitante" do frontend (`login/page.tsx`) passou a chamar essa
+  rota em vez do `/auth/login` com a credencial fixa embutida no bundle
+  — a senha `Demo@2026` continua válida pra quem quiser logar manualmente
+  (documentada, não é secreta), só deixou de ser necessária pro clique
+  único. Verificado via HTTP real contra o backend local (Postgres+Redis
+  reais): token emitido sem corpo nenhum na requisição funciona num
+  endpoint autenticado de verdade, login por senha antigo continua
+  funcionando em paralelo, e o rate-limit de anti-abuso dispara
+  corretamente na 21ª chamada consecutiva.
 
 ## Riscos conhecidos / débito técnico
 

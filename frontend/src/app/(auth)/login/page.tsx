@@ -6,19 +6,26 @@ import { AlertCircle, Eye, EyeOff } from "lucide-react";
 // server-side, evitando CORS na chamada de login.
 const API_BASE = "/api/v1";
 
-// Fase 199 — credencial pública do tenant de demonstração (mesmo valor
-// seedado em backend/app/services/demo_fixtures.py). Não é secreta: qualquer
-// visitante pode usar, é resetada periodicamente e não tem efeito externo
-// real (e-mail/assinatura/pagamento desativados no tenant demo).
-const DEMO_EMAIL = "demo@afjdemo.com.br";
-const DEMO_SENHA = "Demo@2026";
-
 export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPwd, setShowPwd] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+
+  async function handleLoginResponse(data: { access_token: string; refresh_token: string; user: unknown }) {
+    localStorage.setItem("afj_access_token", data.access_token);
+    localStorage.setItem("afj_refresh_token", data.refresh_token);
+    localStorage.setItem("afj_user", JSON.stringify(data.user));
+
+    await fetch("/api/auth/session", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "set" }),
+    });
+
+    window.location.href = "/dashboard";
+  }
 
   async function doLogin(loginEmail: string, loginSenha: string) {
     setLoading(true);
@@ -41,18 +48,35 @@ export default function LoginPage() {
         return;
       }
 
-      const data = await res.json();
-      localStorage.setItem("afj_access_token", data.access_token);
-      localStorage.setItem("afj_refresh_token", data.refresh_token);
-      localStorage.setItem("afj_user", JSON.stringify(data.user));
+      await handleLoginResponse(await res.json());
+    } catch {
+      setError("Sistema temporariamente indisponível. Tente novamente em instantes.");
+    } finally {
+      setLoading(false);
+    }
+  }
 
-      await fetch("/api/auth/session", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "set" }),
-      });
+  // Fase 199+ — entrada sem senha no tenant público de demonstração via
+  // POST /auth/demo-login (backend resolve o usuário demo internamente,
+  // nenhuma credencial trafega do cliente).
+  async function doDemoLogin() {
+    setLoading(true);
+    setError("");
 
-      window.location.href = "/dashboard";
+    try {
+      const res = await fetch(`${API_BASE}/auth/demo-login`, { method: "POST" });
+
+      if (!res.ok) {
+        let errMsg = "Ambiente de demonstração indisponível no momento. Tente novamente em instantes.";
+        try {
+          const errData = await res.json();
+          errMsg = errData.detail || errMsg;
+        } catch { /* resposta sem JSON */ }
+        setError(errMsg);
+        return;
+      }
+
+      await handleLoginResponse(await res.json());
     } catch {
       setError("Sistema temporariamente indisponível. Tente novamente em instantes.");
     } finally {
@@ -208,7 +232,7 @@ export default function LoginPage() {
             <button
               type="button"
               disabled={loading}
-              onClick={() => doLogin(DEMO_EMAIL, DEMO_SENHA)}
+              onClick={() => doDemoLogin()}
               className="w-full btn-afj-outline py-2.5 rounded-sm text-sm disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Entrar como visitante (demonstração)
