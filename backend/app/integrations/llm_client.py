@@ -69,6 +69,16 @@ ai_fallback_ctx: "contextvars.ContextVar[list[dict] | None]" = contextvars.Conte
 # do await, sem quebrar ninguém que não olhe pra isso.
 last_call_truncated_ctx: "contextvars.ContextVar[bool]" = contextvars.ContextVar("last_call_truncated", default=False)
 
+# Fase 198.B — achado da Fase 197: a Fase 196 implementou streaming dentro
+# de `BaseAgent.ask_llm()`, mas nenhum dos 19 agentes chama esse método
+# (todos chamam `call_claude`/`call_llm` direto, replicando o bookkeeping
+# manualmente desde a Fase 125) — streaming nunca ativava de verdade.
+# Setado por `execute_chain_step()` (orchestrator.py) só pra disparo direto
+# (chain de 1 passo), lido aqui em `call_llm()` — o ÚNICO ponto que todo
+# agente já passa por baixo, sem precisar tocar em nenhum agente
+# individual. Formato: {"user_id": str, "run_id": str, "agent_name": str}.
+agent_stream_ctx: "contextvars.ContextVar[dict | None]" = contextvars.ContextVar("agent_stream", default=None)
+
 # ─── Preços aproximados por 1M tokens (input/output) ─────────────────────────
 MODEL_PRICING = {
     # Anthropic
@@ -328,7 +338,20 @@ async def call_llm(
     Monitoramento (Fase 137.7): cada tentativa com uma `AIProviderConfig`
     conhecida (sucesso ou a falha que disparou o próximo fallback) vira uma
     linha em `AICallLog`, fail-soft — nunca afeta o resultado desta função.
+
+    Streaming (Fase 198.B): se `agent_stream_ctx` estiver setado (disparo
+    direto de agente com usuário disparador conhecido — ver
+    `orchestrator.py::execute_chain_step`), delega pra `call_llm_stream`
+    publicando cada pedaço via WebSocket, mas devolve o MESMO contrato
+    `(content, input_tokens, output_tokens, cost_usd)` — transparente pra
+    quem chama, sem fallback entre providers (mesma limitação de
+    `call_llm_stream`, que já tem seu próprio fallback pra não-streaming
+    embutido se o provider falhar antes de emitir qualquer token).
     """
+    stream_info = agent_stream_ctx.get()
+    if stream_info is not None:
+        return await _call_llm_streaming_publish(messages, system, model, max_tokens, temperature, provider, stream_info)
+
     candidates = [_resolve_call_params(ai_creds_ctx.get(), provider, model)]
     for fb_creds in (ai_fallback_ctx.get() or []):
         candidates.append(_resolve_call_params(fb_creds, provider, model))
@@ -366,6 +389,43 @@ async def call_llm(
             if len(candidates) > 1:
                 log.warning("ai_fallback_config_esgotado", tentativas=len(candidates))
             raise
+
+
+async def _call_llm_streaming_publish(
+    messages: list[dict], system: str, model: str | None, max_tokens: int,
+    temperature: float, provider: str | None, stream_info: dict,
+) -> tuple[str, int, int, float]:
+    """Fase 198.B — consome `call_llm_stream`, publica cada pedaço via
+    WebSocket (evento AGENT_RUN_DELTA) e devolve o texto acumulado no
+    mesmo formato que `call_llm` devolveria. Limpa `agent_stream_ctx`
+    ANTES de iterar `call_llm_stream` — se o provider falhar antes de
+    emitir qualquer token, `call_llm_stream` cai pro seu próprio fallback
+    não-streaming chamando `call_llm(...)` de novo; sem limpar o
+    contextvar aqui, essa chamada interna cairia de novo neste mesmo
+    branch (recursão infinita)."""
+    from app.api.v1.ws import publish_event
+
+    token = agent_stream_ctx.set(None)
+    try:
+        parts: list[str] = []
+        tokens_in = tokens_out = 0
+        cost = 0.0
+        async for kind, val in call_llm_stream(
+            messages=messages, system=system, model=model,
+            max_tokens=max_tokens, temperature=temperature, provider=provider,
+        ):
+            if kind == "delta":
+                parts.append(val)
+                await publish_event(stream_info["user_id"], "AGENT_RUN_DELTA", {
+                    "run_id": stream_info["run_id"], "agent_name": stream_info["agent_name"], "delta": val,
+                })
+            elif kind == "done":
+                tokens_in = val.get("input_tokens", 0)
+                tokens_out = val.get("output_tokens", 0)
+                cost = val.get("cost_usd", 0.0)
+        return "".join(parts), tokens_in, tokens_out, cost
+    finally:
+        agent_stream_ctx.reset(token)
 
 
 # ─── Comparação/consenso entre configs (Fase 137.5) ──────────────────────────
