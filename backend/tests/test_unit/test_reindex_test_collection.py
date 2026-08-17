@@ -79,9 +79,13 @@ class _FakeQdrant:
     async def delete(self, collection_name, **kw):
         self.delete_calls.append(collection_name)
 
-    async def search(self, collection_name, query_vector, limit, with_payload=True):
+    async def query_points(self, collection_name, query, limit, with_payload=True):
+        # Fase 187 — espelha `.query_points()` (a Query API real do
+        # qdrant-client instalado), não o `.search()` antigo removido dessa
+        # versão — ver nota em test_rag_cache.py::_FakeQdrantClient.
         self.search_calls.append(collection_name)
-        return [_FakeSearchHit(f"resultado-{i}", 1.0 - i * 0.1) for i in range(min(limit, 3))]
+        hits = [_FakeSearchHit(f"resultado-{i}", 1.0 - i * 0.1) for i in range(min(limit, 3))]
+        return types.SimpleNamespace(points=hits)
 
 
 def _patch_qdrant(monkeypatch_mod, fake_client):

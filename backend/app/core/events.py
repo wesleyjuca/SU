@@ -64,6 +64,46 @@ async def _seed_default_data(engine) -> None:
     log.info("seed_complete", reset_passwords=reset_passwords)
 
 
+async def _seed_demo_tenant(engine) -> None:
+    """Cria o tenant público de demonstração (Fase 199) se ainda não existir.
+
+    Fecha uma lacuna: `_seed_default_data` acima já recria o tenant `afj`
+    sozinho quando o banco está vazio (ex.: instalação nova, banco trocado
+    de provedor), mas o tenant demo só nascia rodando `scripts/seed_db.py`
+    manualmente. Checagem própria por `slug == "demo"` (não reaproveita o
+    "if not tenant" de cima, que só dispara com a tabela tenants inteira
+    vazia — o afj pode já existir sem o demo ter sido criado)."""
+    from sqlalchemy.ext.asyncio import AsyncSession
+    from sqlalchemy import select
+    from app.models.tenant import Tenant, TenantConfig
+    import uuid
+
+    async with AsyncSession(engine) as session:
+        exists = (await session.execute(select(Tenant).where(Tenant.slug == "demo"))).scalar_one_or_none()
+        if exists:
+            return
+        tenant = Tenant(
+            id=uuid.uuid4(), name="Escritório Demo", slug="demo",
+            plan="STANDARD", is_active=True, is_demo=True, max_users=4,
+        )
+        session.add(tenant)
+        session.add(TenantConfig(
+            id=uuid.uuid4(), tenant_id=tenant.id, app_name="Demo Jurídico",
+            primary_color="#1A6EAB", secondary_color="#0D1B2A", accent_color="#EBF4FB",
+            modules_enabled={
+                "processos": True, "peticoes": True, "clientes": True,
+                "financeiro": True, "agentes": True, "visual_law": True,
+            },
+        ))
+        await session.flush()
+
+        from app.services.demo_fixtures import criar_elenco_demo, gerar_dados_ficticios
+        admin_id, socio_id, advogado_id, _ = await criar_elenco_demo(session, tenant.id)
+        await gerar_dados_ficticios(session, tenant.id, admin_id, socio_id, advogado_id)
+        await session.commit()
+    log.info("demo_tenant_seed_complete")
+
+
 async def _seed_tribunais(engine) -> None:
     """Semeia a tabela de referência `tribunais` a partir do mapa canônico
     (TRIBUNAL_INDICES). Idempotente: insere só os códigos que ainda faltam."""
@@ -437,6 +477,20 @@ async def lifespan(app: FastAPI):
             # verdade; True ("em produção") bloqueia os 2 endpoints de
             # exclusão permanente (ver processes.py/users.py).
             "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS em_producao BOOLEAN NOT NULL DEFAULT false",
+            # Fase 190 — mesmo padrão da Fase 141/143, pro anexo de contexto
+            # de agente de IA (AgentAttachment.data_url em base64 inline).
+            "ALTER TABLE agent_attachments ADD COLUMN IF NOT EXISTS storage_key VARCHAR(500)",
+            # Fase 191 — marca a escalação de uma Approval vencida (nunca
+            # auto-resolve, só evita renotificar a cada rodada do reaper).
+            "ALTER TABLE approvals ADD COLUMN IF NOT EXISTS escalated_at TIMESTAMPTZ",
+            # Fase 199 — tenant público de demonstração (slug="demo"), mesmo
+            # padrão de invariante-em-todo-boot da Fase 170 (isento). A 3ª
+            # linha é uma trava redundante: garante que o tenant raiz nunca
+            # fique marcado como demo mesmo com edição manual no Postgres.
+            "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS is_demo BOOLEAN NOT NULL DEFAULT false",
+            "UPDATE tenants SET is_demo = true WHERE slug = 'demo' "
+            "AND is_demo IS DISTINCT FROM true",
+            "UPDATE tenants SET is_demo = false WHERE slug = 'afj' AND is_demo IS TRUE",
         ]:
             try:
                 async with engine.begin() as conn:
@@ -448,6 +502,11 @@ async def lifespan(app: FastAPI):
             await _seed_default_data(engine)
         except Exception as exc:
             log.warning("seed_warning", error=str(exc))
+
+        try:
+            await _seed_demo_tenant(engine)
+        except Exception as exc:
+            log.warning("seed_demo_tenant_warning", error=str(exc))
 
         try:
             await _seed_tribunais(engine)

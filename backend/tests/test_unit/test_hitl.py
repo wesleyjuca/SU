@@ -65,6 +65,9 @@ async def test_create_approval_pending_with_scope():
     assert appr.tipo == "PETITION_REVIEW"
     assert appr.run_id == run.id and appr.tenant_id == run.tenant_id
     assert appr.ai_suggestion["document_id"] == doc_id
+    # Fase 191 — toda Approval nasce com expires_at pro reaper de escalação
+    # ter o que ler; nunca fica aberta indefinidamente sem prazo.
+    assert appr.expires_at is not None
 
 
 async def test_no_approval_when_not_pending():
@@ -149,6 +152,12 @@ class _Doc:
 class _Pet:
     def __init__(self):
         self.review_status = "PENDENTE_REVISAO"
+        # Fase 192 — este fake também dobra de Contract nos testes de
+        # CONTRACT_REVIEW/CONTRACT_SIGN (mesmo _FakeDBDocs.execute() devolve
+        # ele pra qualquer SELECT); client_id=None faz o novo caminho de
+        # envio automático de assinatura ser pulado (comportamento igual ao
+        # de antes desta fase) sem precisar de um fake de Contract dedicado.
+        self.client_id = None
 
 
 class _Appr:

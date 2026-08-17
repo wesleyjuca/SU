@@ -45,6 +45,12 @@ class AgentContext:
     agents_invoked: list[str] = field(default_factory=list)
     current_agent: str = ""
 
+    # ─── Streaming de resposta (Fase 196) ─────────────────────────────────────
+    # True só pra disparo direto (chain de 1 passo) — setado por
+    # execute_chain_step() em orchestrator.py. Chains multi-passo não
+    # streamam (escopo restrito à Fase 196; ver ask_llm()/BaseAgent).
+    stream_enabled: bool = False
+
     # ─── Controle de aprovação humana ────────────────────────────────────────
     requires_approval: bool = False
     approval_id: uuid.UUID | None = None

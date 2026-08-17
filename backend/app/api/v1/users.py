@@ -166,8 +166,11 @@ async def create_my_ai_config(
         raise HTTPException(status_code=422, detail=f"Provedor desconhecido: {prov}")
 
     auth_method = body.auth_method if body.auth_method in info["auth_methods"] else info["auth_methods"][0]
-    if info["requires_key"] and auth_method == "api_key" and not (body.api_key and body.api_key.strip()):
-        raise HTTPException(status_code=422, detail="Configure uma chave de API")
+    # Fase 195 — Vertex AI usa "service_account_json" em vez de "api_key" como
+    # auth_method, mas a credencial (o JSON colado) continua vindo no mesmo
+    # campo `api_key` do request — só o rótulo muda, não o transporte.
+    if info["requires_key"] and auth_method in ("api_key", "service_account_json") and not (body.api_key and body.api_key.strip()):
+        raise HTTPException(status_code=422, detail="Configure uma chave de API" if auth_method == "api_key" else "Cole o JSON da conta de serviço")
     base_url = (body.base_url or info.get("base_url") or "").strip() or None
     # Só provedores openai-compatíveis SEM URL fixa (hoje: ollama, self-hosted)
     # exigem que o usuário informe uma — Anthropic usa o SDK próprio e nunca lê
@@ -175,7 +178,9 @@ async def create_my_ai_config(
     # não roteia por URL nenhuma, não é "self-hosted sem URL fixa"). Bug real
     # corrigido na Fase 137.3: a checagem antiga usava só `not info["base_url"]`,
     # que também dava True pra Anthropic — bloqueava cadastrar BYOK Anthropic.
-    if prov != "anthropic" and not info["base_url"] and not base_url:
+    # Vertex AI (Fase 195) reaproveita `base_url` como REGIÃO do GCP, opcional
+    # (tem default em código) — também fica de fora dessa obrigatoriedade.
+    if prov not in ("anthropic", "vertex_ai") and not info["base_url"] and not base_url:
         raise HTTPException(status_code=422, detail="Informe a URL do servidor")
 
     model = (body.model or "").strip() or info.get("modelo_sugerido")

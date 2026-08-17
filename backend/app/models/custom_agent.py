@@ -6,11 +6,10 @@ agent_map em app/agents/brain/orchestrator.py). Tabela plataforma-wide —
 tenant_id é AUDITORIA de quem propôs, não escopo de visibilidade/execução
 (mesma decisão da Fase 140.1 para agent_prompt_configs).
 
-Sem tabela de versão de prompt nesta fase: PENDENTE→APROVADO/REJEITADO é
-fluxo único, sem edição de um agente já aprovado (fora de escopo da 140.2).
-Se precisar editar um agente aprovado no futuro, replicar o padrão de
-AgentPromptVersion (app/models/agent_prompt.py) então — não construir agora
-sem necessidade."""
+Fase 193 — edição de um agente já APROVADO agora é possível (débito
+técnico documentado desde a 140.2), seguindo o padrão apontado aqui desde
+então: `CustomAgentVersion` snapshota o estado ANTERIOR a cada edição,
+mesmo padrão de `AgentPromptVersion` (app/models/agent_prompt.py)."""
 from sqlalchemy import String, ForeignKey, Text, Float
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import UUID as PGUUID, JSONB
@@ -48,3 +47,20 @@ class CustomAgent(Base):
     rejection_reason: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class CustomAgentVersion(Base):
+    """Snapshot do estado ANTERIOR de um CustomAgent já APROVADO, gravado a
+    cada edição (Fase 193) — mesmo padrão de AgentPromptVersion: guarda o
+    valor antigo antes de sobrescrever, nunca o novo."""
+    __tablename__ = "custom_agent_versions"
+
+    id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    agent_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("custom_agents.id", ondelete="CASCADE"), nullable=False, index=True)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    system_prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    rag_collections: Mapped[list[str] | None] = mapped_column(JSONB)
+    max_cost_usd_per_run: Mapped[float] = mapped_column(Float, nullable=False)
+    changed_by: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"))
+    change_summary: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

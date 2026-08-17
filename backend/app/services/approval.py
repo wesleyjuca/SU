@@ -8,7 +8,10 @@ sinaliza pending_approval; a resolução humana executa a ação de forma síncr
 Invariante (CLAUDE.md): a ação crítica só ocorre após aprovação humana explícita.
 """
 import uuid
+from datetime import datetime, timedelta, timezone
+
 import structlog
+from fastapi import HTTPException
 
 log = structlog.get_logger()
 
@@ -56,6 +59,8 @@ async def create_approval_from_state(db, agent_run, final_state) -> "uuid.UUID |
     else:
         ai_suggestion = pend
 
+    from app.config import settings
+
     approval = Approval(
         run_id=agent_run.id,
         tenant_id=agent_run.tenant_id,
@@ -65,6 +70,7 @@ async def create_approval_from_state(db, agent_run, final_state) -> "uuid.UUID |
         ai_suggestion=ai_suggestion,
         status="PENDENTE",
         prioridade=pend.get("prioridade", "NORMAL"),
+        expires_at=datetime.now(timezone.utc) + timedelta(days=settings.APPROVAL_EXPIRY_DAYS),
     )
     db.add(approval)
     await db.flush()
@@ -81,9 +87,10 @@ async def _notify_tenant_of_approval(db, approval) -> None:
     1. `Notification` persistente (Fase 156) — sobrevive a reconexão/refresh e
        alimenta o sino de notificações (`GET /notifications`); sem isso, uma
        aprovação pendente só era vista se o revisor estivesse com a aba aberta
-       no exato momento do disparo do WebSocket (`Approval.expires_at` existe
-       no model mas nada lê/escala aprovações esquecidas — isso continua fora
-       de escopo aqui, é um lembrete/escalação seguinte, não implementado).
+       no exato momento do disparo do WebSocket (a escalação de aprovações
+       vencidas — `Approval.expires_at`, setado aqui, lido pelo reaper em
+       `app/workers/tasks/approval_reaper.py`, Fase 191 — é um mecanismo
+       separado, roda em background, não nesta notificação inicial).
        Construído inline (não via `services/notification.py::create_batch`,
        que faz seu próprio `db.commit()`) pra entrar na MESMA transação do
        `Approval` — commit é responsabilidade do caller de
@@ -184,11 +191,62 @@ async def execute_approved_action(db, approval, modifications: dict | None = Non
         if con:
             con.status = "APROVADO"
         await db.flush()
+
+        # Fase 192 — dispara a assinatura eletrônica automaticamente quando
+        # dá pra fazer isso com segurança (cliente com e-mail cadastrado,
+        # Clicksign conectado). Fail-soft: qualquer motivo pra não conseguir
+        # deixa o contrato "aprovado, aguardando envio manual" — igual ao
+        # comportamento de antes desta fase — nunca bloqueia a aprovação.
+        # Protocolo automático em tribunal (PETITION_FILING) segue de fora,
+        # propositalmente: o próprio cliente PJe (app/integrations/
+        # tribunais/base.py) documenta isso como um "NEVER" da integração.
+        auto_enviado = False
+        nota = "Contrato aprovado — pronto para envio manual ao cliente."
+        if doc and con and con.client_id:
+            envio = await _tentar_envio_automatico_assinatura(db, approval.tenant_id, doc, con)
+            if envio.get("ok"):
+                auto_enviado = True
+                nota = f"Contrato aprovado — enviado automaticamente para assinatura de {envio['email']} via Clicksign."
+            else:
+                nota = f"Contrato aprovado — pronto para envio manual ao cliente (envio automático não disparou: {envio['motivo']})."
+
         return {"executed": "contract_approved", "document_id": doc_id,
-                "note": "Contrato aprovado — pronto para envio manual ao cliente."}
+                "note": nota, "auto_enviado_assinatura": auto_enviado}
 
     # Tipos sem execução automática (ex.: CLIENT_EMAIL): registrar aprovação sem simular envio.
     return {"executed": "approved", "note": "Aprovado. Ação externa deve ser realizada manualmente."}
+
+
+async def _tentar_envio_automatico_assinatura(db, tenant_id, doc, con) -> dict:
+    """Fase 192 — melhor esforço pra disparar `enviar_para_assinatura`
+    (app/services/esign.py) sem intervenção humana. Nunca levanta —
+    qualquer falha vira `{"ok": False, "motivo": ...}` pro caller decidir
+    a mensagem, e o contrato permanece "aprovado, aguardando envio manual"."""
+    from app.models.client import Client
+    from app.services import integration_hub
+
+    if not (doc.conteudo_html or doc.conteudo_texto):
+        return {"ok": False, "motivo": "contrato sem conteúdo gerado"}
+
+    client = await db.get(Client, con.client_id)
+    if not client or not client.email:
+        return {"ok": False, "motivo": "cliente vinculado sem e-mail cadastrado"}
+
+    creds = await integration_hub.get_credentials(db, tenant_id, "clicksign")
+    if not creds:
+        return {"ok": False, "motivo": "Clicksign não conectado em Integrações"}
+
+    try:
+        from app.services.esign import enviar_para_assinatura
+        resultado = await enviar_para_assinatura(db, tenant_id, doc, con, client.email, client.nome_completo)
+        return {"ok": True, "email": client.email, **resultado}
+    except HTTPException as exc:
+        # Fase 199: distingue o motivo real (ex. "ambiente de demonstração")
+        # do genérico "falha ao enviar" — mensagem melhor na UI de aprovação.
+        return {"ok": False, "motivo": exc.detail}
+    except Exception as exc:
+        log.warning("contract_auto_esign_failed", document_id=str(doc.id), error=str(exc))
+        return {"ok": False, "motivo": "falha ao enviar para o Clicksign"}
 
 
 async def mark_rejected_action(db, approval) -> None:

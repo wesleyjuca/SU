@@ -11,6 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tesseract-ocr-por \
     poppler-utils \
     libpq-dev \
+    postgresql-client \
     gcc \
     curl \
     libpango-1.0-0 \

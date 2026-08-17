@@ -13,7 +13,7 @@ from pydantic import BaseModel, field_validator
 from app.db.base import get_db
 from app.dependencies import require_role
 from app.models.user import User
-from app.models.custom_agent import CustomAgent
+from app.models.custom_agent import CustomAgent, CustomAgentVersion
 from app.api.v1.rag import VALID_COLLECTIONS
 from app.core.exceptions import NotFoundError
 
@@ -42,6 +42,37 @@ class CustomAgentResolveRequest(BaseModel):
     approved: bool
     rejection_reason: str | None = None
     max_cost_usd_per_run: float | None = None
+
+
+class CustomAgentUpdateRequest(BaseModel):
+    """Fase 193 — edição de um agente já APROVADO. `name` fica de fora de
+    propósito (é a chave estável usada em execuções/relatórios existentes;
+    renomear exigiria migrar referências, fora de escopo)."""
+    description: str | None = None
+    system_prompt: str | None = None
+    rag_collections: list[str] | None = None
+    max_cost_usd_per_run: float | None = None
+    change_summary: str | None = None
+
+    @field_validator("rag_collections")
+    @classmethod
+    def _validar_colecoes(cls, v):
+        if v:
+            invalidas = set(v) - VALID_COLLECTIONS
+            if invalidas:
+                raise ValueError(f"Coleções inválidas: {', '.join(sorted(invalidas))}")
+        return v
+
+
+class CustomAgentVersionResponse(BaseModel):
+    id: str
+    description: str
+    system_prompt: str
+    rag_collections: list[str] | None
+    max_cost_usd_per_run: float
+    changed_by: str | None
+    change_summary: str | None
+    created_at: str
 
 
 class CustomAgentResponse(BaseModel):
@@ -173,3 +204,60 @@ async def resolve_custom_agent(
         link="/agentes",
     )
     return CustomAgentResponse.from_row(row)
+
+
+@router.patch("/{agent_id}", response_model=CustomAgentResponse)
+async def update_custom_agent(
+    agent_id: str,
+    body: CustomAgentUpdateRequest,
+    current_user: User = Depends(require_role("SUPERADMIN")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Fase 193 — edita um agente customizado já APROVADO. SUPERADMIN-only
+    (mesma autoridade que já resolve propostas sozinho em `/resolve`) —
+    aplica a mudança imediatamente, sem reabrir fluxo de aprovação.
+    Grava o estado ANTERIOR em `CustomAgentVersion` antes de sobrescrever,
+    mesmo padrão de `AgentPromptVersion`."""
+    row = (await db.execute(select(CustomAgent).where(CustomAgent.id == uuid.UUID(agent_id)))).scalar_one_or_none()
+    if not row:
+        raise NotFoundError("CustomAgent", agent_id)
+    if row.status != "APROVADO":
+        raise HTTPException(status_code=400, detail="Só é possível editar um agente já aprovado — proponha uma nova versão via /resolve para os demais casos.")
+
+    db.add(CustomAgentVersion(
+        agent_id=row.id, description=row.description, system_prompt=row.system_prompt,
+        rag_collections=row.rag_collections, max_cost_usd_per_run=row.max_cost_usd_per_run,
+        changed_by=current_user.id, change_summary=body.change_summary,
+    ))
+
+    if body.description is not None:
+        row.description = body.description
+    if body.system_prompt is not None:
+        row.system_prompt = body.system_prompt
+    if body.rag_collections is not None:
+        row.rag_collections = body.rag_collections
+    if body.max_cost_usd_per_run is not None:
+        row.max_cost_usd_per_run = body.max_cost_usd_per_run
+    await db.flush()
+    return CustomAgentResponse.from_row(row)
+
+
+@router.get("/{agent_id}/versions", response_model=list[CustomAgentVersionResponse])
+async def list_custom_agent_versions(
+    agent_id: str,
+    limit: int = Query(default=20, le=100),
+    current_user: User = Depends(require_role("SUPERADMIN")),
+    db: AsyncSession = Depends(get_db),
+):
+    rows = (await db.execute(
+        select(CustomAgentVersion)
+        .where(CustomAgentVersion.agent_id == uuid.UUID(agent_id))
+        .order_by(desc(CustomAgentVersion.created_at))
+        .limit(limit)
+    )).scalars().all()
+    return [CustomAgentVersionResponse(
+        id=str(v.id), description=v.description, system_prompt=v.system_prompt,
+        rag_collections=v.rag_collections, max_cost_usd_per_run=v.max_cost_usd_per_run,
+        changed_by=str(v.changed_by) if v.changed_by else None,
+        change_summary=v.change_summary, created_at=v.created_at.isoformat(),
+    ) for v in rows]

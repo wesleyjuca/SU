@@ -53,6 +53,9 @@ celery_app = Celery(
         "app.workers.tasks.legislacao_sync",
         "app.workers.tasks.infra_check",
         "app.workers.tasks.sync_reaper",
+        "app.workers.tasks.approval_reaper",
+        "app.workers.tasks.oab_discovery",
+        "app.workers.tasks.demo_reset",
     ],
 )
 
@@ -119,5 +122,26 @@ celery_app.conf.beat_schedule = {
     "reapear-syncs-travados": {
         "task": "app.workers.tasks.sync_reaper.reapear_syncs_travados_periodico",
         "schedule": crontab(minute="*/30"),
+    },
+    # Escalação de Approval PENDENTE vencida (Fase 191) — nunca aprova/rejeita
+    # sozinho, só notifica os gestores do escritório. Cadência mais espaçada
+    # que os reapers de sync (aprovações vencem em dias, não minutos).
+    "escalar-aprovacoes-vencidas": {
+        "task": "app.workers.tasks.approval_reaper.escalar_aprovacoes_vencidas",
+        "schedule": crontab(hour="*/6", minute=15),
+    },
+    # Descoberta automática diária de processos novos por OAB (Fase 194) —
+    # capturar_por_oab() já existia desde a Fase 73/102, só disparava manual.
+    # Horário distinto de STJ (4h)/Drive (5h)/legislação (6h)/prazos (7h).
+    "descobrir-processos-por-oab": {
+        "task": "app.workers.tasks.oab_discovery.descobrir_processos_por_oab_periodico",
+        "schedule": crontab(hour=8, minute=0),
+    },
+    # Reset diário do tenant público de demonstração (Fase 199) — apaga tudo
+    # gerado desde o último reset e re-semeia o conjunto fictício original.
+    # Horário de madrugada, entre STJ (4h) e Google Drive (5h).
+    "resetar-tenant-demo": {
+        "task": "app.workers.tasks.demo_reset.resetar_tenant_demo_periodico",
+        "schedule": crontab(hour=4, minute=45),
     },
 }

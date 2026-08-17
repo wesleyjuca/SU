@@ -91,6 +91,11 @@ function HubCards() {
   const [modulos, setModulos] = useState<Record<string, boolean>>({});
   const [folderInputs, setFolderInputs] = useState<Record<string, string>>({});
   const [salvandoPasta, setSalvandoPasta] = useState<string | null>(null);
+  // Fase 188.2 — achado da Fase 186: a tela não mostrava nenhum resultado
+  // da sincronização de doutrina (processados/pulados/falhas/erro).
+  const [driveLastSync, setDriveLastSync] = useState<{
+    status: string; stats: Record<string, unknown>; started_at: string | null; finished_at: string | null;
+  } | null>(null);
 
   async function fetchHub() {
     try {
@@ -106,9 +111,17 @@ function HubCards() {
     } catch { /* mantém estado padrão (desligado) */ }
   }
 
+  async function fetchDriveLastSync() {
+    try {
+      const res = await fetch("/api/v1/integrations/hub/google_drive_doutrina/last-sync", { headers: authH() });
+      if (res.ok) setDriveLastSync((await res.json()).ultima_sincronizacao || null);
+    } catch { /* mantém estado vazio */ }
+  }
+
   useEffect(() => {
     fetchHub();
     fetchModulos();
+    fetchDriveLastSync();
     fetch("/api/v1/users/me", { headers: authH() })
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => setIsAdmin(d?.role === "ADMIN" || d?.role === "SUPERADMIN"))
@@ -316,6 +329,24 @@ function HubCards() {
                   <p className="text-[11px] text-afj-black/40 mt-1">
                     Pasta atual: <code className="bg-afj-cream px-1 rounded">{it.extra_data.folder_id}</code>
                   </p>
+                )}
+                {driveLastSync && (
+                  <div className={`mt-2.5 text-[11px] rounded-sm px-2.5 py-1.5 border ${
+                    driveLastSync.status === "ERRO" ? "bg-red-50 border-red-200 text-red-700" : "bg-afj-cream border-afj-cream-dark text-afj-black/60"
+                  }`}>
+                    <p className="font-medium">
+                      Última sincronização: {driveLastSync.status === "ERRO" ? "com erro" : driveLastSync.status === "OK" ? "concluída" : "em andamento"}
+                      {driveLastSync.started_at && ` — ${new Date(driveLastSync.started_at).toLocaleString("pt-BR")}`}
+                    </p>
+                    {driveLastSync.status !== "ERRO" && (
+                      <p className="mt-0.5">
+                        {String(driveLastSync.stats?.processados ?? 0)} processados, {String(driveLastSync.stats?.pulados ?? 0)} pulados, {String(driveLastSync.stats?.falhas ?? 0)} falhas
+                      </p>
+                    )}
+                    {driveLastSync.status === "ERRO" && driveLastSync.stats?.erro ? (
+                      <p className="mt-0.5">{String(driveLastSync.stats.erro)}</p>
+                    ) : null}
+                  </div>
                 )}
               </div>
             )}

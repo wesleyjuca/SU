@@ -6,6 +6,7 @@ export interface TenantTheme {
   logoUrl: string | null;
   logoDarkUrl: string | null;
   faviconUrl: string | null;
+  isDemo: boolean;
 }
 
 const STORAGE_KEY = "afj_theme";
@@ -18,6 +19,7 @@ const DEFAULT_THEME: TenantTheme = {
   logoUrl: null,
   logoDarkUrl: null,
   faviconUrl: null,
+  isDemo: false,
 };
 
 export function applyTheme(theme: TenantTheme): void {
@@ -81,6 +83,7 @@ export async function fetchAndApplyTheme(): Promise<TenantTheme> {
       logoUrl: data.logo_url ?? null,
       logoDarkUrl: data.logo_dark_url ?? null,
       faviconUrl: data.favicon_url ?? null,
+      isDemo: data.is_demo ?? false,
     };
     return applyAndReturn(theme);
   } catch {

@@ -64,6 +64,15 @@ async def send_email(
 ) -> bool:
     from app.config import settings
 
+    # Fase 199: tenant de demonstração pública — nunca envia e-mail real
+    # (nem Gmail nem SMTP), mesmo idioma de "não configurado" que a função
+    # já usa (retorna False, não lança).
+    if db is not None and tenant_id is not None:
+        from app.services.demo_guard import tenant_is_demo
+        if await tenant_is_demo(db, tenant_id):
+            log.info("email_skipped", reason="demo tenant", to=to, subject=subject)
+            return False
+
     # Google Workspace do escritório (Fase 139): se o tenant tem a conta
     # Google conectada, envia pela Gmail API; falha cai no SMTP abaixo.
     if db is not None and tenant_id is not None:

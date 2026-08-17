@@ -101,8 +101,15 @@ COLLECTIONS: dict[str, dict] = {
 
 
 async def ensure_collections(qdrant_client):
-    """Cria collections no Qdrant se não existirem. Chamado na startup."""
-    existing = {c.name for c in await qdrant_client.get_collections()}
+    """Cria collections no Qdrant se não existirem. Chamado na startup.
+
+    Fase 198 — achado da Fase 197: `get_collections()` devolve um
+    `CollectionsResponse` (pydantic), não uma lista — iterar o objeto
+    direto itera seus campos (`[("collections", [...])]`), não as
+    collections em si. `c.name` explodia com AttributeError em qualquer
+    ambiente com QDRANT_URL real configurado (silenciado pelo except do
+    warmup, nunca visto neste sandbox)."""
+    existing = {c.name for c in (await qdrant_client.get_collections()).collections}
 
     for name, config in COLLECTIONS.items():
         if name not in existing:

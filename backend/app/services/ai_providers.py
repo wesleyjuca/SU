@@ -73,6 +73,22 @@ AI_PROVIDERS: dict[str, dict] = {
         "modelo_sugerido": "llama3.1",
         "obter": "Instale o Ollama e rode `ollama pull <modelo>` — sem chave, só a URL do servidor.",
     },
+    # Fase 195 — diferente do Gemini (chave simples via AI Studio), Vertex AI
+    # é o mesmo modelo Gemini servido pela infra do projeto GCP do PRÓPRIO
+    # escritório (BYOK), autenticado por conta de serviço — não é
+    # OpenAI-compatível, tem branch dedicado em app/integrations/llm_client.py
+    # (_call_vertex_ai). `base_url` aqui é reaproveitado como a REGIÃO do GCP
+    # (ex.: "us-central1"), não uma URL — opcional, tem default no código.
+    "vertex_ai": {
+        "nome": "Google Vertex AI",
+        "auth_methods": ["service_account_json"],
+        "base_url": None,
+        "requires_key": True,
+        "oauth_disponivel": False,  # exige projeto GCP com billing/IAM do próprio escritório — BYOK via conta de serviço, não OAuth
+        "modelo_sugerido": "gemini-2.5-flash",
+        "obter": "console.cloud.google.com → IAM e administrador → Contas de serviço → crie uma "
+                 "chave JSON com o papel \"Vertex AI User\" — cole o JSON completo aqui.",
+    },
 }
 
 

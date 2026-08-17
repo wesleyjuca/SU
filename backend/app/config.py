@@ -119,6 +119,10 @@ class Settings(BaseSettings):
     POLL_AI_SUMMARY: bool = False
     PUBLICATION_SCAN_HOUR: int = 7
     DEADLINE_ALERT_DAYS: list[int] = [3, 7, 15]
+    # Fase 191 — prazo padrão pra uma Approval PENDENTE ser escalada (nunca
+    # auto-resolvida — HITL nunca pode pular a aprovação humana) se ninguém
+    # decidir a tempo.
+    APPROVAL_EXPIRY_DAYS: int = 5
 
     @field_validator("DEADLINE_ALERT_DAYS", mode="before")
     @classmethod

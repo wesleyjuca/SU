@@ -297,6 +297,306 @@ Histórico:
   (não-petição/contrato) numa chain de 3+ passos completa corretamente
   até SUCCESS, e (b) que uma rejeição sobrevive a um retry concorrente do
   Celery mesmo quando o retry calcula um status terminal diferente.
+- **Fase 186** — reconfirmação independente dos fixes das Fases 184
+  (flush + lock HITL, audit trail Google, aviso de PII) e 185 (doutrina
+  Google Drive), desta vez indo mais fundo que a rodada anterior: os 2
+  cenários HITL foram reproduzidos batendo em endpoints HTTP reais
+  (`uvicorn` numa 2ª porta com só `resolve_agent_class` monkeypatched,
+  requisições concorrentes via `httpx.AsyncClient` de verdade) em vez de
+  chamar as funções de serviço direto em processo como a Fase 184 fez —
+  e a lacuna de cobertura que isso expôs (nenhum teste commitado batia
+  Postgres real pra esses 2 bugs, só um script de scratchpad) foi
+  fechada com `tests/test_api/test_hitl_flush_and_lock.py`. Fases
+  179-182 reconfirmadas por um agente dedicado — tudo OK, sem regressão
+  de interação com 184/185. Frontend real via Playwright confirmou ao
+  vivo (não só leitura de código) que a tela de Integrações não mostra
+  nenhum resultado de sincronização da doutrina (processados/pulados/
+  falhas/erro) e que o modal de Aprovações exige justificativa pra
+  rejeitar, como esperado. 2 achados novos, ambos confirmados
+  empiricamente (não hipótese de leitura de código):
+  - **CRÍTICO — busca RAG inteira quebrada silenciosamente**: a versão
+    exata de `qdrant-client` pinada em `requirements.txt` (`1.18.0`,
+    confirmada instalada) **não tem mais o método `.search()`** em
+    `AsyncQdrantClient`/`QdrantClient` (renomeado pra `.query_points()`
+    numa versão anterior da lib) — confirmado por inspeção direta da
+    classe instalada (`'search' not in dir(AsyncQdrantClient)`) e
+    reprodução real com Qdrant em memória (motor de verdade, não mock).
+    `app/rag/retrieval.py:82` (usado por **todo** agente via
+    `BaseAgent.recall()`, pelo assistente do Cérebro em
+    `brain_assistant.py`, e pelo endpoint `/rag/...` da tela de busca
+    jurídica) chama `qdrant_client.search(...)`, que sempre lança
+    `AttributeError` — engolido silenciosamente por um `except
+    Exception: log.warning(...)` **por coleção**, então a busca RAG
+    devolve `200 OK` com resultado sempre vazio, pra todo tenant, em
+    toda coleção, sem nenhum erro visível. `app/services/
+    embeddings_compare.py` (ferramenta SUPERADMIN, Fase 4.2) tem os
+    mesmos 2 call sites sem esse try/except — quebra com 500 direto.
+    Nenhum teste commitado pegou isso porque todos usam um Fake client
+    próprio com um método `search()` definido à mão (nunca validou
+    contra a API real da lib instalada) — o mesmo padrão de risco
+    (mock diverge da API real de uma lib externa) vale a pena vasculhar
+    mais amplo numa rodada futura.
+  - **ALTO — achado introduzido pelo próprio fix da Fase 185**:
+    `google_drive_sync.py` agora reprocessa arquivos `FALHOU`
+    corretamente (Fase 185), mas nunca chama `delete_document_chunks()`
+    antes de re-ingerir, e `ingest_document()` usa `uuid4()` (não
+    determinístico) como point ID — confirmado empiricamente (Qdrant em
+    memória real): reingerir o mesmo `document_id` duplica os chunks
+    (2 pontos órfãos pro mesmo arquivo, 0 IDs em comum entre as 2
+    tentativas). `delete_document_chunks()` já existe e funciona
+    (testado no mesmo script), só nunca é chamado nesse caminho.
+  Nenhuma correção feita nesta fase — decisão do usuário sobre quais
+  viram fase nova. **Próxima rodada deve**: se o fix do `.search()`
+  for implementado, reconfirmar que a busca RAG volta resultados de
+  verdade (não só 200 vazio) em pelo menos 1 collection privada e 1
+  pública, e considerar auditar outros pontos onde um Fake de teste
+  pode ter divergido silenciosamente da API real de uma lib externa
+  pinada. Também ficou pra trás: 3 linhas de teste órfãs na tabela
+  `approvals` (tipo `GATE1`/`CONTRACT_REVIEW` — resíduo de sessões
+  anteriores, não são dados reais, mas nunca foram limpas) e a decisão
+  jurídica pendente sobre retenção de `audit_logs` (sem mudança desde a
+  Fase 148).
+  - **Fase 187** (implementação do achado CRÍTICO acima, usuário optou
+    por não corrigir o achado ALTO da duplicação no Qdrant nem a
+    observabilidade de sincronização nesta rodada): `retrieval.py` e
+    `embeddings_compare.py` trocam `.search()` por `.query_points()` (a
+    Query API real do qdrant-client 1.18.0) nos 3 call sites. Novo teste
+    `test_rag_retrieval_real_qdrant.py` usa Qdrant real em memória
+    (`location=":memory:"`, não um Fake escrito à mão) — confirmado que
+    ele falha contra o código antigo (`AttributeError` capturado) e
+    passa com o fix, fechando exatamente a lacuna que permitiu o bug
+    passar despercebido. Os 2 Fakes existentes que tinham `search()`
+    manual (`test_rag_cache.py`, `test_reindex_test_collection.py`)
+    também foram corrigidos pra `query_points()`. Reconfirmação da busca
+    RAG de verdade (não só 200 vazio) com Qdrant real fica pra próxima
+    rodada de teste geral, conforme a guidance acima.
+  - **Fases 188-196** — sequência contínua a pedido do usuário (não uma
+    rodada de teste geral): fecha os 2 achados da Fase 186 que ficaram
+    sem fase, implementa os "próximos passos do programa" de Ética e
+    Integridade, e trabalha a lista `PENDENCIAS` de `/sobre` inteira
+    (exceto retenção de auditoria LGPD, mantida travada — mesma decisão
+    do CLAUDE.md, não reaberta sob nenhuma leitura de "débito técnico").
+    Cada fase foi testada (unitário + verificação empírica contra
+    Postgres/Redis reais) e verificada (ruff/py_compile/pytest/tsc/eslint)
+    antes do commit, sem parar pra confirmar entre fases.
+    - **Fase 188** — fecha os 2 achados pendentes da Fase 186:
+      `google_drive_sync.py` chama `delete_document_chunks()` antes de
+      reingerir um arquivo `FALHOU` (fix da duplicação de chunks no
+      Qdrant, confirmado com Qdrant real em memória); novo endpoint
+      `GET .../google_drive_doutrina/last-sync` + card na tela de
+      Integrações mostrando o resultado da última sincronização de
+      doutrina (processados/pulados/falhas), fechando o gap de
+      observabilidade visto ao vivo via Playwright na Fase 186.
+    - **Fase 189** — próximos passos do programa de Ética e Integridade
+      (antes só cards estáticos em `PROGRAMA_PLANEJADO`): 3 modelos novos
+      (`IntegrityRisk`, `IntegrityTraining`+`IntegrityTrainingCompletion`,
+      `IntegrityCommitteeCase`) com CRUD completo e frontend real — Matriz
+      de Riscos de Integridade, Treinamentos Obrigatórios (com % de
+      conclusão da equipe) e Comitê de Integridade (casos ligados a
+      `IntegrityReport`, quando houver).
+    - **Fase 190** (débito A) — `AgentAttachment` ganha `storage_key`,
+      reaproveitando `object_storage.py` (padrão da Fase 141) com
+      fallback automático pro base64 legado quando S3 não está
+      configurado.
+    - **Fase 191** (débito B) — `Approval.expires_at` (existia, nunca era
+      lido) passa a ser setado em `create_approval_from_state`; novo
+      reaper periódico (`escalar_aprovacoes_vencidas`, Celery Beat)
+      **só escala/notifica** gestores do tenant quando uma aprovação
+      pendente vence — nunca auto-aprova/auto-rejeita, invariante HITL
+      do CLAUDE.md respeitado.
+    - **Fase 192** (débito C) — `execute_approved_action` no branch de
+      contrato dispara `enviar_para_assinatura` (Clicksign) automaticamente
+      após a aprovação humana, fail-soft (falha no envio nunca desfaz a
+      aprovação, só deixa "aprovado, aguardando envio manual").
+      Deliberadamente fora de escopo: protocolo automático em tribunal
+      (`PETITION_FILING`) — o próprio cliente PJe documenta isso como um
+      "NEVER" da integração; petição aprovada continua exigindo protocolo
+      manual, como antes.
+    - **Fase 193** (débito D) — novo modelo `CustomAgentVersion` (mesmo
+      padrão de snapshot de `AgentPromptVersion`) + `PATCH
+      /custom-agents/{id}` (SUPERADMIN-only) pra editar um agente de IA
+      customizado já `APROVADO` sem reabrir fluxo de aprovação.
+    - **Fase 194** (débito E) — `capturar_por_oab()` (já existia, só
+      disparava manual ou sob demanda) ganha uma task Celery Beat diária,
+      fail-soft por tenant.
+    - **Fase 195** (débito F) — Google Vertex AI como provedor BYOK em
+      `AI_PROVIDERS`, com branch dedicado em `llm_client.py`
+      (`_call_vertex_ai` — fluxo OAuth2 JWT Bearer + REST puro via httpx,
+      sem SDK novo, mesmo padrão das demais integrações Google do
+      projeto). Corrigiu de quebra um bug real exposto pelo novo
+      provedor: `minha-ia/page.tsx` decidia "precisa URL própria"
+      checando só `!base_url` (pensado só pro Ollama) — como Vertex
+      também tem `base_url` nulo (reaproveitado como região do GCP), o
+      formulário teria escondido o campo de credencial e mostrado em vez
+      disso o campo de URL de servidor do Ollama, tornando impossível
+      configurar Vertex pela UI.
+    - **Fase 196** (débito G) — resposta de IA em streaming nos agentes:
+      `BaseAgent.ask_llm()` usa `call_llm_stream` (WebSocket, evento
+      `AGENT_RUN_DELTA`) em vez de `call_claude` quando
+      `ctx.stream_enabled` — setado por `execute_chain_step` só pra
+      disparo direto (chain de 1 passo); chains multi-agente nunca
+      streamam (uma chain já usa a saída de um passo como entrada do
+      próximo antes do usuário ver qualquer coisa). Verificado com Redis
+      real (pub/sub de verdade, não mockado) confirmando os deltas
+      publicados/recebidos na ordem certa.
+    - Não repetiu nem tentou reconfirmar achados de rodadas de teste geral
+      anteriores (não era esse o objetivo desta sequência) — a próxima
+      rodada de teste geral deve reconfirmar os 9 itens acima de forma
+      independente antes de ir atrás de achados novos, no mesmo padrão
+      já estabelecido (174→175, 176→178, etc.).
+- **Fase 197** — rodada de teste geral (ambiente real: Postgres+Redis+Celery
+  worker+uvicorn+frontend subidos de verdade). Reconfirmou de forma
+  independente, via HTTP real contra o backend rodando (não chamando
+  serviço em processo), os 9 itens das Fases 188-196: 188.2 (endpoint
+  last-sync), 189 (CRUD completo de risco/treinamento/comitê + isolamento
+  cross-tenant testado explicitamente), 190 (upload de anexo confirma
+  fallback base64 com S3 não configurado — `storage_key` NULL,
+  `data_url` populado), 191 (Approval vencida escala via Celery real,
+  nunca resolve sozinha, idempotente numa 2ª rodada do reaper), 192
+  (aprovação de contrato dispara tentativa de Clicksign, fail-soft
+  correto sem credencial configurada), 193 (propor→aprovar→PATCH→
+  snapshot de versão com o prompt ANTIGO, 403 pra não-SUPERADMIN), 194
+  (task Celery roda limpo contra 2 tenants reais, 0 OABs configuradas).
+  Também reconfirmou a Fase 187 (RAG real com Qdrant em memória, 1
+  collection pública + 1 privada, isolamento cross-tenant) e a Fase
+  188.1 (reingest não duplica chunks). Limpou os itens de "próxima
+  rodada" documentados pela Fase 186: as 3 linhas órfãs viraram 28 (residual
+  acumulado de várias rodadas anteriores, nunca limpo) — apagadas da
+  tabela `approvals`.
+  **2 achados novos, ambos CRÍTICOS e confirmados empiricamente:**
+  - **Fase 196 nunca ativa em nenhum agente real.** Streaming foi
+    implementado inteiramente dentro de `BaseAgent.ask_llm()`, mas
+    `grep -rn "\.ask_llm("` no código de produção mostra zero call
+    sites — todos os 19 agentes chamam `call_claude`/`call_llm`
+    diretamente e replicam manualmente o bookkeeping de tokens/auditoria
+    que `ask_llm()` faria (padrão estabelecido desde a Fase 125).
+    Confirmado ao vivo: disparo real de `generate_strategy` via HTTP
+    contra Celery real (com `call_llm_stream`/`call_llm` monkeypatchados
+    pra reconhecer qual caminho rodou) — zero eventos `AGENT_RUN_DELTA`
+    publicados; o agente usou o `call_llm` de fallback, não o stream.
+    A Fase 196 só "funcionava" no `_StubAgent` sintético dos próprios
+    testes, que é o único código de produção ou teste que chama
+    `self.ask_llm()` de verdade.
+  - **`ensure_collections()` (`app/rag/collections.py:105`) quebra
+    contra o qdrant-client 1.18.0 real.** `{c.name for c in await
+    qdrant_client.get_collections()}` itera o objeto pydantic
+    `CollectionsResponse` diretamente — isso não devolve a lista de
+    collections, devolve `[("collections", [...])]` (iteração padrão de
+    BaseModel), e `c.name` explode com `AttributeError: 'tuple' object
+    has no attribute 'name'`. Confirmado com Qdrant real em memória.
+    Só não derruba o boot porque `_background_warmup()`
+    (`app/core/events.py:154-162`) engole a exceção num
+    `except Exception: log.warning(...)` — mas isso significa que em
+    QUALQUER ambiente com `QDRANT_URL` real configurado (nunca foi o
+    caso deste sandbox nem, aparentemente, de nenhuma rodada anterior),
+    as collections nunca são criadas automaticamente no primeiro boot, e
+    toda ingestão/busca RAG subsequente falharia silenciosamente com
+    "collection not found" — engolido de novo pelos `except Exception`
+    já documentados em `retrieval.py` (Fase 186). É a mesma classe de
+    risco já achada na Fase 186 (Fake de teste divergindo da API real de
+    lib externa pinada): o teste da própria Fase 187
+    (`test_rag_retrieval_real_qdrant.py`) cria as collections
+    manualmente com `client.create_collection(...)`, nunca passando por
+    `ensure_collections()` — por isso esse bug sobreviveu mesmo num
+    teste que já usa Qdrant real.
+  Escopo cortado desta rodada por decisão de tempo: não rodou uma
+  auditoria paralela formal via `Workflow`/vários `Agent`s — os 2
+  achados foram todos encontrados por teste direto e leitura de código
+  guiada pelos resultados, mais rápido que armar um fan-out pra esta
+  rodada específica. Cross-tenant nos 3 modelos novos de Ética (Fase
+  189) foi testado manualmente (limpo, sem achado). Nenhuma correção
+  feita nesta fase — decisão do usuário sobre quais achados viram fase
+  nova. **Próxima rodada deve**: se o fix de `ensure_collections()` for
+  implementado, reconfirmar com Qdrant real que collections novas são
+  criadas no boot; se o fix da Fase 196 for implementado, decidir (e
+  documentar a decisão) se streaming passa a rodar por trás de
+  `call_claude`/`call_llm` diretamente (tocando todos os 19 agentes) ou
+  se os agentes passam a ser migrados pra usar `ask_llm()` de fato —
+  qualquer uma das duas é uma mudança bem maior que a Fase 196 original
+  presumiu. Considerar também levantar se algum dos outros itens
+  "reconfirmados" desta rodada (188.2, 189, 190, 191, 192, 193, 194)
+  tem o mesmo tipo de gap estrutural do 196 (feature implementada mas
+  nunca alcançada pelo fluxo real) — não foi verificado de propósito
+  além do próprio smoke test de cada um.
+- **Fase 198** — fecha os 2 achados críticos da Fase 197.
+  - **198.A** — `app/rag/collections.py::ensure_collections()` trocou
+    `{c.name for c in await qdrant_client.get_collections()}` por
+    `{c.name for c in (await qdrant_client.get_collections()).collections}`
+    (o retorno é um `CollectionsResponse` pydantic, não uma lista).
+    Novo teste `test_rag_ensure_collections_real_qdrant.py` com Qdrant
+    real em memória (não um Fake) confirma que falha contra o código
+    antigo e passa com o fix.
+  - **198.B** — por escolha do usuário ("Mover streaming pro
+    call_claude direto"), o streaming da Fase 196 deixou de depender de
+    `BaseAgent.ask_llm()` (que nenhum dos 19 agentes chama) e passou a
+    rodar por trás de `call_llm()` (`app/integrations/llm_client.py`) —
+    o único ponto que todo agente já atravessa, direto ou via
+    `ask_llm()`. Novo contextvar `agent_stream_ctx`, setado só pra
+    disparo direto (chain de 1 passo) em `execute_chain_step()`
+    (orchestrator.py). Verificado com um agente real no padrão de
+    produção (`call_claude` direto, `strategy_agent`) disparado via
+    HTTP+Celery real, confirmando `AGENT_RUN_DELTA` publicado via Redis
+    pub/sub — não só teste unitário.
+- **Fase 199** — dois pedidos do usuário, sem relação com o ciclo de
+  "teste geral": (1) reduzir o custo do Railway (hoje hospeda
+  Postgres+Redis+compute juntos no mesmo projeto) e (2) um tenant
+  público de demonstração, todas as funcionalidades liberadas mas sem
+  nenhum efeito externo real, resetável a qualquer momento.
+  - **Custo Railway**: runbook novo em `DEPLOY.md` (migrar Postgres pra
+    Neon/Supabase free e Redis pra Upstash free, mantendo só o compute
+    no Railway) — infraestrutura pura, sem mudança de código
+    necessária (`DATABASE_URL`/`REDIS_URL` já são genéricas). Não
+    executado nesta sessão — exige conta em provedor externo e acesso
+    ao dashboard do Railway, fora do alcance desta sessão.
+  - **Tenant demo**: `Tenant.is_demo` (mesmo padrão idempotente do
+    `isento` da Fase 170, `core/events.py`). **Achado de segurança do
+    Plan agent, confirmado em código**: `role == "SUPERADMIN"` neste
+    sistema é o dono da plataforma inteira (`DELETE /processes/{id}
+    /permanente` e o de usuário não filtram por tenant, só por
+    `em_producao`) — por isso o usuário demo é `role=ADMIN`, nunca
+    SUPERADMIN, confirmado explicitamente com o usuário. Novo
+    `app/services/demo_guard.py` (`tenant_is_demo`) bloqueia, sem
+    tocar nos call sites, os 4 pontos de efeito externo real:
+    `esign.py::enviar_para_assinatura`, `email.py::send_email`,
+    `payment_gateway.py::criar_link_pagamento`, e (achado extra do Plan
+    agent) `PUT /system/ai-budgets` — sem esse último, o próprio ADMIN
+    demo poderia remover o teto de IA da própria conta. Seed/reset
+    fatorados em `app/services/demo_fixtures.py`
+    (`criar_elenco_demo`/`gerar_dados_ficticios`, reaproveitados por
+    `scripts/seed_db.py`, agora idempotente) e
+    `app/services/demo_reset.py` (`resetar_tenant_demo` — não recebe
+    `tenant_id` como parâmetro, resolve o alvo internamente e aborta se
+    não for exatamente o tenant `demo`, eliminando por construção
+    qualquer risco de vazar pro tenant `afj`). Reset diário via Celery
+    Beat (`app/workers/tasks/demo_reset.py`, `crontab(hour=4,
+    minute=45)`) + endpoint manual `POST /tenants/demo/reset`
+    (`SUPERADMIN` real, nunca o ADMIN do próprio tenant demo). Frontend:
+    banner "modo demonstração" (`AlertBanner` variant `info` novo) e
+    botão "Entrar como visitante" na tela de login com a credencial
+    pública (`demo@afjdemo.com.br` / `Demo@2026`, documentada e
+    resetada periodicamente, não é secreta).
+  - **Achado real desta fase** (fora do escopo original, pego pelos
+    testes): `GET /tenant/theme`/`PUT /tenant/branding` quebravam com
+    `ValidationError` quando o objeto `Tenant` em memória não tinha
+    `is_demo` carregado do banco (`None` em vez de `bool`) — corrigido
+    com `bool(tenant.is_demo)`; pego por um teste pré-existente
+    (`test_tenant_logo_fase143.py`) que constrói um `Tenant()` sem
+    passar por sessão.
+  - Verificado com Postgres+Redis reais: seed idempotente (rodar 2x não
+    duplica), login público funcional, os 3 guards de I/O bloqueando
+    via HTTP real (fatura de teste emitida → `POST .../payment-link`
+    devolve 422 sem tentar Mercado Pago/Stripe; `PUT /system/ai-budgets`
+    devolve 403 pro próprio ADMIN demo), reset manual via SUPERADMIN
+    real confirmando que a contagem de linhas do tenant `afj` não muda
+    nem uma unidade antes/depois, e que o login público continua
+    funcionando imediatamente após o reset (usuários recriados com IDs
+    novos). Suíte completa: 809 passed — a flutuação de ~35-40
+    ERROR/FAILED entre rodadas é um artefato de infraestrutura
+    pré-existente e não relacionado (pool de conexão asyncpg reutilizado
+    entre event loops por-teste do pytest-asyncio), reproduzido de forma
+    idêntica isolando um teste já existente e não tocado nesta fase
+    (`test_hitl_flush_and_lock.py`) — todo teste novo desta fase passa
+    limpo quando rodado isolado.
 
 ## Riscos conhecidos / débito técnico
 

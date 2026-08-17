@@ -6,6 +6,13 @@ import { AlertCircle, Eye, EyeOff } from "lucide-react";
 // server-side, evitando CORS na chamada de login.
 const API_BASE = "/api/v1";
 
+// Fase 199 — credencial pública do tenant de demonstração (mesmo valor
+// seedado em backend/app/services/demo_fixtures.py). Não é secreta: qualquer
+// visitante pode usar, é resetada periodicamente e não tem efeito externo
+// real (e-mail/assinatura/pagamento desativados no tenant demo).
+const DEMO_EMAIL = "demo@afjdemo.com.br";
+const DEMO_SENHA = "Demo@2026";
+
 export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -13,8 +20,7 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
+  async function doLogin(loginEmail: string, loginSenha: string) {
     setLoading(true);
     setError("");
 
@@ -22,7 +28,7 @@ export default function LoginPage() {
       const res = await fetch(`${API_BASE}/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email: loginEmail, password: loginSenha }),
       });
 
       if (!res.ok) {
@@ -52,6 +58,11 @@ export default function LoginPage() {
     } finally {
       setLoading(false);
     }
+  }
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    await doLogin(email, password);
   }
 
   return (
@@ -187,6 +198,24 @@ export default function LoginPage() {
                 )}
               </button>
             </form>
+
+            <div className="flex items-center gap-3 my-5">
+              <div className="flex-1 h-px bg-afj-cream-dark" />
+              <span className="text-afj-black/30 text-[10px] uppercase tracking-widest">ou</span>
+              <div className="flex-1 h-px bg-afj-cream-dark" />
+            </div>
+
+            <button
+              type="button"
+              disabled={loading}
+              onClick={() => doLogin(DEMO_EMAIL, DEMO_SENHA)}
+              className="w-full btn-afj-outline py-2.5 rounded-sm text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Entrar como visitante (demonstração)
+            </button>
+            <p className="text-center text-afj-black/35 text-[10px] mt-2 leading-relaxed">
+              Ambiente público com dados fictícios, resetado periodicamente — sem envio real de e-mail, assinatura ou pagamento.
+            </p>
           </div>
 
           <p className="text-center text-afj-black/20 text-[9px] mt-5 tracking-widest uppercase">

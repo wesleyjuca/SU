@@ -115,6 +115,13 @@ class BaseAgent(ABC):
         msgs = messages if messages is not None else self.build_messages(prompt or "", few_shot)
 
         call_start_ms = int(time.time() * 1000)
+        # Fase 196/198.B — streaming (WebSocket, evento AGENT_RUN_DELTA) é
+        # transparente aqui: `call_claude` → `call_llm` checa sozinho o
+        # contextvar `agent_stream_ctx` (setado por
+        # orchestrator.py::execute_chain_step só pra disparo direto) e
+        # decide se publica pedaço-a-pedaço. `ask_llm` não precisa saber
+        # disso — o mesmo vale pra qualquer agente que chame
+        # call_claude/call_llm direto (todos os 19, hoje).
         content, tokens_in, tokens_out, cost = await call_claude(
             messages=msgs, system=system, model=model,
             max_tokens=max_tokens, temperature=temperature,

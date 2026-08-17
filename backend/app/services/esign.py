@@ -29,6 +29,12 @@ async def enviar_para_assinatura(
     signatario_email: str, signatario_nome: str,
 ) -> dict:
     """Sobe o PDF no Clicksign e cria o signatário + lista de assinatura."""
+    from app.services.demo_guard import tenant_is_demo
+    if await tenant_is_demo(db, tenant_id):
+        raise HTTPException(
+            status_code=422,
+            detail="Ambiente de demonstração: assinatura eletrônica real está desativada.",
+        )
     creds = await integration_hub.get_credentials(db, tenant_id, "clicksign")
     if not creds:
         raise HTTPException(

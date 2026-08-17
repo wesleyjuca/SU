@@ -283,6 +283,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             Mensalidade vencida{typeof billing.dias_para_vencimento === "number" ? ` há ${Math.abs(billing.dias_para_vencimento)} dia(s)` : ""}. Regularize o pagamento para evitar a suspensão do acesso.
           </AlertBanner>
         )}
+        {theme.isDemo && (
+          <AlertBanner variant="info">
+            Ambiente de demonstração pública — dados fictícios, resetados periodicamente. E-mails, assinaturas e pagamentos reais estão desativados.
+          </AlertBanner>
+        )}
 
         {/* Área de conteúdo com scroll — pb-16 evita sobreposição da bottom nav no mobile */}
         <main className="flex-1 overflow-y-auto p-6 pb-20 md:pb-6 bg-afj-cream">

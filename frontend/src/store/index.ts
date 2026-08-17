@@ -91,6 +91,7 @@ const DEFAULT_THEME: TenantTheme = {
   logoUrl: null,
   logoDarkUrl: null,
   faviconUrl: null,
+  isDemo: false,
 };
 
 interface ThemeStore {

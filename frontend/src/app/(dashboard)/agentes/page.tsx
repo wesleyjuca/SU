@@ -8,6 +8,7 @@ import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
 import { useUserStore } from "@/store";
 import { api } from "@/lib/api";
+import { useAgentStatus } from "@/hooks/useAgentStatus";
 import type { AgentCardData } from "@/components/agents/AgentStatusCard";
 
 interface CustomAgent {
@@ -133,6 +134,10 @@ export default function AgentesPage() {
   const [lastRunWasChain, setLastRunWasChain] = useState(false);
   const isChain = CHAIN_TASK_TYPES.some((c) => c.value === taskType);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Fase 196 — resposta de IA em streaming: só populado pra disparo direto
+  // (não-chain); o backend nem publica o evento pra chains multi-passo.
+  const { streamingText } = useAgentStatus();
+  const streamedContent = lastRunId ? streamingText[lastRunId] : undefined;
 
   useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
 
@@ -288,6 +293,19 @@ export default function AgentesPage() {
               Cancelar execução
             </button>
           )}
+        </div>
+      )}
+
+      {/* Fase 196 — resposta de IA ao vivo, pedaço a pedaço, pra disparo
+          direto (não-chain). Some assim que o run termina (streamingText
+          é limpo em AGENT_RUN_COMPLETED, ver useAgentStatus). */}
+      {streamedContent && !lastRunWasChain && (
+        <div className="afj-card p-4 space-y-2">
+          <h3 className="text-xs font-semibold text-afj-black/50 uppercase tracking-wider flex items-center gap-1.5">
+            <Sparkles size={12} className="text-afj-gold" />
+            Resposta em andamento
+          </h3>
+          <p className="text-sm text-afj-black/80 whitespace-pre-wrap leading-relaxed">{streamedContent}</p>
         </div>
       )}
 

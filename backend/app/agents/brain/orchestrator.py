@@ -84,6 +84,7 @@ async def execute_chain_step(ctx: AgentContext, chain: list[str], chain_index: i
     qdrant = await _get_qdrant_if_configured()
 
     from app.integrations.byok import user_ai_creds
+    from app.integrations.llm_client import agent_stream_ctx
 
     step_input_snapshot = dict(ctx.task_input)
 
@@ -91,8 +92,26 @@ async def execute_chain_step(ctx: AgentContext, chain: list[str], chain_index: i
         # BYOK: se o usuário disparador tem IA própria ativa, usa a chave dele
         # (economiza tokens do sistema). O contextvar propaga até o call_llm.
         agent = agent_class(db=session, redis=redis, qdrant=qdrant)
-        async with user_ai_creds(session, ctx.triggered_by, ctx.task_type):
-            result = await agent.run(ctx)
+        # Fase 196/198.B — streaming de resposta via WebSocket só pra
+        # disparo direto (chain de 1 passo só): uma chain multi-agente já
+        # usa o texto de um passo como entrada do próximo (project_output)
+        # antes do usuário ver qualquer coisa, então não há "resposta ao
+        # vivo" útil no meio do caminho. `agent_stream_ctx` é lido dentro
+        # de `call_llm()` (llm_client.py) — o único ponto que TODO agente
+        # já passa por baixo (call_claude/call_llm direto ou via
+        # ask_llm()), sem precisar tocar em nenhum agente individual.
+        ctx.stream_enabled = len(chain) == 1
+        stream_token = None
+        if ctx.stream_enabled and ctx.triggered_by is not None:
+            stream_token = agent_stream_ctx.set({
+                "user_id": str(ctx.triggered_by), "run_id": str(ctx.run_id), "agent_name": route,
+            })
+        try:
+            async with user_ai_creds(session, ctx.triggered_by, ctx.task_type):
+                result = await agent.run(ctx)
+        finally:
+            if stream_token is not None:
+                agent_stream_ctx.reset(stream_token)
         try:
             if result.status == AgentStatus.FAILED:
                 await session.rollback()

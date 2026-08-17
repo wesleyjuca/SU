@@ -9,10 +9,11 @@ import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
 
-from app.models.custom_agent import CustomAgent
+from app.models.custom_agent import CustomAgent, CustomAgentVersion
 from app.api.v1.custom_agents import (
     propose_custom_agent, list_custom_agents, get_custom_agent, resolve_custom_agent,
-    CustomAgentCreateRequest, CustomAgentResolveRequest,
+    update_custom_agent, list_custom_agent_versions,
+    CustomAgentCreateRequest, CustomAgentResolveRequest, CustomAgentUpdateRequest,
 )
 from app.agents.custom.custom_agent_executor import CustomAgentExecutor
 from app.agents.base.agent import BaseAgent
@@ -226,6 +227,80 @@ async def test_resolve_custom_agent_ja_resolvido_400():
     with pytest.raises(HTTPException) as exc_info:
         await resolve_custom_agent(str(row.id), body, current_user=_FakeUser(role="SUPERADMIN"), db=db)
     assert exc_info.value.status_code == 400
+
+
+# ─── Fase 193 — edição de agente já APROVADO ────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_update_custom_agent_edita_prompt_e_grava_versao_anterior():
+    row = _row(status="APROVADO")
+    prompt_antigo = row.system_prompt
+    db = _FakeDB(execute_results=[_FakeResult(scalar=row)])
+
+    body = CustomAgentUpdateRequest(system_prompt="prompt novo revisado", change_summary="ajuste de tom")
+    resp = await update_custom_agent(str(row.id), body, current_user=_FakeUser(id="super1", role="SUPERADMIN"), db=db)
+
+    assert resp.system_prompt == "prompt novo revisado"
+    assert row.status == "APROVADO"  # não reabre fluxo de aprovação
+
+    versao = next(o for o in db.added if isinstance(o, CustomAgentVersion))
+    assert versao.system_prompt == prompt_antigo  # snapshot do valor ANTERIOR, não do novo
+    assert versao.changed_by == "super1"
+    assert versao.change_summary == "ajuste de tom"
+
+
+@pytest.mark.asyncio
+async def test_update_custom_agent_pendente_rejeitado_400():
+    row = _row(status="PENDENTE")
+    db = _FakeDB(execute_results=[_FakeResult(scalar=row)])
+    body = CustomAgentUpdateRequest(system_prompt="x")
+    with pytest.raises(HTTPException) as exc_info:
+        await update_custom_agent(str(row.id), body, current_user=_FakeUser(role="SUPERADMIN"), db=db)
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_update_custom_agent_inexistente_404():
+    db = _FakeDB(execute_results=[_FakeResult(scalar=None)])
+    body = CustomAgentUpdateRequest(system_prompt="x")
+    with pytest.raises(HTTPException) as exc_info:
+        await update_custom_agent(str(uuid.uuid4()), body, current_user=_FakeUser(role="SUPERADMIN"), db=db)
+    assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_update_custom_agent_campos_omitidos_preservam_valor_atual():
+    row = _row(status="APROVADO", rag_collections=["jurisprudencia"], max_cost=1.0)
+    db = _FakeDB(execute_results=[_FakeResult(scalar=row)])
+
+    body = CustomAgentUpdateRequest(description="nova descrição")  # só description
+    resp = await update_custom_agent(str(row.id), body, current_user=_FakeUser(role="SUPERADMIN"), db=db)
+
+    assert resp.description == "nova descrição"
+    assert resp.rag_collections == ["jurisprudencia"]
+    assert resp.max_cost_usd_per_run == 1.0
+
+
+@pytest.mark.asyncio
+async def test_update_custom_agent_colecao_invalida_rejeitada():
+    with pytest.raises(ValidationError):
+        CustomAgentUpdateRequest(system_prompt="x", rag_collections=["colecao_fake"])
+
+
+@pytest.mark.asyncio
+async def test_list_custom_agent_versions_devolve_historico():
+    agent_id = uuid.uuid4()
+    v1 = CustomAgentVersion(
+        id=uuid.uuid4(), agent_id=agent_id, description="d1", system_prompt="p1",
+        rag_collections=None, max_cost_usd_per_run=0.5, changed_by="super1",
+        change_summary=None, created_at=datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc),
+    )
+    db = _FakeDB(execute_results=[_FakeResult(items=[v1])])
+
+    result = await list_custom_agent_versions(str(agent_id), limit=20, current_user=_FakeUser(role="SUPERADMIN"), db=db)
+
+    assert len(result) == 1
+    assert result[0].system_prompt == "p1"
 
 
 @pytest.mark.asyncio

@@ -44,6 +44,52 @@ Gates que **quebram** o PR: `tsc --noEmit`, `next build` (com TS estrito) e
 
 O backend canônico atual é `https://su-production-4561.up.railway.app`. Mantenha `API_URL` (server-side, rewrites HTTP) e `NEXT_PUBLIC_API_URL` (browser, apenas conexões diretas como WebSocket) apontando para esse mesmo host em produção.
 
+## Reduzir custo do Railway (tirar Postgres/Redis de dentro dele)
+
+O Railway cobra por serviço provisionado — hoje Postgres e Redis rodam
+como plugins gerenciados *dentro* do próprio projeto Railway, junto com o
+container de compute (uvicorn+worker+beat). Isso costuma ser a maior
+fatia da fatura num projeto pequeno. Como o app já lê `DATABASE_URL` e
+`REDIS_URL` de variável de ambiente (sem nenhuma dependência de código do
+Railway em si — `app/config.py` é provider-agnostic), dá pra apontar
+essas duas peças para provedores com camada gratuita e manter só o
+compute (uvicorn+worker+beat) no Railway. **Isto é infraestrutura, não
+código** — os passos abaixo são manuais, feitos fora deste repositório:
+
+1. Checar o tamanho atual do banco no dashboard do Railway (Database →
+   Metrics). Se passar de ~500MB, nem Neon nem Supabase cabem no plano
+   gratuito — reavalie antes de prosseguir.
+2. Criar um projeto gratuito na [Neon](https://neon.tech) (Postgres
+   puro, escala a zero quando ocioso — ~1s de latência extra na 1ª query
+   após período parado) ou [Supabase](https://supabase.com) (500MB, sem
+   cold start de compute, mas traz mais funcionalidades que não são
+   usadas aqui). Copiar a connection string fornecida.
+3. Fazer backup do banco atual do Railway e restaurar no novo provedor:
+   ```bash
+   pg_dump "$RAILWAY_DATABASE_URL" > backup.sql
+   psql "$NEON_DATABASE_URL" < backup.sql
+   ```
+4. Ajustar a string para o formato que `app/config.py` espera
+   (`postgresql+asyncpg://usuario:senha@host/banco?ssl=require`) e trocar
+   `DATABASE_URL` nas variáveis do serviço Railway (Settings →
+   Variables). Fazer o deploy e confirmar `GET /ping` funcionando e login
+   normal.
+5. Criar um banco gratuito na [Upstash](https://upstash.com) (Redis,
+   500k comandos/mês, 256MB) e trocar `REDIS_URL`/`CELERY_BROKER_URL`
+   (formato `rediss://...`, TLS) da mesma forma.
+6. Validar por alguns dias — login, `/ping`, e principalmente o Celery
+   Beat rodando (logs devem mostrar as 9 tarefas periódicas disparando
+   nos horários certos, ver `backend/app/workers/worker.py`) — antes de
+   remover os plugins Postgres/Redis do projeto Railway. É essa remoção
+   que efetivamente para de cobrar por eles.
+7. Monitorar o teto de comandos/mês da Upstash e o limite de
+   armazenamento do Neon/Supabase na primeira semana; se estourar
+   rotineiramente, o volume de uso não cabe mais no nível gratuito.
+
+Resultado esperado: a fatura do Railway cai para perto do piso do plano
+Hobby (compute apenas), já que os dois itens gerenciados que mais pesam
+saem da conta.
+
 ## Verificação pós-deploy (fumaça)
 1. `GET /ping` → `{"ok": true}` e `GET /health` → `status: operational`.
 2. Logs do serviço devem mostrar `celery@… ready` além do uvicorn.

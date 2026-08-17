@@ -1,5 +1,5 @@
 "use client";
-// Fase 172 — sincronizado com o código até a Fase 171 (ver git log). Esta
+// Fase 196 — sincronizado com o código até a Fase 196 (ver git log). Esta
 // página é 100% estática (nenhum fetch — tudo nos arrays abaixo); ficou
 // congelada na Fase 92 por ~80 fases até esta sincronização. Ao entregar
 // uma fase que mude recurso visível ao usuário, atualize os arrays abaixo
@@ -104,13 +104,6 @@ const ROADMAP: { fase: string; itens: string; estado: Estado }[] = [
 
 const PENDENCIAS: { titulo: string; desc: string }[] = [
   { titulo: "Retenção dos logs de auditoria (LGPD)", desc: "O log de auditoria é imutável e cresce sem limite — o prazo de expurgo/arquivamento ainda depende de orientação jurídica do escritório antes de ser implementado." },
-  { titulo: "Anexos de agentes de IA em base64", desc: "Diferente dos documentos do processo (já migrados pra armazenamento em nuvem), os anexos usados pelos agentes de IA ainda ficam salvos como base64 direto no banco." },
-  { titulo: "Aprovação pendente não expira sozinha", desc: "Uma aprovação esquecida por muito tempo não expira nem escala automaticamente pra outra pessoa — ainda depende de alguém lembrar de resolvê-la." },
-  { titulo: "Ação aprovada não dispara o passo externo sozinha", desc: "Aprovar uma petição ou contrato deixa o documento pronto, mas o protocolo no tribunal ou o envio ao cliente continuam manuais." },
-  { titulo: "Descoberta automática de processos novos por OAB", desc: "A busca por OAB nos provedores credenciados (Jusbrasil/Escavador) ainda não alimenta sozinha a descoberta de processos novos vinculados ao advogado." },
-  { titulo: "Google Vertex AI como provedor de IA", desc: "Não implementado — exigiria configuração própria de projeto Google Cloud (billing/IAM) por escritório." },
-  { titulo: "Resposta de IA em streaming", desc: "Hoje a resposta da IA chega pronta; aparecer aos poucos (como em um chat) ainda não está implementado nos fluxos de agentes." },
-  { titulo: "Editar agente de IA customizado já aprovado", desc: "Só é possível propor um agente novo — não dá pra editar um que já foi aprovado, só recriar." },
 ];
 
 const SUGESTOES: { titulo: string; desc: string }[] = [
@@ -145,7 +138,7 @@ export default function SobrePage() {
           <p className="text-afj-black/45 text-sm mt-1">
             Tudo que o AFJ CORE oferece — o que já está em operação, o que está em evolução e o que vem a seguir.
           </p>
-          <p className="text-afj-black/30 text-xs mt-1">Atualizado até a Fase 171.</p>
+          <p className="text-afj-black/30 text-xs mt-1">Atualizado até a Fase 196.</p>
         </div>
       </div>
 

@@ -111,7 +111,11 @@ async def test_falha_no_meio_dos_arquivos_de_um_tenant_nao_aborta_os_demais(monk
     async def _fake_ingest(**kwargs):
         return None
 
+    async def _fake_delete_chunks(**kwargs):
+        return None
+
     monkeypatch.setattr("app.rag.ingestion.ingest_document", _fake_ingest)
+    monkeypatch.setattr("app.rag.ingestion.delete_document_chunks", _fake_delete_chunks)
 
     # Ordem de execute(): [integracoes] [cfgA] [dedup fa1 -> None] [dedup fa2 -> RAISES]
     #                      [cfgB] [dedup fb1 -> None]
@@ -196,7 +200,13 @@ async def test_arquivo_falhou_e_reprocessado_na_proxima_sincronizacao(monkeypatc
     async def _fake_ingest(**kwargs):
         return None
 
+    chamadas_delete = []
+
+    async def _fake_delete_chunks(**kwargs):
+        chamadas_delete.append(kwargs)
+
     monkeypatch.setattr("app.rag.ingestion.ingest_document", _fake_ingest)
+    monkeypatch.setattr("app.rag.ingestion.delete_document_chunks", _fake_delete_chunks)
 
     entrada_falhou = _FakeEntradaFalhou()
     db = _FakeDB([
@@ -211,6 +221,9 @@ async def test_arquivo_falhou_e_reprocessado_na_proxima_sincronizacao(monkeypatc
     assert resultado["pulados"] == 0
     assert entrada_falhou.status == "EMBEDDED"
     assert entrada_falhou.erro is None
+    # Fase 188.1 — reprocessar um FALHOU tem que limpar os chunks antigos
+    # antes de re-ingerir, senão duplica no Qdrant (achado da Fase 186).
+    assert chamadas_delete == [{"collection": "doutrina_privada", "document_id": "f1"}]
 
 
 @pytest.mark.asyncio

@@ -69,6 +69,16 @@ ai_fallback_ctx: "contextvars.ContextVar[list[dict] | None]" = contextvars.Conte
 # do await, sem quebrar ninguém que não olhe pra isso.
 last_call_truncated_ctx: "contextvars.ContextVar[bool]" = contextvars.ContextVar("last_call_truncated", default=False)
 
+# Fase 198.B — achado da Fase 197: a Fase 196 implementou streaming dentro
+# de `BaseAgent.ask_llm()`, mas nenhum dos 19 agentes chama esse método
+# (todos chamam `call_claude`/`call_llm` direto, replicando o bookkeeping
+# manualmente desde a Fase 125) — streaming nunca ativava de verdade.
+# Setado por `execute_chain_step()` (orchestrator.py) só pra disparo direto
+# (chain de 1 passo), lido aqui em `call_llm()` — o ÚNICO ponto que todo
+# agente já passa por baixo, sem precisar tocar em nenhum agente
+# individual. Formato: {"user_id": str, "run_id": str, "agent_name": str}.
+agent_stream_ctx: "contextvars.ContextVar[dict | None]" = contextvars.ContextVar("agent_stream", default=None)
+
 # ─── Preços aproximados por 1M tokens (input/output) ─────────────────────────
 MODEL_PRICING = {
     # Anthropic
@@ -86,10 +96,11 @@ MODEL_PRICING = {
 
 GEMINI_OPENAI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 
-# Fase 137.1 — provedores conhecidos (nome canônico + apelidos aceitos). Só
-# "anthropic" usa SDK próprio (_call_anthropic); todos os demais passam pelo
-# endpoint OpenAI-compatível genérico (_call_openai_compatible).
-_KNOWN_PROVIDERS = {"anthropic", "openai", "gemini", "grok", "deepseek", "openrouter", "ollama"}
+# Fase 137.1 — provedores conhecidos (nome canônico + apelidos aceitos).
+# "anthropic" usa SDK próprio (_call_anthropic); "vertex_ai" tem branch
+# dedicado (_call_vertex_ai, Fase 195 — não é OpenAI-compatível); todos os
+# demais passam pelo endpoint OpenAI-compatível genérico (_call_openai_compatible).
+_KNOWN_PROVIDERS = {"anthropic", "openai", "gemini", "grok", "deepseek", "openrouter", "ollama", "vertex_ai"}
 _PROVIDER_ALIASES = {"google": "gemini", "claude": "anthropic", "xai": "grok"}
 
 # Cache de clientes por (provider, api_key, base_url) — chaves diferem por
@@ -194,6 +205,95 @@ async def _call_openai_compatible(base_url, api_key, messages, system, model, ma
     return content, in_t, out_t, finish_reason
 
 
+# ─── Google Vertex AI (Fase 195) — BYOK via conta de serviço do próprio ──────
+# ─── projeto GCP do escritório, não é OpenAI-compatível ──────────────────────
+_VERTEX_TOKEN_URL = "https://oauth2.googleapis.com/token"
+_VERTEX_DEFAULT_LOCATION = "us-central1"
+
+
+async def _vertex_access_token(sa: dict) -> str:
+    """Troca a conta de serviço (JSON colado como `api_key` na config BYOK)
+    por um access_token OAuth2 de curta duração via o fluxo JWT Bearer do
+    Google (RFC 7523) — cacheado em `_client_cache` até pouco antes de expirar.
+    Nunca usa o SDK google-cloud-aiplatform (não é dependência deste projeto,
+    ver README de app/integrations/) — REST puro via httpx, mesmo padrão de
+    todas as outras integrações Google já existentes (google_workspace.py)."""
+    ck = ("vertex_token", sa.get("client_email"), sa.get("private_key_id"))
+    cached = _client_cache.get(ck)
+    if cached and cached[1] > time.time() + 30:
+        return cached[0]
+
+    import jwt as pyjwt
+    import httpx
+
+    now = int(time.time())
+    assertion = pyjwt.encode(
+        {
+            "iss": sa["client_email"],
+            "scope": "https://www.googleapis.com/auth/cloud-platform",
+            "aud": _VERTEX_TOKEN_URL,
+            "iat": now,
+            "exp": now + 3600,
+        },
+        sa["private_key"],
+        algorithm="RS256",
+    )
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.post(_VERTEX_TOKEN_URL, data={
+            "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
+            "assertion": assertion,
+        })
+    if resp.status_code >= 400:
+        raise RuntimeError(f"Vertex AI recusou a conta de serviço ({resp.status_code}): {resp.text[:300]}")
+    data = resp.json()
+    token = data["access_token"]
+    _client_cache[ck] = (token, time.time() + data.get("expires_in", 3600))
+    return token
+
+
+@retry(retry=retry_if_exception_type(_RETRYABLE_OPENAI), **_RETRY_KWARGS)
+async def _call_vertex_ai(service_account_json, location, messages, system, model, max_tokens, temperature):
+    import json
+
+    try:
+        sa = json.loads(service_account_json)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("Credencial do Vertex AI inválida — cole o JSON completo da conta de serviço.") from exc
+    project_id = sa.get("project_id")
+    if not project_id or not sa.get("client_email") or not sa.get("private_key"):
+        raise RuntimeError("JSON da conta de serviço incompleto (faltam project_id/client_email/private_key).")
+
+    loc = (location or "").strip() or _VERTEX_DEFAULT_LOCATION
+    token = await _vertex_access_token(sa)
+
+    contents = [
+        {"role": "model" if m.get("role") == "assistant" else "user", "parts": [{"text": m.get("content", "")}]}
+        for m in messages
+    ]
+    body = {"contents": contents, "generationConfig": {"maxOutputTokens": max_tokens, "temperature": temperature}}
+    if system:
+        body["systemInstruction"] = {"parts": [{"text": system}]}
+
+    import httpx
+    url = (
+        f"https://{loc}-aiplatform.googleapis.com/v1/projects/{project_id}"
+        f"/locations/{loc}/publishers/google/models/{model}:generateContent"
+    )
+    async with httpx.AsyncClient(timeout=90) as client:
+        resp = await client.post(url, headers={"Authorization": f"Bearer {token}"}, json=body)
+    if resp.status_code >= 400:
+        raise RuntimeError(f"Vertex AI recusou a chamada ({resp.status_code}): {resp.text[:300]}")
+
+    data = resp.json()
+    candidates = data.get("candidates") or []
+    parts = (candidates[0].get("content", {}).get("parts") or []) if candidates else []
+    content = "".join(p.get("text", "") for p in parts)
+    usage = data.get("usageMetadata") or {}
+    in_t, out_t = usage.get("promptTokenCount", 0), usage.get("candidatesTokenCount", 0)
+    finish_reason = candidates[0].get("finishReason") if candidates else None
+    return content, in_t, out_t, finish_reason
+
+
 def _resolve_call_params(creds: dict | None, provider: str | None, model: str | None):
     """Resolve (prov, api_key, mdl, base_url, config_id) a partir de um dict de
     credenciais (formato de `ai_creds_ctx`/entradas de `ai_fallback_ctx`) ou das
@@ -238,7 +338,20 @@ async def call_llm(
     Monitoramento (Fase 137.7): cada tentativa com uma `AIProviderConfig`
     conhecida (sucesso ou a falha que disparou o próximo fallback) vira uma
     linha em `AICallLog`, fail-soft — nunca afeta o resultado desta função.
+
+    Streaming (Fase 198.B): se `agent_stream_ctx` estiver setado (disparo
+    direto de agente com usuário disparador conhecido — ver
+    `orchestrator.py::execute_chain_step`), delega pra `call_llm_stream`
+    publicando cada pedaço via WebSocket, mas devolve o MESMO contrato
+    `(content, input_tokens, output_tokens, cost_usd)` — transparente pra
+    quem chama, sem fallback entre providers (mesma limitação de
+    `call_llm_stream`, que já tem seu próprio fallback pra não-streaming
+    embutido se o provider falhar antes de emitir qualquer token).
     """
+    stream_info = agent_stream_ctx.get()
+    if stream_info is not None:
+        return await _call_llm_streaming_publish(messages, system, model, max_tokens, temperature, provider, stream_info)
+
     candidates = [_resolve_call_params(ai_creds_ctx.get(), provider, model)]
     for fb_creds in (ai_fallback_ctx.get() or []):
         candidates.append(_resolve_call_params(fb_creds, provider, model))
@@ -253,6 +366,9 @@ async def call_llm(
             if prov == "anthropic":
                 content, in_t, out_t, finish_reason = await _call_anthropic(api_key, messages, system, mdl, max_tokens, temperature)
                 last_call_truncated_ctx.set(finish_reason == "max_tokens")
+            elif prov == "vertex_ai":
+                content, in_t, out_t, finish_reason = await _call_vertex_ai(api_key, base_url, messages, system, mdl, max_tokens, temperature)
+                last_call_truncated_ctx.set(finish_reason == "MAX_TOKENS")
             else:
                 content, in_t, out_t, finish_reason = await _call_openai_compatible(base_url, api_key, messages, system, mdl, max_tokens, temperature)
                 last_call_truncated_ctx.set(finish_reason == "length")
@@ -275,6 +391,43 @@ async def call_llm(
             raise
 
 
+async def _call_llm_streaming_publish(
+    messages: list[dict], system: str, model: str | None, max_tokens: int,
+    temperature: float, provider: str | None, stream_info: dict,
+) -> tuple[str, int, int, float]:
+    """Fase 198.B — consome `call_llm_stream`, publica cada pedaço via
+    WebSocket (evento AGENT_RUN_DELTA) e devolve o texto acumulado no
+    mesmo formato que `call_llm` devolveria. Limpa `agent_stream_ctx`
+    ANTES de iterar `call_llm_stream` — se o provider falhar antes de
+    emitir qualquer token, `call_llm_stream` cai pro seu próprio fallback
+    não-streaming chamando `call_llm(...)` de novo; sem limpar o
+    contextvar aqui, essa chamada interna cairia de novo neste mesmo
+    branch (recursão infinita)."""
+    from app.api.v1.ws import publish_event
+
+    token = agent_stream_ctx.set(None)
+    try:
+        parts: list[str] = []
+        tokens_in = tokens_out = 0
+        cost = 0.0
+        async for kind, val in call_llm_stream(
+            messages=messages, system=system, model=model,
+            max_tokens=max_tokens, temperature=temperature, provider=provider,
+        ):
+            if kind == "delta":
+                parts.append(val)
+                await publish_event(stream_info["user_id"], "AGENT_RUN_DELTA", {
+                    "run_id": stream_info["run_id"], "agent_name": stream_info["agent_name"], "delta": val,
+                })
+            elif kind == "done":
+                tokens_in = val.get("input_tokens", 0)
+                tokens_out = val.get("output_tokens", 0)
+                cost = val.get("cost_usd", 0.0)
+        return "".join(parts), tokens_in, tokens_out, cost
+    finally:
+        agent_stream_ctx.reset(token)
+
+
 # ─── Comparação/consenso entre configs (Fase 137.5) ──────────────────────────
 async def _call_with_config(
     config: dict, messages: list[dict], system: str = "",
@@ -293,6 +446,8 @@ async def _call_with_config(
     try:
         if prov == "anthropic":
             content, in_t, out_t, _finish = await _call_anthropic(api_key, messages, system, mdl, max_tokens, temperature)
+        elif prov == "vertex_ai":
+            content, in_t, out_t, _finish = await _call_vertex_ai(api_key, base_url, messages, system, mdl, max_tokens, temperature)
         else:
             content, in_t, out_t, _finish = await _call_openai_compatible(base_url, api_key, messages, system, mdl, max_tokens, temperature)
         latency_ms = int((time.monotonic() - inicio) * 1000)
@@ -354,6 +509,16 @@ async def call_llm_stream(
     prov, api_key, mdl, base_url = _resolve_creds(provider, model)
     emitido = False
     try:
+        if prov == "vertex_ai":
+            # Fase 195 — sem streaming nativo nesta fase (a Query API do
+            # Vertex suporta streamGenerateContent, mas é escopo novo); cai
+            # direto pro caminho não-streaming em vez de tentar montar um
+            # client OpenAI-compatível com `base_url` que aqui é uma REGIÃO
+            # do GCP, não uma URL — daria erro de conexão sem sentido.
+            content, in_t, out_t, cost = await call_llm(messages, system, model, max_tokens, temperature, provider)
+            yield ("delta", content)
+            yield ("done", {"input_tokens": in_t, "output_tokens": out_t, "cost_usd": cost, "fallback": True})
+            return
         if prov != "anthropic":
             client = _get_openai_compatible(base_url, api_key)
             oai_messages = ([{"role": "system", "content": system}] if system else []) + list(messages)
