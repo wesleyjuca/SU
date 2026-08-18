@@ -617,6 +617,160 @@ Histórico:
   endpoint autenticado de verdade, login por senha antigo continua
   funcionando em paralelo, e o rate-limit de anti-abuso dispara
   corretamente na 21ª chamada consecutiva.
+- **Fase 201** — rodada de teste geral (ambiente real: Postgres+Redis+
+  Celery worker+uvicorn+frontend subidos de verdade). Cobriu, nesta
+  ordem: (a) reconfirmação independente dos 2 achados críticos da Fase
+  197/198 — desta vez indo mais fundo que a própria Fase 198; (b) a
+  lacuna que a Fase 197 deixou documentada ("será que 188.2/190-194 têm
+  o mesmo gap estrutural do 196?"); (c) primeira rodada de teste geral
+  sobre as Fases 199-200 (nunca tinham passado por uma, só pelo teste do
+  próprio build); (d) auditoria paralela adversarial (`Agent`, não
+  `Workflow`) — a frente que a Fase 197 cortou por tempo.
+  - **198.A reconfirmado, mais fundo**: em vez de só chamar
+    `ensure_collections()` isolado (como o teste da 198 fez), este round
+    exercitou o **caminho de boot real** (`_background_warmup()`,
+    `app/core/events.py`) com `get_qdrant()` monkeypatchado pra um Qdrant
+    real em memória — confirma que a integração completa (checagem de
+    `QDRANT_URL` configurada → `get_qdrant()` → `ensure_collections()`)
+    funciona de ponta a ponta, não só a função isolada.
+  - **198.B reconfirmado com um agente diferente do testado na própria
+    Fase 198** (`compliance_agent` em vez de `strategy_agent`, disparado
+    via HTTP+Celery+Redis reais, `call_llm_stream` monkeypatchado pra não
+    depender de credencial Anthropic real): 3 eventos `AGENT_RUN_DELTA`
+    publicados na ordem certa + `AGENT_RUN_COMPLETED`, confirmando que a
+    decisão de mover streaming pro nível de `call_llm()` (não
+    `ask_llm()`) realmente generaliza pra qualquer agente que passe por
+    `call_claude`/`call_llm`, não só o testado originalmente. Também
+    testado o caso negativo pela primeira vez: uma chain de 2 passos
+    (`full_contract_flow`) real, via HTTP+Celery, confirmando **zero**
+    eventos `AGENT_RUN_DELTA` publicados (`ctx.stream_enabled = len(chain)
+    == 1`, `app/agents/brain/orchestrator.py:103`, se comporta como
+    documentado).
+  - **Lacuna da Fase 197 fechada — todos os 6 itens auditados vieram
+    limpos**: 188.2 (observabilidade de sync), 190 (S3 dos anexos), 191
+    (expiração/escalonamento de aprovação), 192 (Clicksign automático),
+    193 (snapshot de versão de agente customizado) e 194 (descoberta por
+    OAB) foram todos rastreados ponta a ponta (writer↔reader, chamador
+    real↔`beat_schedule`) e nenhum reproduz o padrão da Fase 196 (feature
+    implementada mas nunca alcançada pelo fluxo real). Fechado — não
+    precisa reabrir numa rodada futura a menos que algum desses itens
+    mude.
+  - **Primeira auditoria de teste geral sobre as Fases 199-200**:
+    reconfirmado de forma independente (não reaproveitando os testes do
+    próprio build) — login sem senha funcional via HTTP real e via
+    Next.js dev real (proxy batendo no backend local, não produção,
+    fechando a mesma classe de risco da 176.6), tentativa de bypass via
+    parâmetros extra no corpo da requisição corretamente ignorada, os 3
+    guards de I/O (e-mail/assinatura/pagamento) e o guard de teto de IA
+    todos reconfirmados via HTTP real contra o próprio ADMIN demo, teto
+    de `max_users=4` bloqueando um 5º convite (fecha a brecha de escapar
+    do teto de IA por convite), e o reset do tenant demo reconfirmado
+    **não tocando uma linha do tenant `afj`** rodando a função de serviço
+    direto contra Postgres real (não só via teste automatizado
+    pré-existente).
+  - **2 achados novos, ambos confirmados empiricamente/pela inspeção
+    direta do banco (não hipótese de leitura de código)**:
+    - **ALTO — a garantia "estruturalmente impossível" de
+      `POST /auth/demo-login` depende de uma constraint que não existe no
+      banco real deste ambiente.** O comentário do endpoint
+      (`app/api/v1/auth.py`) afirma que cruzar pra outro tenant é
+      estruturalmente impossível porque a query filtra por
+      `Tenant.slug=="demo"` + `User.email==DEMO_ADMIN_EMAIL` com
+      `scalar_one_or_none()` — o que só é uma garantia real se essas
+      colunas forem `UNIQUE` no banco. Confirmado via `\d tenants`/`\d
+      users` direto no Postgres: **não existe nenhum índice único em
+      `tenants.slug` nem em `users.email`** (só `tenants_subdomain_key`)
+      — o `unique=True` do SQLAlchemy nunca virou constraint real porque
+      o banco nasceu via `create_all()` num schema legado, sem
+      `alembic_version` (confirmado: `to_regclass('alembic_version')`
+      retorna vazio). `_seed_demo_tenant()` (`app/core/events.py`, roda
+      em todo boot, sem lock) faz um `SELECT` seguido de `INSERT` sem
+      nenhuma trava — dois processos do app subindo ao mesmo tempo (o
+      caso normal de um rolling deploy no Railway, que a CLAUDE.md já
+      documenta como disparado a cada push em `main`) poderiam ambos
+      passar pelo `SELECT` antes de qualquer `INSERT` comitar, e sem
+      constraint única nada impede a duplicata. Se isso acontecer, o
+      efeito observável não é vazamento cross-tenant (a query do
+      `demo-login` levantaria `MultipleResultsFound` → 500, falha
+      fechada) — mas o próprio `resetar_tenant_demo` também usa
+      `scalar_one_or_none()` pra achar o tenant demo, e quebraria do
+      mesmo jeito, desligando o reset diário permanentemente até
+      intervenção manual. Não reproduzido o race de boot concorrente em
+      si (exigiria subir uma 2ª instância do app), mas a premissa que o
+      torna possível — ausência da constraint única — foi confirmada
+      direto no banco, não é hipótese.
+    - **ALTO — reset do tenant demo nunca limpa Qdrant nem S3, só
+      Postgres.** `resetar_tenant_demo` (`app/services/demo_reset.py`)
+      apaga a linha `Document` do Postgres mas nunca chama
+      `delete_document_chunks()` nem nada de
+      `app/integrations/object_storage.py` — confirmado por grep: o
+      próprio módulo `object_storage.py` **não tem nenhuma função de
+      delete** (só `upload_bytes`/`get_bytes`/`generate_presigned_url`).
+      Como `documents.py` auto-ingesta no RAG qualquer documento
+      `APROVADO`/`PROTOCOLADO` sem nenhum guard de tenant demo
+      (`app/api/v1/documents.py:358-366`), um visitante que aprova um
+      documento deixa: (a) o blob no S3 órfão pra sempre (quando S3
+      estiver configurado — Fase 141), e (b) os chunks vetoriais no
+      Qdrant órfãos pra sempre, ainda marcados com o `tenant_id` do
+      tenant demo (que nunca muda entre resets) — ou seja, buscas RAG de
+      futuras sessões de visitante podem continuar trazendo conteúdo de
+      documentos que o "reset diário" supostamente apagou. Mesma classe
+      de risco já documentada nas Fases 186/188.1 (duplicação de chunks
+      no Qdrant por reingestão sem limpeza prévia), só que aqui é vazamento
+      permanente, não duplicação.
+  - **2 observações menores, não confirmadas como defeito** (registradas
+    pra não se perderem, não viram achado por falta de reprodução):
+    anomalia real de log (`ws_publish_failed error="Event loop is
+    closed"`) observada 1x durante a reconfirmação do 198.B — a mensagem
+    `AGENT_RUN_COMPLETED` ainda assim chegou ao assinante Redis, e uma 3ª
+    task no mesmo worker forkado não reproduziu o mesmo erro; a causa
+    provável é o mesmo padrão de bug já documentado e parcialmente
+    corrigido em `app/workers/async_utils.py` (conexão asyncpg presa a um
+    event loop fechado entre tasks do Celery, por isso `engine.dispose()`
+    é chamado no `finally`) — mas o `_redis_pool` singleton de
+    `app/db/redis.py` **não** recebe o mesmo tratamento (`close_redis()`
+    nunca é chamado em `run_worker_coro`), o que é a causa mais provável,
+    ainda que não 100% confirmada nem reproduzida numa 2ª tentativa. E:
+    o rate-limiter de `demo-login` (INCR seguido de EXPIRE condicional)
+    é atomicamente seguro sob concorrência normal (confirmado: `INCR` é
+    atômico, testado com >20 chamadas reais disparando 429 corretamente),
+    mas tem uma janela teórica de fail-open→trava-permanente se o `INCR`
+    suceder e o `EXPIRE` falhar por uma queda de conexão exatamente entre
+    as duas chamadas — não induzido de propósito, fica como hipótese.
+  - **Nota operacional**: o bloqueio de subagentes por um lembrete de
+    "plan mode ativo" injetado (mesmo achado da Fase 178) **recorreu
+    nesta rodada** — desta vez em 2 dos 3 agentes lançados (o de
+    Playwright real e, parcialmente, o de auditoria de segurança, que
+    corretamente se recusou a fazer qualquer escrita e caiu pra leitura
+    read-only). Isso já não é mais "transitório desta sessão" como a
+    178 supôs — recorreu numa sessão totalmente diferente. Confirma que é
+    um problema de harness a reportar, não algo que se resolve sozinho.
+    A verificação real do frontend (Playwright bloqueado) foi refeita
+    manualmente pela sessão principal: `npm run dev` real com
+    `API_URL` apontando pro backend local, confirmando via HTTP através
+    do proxy do Next.js que `/auth/demo-login` bate no backend local (não
+    produção — fecha a mesma classe de risco da 176.6) e captura de tela
+    via Chromium headless direto (sem o pacote `playwright`, que não
+    está instalado neste ambiente) confirmando o botão "Entrar como
+    visitante" renderizado corretamente em `/login`.
+  - Nenhuma correção feita nesta fase — decisão do usuário sobre quais
+    achados viram fase nova. **Próxima rodada deve**: se os 2 achados
+    ALTOS forem corrigidos, reconfirmar (a) que `_seed_demo_tenant()`
+    ganhou proteção contra corrida de boot concorrente (lock consultivo
+    ou constraint única de verdade aplicada via `ALTER TABLE ... ADD
+    CONSTRAINT` idempotente, mesmo padrão do backfill de colunas em
+    `events.py`) e (b) que o reset do tenant demo chama
+    `delete_document_chunks()` e alguma forma de limpeza S3 (ou aceita
+    documentar a limitação, se optar por não implementar delete de S3
+    nesta fase). Também vale, numa rodada futura, terminar o item que o
+    achado 5 da auditoria adversarial explicitamente deixou fora de
+    escopo por falta de tempo: uma varredura completa dos 82 endpoints
+    procurando falta de filtro por `tenant_id` — agora com um agravante
+    novo, já que qualquer JWT de ADMIN sem senha nenhuma (o próprio
+    `demo-login`) torna esse tipo de bug, se existir, um exploit público
+    sem credencial, não mais um requisito de conta comprometida.
+  funcionando em paralelo, e o rate-limit de anti-abuso dispara
+  corretamente na 21ª chamada consecutiva.
 
 ## Riscos conhecidos / débito técnico
 
