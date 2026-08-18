@@ -74,11 +74,19 @@ async def _seed_demo_tenant(engine) -> None:
     "if not tenant" de cima, que só dispara com a tabela tenants inteira
     vazia — o afj pode já existir sem o demo ter sido criado)."""
     from sqlalchemy.ext.asyncio import AsyncSession
-    from sqlalchemy import select
+    from sqlalchemy import select, text
     from app.models.tenant import Tenant, TenantConfig
     import uuid
 
     async with AsyncSession(engine) as session:
+        # Fase 202 (achado da Fase 201) — lock consultivo transacional: sem
+        # isso, 2 instâncias do app subindo ao mesmo tempo (rolling deploy
+        # normal no Railway) passam ambas pelo SELECT abaixo antes de
+        # qualquer INSERT comitar, podendo duplicar o tenant demo.
+        # `pg_advisory_xact_lock` libera sozinho no commit/rollback desta
+        # sessão — a 2ª instância espera aqui até a 1ª terminar, depois vê
+        # `exists` e retorna sem duplicar.
+        await session.execute(text("SELECT pg_advisory_xact_lock(hashtext('demo_tenant_seed')::bigint)"))
         exists = (await session.execute(select(Tenant).where(Tenant.slug == "demo"))).scalar_one_or_none()
         if exists:
             return
@@ -491,6 +499,16 @@ async def lifespan(app: FastAPI):
             "UPDATE tenants SET is_demo = true WHERE slug = 'demo' "
             "AND is_demo IS DISTINCT FROM true",
             "UPDATE tenants SET is_demo = false WHERE slug = 'afj' AND is_demo IS TRUE",
+            # Fase 202 (achado da Fase 201) — o `unique=True` do SQLAlchemy em
+            # Tenant.slug/User.email nunca virou constraint real neste banco
+            # (nasceu via create_all sem alembic aplicado). Sem isso, nada no
+            # Postgres impedia duas linhas com slug='demo' ou o mesmo e-mail
+            # do ADMIN demo — a garantia de segurança de POST /auth/demo-login
+            # e de resetar_tenant_demo dependia dessa constraint sem ela
+            # existir de fato. Fail-soft: se já houver duplicata numa base
+            # existente, a criação falha e só loga aviso (não trava o boot).
+            "CREATE UNIQUE INDEX IF NOT EXISTS tenants_slug_unique_idx ON tenants (slug)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS users_email_unique_idx ON users (email)",
         ]:
             try:
                 async with engine.begin() as conn:

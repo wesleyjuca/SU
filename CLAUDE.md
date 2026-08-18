@@ -769,8 +769,47 @@ Histórico:
     novo, já que qualquer JWT de ADMIN sem senha nenhuma (o próprio
     `demo-login`) torna esse tipo de bug, se existir, um exploit público
     sem credencial, não mais um requisito de conta comprometida.
-  funcionando em paralelo, e o rate-limit de anti-abuso dispara
-  corretamente na 21ª chamada consecutiva.
+- **Fase 202** — implementação dos 2 achados ALTO da Fase 201, a pedido
+  do usuário ("transforme os achados em novas fases e inicie as
+  correções").
+  - **202.A** — `backend/app/core/events.py` ganhou 2
+    `CREATE UNIQUE INDEX IF NOT EXISTS` idempotentes (mesmo padrão
+    fail-soft da lista de ALTERs) em `tenants.slug` e `users.email`,
+    fechando a lacuna real confirmada na Fase 201 (nenhuma das duas
+    colunas tinha constraint única de verdade no Postgres, apesar do
+    `unique=True` do SQLAlchemy). `_seed_demo_tenant()` ganhou
+    `pg_advisory_xact_lock` logo no início, serializando boots
+    concorrentes (rolling deploy) sem mudar nada pro caso comum de 1
+    instância só. Verificado: os 2 índices foram criados sem conflito
+    no Postgres local (sem duplicata pré-existente); teste novo
+    (`test_tenant_user_unique_constraints.py`) confirma `IntegrityError`
+    real ao tentar duplicar slug/email; verificação empírica adicional
+    (não virou teste permanente) — 2 chamadas **verdadeiramente
+    concorrentes** de `_seed_demo_tenant()` (`asyncio.gather`, não
+    sequencial) contra um banco Postgres descartável resultaram em
+    exatamente 1 tenant `slug="demo"`, confirmando que o lock serializa
+    a corrida de verdade.
+  - **202.B** — `object_storage.py` ganhou `delete_bytes()` (mesmo
+    padrão try/except + `ObjectStorageError` das outras 3 funções do
+    módulo). `resetar_tenant_demo` agora lê os `Document` do tenant demo
+    ANTES do DELETE genérico e chama `delete_document_chunks()` (Qdrant,
+    reaproveitando `_collection_for` de `auto_ingest.py`) e
+    `object_storage.delete_bytes()` (S3, só se configurado) pra cada um
+    — fail-soft, uma falha de Qdrant/S3 nunca trava o reset do Postgres.
+    Fecha o vazamento real confirmado na Fase 201: documentos aprovados
+    no tenant demo não ficam mais órfãos no Qdrant/S3 a cada reset.
+    Teste novo (`test_demo_reset_cleanup.py`, Qdrant real em memória)
+    confirma que os chunks somem da collection e que `delete_bytes` é
+    chamado com a `storage_key` certa; segundo teste confirma que um
+    documento sem `storage_key` (caminho legado base64) não dispara
+    nenhuma chamada de delete no S3.
+  - Suíte de testes relacionada (unique constraints + demo reset +
+    demo login + demo guard + object storage) rodada isolada e em
+    conjunto — a mesma flakiness de pool asyncpg/pytest-asyncio já
+    documentada (Fase 199) apareceu de novo em 3 dos testes quando
+    rodados juntos, mas todos passam limpo quando isolados; nenhum é
+    específico desta fase (reproduz em testes pré-existentes não
+    tocados também).
 
 ## Riscos conhecidos / débito técnico
 

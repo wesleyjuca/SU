@@ -146,6 +146,32 @@ async def test_get_bytes_falha_vira_object_storage_error(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_delete_bytes_chama_delete_object_com_bucket_e_key(monkeypatch):
+    _patch_settings(monkeypatch)
+    fake_client = MagicMock()
+    fake_client.delete_object = AsyncMock(return_value={})
+    monkeypatch.setattr("aioboto3.Session", lambda: _FakeSession(fake_client))
+
+    await object_storage.delete_bytes("documents/t1/d1/a.pdf")
+
+    fake_client.delete_object.assert_awaited_once()
+    _, kwargs = fake_client.delete_object.call_args
+    assert kwargs["Bucket"] == "meu-bucket"
+    assert kwargs["Key"] == "documents/t1/d1/a.pdf"
+
+
+@pytest.mark.asyncio
+async def test_delete_bytes_falha_vira_object_storage_error(monkeypatch):
+    _patch_settings(monkeypatch)
+    fake_client = MagicMock()
+    fake_client.delete_object = AsyncMock(side_effect=RuntimeError("conexão recusada"))
+    monkeypatch.setattr("aioboto3.Session", lambda: _FakeSession(fake_client))
+
+    with pytest.raises(object_storage.ObjectStorageError):
+        await object_storage.delete_bytes("documents/t1/d1/a.pdf")
+
+
+@pytest.mark.asyncio
 async def test_generate_presigned_url_inclui_content_disposition(monkeypatch):
     _patch_settings(monkeypatch)
     fake_client = MagicMock()
