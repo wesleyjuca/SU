@@ -810,6 +810,120 @@ Histórico:
     rodados juntos, mas todos passam limpo quando isolados; nenhum é
     específico desta fase (reproduz em testes pré-existentes não
     tocados também).
+- **Fase 203** — rodada de teste geral a pedido do usuário, desta vez
+  também com propostas de evolução de produto (não só achados de bug).
+  Ambiente real (Postgres+Redis+Celery+uvicorn) subido de verdade.
+  - **Achado pré-existente confirmado nesta rodada** (via screenshot real
+    do usuário do painel "Insights proativos" do Cérebro, antes mesmo da
+    rodada formal começar): `backend/app/services/brain_insights.py::
+    gerar_insights()` chama `call_llm(...)` diretamente, sem nunca entrar
+    em `user_ai_creds(db, user_id)` (`app/integrations/byok.py`) — ao
+    contrário de toda outra rota disparadora de IA do sistema, essa não
+    tem NENHUM fallback pra BYOK (nem o do próprio SUPERADMIN que clicou
+    no botão). Depende 100% de `ANTHROPIC_API_KEY` estar configurada no
+    servidor; se ausente/perdida em produção, o erro é exatamente
+    `Could not resolve authentication method` do SDK Anthropic, batendo
+    com o screenshot do usuário. `db`/`current_user` já estão disponíveis
+    no call site (`app/api/v1/system.py`, `POST /system/brain/insights`)
+    — fix é threading-los através de `gerar_insights()`.
+  - **202.A/202.B reconfirmados de forma independente e mais fundo** que
+    a própria Fase 202: 202.A com 5 chamadas verdadeiramente concorrentes
+    de `_seed_demo_tenant()` (`asyncio.gather`, banco descartável — até
+    aqui só 2 tinham sido testadas) resultando em exatamente 1 tenant
+    `slug="demo"`, e os 2 índices únicos confirmados presentes no
+    Postgres local após um boot novo; 202.B reconfirmado via HTTP real de
+    ponta a ponta (não chamando `resetar_tenant_demo()` direto em Python
+    como a própria Fase 202 fez) — 2ª instância do backend com Qdrant
+    real em memória, documento criado e aprovado via HTTP real,
+    `POST /rag/search` confirma o chunk findável ANTES do reset,
+    `POST /tenants/demo/reset` disparado via HTTP como SUPERADMIN real, e
+    o mesmo `POST /rag/search` confirma `count=0` DEPOIS — o fluxo
+    completo (não só a função de serviço isolada) funciona.
+  - **Varredura completa dos ~82 endpoints por `tenant_id`** — lacuna que
+    a Fase 201 deixou documentada e nenhuma rodada seguinte tinha
+    fechado. 4 agentes paralelos, cada um auditando um subconjunto dos
+    routers de `app/api/v1/`; 3 completaram (a 4ª falhou por limite
+    semanal de uso da API do harness — refeita manualmente pela sessão
+    principal lendo os 7 arquivos restantes: `reports_admin.py`,
+    `system.py`, `tenant.py`, `tenants_admin.py`, `teses.py`, `users.py`,
+    `ws.py` — todos limpos, sem achado novo). **3 achados reais
+    confirmados**:
+    - **ALTO — `POST /rag/ingest` permite envenenamento cross-tenant do
+      RAG privado.** `app/api/v1/rag.py:154-183`. Gate é só
+      `require_role("ADMIN")` (qualquer tenant, não SUPERADMIN); o
+      payload aceita `metadata` livre do cliente e nunca sobrescreve
+      `metadata["tenant_id"]` com o `tenant_id` real do chamador (ao
+      contrário do caminho de auto-ingest confiável,
+      `app/rag/auto_ingest.py:33`, que sempre carimba o valor derivado do
+      servidor). `app/rag/retrieval.py:82` (`retrieve()`) confia
+      cegamente no `tenant_id` do payload como único mecanismo de
+      isolamento pras collections privadas
+      (`peticoes_afj`/`memorias_afj`/`documentos_clientes`/
+      `doutrina_privada`). Um ADMIN do tenant A pode plantar conteúdo
+      malicioso que passa a aparecer nas buscas jurídicas privadas do
+      tenant B como se fosse dado confiável do próprio escritório B —
+      alcançável com zero credenciais reais via `POST /auth/demo-login`
+      (Fase 200), já que o tenant demo também tem um ADMIN.
+    - **MÉDIO — `integrity.py`: `responsavel_id` de `IntegrityRisk` não é
+      validado contra o tenant do chamador**, ao contrário de todo outro
+      FK do sistema (`client_id`/`process_id` sempre passam por um
+      validador). `GET /integrity/risks` faz um outer join sem filtro de
+      tenant no lado de `User` — um ADMIN pode setar `responsavel_id` pra
+      um UUID de usuário de outro tenant (se souber/adivinhar) e ler de
+      volta o `full_name` desse usuário. Severidade limitada por exigir
+      um UUID válido em mãos primeiro (não é enumerável) — é um
+      vazamento de nome via confirmação, não exposição de linha inteira.
+    - **BAIXO — `GET /rag/coverage` devolve contagem agregada
+      cross-tenant.** `qdrant.count()` roda sem filtro de tenant pras 4
+      collections privadas — qualquer usuário staff vê o total de chunks
+      armazenados na plataforma inteira (não só do próprio tenant) em
+      cada collection. Nenhum conteúdo/PII vaza, só um sinal quantitativo.
+    - Todos os outros ~75 endpoints auditados (grupos A/C/D completos:
+      `agent_prompts`, `agents`, `ai_oauth`, `approvals`, `audit`,
+      `auth`, `billing`, `clients`, `crm`, `custom_agents`, `documents`,
+      `financial`, `google_integration`, `integrations_hub`, `invoices`,
+      `lgpd`, `notifications`, `petition_templates`, `portal`,
+      `processes`, `publications`, `push`, `rag` [`/search`,
+      `/jurisprudencia/favorabilidade`], `reports_admin`, `system`,
+      `tenant`, `tenants_admin`, `teses`, `users`, `ws`) vieram limpos.
+  - **Auditoria adicional (sessão principal, sem novos agentes por causa
+    do limite semanal já atingido)**: revisão LGPD/PII dos 5 modelos de
+    Ética/Integridade (Fase 189) — nenhum guarda PII de cliente (só dados
+    de colaborador/governança interna), fora do escopo de
+    `erase_client_data`; não é um gap, é o design correto. Revisão de
+    design (não confirmada empiricamente, registrada como observação pra
+    não se perder): `resetar_tenant_demo()` apaga `Approval`/`AgentRun`
+    do tenant demo incondicionalmente, sem checar se algum está
+    `PENDENTE`/`RUNNING` no exato momento do reset — se um worker Celery
+    estiver no meio de `resume_chain_after_approval` pra uma chain HITL
+    do tenant demo quando o reset diário (4:45am) ou o botão manual
+    disparar, o `UPDATE` subsequente do worker viraria um no-op silencioso
+    (linha já apagada) em vez de erro — não reproduzido de propósito
+    (exigiria orquestrar uma race real), fica como hipótese pra próxima
+    rodada decidir se vale a pena investigar mais fundo.
+  - **Walkthrough real do frontend via Playwright**: cortado nesta rodada
+    por decisão de tempo/recursos (o limite semanal de uso já tinha sido
+    atingido por um dos agentes da varredura de tenant_id) — não subiu o
+    frontend de verdade desta vez. Fica como lacuna explícita pra próxima
+    rodada, no mesmo padrão de transparência das rodadas anteriores.
+  - **Evolução de produto** (novo nesta rodada, a pedido do usuário — não
+    são achados de bug): 2 frentes paralelas (backend/IA e frontend/UX)
+    levantaram propostas lendo `CLAUDE.md`, `/sobre` e os módulos
+    existentes. 16 propostas no total (8 de cada frente) — ver o
+    relatório apresentado ao usuário ao final desta fase para a lista
+    completa com nome, módulo estendido, justificativa e estimativa de
+    complexidade (S/M/L). Nenhuma decisão de priorização foi tomada nesta
+    fase — cabe ao usuário escolher quais viram fase nova.
+  - Nenhuma correção foi feita nesta fase (metodologia padrão) — decisão
+    do usuário sobre quais achados/evoluções viram fase nova. **Próxima
+    rodada deve**: se os 3 achados de `tenant_id` forem corrigidos,
+    reconfirmar via HTTP real (não só teste unitário) que `POST
+    /rag/ingest` carimba o `tenant_id` do servidor, ignorando qualquer
+    valor no `metadata` do cliente; completar o walkthrough real do
+    frontend via Playwright que ficou de fora aqui; e considerar
+    investigar a hipótese não confirmada do reset-durante-chain-HITL
+    acima com uma race real orquestrada (2 processos, não só leitura de
+    código).
 
 ## Riscos conhecidos / débito técnico
 
