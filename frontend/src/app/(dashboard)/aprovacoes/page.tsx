@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect, useCallback } from "react";
-import { CheckCircle } from "lucide-react";
+import { CheckCircle, ArrowLeft } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { ApprovalCard, ApprovalListItem, type Approval } from "@/components/approvals/ApprovalCard";
 
@@ -12,6 +12,17 @@ export default function AprovacoesPage() {
   const [resolvidas, setResolvidas] = useState<Approval[]>([]);
   const [selected, setSelected] = useState<Approval | null>(null);
   const [loading, setLoading] = useState(true);
+  // Fase 207.2 — no mobile, lista e detalhe disputavam a mesma altura fixa
+  // da tela (herdada do layout desktop lista+detalhe lado a lado). Esse
+  // estado controla um fluxo "lista → toque → detalhe" só abaixo de `lg`;
+  // no desktop os dois painéis continuam sempre visíveis lado a lado, sem
+  // depender dele.
+  const [mobileDetailOpen, setMobileDetailOpen] = useState(false);
+
+  function selecionar(a: Approval) {
+    setSelected(a);
+    setMobileDetailOpen(true);
+  }
 
   const approvals = aba === "pendentes" ? pendentes : resolvidas;
 
@@ -45,6 +56,7 @@ export default function AprovacoesPage() {
   useEffect(() => {
     setLoading(true);
     setSelected(null);
+    setMobileDetailOpen(false);
     const carregar = aba === "pendentes" ? fetchPendentes : fetchResolvidas;
     carregar()
       .then((data) => {
@@ -59,6 +71,9 @@ export default function AprovacoesPage() {
     const remaining = pendentes.filter((a) => a.id !== id);
     setPendentes(remaining);
     setSelected(remaining.length > 0 ? remaining[0] : null);
+    // Volta pra lista no mobile — o usuário toca no próximo item da fila em
+    // vez de cair direto no detalhe seguinte sem contexto.
+    setMobileDetailOpen(false);
   }
 
   return (
@@ -114,23 +129,32 @@ export default function AprovacoesPage() {
           </p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 h-[calc(100vh-240px)]">
-          {/* Lista esquerda */}
-          <div className="lg:col-span-1 overflow-y-auto space-y-2">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 lg:h-[calc(100vh-240px)]">
+          {/* Lista esquerda — escondida no mobile assim que um item é aberto */}
+          <div className={`lg:col-span-1 lg:overflow-y-auto space-y-2 ${mobileDetailOpen ? "hidden lg:block" : ""}`}>
             {approvals.map((a) => (
               <ApprovalListItem
                 key={a.id}
                 approval={a}
                 selected={selected?.id === a.id}
-                onClick={() => setSelected(a)}
+                onClick={() => selecionar(a)}
               />
             ))}
           </div>
 
-          {/* Painel de detalhes direito */}
-          <div className="lg:col-span-2 overflow-y-auto">
+          {/* Painel de detalhes direito — no mobile só aparece após tocar um item */}
+          <div className={`lg:col-span-2 lg:overflow-y-auto ${mobileDetailOpen ? "" : "hidden lg:block"}`}>
             {selected ? (
-              <ApprovalCard approval={selected} onResolved={handleResolved} readOnly={aba === "resolvidas"} />
+              <>
+                <button
+                  type="button"
+                  onClick={() => setMobileDetailOpen(false)}
+                  className="lg:hidden mb-3 min-h-[44px] flex items-center gap-1.5 text-sm text-afj-black/60 hover:text-afj-black"
+                >
+                  <ArrowLeft size={15} /> Voltar pra lista
+                </button>
+                <ApprovalCard approval={selected} onResolved={handleResolved} readOnly={aba === "resolvidas"} />
+              </>
             ) : (
               <div className="afj-card p-12 text-center text-afj-black/40">
                 Selecione uma aprovação para revisar

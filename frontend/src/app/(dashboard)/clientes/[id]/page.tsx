@@ -3,7 +3,8 @@ import { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
 import {
   ArrowLeft, Users, Plus, MessageSquare, Phone, Mail, Scale,
-  Loader2, X, AlertTriangle, Download, Trash2, Settings2, Globe, Copy, Check as CheckIcon
+  Loader2, X, AlertTriangle, Download, Trash2, Settings2, Globe, Copy, Check as CheckIcon,
+  HeartPulse,
 } from "lucide-react";
 import Link from "next/link";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
@@ -57,6 +58,22 @@ interface Processo {
   situacao: string;
 }
 
+interface HealthScore {
+  score: number;
+  banda: "saudavel" | "atencao" | "risco";
+  componentes: {
+    financeiro: { pontos: number; max: number; receita_atrasada: number; receita_total: number };
+    engajamento: { pontos: number; max: number; dias_desde_ultima_interacao: number | null };
+    processual: { pontos: number; max: number; taxa_exito: number | null; total_com_desfecho: number };
+  };
+}
+
+const HEALTH_BANDA_CONFIG: Record<HealthScore["banda"], { label: string; bg: string; text: string; border: string }> = {
+  saudavel: { label: "Saudável", bg: "bg-green-50", text: "text-green-700", border: "border-green-200" },
+  atencao: { label: "Atenção", bg: "bg-amber-50", text: "text-amber-700", border: "border-amber-200" },
+  risco: { label: "Risco", bg: "bg-red-50", text: "text-red-700", border: "border-red-200" },
+};
+
 const TIPO_ICONS: Record<string, React.ReactNode> = {
   EMAIL: <Mail size={12} className="text-blue-500" />,
   LIGACAO: <Phone size={12} className="text-green-500" />,
@@ -92,6 +109,7 @@ export default function ClienteDetailPage() {
   const [interactions, setInteractions] = useState<Interaction[]>([]);
   const [contatos, setContatos] = useState<Contato[]>([]);
   const [processos, setProcessos] = useState<Processo[]>([]);
+  const [healthScore, setHealthScore] = useState<HealthScore | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<"interacoes" | "contatos" | "financeiro">("interacoes");
   const userRole = useUserStore((s) => s.user?.role);
@@ -130,16 +148,18 @@ export default function ClienteDetailPage() {
     const headers = { Authorization: `Bearer ${token}` };
     setLoading(true);
     try {
-      const [cRes, iRes, pRes, ctRes] = await Promise.all([
+      const [cRes, iRes, pRes, ctRes, hRes] = await Promise.all([
         fetch(`/api/v1/clients/${id}`, { headers }),
         fetch(`/api/v1/clients/${id}/interactions?limit=50`, { headers }),
         fetch(`/api/v1/processes?client_id=${id}`, { headers }),
         fetch(`/api/v1/clients/${id}/contacts`, { headers }),
+        fetch(`/api/v1/clients/${id}/health-score`, { headers }),
       ]);
       if (cRes.ok) setCliente(await cRes.json());
       if (iRes.ok) setInteractions(await iRes.json());
       if (pRes.ok) setProcessos(await pRes.json());
       if (ctRes.ok) setContatos(await ctRes.json());
+      if (hRes.ok) setHealthScore(await hRes.json());
     } finally { setLoading(false); }
   }
 
@@ -353,6 +373,50 @@ export default function ClienteDetailPage() {
               ))}
             </div>
           </div>
+
+          {/* Score de saúde do cliente (Fase 207.1) */}
+          {healthScore && (
+            <div className={`rounded-sm border p-4 ${HEALTH_BANDA_CONFIG[healthScore.banda].bg} ${HEALTH_BANDA_CONFIG[healthScore.banda].border}`}>
+              <div className="flex items-center justify-between gap-2 mb-3">
+                <h2 className="font-semibold text-afj-black text-sm flex items-center gap-2">
+                  <HeartPulse size={14} className={HEALTH_BANDA_CONFIG[healthScore.banda].text} />
+                  Saúde do Cliente
+                </h2>
+                <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${HEALTH_BANDA_CONFIG[healthScore.banda].text} ${HEALTH_BANDA_CONFIG[healthScore.banda].bg} border ${HEALTH_BANDA_CONFIG[healthScore.banda].border}`}>
+                  {healthScore.score}/100 · {HEALTH_BANDA_CONFIG[healthScore.banda].label}
+                </span>
+              </div>
+              <div className="space-y-1.5 text-xs text-afj-black/60">
+                <div className="flex justify-between">
+                  <span>Pagamentos em dia</span>
+                  <span className="font-medium text-afj-black">
+                    {healthScore.componentes.financeiro.pontos}/{healthScore.componentes.financeiro.max}
+                    {healthScore.componentes.financeiro.receita_atrasada > 0 && (
+                      <span className="text-red-600"> ({healthScore.componentes.financeiro.receita_atrasada} atrasada{healthScore.componentes.financeiro.receita_atrasada > 1 ? "s" : ""})</span>
+                    )}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Engajamento recente</span>
+                  <span className="font-medium text-afj-black">
+                    {healthScore.componentes.engajamento.pontos}/{healthScore.componentes.engajamento.max}
+                    {healthScore.componentes.engajamento.dias_desde_ultima_interacao !== null && (
+                      <span className="text-afj-black/40"> (última há {healthScore.componentes.engajamento.dias_desde_ultima_interacao}d)</span>
+                    )}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Taxa de êxito processual</span>
+                  <span className="font-medium text-afj-black">
+                    {healthScore.componentes.processual.pontos}/{healthScore.componentes.processual.max}
+                    {healthScore.componentes.processual.taxa_exito !== null && (
+                      <span className="text-afj-black/40"> ({healthScore.componentes.processual.taxa_exito}%)</span>
+                    )}
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Processos vinculados */}
           <div className="afj-card p-4">

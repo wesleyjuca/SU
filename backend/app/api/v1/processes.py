@@ -1017,6 +1017,56 @@ async def reatribuir_carteira(
     }
 
 
+class BulkProcessUpdate(BaseModel):
+    process_ids: list[str]
+    situacao: str | None = None
+    responsavel_id: str | None = None
+
+
+@router.post("/bulk-update")
+async def bulk_update_processes(
+    body: BulkProcessUpdate,
+    # Mesmo gate de reatribuir_carteira — atualizar vários processos de uma
+    # vez é ação de gestão, não operação do dia a dia de um único advogado.
+    current_user: User = Depends(require_role("ADMIN", "SOCIO", "GESTOR")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Fase 207.3 — ação em lote sobre processos selecionados na listagem:
+    atualiza situação e/ou responsável de vários processos numa só chamada.
+    Mesmo padrão de `reatribuir_carteira` (bulk por ids explícitos em vez de
+    "todos de um advogado")."""
+    from fastapi import HTTPException
+
+    if not body.process_ids:
+        raise HTTPException(status_code=422, detail="Selecione pelo menos um processo.")
+    if len(body.process_ids) > 200:
+        raise HTTPException(status_code=422, detail="Selecione no máximo 200 processos por vez.")
+    if not body.situacao and not body.responsavel_id:
+        raise HTTPException(status_code=422, detail="Informe situação e/ou responsável pra atualizar.")
+
+    novo_responsavel = None
+    if body.responsavel_id:
+        novo_responsavel = uuid.UUID(body.responsavel_id)
+        await _validar_advogados_do_tenant(db, current_user.tenant_id, [novo_responsavel])
+
+    ids = [uuid.UUID(pid) for pid in body.process_ids]
+    processos = (await db.execute(
+        select(LegalProcess).where(
+            LegalProcess.id.in_(ids),
+            LegalProcess.tenant_id == current_user.tenant_id,
+        )
+    )).scalars().all()
+
+    for p in processos:
+        if body.situacao:
+            p.situacao = body.situacao
+        if novo_responsavel:
+            p.responsavel_id = novo_responsavel
+
+    await db.commit()
+    return {"atualizados": len(processos), "solicitados": len(body.process_ids)}
+
+
 @router.delete("/{process_id}", status_code=204)
 async def archive_process(
     process_id: str,

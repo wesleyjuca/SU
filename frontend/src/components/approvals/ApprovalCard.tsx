@@ -235,12 +235,13 @@ export function ApprovalCard({ approval, onResolved, readOnly = false }: Approva
             Ao aprovar, você confirma ter revisado o conteúdo. Esta ação será registrada no log de auditoria.
           </div>
 
-          {/* Botões */}
-          <div className="flex gap-3 pt-2 border-t border-afj-cream-dark">
+          {/* Botões — empilha em telas muito estreitas (Fase 207.2) pra não
+              espremer o alvo de toque do "Rejeitar" ao lado do "Aprovar". */}
+          <div className="flex flex-col sm:flex-row gap-3 pt-2 border-t border-afj-cream-dark">
             <button
               onClick={() => resolve(false)}
               disabled={submitting}
-              className="flex items-center gap-2 px-4 py-2.5 border border-red-200 text-red-700 rounded-md
+              className="min-h-[44px] flex items-center justify-center gap-2 px-4 py-2.5 border border-red-200 text-red-700 rounded-md
                          text-sm font-medium hover:bg-red-50 transition-colors disabled:opacity-50"
             >
               <XCircle size={16} />
@@ -249,7 +250,7 @@ export function ApprovalCard({ approval, onResolved, readOnly = false }: Approva
             <button
               onClick={() => resolve(true)}
               disabled={submitting}
-              className="flex-1 flex items-center justify-center gap-2 btn-afj-primary rounded-md disabled:opacity-50"
+              className="flex-1 min-h-[44px] flex items-center justify-center gap-2 btn-afj-primary rounded-md disabled:opacity-50"
             >
               <CheckCircle size={16} />
               {submitting ? "Processando..." : "Aprovar"}

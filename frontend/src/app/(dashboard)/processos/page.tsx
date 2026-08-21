@@ -68,6 +68,11 @@ export default function ProcessosPage() {
   const [showOabModal, setShowOabModal] = useState(false);
   const [oabForm, setOabForm] = useState({ oab: "", uf: "AC" });
   const [oabLoading, setOabLoading] = useState(false);
+  // Fase 207.3 — ações em lote (seleção múltipla + situação em massa + export).
+  const canBulk = ["ADMIN", "SOCIO", "GESTOR", "SUPERADMIN"].includes(me?.role ?? "");
+  const [selecionados, setSelecionados] = useState<Set<string>>(new Set());
+  const [bulkSituacao, setBulkSituacao] = useState("");
+  const [bulkApplying, setBulkApplying] = useState(false);
   const [view, setView] = useState<"table" | "grid">(() => {
     if (typeof window !== "undefined") {
       return (localStorage.getItem("processos_view") as "table" | "grid") ?? "table";
@@ -244,6 +249,63 @@ export default function ProcessosPage() {
   // filtrado do backend, não precisa mais filtrar de novo aqui.
   const filtrados = processos;
 
+  function toggleSelecionado(id: string) {
+    setSelecionados((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleTodosVisiveis() {
+    setSelecionados((prev) => {
+      const todosMarcados = filtrados.length > 0 && filtrados.every((p) => prev.has(p.id));
+      return todosMarcados ? new Set() : new Set(filtrados.map((p) => p.id));
+    });
+  }
+
+  async function aplicarBulkSituacao() {
+    if (!bulkSituacao || selecionados.size === 0) return;
+    setBulkApplying(true);
+    try {
+      const token = localStorage.getItem("afj_access_token");
+      const res = await fetch("/api/v1/processes/bulk-update", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ process_ids: Array.from(selecionados), situacao: bulkSituacao }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        toast.success(`${data.atualizados} processo(s) atualizado(s).`);
+        setSelecionados(new Set());
+        setBulkSituacao("");
+        fetchProcessos(0, false);
+      } else {
+        toast.error(data.detail || "Erro ao atualizar em lote.");
+      }
+    } catch {
+      toast.error("Erro de conexão.");
+    } finally {
+      setBulkApplying(false);
+    }
+  }
+
+  function exportarSelecionadosCSV() {
+    const linhas = filtrados.filter((p) => selecionados.has(p.id));
+    const header = ["numero_cnj", "tribunal", "area_direito", "situacao", "valor_causa"];
+    const csv = [
+      header.join(","),
+      ...linhas.map((p) => [p.numero_cnj ?? "", p.tribunal, p.area_direito ?? "", p.situacao, p.valor_causa ?? ""]
+        .map((v) => `"${String(v).replace(/"/g, '""')}"`).join(",")),
+    ].join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const a = Object.assign(document.createElement("a"), {
+      href: URL.createObjectURL(blob),
+      download: `processos_selecionados_${new Date().toISOString().slice(0, 10)}.csv`,
+    });
+    a.click();
+  }
+
   return (
     <div className="max-w-7xl mx-auto space-y-5">
       <Breadcrumb crumbs={[{ label: "Dashboard", href: "/dashboard" }, { label: "Processos" }]} />
@@ -301,6 +363,40 @@ export default function ProcessosPage() {
         </select>
       </div>
 
+      {/* Barra de ações em lote (Fase 207.3) — só aparece com seleção ativa */}
+      {canBulk && selecionados.size > 0 && (
+        <div className="afj-card p-3 flex flex-wrap items-center gap-3 border-afj-gold/40 bg-afj-gold/5">
+          <span className="text-sm font-medium text-afj-black">{selecionados.size} selecionado(s)</span>
+          <select
+            value={bulkSituacao}
+            onChange={(e) => setBulkSituacao(e.target.value)}
+            className="border border-afj-cream-dark rounded-sm px-3 py-1.5 text-sm bg-white focus:outline-none focus:border-afj-gold"
+          >
+            <option value="">Alterar situação para...</option>
+            <option value="ATIVO">Ativo</option>
+            <option value="SUSPENSO">Suspenso</option>
+            <option value="ARQUIVADO">Arquivado</option>
+            <option value="ENCERRADO">Encerrado</option>
+          </select>
+          <button
+            onClick={aplicarBulkSituacao}
+            disabled={!bulkSituacao || bulkApplying}
+            className="btn-afj-primary rounded-sm text-sm disabled:opacity-50"
+          >
+            {bulkApplying ? "Aplicando..." : "Aplicar"}
+          </button>
+          <button onClick={exportarSelecionadosCSV} className="btn-afj-outline rounded-sm text-sm flex items-center gap-1.5">
+            <Download size={13} /> Exportar CSV
+          </button>
+          <button
+            onClick={() => setSelecionados(new Set())}
+            className="text-xs text-afj-black/40 hover:text-afj-black underline ml-auto"
+          >
+            Limpar seleção
+          </button>
+        </div>
+      )}
+
       {loading ? (
         view === "table" ? (
           <div className="afj-card p-4 space-y-3">
@@ -331,6 +427,17 @@ export default function ProcessosPage() {
             <table className="afj-table">
               <thead>
                 <tr>
+                  {canBulk && (
+                    <th className="w-8">
+                      <input
+                        type="checkbox"
+                        checked={filtrados.length > 0 && filtrados.every((p) => selecionados.has(p.id))}
+                        onChange={toggleTodosVisiveis}
+                        className="cursor-pointer"
+                        aria-label="Selecionar todos"
+                      />
+                    </th>
+                  )}
                   <th>Número CNJ</th>
                   <th>Tribunal</th>
                   <th>Área</th>
@@ -345,6 +452,17 @@ export default function ProcessosPage() {
                   const prazo = diasParaPrazo(p.proximo_prazo_at);
                   return (
                     <tr key={p.id}>
+                      {canBulk && (
+                        <td>
+                          <input
+                            type="checkbox"
+                            checked={selecionados.has(p.id)}
+                            onChange={() => toggleSelecionado(p.id)}
+                            className="cursor-pointer"
+                            aria-label={`Selecionar processo ${p.numero_cnj || p.id}`}
+                          />
+                        </td>
+                      )}
                       <td>
                         <Link href={`/processos/${p.id}`} className="text-afj-gold hover:underline font-mono text-xs">
                           {p.numero_cnj || "Sem CNJ"}
@@ -415,8 +533,17 @@ export default function ProcessosPage() {
           {filtrados.map((p) => {
             const prazo = diasParaPrazo(p.proximo_prazo_at);
             return (
-              <div key={p.id} className="afj-card p-4 hover:border-afj-gold/30 transition-colors">
-                <div className="flex items-start justify-between mb-2">
+              <div key={p.id} className="afj-card p-4 hover:border-afj-gold/30 transition-colors relative">
+                {canBulk && (
+                  <input
+                    type="checkbox"
+                    checked={selecionados.has(p.id)}
+                    onChange={() => toggleSelecionado(p.id)}
+                    className="absolute top-3 left-3 cursor-pointer z-10"
+                    aria-label={`Selecionar processo ${p.numero_cnj || p.id}`}
+                  />
+                )}
+                <div className={`flex items-start justify-between mb-2 ${canBulk ? "pl-6" : ""}`}>
                   {p.area_direito ? (
                     <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${AREA_COLORS[p.area_direito] ?? "bg-gray-100 text-gray-700"}`}>
                       {p.area_direito}

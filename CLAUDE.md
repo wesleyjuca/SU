@@ -1131,6 +1131,88 @@ Histórico:
     analytics entre filiais, score de saúde do cliente, ações em lote em
     Processos, fila de aprovação mobile-first) — seguem pro próximo
     sub-lote.
+- **Fase 207** — segundo sub-lote das evoluções M/L da Fase 203 ("eu
+  escolho a ordem"). 3 das 8 propostas restantes; guardando as 2
+  estruturalmente maiores (agentes customizados como passo de chain,
+  analytics entre filiais) e as 3 que precisam de mais decisão de produto
+  (win-rate/strategy_agent, CRM→previsão de caixa, auto-população da
+  Matriz de Riscos) pro sub-lote seguinte.
+  - **207.1 — Score de saúde do cliente**: novo `GET /clients/{id}/
+    health-score` (`app/api/v1/clients.py`) — score 0-100 puramente
+    derivado (nenhum campo novo persistido), combinando 3 sinais já
+    existentes: financeiro (40 pts, penaliza receita PENDENTE já vencida),
+    engajamento (30 pts, recência de `ClientInteraction`) e processual
+    (30 pts, taxa de êxito/acordo dos processos com desfecho), bandado em
+    saudável/atenção/risco. Gate `get_current_user` (não
+    `require_role`) — sinal agregado/derivado, menos sensível que os
+    dados financeiros brutos de `/financeiro`, qualquer advogado que
+    trabalhe a relação com o cliente deve ver. Frontend: novo card no
+    Cliente 360 (`clientes/[id]/page.tsx`) com badge geral + 3 linhas de
+    componente.
+  - **207.2 — Fila de aprovação mobile-first**: `/aprovacoes` (lista +
+    detalhe lado a lado) forçava a mesma altura fixa da tela no mobile
+    que no desktop, e o `useEffect` que auto-seleciona o 1º item da aba
+    ao carregar fazia o painel de detalhe aparecer sempre "aberto" mesmo
+    no mobile — sem forma de ver a lista primeiro. Novo estado
+    `mobileDetailOpen`, desacoplado de `selected` e setado só por
+    interação explícita do usuário (nunca pelo auto-select), habilita um
+    fluxo lista→toque→detalhe só abaixo de `lg` (desktop continua lado a
+    lado, inalterado); botão "Voltar pra lista" (`ArrowLeft`,
+    `min-h-[44px]`) só visível no mobile. `ApprovalCard`: botões
+    Aprovar/Rejeitar ganham `min-h-[44px]` + empilham em `flex-col` em
+    telas muito estreitas (antes espremidos lado a lado). Mudança
+    puramente frontend — sem endpoint novo, sem teste de backend
+    aplicável.
+  - **207.3 — Ações em lote em Processos**: novo `POST /processes/
+    bulk-update` (`app/api/v1/processes.py`) — atualiza situação e/ou
+    responsável de até 200 processos numa chamada só, mesmo padrão de
+    `reatribuir_carteira` (bulk por ids explícitos) e mesmo gate
+    (`ADMIN/SOCIO/GESTOR` — ação de gestão, não operação do dia a dia de
+    um advogado); processos de outro tenant são silenciosamente
+    excluídos da contagem (`atualizados` < `solicitados`), não um erro;
+    `responsavel_id` passa por `_validar_advogados_do_tenant` (já
+    existente). Frontend (`processos/page.tsx`): primeiro uso de
+    checkbox multi-select nesta base de código (confirmado por pesquisa
+    prévia — não havia padrão anterior a reaproveitar) — `Set<string>`
+    de selecionados, checkbox "selecionar todos visíveis" no cabeçalho
+    da tabela e por linha (tabela e grid), toolbar condicional
+    (`canBulk && selecionados.size > 0`) com dropdown de situação +
+    "Aplicar" + "Exportar CSV" (client-side, só das linhas já
+    selecionadas/carregadas) + "Limpar seleção". Escopo deliberadamente
+    cortado: reatribuição de responsável em lote não foi ligada na UI
+    ainda (exigiria carregar uma lista de advogados não usada hoje nessa
+    tela) — backend já suporta, fica pra quando fizer sentido adicionar.
+  - Testes novos: `test_client_health_score_fase207.py` (5 testes —
+    score neutro sem histórico, receita atrasada derruba o componente
+    financeiro, interação recente vs. antiga muda o componente de
+    engajamento, taxa de êxito processual, cliente de outro tenant não
+    encontrado) e `test_bulk_update_processes_fase207.py` (7 testes —
+    atualização em lote bem-sucedida, processo de outro tenant excluído
+    da contagem sem erro, responsável válido aplica a todos, responsável
+    de outro tenant rejeitado com 422, lista vazia/>200 ids/nem
+    situação-nem-responsável todos rejeitados com 422), ambos Postgres
+    real, mesmo padrão direto-por-função dos testes recentes (206.3).
+    207.2 não gerou teste de backend (mudança puramente frontend).
+  - Verificação: `ruff check` + `py_compile` limpos em `clients.py`/
+    `processes.py` + os 2 arquivos de teste novos; `tsc --noEmit` limpo;
+    `eslint` nos 4 arquivos frontend tocados — 2 warnings pré-existentes
+    de `exhaustive-deps` (`clientes/[id]/page.tsx`, `processos/page.tsx`)
+    confirmados via `git stash`/`eslint`/`git stash pop` como idênticos
+    antes desta fase (só linha deslocada pelas inserções), não
+    regressão. Os 12 testes novos passam limpos isolados; rodados junto
+    da suíte completa (819 → 831 com os novos), a mesma flutuação de
+    ERROR/FAILED entre rodadas (pool asyncpg entre event loops do
+    pytest-asyncio + rate-limit de login estourando quando a suíte
+    inteira reusa a mesma credencial em sequência, documentada desde a
+    Fase 199) reapareceu em arquivos pré-existentes não tocados nesta
+    fase (`test_auth.py`, `test_demo_login.py`, `test_clients.py`,
+    `test_process_fonte.py`, `test_tenant_user_unique_constraints.py`,
+    entre outros) — nenhuma falha nos 2 arquivos novos desta fase.
+  - Não implementadas nesta fase: as 5 propostas M/L restantes (win-rate
+    histórico no strategy_agent, CRM→previsão de caixa, auto-população
+    da Matriz de Riscos, agentes customizados como passo de chain,
+    analytics entre filiais) — seguem pro próximo sub-lote, com as 2
+    estruturalmente maiores deixadas por último como já planejado.
 
 ## Riscos conhecidos / débito técnico
 
