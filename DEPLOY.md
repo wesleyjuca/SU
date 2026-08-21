@@ -90,6 +90,33 @@ Resultado esperado: a fatura do Railway cai para perto do piso do plano
 Hobby (compute apenas), já que os dois itens gerenciados que mais pesam
 saem da conta.
 
+## Auditoria de infraestrutura (2026) — dá pra rodar tudo de graça?
+
+Levantamento peça-por-peça de toda a infra (não só Postgres/Redis) contra
+o que existe de free tier real em 2026, feito a pedido do usuário. Preços/
+limites abaixo foram confirmados por busca, não só memória — esse tipo de
+termo muda com frequência.
+
+| Peça | Hoje | Alternativa grátis viável | Risco da opção grátis |
+|---|---|---|---|
+| Compute backend (uvicorn+Celery) | Railway (pago, sem free tier desde 2023) | Self-host numa VM sempre-ligada | — |
+| Frontend Next.js | Vercel | Self-host (mesma VM) | Plano Hobby do Vercel **proíbe uso comercial** — risco de ToS independente de custo, se o projeto atual estiver em Hobby |
+| Postgres | Railway plugin (pago) | Self-host (mesma VM) — Neon/Supabase free têm teto pequeno + scale-to-zero/pausa por inatividade | Indisponibilidade num sistema de produção |
+| Redis | Railway plugin (pago) | Self-host (mesma VM) — Upstash free (500k comandos/mês) pode não sobrar pro volume real de Beat+WS+rate-limit+cache | Estouro de cota sem alarme prévio |
+| Qdrant | Serviço externo pago (não documentado onde) | Self-host (mesma VM) — Qdrant Cloud free suspende após 1 semana sem uso, apaga após 4 | Perda de índice jurídico por inatividade |
+| Object storage | Opt-in, hoje provavelmente OFF (cai em base64 no Postgres) | Cloudflare R2 (10GB grátis, egress grátis, já S3-compatível) | Nenhum até passar de 10GB |
+| Email/SMTP | Gmail SMTP (já $0) | Manter | — |
+| Sentry | Já $0 (plano Developer, opt-in) | Manter | Monitorar se passa de 5k erros/mês |
+| CI (GitHub Actions) | Já $0 (sem cron, só push/PR) | Manter | — |
+
+**Recomendação**: consolidar compute+frontend+Postgres+Redis+Qdrant numa
+única VM Oracle Cloud "Always Free" via o `docker-compose.prod.yml` já
+existente — ver a seção **"Provisionar de graça: Oracle Cloud 'Always
+Free'"** em [`DEPLOY_VPS.md`](./DEPLOY_VPS.md#provisionar-de-graça-oracle-cloud-always-free)
+pro passo a passo. Evita depender de 3-4 free tiers gerenciados diferentes,
+cada um com sua própria forma de "sumir sozinho" por inatividade — um
+único ponto de operação, reaproveitando 100% do que já existe no repo.
+
 ## Verificação pós-deploy (fumaça)
 1. `GET /ping` → `{"ok": true}` e `GET /health` → `status: operational`.
 2. Logs do serviço devem mostrar `celery@… ready` além do uvicorn.
