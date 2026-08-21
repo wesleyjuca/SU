@@ -1,7 +1,7 @@
 """Programa de Integridade — Código de Conduta (com aceite) e Canal de Denúncias."""
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc, func
+from sqlalchemy import select, desc, func, and_
 from pydantic import BaseModel
 import uuid
 from datetime import datetime, timezone
@@ -283,6 +283,26 @@ class RiskUpdate(BaseModel):
     marcar_revisado: bool = False
 
 
+async def _validar_responsavel_id(db: AsyncSession, responsavel_id: str | None, tenant_id) -> uuid.UUID | None:
+    """Garante que o responsavel_id (se informado) pertence ao tenant — mesmo
+    padrão de `_validar_client_id`/`_validar_process_id` (documents.py).
+
+    Fase 204 (achado MÉDIO da Fase 203) — antes, `responsavel_id` era gravado
+    sem checar o tenant, e `list_risks()` fazia um outer join sem filtro de
+    tenant no lado de `User` — um ADMIN podia setar `responsavel_id` pra um
+    UUID de usuário de outro escritório (se soubesse/adivinhasse) e ler de
+    volta o `full_name` desse usuário via GET /integrity/risks."""
+    if not responsavel_id:
+        return None
+    rid = uuid.UUID(responsavel_id)
+    existe = (await db.execute(
+        select(User.id).where(User.id == rid, User.tenant_id == tenant_id)
+    )).scalar_one_or_none()
+    if not existe:
+        raise HTTPException(status_code=422, detail="Responsável não encontrado neste escritório.")
+    return rid
+
+
 def _risk_to_dict(r: IntegrityRisk, nome_responsavel: str | None = None) -> dict:
     return {
         "id": str(r.id),
@@ -306,7 +326,7 @@ async def list_risks(
 ):
     rows = (await db.execute(
         select(IntegrityRisk, User.full_name)
-        .outerjoin(User, User.id == IntegrityRisk.responsavel_id)
+        .outerjoin(User, and_(User.id == IntegrityRisk.responsavel_id, User.tenant_id == current_user.tenant_id))
         .where(IntegrityRisk.tenant_id == current_user.tenant_id)
         .order_by(desc(IntegrityRisk.created_at))
     )).all()
@@ -326,6 +346,7 @@ async def create_risk(
     if not body.risco.strip() or not body.controles.strip():
         raise HTTPException(status_code=422, detail="Informe o risco e os controles.")
 
+    responsavel_id = await _validar_responsavel_id(db, body.responsavel_id, current_user.tenant_id)
     risk = IntegrityRisk(
         tenant_id=current_user.tenant_id,
         risco=body.risco.strip(),
@@ -333,7 +354,7 @@ async def create_risk(
         probabilidade=body.probabilidade,
         impacto=body.impacto,
         controles=body.controles.strip(),
-        responsavel_id=uuid.UUID(body.responsavel_id) if body.responsavel_id else None,
+        responsavel_id=responsavel_id,
         created_by=current_user.id,
     )
     db.add(risk)
@@ -375,7 +396,7 @@ async def update_risk(
     if body.controles is not None:
         risk.controles = body.controles.strip()
     if body.responsavel_id is not None:
-        risk.responsavel_id = uuid.UUID(body.responsavel_id) if body.responsavel_id else None
+        risk.responsavel_id = await _validar_responsavel_id(db, body.responsavel_id, current_user.tenant_id)
     if body.status is not None:
         risk.status = body.status
     if body.marcar_revisado:

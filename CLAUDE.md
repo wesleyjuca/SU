@@ -924,6 +924,65 @@ Histórico:
     investigar a hipótese não confirmada do reset-durante-chain-HITL
     acima com uma race real orquestrada (2 processos, não só leitura de
     código).
+- **Fase 204** — implementação dos 4 achados de bug confirmados na Fase
+  203 (o usuário optou por corrigir os achados agora, deixando as 16
+  propostas de evolução de produto pra decidir depois).
+  - **204.A** — `backend/app/services/brain_insights.py::gerar_insights()`
+    passou a receber `db`/`user_id` e envolve a chamada a `call_llm(...)`
+    em `user_ai_creds(db, user_id, "brain_insights")`
+    (`app/integrations/byok.py`), o mesmo mecanismo de fallback BYOK usado
+    por `generate_petition`/`review_document`/`manage_contract` — fecha o
+    gap real que causava o erro do screenshot do usuário
+    (`Could not resolve authentication method`) quando a
+    `ANTHROPIC_API_KEY` do servidor está ausente. `POST /system/brain/
+    insights` (`app/api/v1/system.py`) agora passa `db`/`current_user.id`.
+    Verificado via HTTP real contra o backend local (Postgres+Redis reais,
+    login SUPERADMIN real): o endpoint continua respondendo `200` com
+    `ok: False` e a mesma mensagem de erro do SDK Anthropic (nem
+    `ANTHROPIC_API_KEY` nem BYOK configurados neste sandbox) — confirma
+    que o código agora passa pelo caminho de fallback correto antes de
+    cair no erro, em vez de nunca ter tentado.
+  - **204.B** — `POST /rag/ingest` (`app/api/v1/rag.py`) agora carimba
+    `metadata["tenant_id"]` com o `current_user.tenant_id` real do servidor
+    pras 4 collections privadas (`PRIVATE_COLLECTIONS`), ignorando
+    qualquer `tenant_id` vindo no payload do cliente — mesmo padrão do
+    caminho de auto-ingest confiável (`app/rag/auto_ingest.py`). Fecha o
+    achado ALTO da Fase 203 (envenenamento cross-tenant do RAG privado).
+    Teste novo (`test_rag_ingest_tenant_stamping.py`, Qdrant real em
+    memória) reproduz o ataque de ponta a ponta: um ADMIN forja
+    `tenant_id` de outro tenant no payload, confirma que a vítima não vê o
+    conteúdo plantado em `retrieve()`, e que o conteúdo fica corretamente
+    atribuído ao tenant real do atacante (não descartado, só não
+    mal-atribuído).
+  - **204.C** — `integrity.py` ganhou `_validar_responsavel_id()` (mesmo
+    padrão de `_validar_client_id`/`_validar_process_id` de
+    `documents.py`), chamado em `create_risk`/`update_risk`; `list_risks`
+    também ganhou filtro de tenant direto no `outerjoin` com `User`
+    (defesa em profundidade, cobre até uma linha legada pré-fix). Fecha o
+    achado MÉDIO da Fase 203 (FK sem validação de tenant + vazamento de
+    nome via `GET /integrity/risks`). Testes novos
+    (`test_integrity_responsavel_tenant_scope.py`, Postgres real com 2
+    tenants de verdade) reproduzem o ataque exato (setar `responsavel_id`
+    pro usuário de outro tenant) em `create_risk`/`update_risk`
+    (bloqueado com 422) e confirmam que `list_risks` não vaza o nome
+    mesmo com uma linha inserida direto no banco simulando dado legado.
+  - **204.D** — `GET /rag/coverage` (`app/api/v1/rag.py`) agora passa um
+    `count_filter` por `tenant_id` pro `qdrant.count()` nas 4 collections
+    privadas (público continua sem filtro, por design). Fecha o achado
+    BAIXO da Fase 203 (contagem agregada cross-tenant). Teste novo
+    confirma que só as collections privadas recebem o filtro.
+  - Suíte completa rodada (`pytest tests/`): 812 passed — a mesma
+    flutuação de ERROR/FAILED entre rodadas já documentada desde a Fase
+    199 (pool asyncpg reutilizado entre event loops por-teste do
+    pytest-asyncio) apareceu de novo, incluindo em arquivos nunca tocados
+    nesta fase; confirmado que não é regressão desta fase isolando os 4
+    testes novos (todos passam limpo sozinhos) e, por precaução extra,
+    revertendo temporariamente os 4 fixes (`git stash`) pra confirmar que
+    um teste de um módulo não tocado (`test_process_fonte.py`) já falhava
+    exatamente igual antes desta fase — não é algo introduzido aqui.
+  - Não implementadas nesta fase (fora do escopo pedido pelo usuário): as
+    16 propostas de evolução de produto da Fase 203, e as 2 observações
+    não confirmadas (reset-durante-chain-HITL, walkthrough Playwright).
 
 ## Riscos conhecidos / débito técnico
 

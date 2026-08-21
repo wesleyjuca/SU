@@ -1177,7 +1177,7 @@ async def brain_insights(
 
     await enforce_budget(db, current_user.id, current_user.tenant_id)
     await _audit_brain(current_user.id, "BRAIN_INSIGHTS_GENERATE")
-    return await gerar_insights()
+    return await gerar_insights(db, current_user.id)
 
 
 # ─── Assistente IA do Cérebro (SUPERADMIN — chat multi-turn + streaming SSE) ──
