@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_, text
-from datetime import datetime, timezone, timedelta
+from datetime import date, datetime, timezone, timedelta, time as dtime
 import json
 import uuid
 from typing import Any, Callable, Awaitable
@@ -420,10 +420,18 @@ async def analytics_agentes(
 
 @router.get("/analytics/gestao")
 async def analytics_gestao(
+    date_from: date | None = Query(default=None, description="Filtra por período (inclusive). Sem filtro = histórico completo."),
+    date_to: date | None = Query(default=None, description="Filtra por período (inclusive). Sem filtro = histórico completo."),
     current_user: User = Depends(require_role("ADMIN", "SOCIO", "GESTOR")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Relatórios de gestão do sócio: rentabilidade, produtividade e taxa de êxito (cache 5 min)."""
+    """Relatórios de gestão do sócio: rentabilidade, produtividade e taxa de êxito
+    (cache 5 min, chave varia por período). Fase 206.3 — `date_from`/`date_to`
+    opcionais habilitam comparativo de período no frontend (2 chamadas, uma por
+    período). Cada bloco de métrica usa o campo de data mais natural pro que
+    representa — ver comentários abaixo; `processos_ativos`/`prazos_pendentes`
+    (carga ATUAL) e `prazos_cumpridos` (sem timestamp de conclusão no model)
+    ficam de fora do filtro em qualquer período, por design."""
     from app.models.financial import FinancialEntry
     from app.models.client import Client
     from app.models.process import LegalProcess, ProcessDeadline
@@ -431,12 +439,19 @@ async def analytics_gestao(
     from app.models.tese import Tese
 
     tid = current_user.tenant_id
+    periodo_ini = datetime.combine(date_from, dtime.min, tzinfo=timezone.utc) if date_from else None
+    periodo_fim = datetime.combine(date_to, dtime.max, tzinfo=timezone.utc) if date_to else None
 
     async def compute():
         # ── Rentabilidade por cliente (receita − despesa, pagos) ─────────────
+        fin_where = [FinancialEntry.tenant_id == tid, FinancialEntry.status == "PAGO"]
+        if date_from:
+            fin_where.append(FinancialEntry.data_pagamento >= date_from)
+        if date_to:
+            fin_where.append(FinancialEntry.data_pagamento <= date_to)
         fin_rows = (await db.execute(
             select(FinancialEntry.client_id, FinancialEntry.tipo, func.coalesce(func.sum(FinancialEntry.valor), 0))
-            .where(FinancialEntry.tenant_id == tid, FinancialEntry.status == "PAGO")
+            .where(*fin_where)
             .group_by(FinancialEntry.client_id, FinancialEntry.tipo)
         )).all()
         por_cliente: dict = {}
@@ -456,10 +471,15 @@ async def analytics_gestao(
             key=lambda x: x["resultado"], reverse=True,
         )[:12]
 
-        # ── Rentabilidade por processo ────────────────────────────────────────
+        # ── Rentabilidade por processo (mesmo filtro de data_pagamento) ────────
+        proc_fin_where = [FinancialEntry.tenant_id == tid, FinancialEntry.status == "PAGO", FinancialEntry.process_id.is_not(None)]
+        if date_from:
+            proc_fin_where.append(FinancialEntry.data_pagamento >= date_from)
+        if date_to:
+            proc_fin_where.append(FinancialEntry.data_pagamento <= date_to)
         proc_rows = (await db.execute(
             select(FinancialEntry.process_id, FinancialEntry.tipo, func.coalesce(func.sum(FinancialEntry.valor), 0))
-            .where(FinancialEntry.tenant_id == tid, FinancialEntry.status == "PAGO", FinancialEntry.process_id.is_not(None))
+            .where(*proc_fin_where)
             .group_by(FinancialEntry.process_id, FinancialEntry.tipo)
         )).all()
         por_proc: dict = {}
@@ -477,15 +497,27 @@ async def analytics_gestao(
             key=lambda x: x["resultado"], reverse=True,
         )[:12]
 
-        # ── Produtividade por advogado ────────────────────────────────────────
+        # ── Produtividade por advogado — "processos"/"documentos" contam só o
+        # que foi CRIADO no período (created_at); sem período = histórico
+        # completo, igual ao comportamento anterior a esta fase. ─────────────
+        proc_por_resp_where = [LegalProcess.tenant_id == tid, LegalProcess.responsavel_id.is_not(None)]
+        if periodo_ini:
+            proc_por_resp_where.append(LegalProcess.created_at >= periodo_ini)
+        if periodo_fim:
+            proc_por_resp_where.append(LegalProcess.created_at <= periodo_fim)
         proc_por_resp = dict((await db.execute(
             select(LegalProcess.responsavel_id, func.count(LegalProcess.id))
-            .where(LegalProcess.tenant_id == tid, LegalProcess.responsavel_id.is_not(None))
+            .where(*proc_por_resp_where)
             .group_by(LegalProcess.responsavel_id)
         )).all())
+        docs_where = [Document.tenant_id == tid, Document.created_by.is_not(None)]
+        if periodo_ini:
+            docs_where.append(Document.created_at >= periodo_ini)
+        if periodo_fim:
+            docs_where.append(Document.created_at <= periodo_fim)
         docs_por_autor = dict((await db.execute(
             select(Document.created_by, func.count(Document.id))
-            .where(Document.tenant_id == tid, Document.created_by.is_not(None))
+            .where(*docs_where)
             .group_by(Document.created_by)
         )).all())
         prazos_cumpridos = dict((await db.execute(
@@ -523,10 +555,19 @@ async def analytics_gestao(
             key=lambda x: x["processos"], reverse=True,
         )
 
-        # ── Taxa de êxito (processos com desfecho) ────────────────────────────
+        # ── Taxa de êxito (processos com desfecho). O model não guarda um
+        # timestamp dedicado de "quando o desfecho foi registrado" — usa
+        # `updated_at` como proxy (igual aproximação já aceita em
+        # `protocolado_em`/`updated_at` na Fase 205.1, documentada lá pelo
+        # mesmo motivo: sem campo dedicado, é a melhor data disponível). ─────
+        desf_where = [LegalProcess.tenant_id == tid, LegalProcess.desfecho.is_not(None)]
+        if periodo_ini:
+            desf_where.append(LegalProcess.updated_at >= periodo_ini)
+        if periodo_fim:
+            desf_where.append(LegalProcess.updated_at <= periodo_fim)
         desf_rows = dict((await db.execute(
             select(LegalProcess.desfecho, func.count(LegalProcess.id))
-            .where(LegalProcess.tenant_id == tid, LegalProcess.desfecho.is_not(None))
+            .where(*desf_where)
             .group_by(LegalProcess.desfecho)
         )).all())
         total_desf = sum(desf_rows.values())
@@ -534,7 +575,7 @@ async def analytics_gestao(
         win_rate = round(100 * ganhos / total_desf, 1) if total_desf else 0.0
         por_area_rows = (await db.execute(
             select(LegalProcess.area_direito, LegalProcess.desfecho, func.count(LegalProcess.id))
-            .where(LegalProcess.tenant_id == tid, LegalProcess.desfecho.is_not(None))
+            .where(*desf_where)
             .group_by(LegalProcess.area_direito, LegalProcess.desfecho)
         )).all()
         area_map: dict = {}
@@ -552,7 +593,7 @@ async def analytics_gestao(
         # texto livre — sem FK real pra Tribunal, GROUP BY funciona igual) ────
         por_tribunal_rows = (await db.execute(
             select(LegalProcess.tribunal, LegalProcess.desfecho, func.count(LegalProcess.id))
-            .where(LegalProcess.tenant_id == tid, LegalProcess.desfecho.is_not(None))
+            .where(*desf_where)
             .group_by(LegalProcess.tribunal, LegalProcess.desfecho)
         )).all()
         tribunal_map: dict = {}
@@ -570,7 +611,7 @@ async def analytics_gestao(
         # definida — a maioria hoje não tem, campo é novo) ────────────────────
         por_tese_rows = (await db.execute(
             select(LegalProcess.tese_id, LegalProcess.desfecho, func.count(LegalProcess.id))
-            .where(LegalProcess.tenant_id == tid, LegalProcess.desfecho.is_not(None), LegalProcess.tese_id.is_not(None))
+            .where(*desf_where, LegalProcess.tese_id.is_not(None))
             .group_by(LegalProcess.tese_id, LegalProcess.desfecho)
         )).all()
         tese_map: dict = {}
@@ -603,7 +644,7 @@ async def analytics_gestao(
             },
         }
 
-    return await _cached(f"gestao:{tid}", 300, compute)
+    return await _cached(f"gestao:{tid}:{date_from or ''}:{date_to or ''}", 300, compute)
 
 
 @router.get("/health/detailed")

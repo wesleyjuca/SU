@@ -1052,6 +1052,85 @@ Histórico:
     (`test_ai_budget_request_increase.py`, da própria 205.5).
   - Não implementadas nesta fase: as 11 propostas restantes (M/L) da
     Fase 203 — seguem aguardando decisão do usuário sobre priorização.
+- **Fase 206** — usuário pediu pra seguir com as 11 propostas M/L
+  restantes da Fase 203, mas deixou a ordem a critério da sessão ("eu
+  escolho a ordem"). Primeiro sub-lote: as 3 mais independentes/de menor
+  risco, guardando as 2 estruturalmente maiores (agentes customizados
+  como passo de chain — toca o orchestrator; analytics comparativo entre
+  filiais — precisa de design cuidadoso de isolamento cross-tenant) pro
+  fim.
+  - **206.1 — Perfil de relator/juiz**: a agregação por relator já
+    existia desde a Fase 138.5 (`agregar_favorabilidade_por_relator`),
+    só faltava o drill-down. Novo `detalhar_relator()` em
+    `app/rag/aggregation.py` (mesmo scroll paginado + dedup por
+    `document_id`, retendo os campos por documento em vez de só somar) e
+    endpoint `GET /rag/jurisprudencia/favorabilidade/{relator}`. Frontend:
+    linhas da tabela de favorabilidade em `busca-juridica/page.tsx`
+    viram clicáveis, abrindo um modal com a lista de acórdãos
+    (nº processo/data/órgão julgador/área/favorável) daquele relator.
+    **Achado do próprio teste, corrigido de quebra**: a implementação
+    inicial de `detalhar_relator()` não excluía acórdãos sem
+    classificação (`favoravel` ausente), ao contrário da agregação —
+    um teste com Qdrant real em memória pegou a divergência (agregado
+    dizia "2 total", drill-down devolvia 3) antes de virar bug em
+    produção; corrigido pra usar o mesmo critério de exclusão.
+  - **206.2 — Preferências de notificação persistentes**: a tela
+    Configurações → Notificações já tinha 5 checkboxes, mas
+    `saveNotifs()` só gravava em `localStorage` — nada no backend lia
+    essa preferência. `User.notification_prefs` (JSONB) + migração
+    idempotente; novos `GET/PUT /users/me/notification-preferences`;
+    novo `deve_notificar()` em `app/services/notification.py`, chamado
+    dentro de `create_notification()`/`create_batch()` (retornam
+    `None`/pulam o usuário quando desativado) e nos 2 call sites diretos
+    que criam `Notification` fora do serviço pros tipos realmente
+    gateados (`deadline_check.py` — PRAZO_VENCENDO/CONTRATO_VENCENDO;
+    `approval.py::_notify_tenant_of_approval` — APROVACAO_PENDENTE, só
+    o aviso de rotina, **não** o evento WS `NEW_APPROVAL_PENDING` que
+    alimenta o contador da fila, nem o reaper de aprovação vencida em
+    `approval_reaper.py` — escalação de SLA pra gestores não deve ficar
+    silenciada por uma preferência pessoal). Decisão de escopo
+    deliberada (mesmo espírito do alerta da Fase 196/197 — nunca fingir
+    que uma preferência alcança um fluxo que não alcança): os
+    checkboxes `publicacoes_dj` e `email_diario` continuam só no
+    frontend por enquanto — o alerta de nova intimação do DJe usa
+    `tipo="NOVO_ANDAMENTO"`, o MESMO tipo de 2 outros fluxos não
+    relacionados (notificar equipe manual, captura automática por OAB);
+    gatear o tipo inteiro sob esse toggle silenciaria os 2 fluxos
+    errados. `email_diario` não tem nenhuma rotina de resumo diário
+    ainda. Documentado no código pra próxima fase decidir se vale a
+    pena um tipo dedicado.
+  - **206.3 — Comparativo de período em Relatórios**: `date_from`/
+    `date_to` opcionais em `GET /system/analytics/gestao`, cache key
+    variando por período. Cada bloco de métrica filtra pelo campo de
+    data mais natural: rentabilidade por `FinancialEntry.data_pagamento`,
+    produtividade "processos novos"/"documentos" por `created_at`, taxa
+    de êxito por `LegalProcess.updated_at` (proxy documentado — o model
+    não tem um timestamp dedicado de "quando o desfecho foi registrado",
+    mesma classe de aproximação já aceita em `protocolado_em`/
+    `updated_at` na Fase 205.1). `processos_ativos`/`prazos_pendentes`
+    (carga atual) e `prazos_cumpridos` (sem timestamp de conclusão no
+    model) ficam de fora do filtro em qualquer período, por design.
+    Frontend: date-range picker na aba Gestão de Relatórios + cálculo
+    automático do "período anterior" de mesma duração + card de
+    comparativo com deltas (▲/▼) em `GestaoCharts.tsx`.
+  - Verificação: `ruff check` + `py_compile` limpos nos 9 arquivos
+    backend tocados; `tsc --noEmit` + `eslint` limpos nos 4 arquivos
+    frontend tocados (3 warnings pré-existentes de `exhaustive-deps`/
+    `no-img-element`, confirmados via `git stash` como não-novos desta
+    fase). 11 testes novos com Postgres/Qdrant reais, todos passando
+    isolados; a mesma flutuação de ERROR/FAILED em rodada completa
+    (pool asyncpg entre event loops do pytest-asyncio, documentada desde
+    a Fase 199, mais rate-limit de login estourando quando a suíte
+    inteira reusa a mesma credencial em sequência) reproduzida de forma
+    idêntica isolando um teste pré-existente não tocado
+    (`test_tenant_user_unique_constraints.py`) — não é regressão desta
+    fase.
+  - Não implementadas nesta fase: as 8 propostas M/L restantes (win-rate
+    histórico no strategy_agent, CRM→previsão de caixa, agentes
+    customizados como passo de chain, auto-população da Matriz de Riscos,
+    analytics entre filiais, score de saúde do cliente, ações em lote em
+    Processos, fila de aprovação mobile-first) — seguem pro próximo
+    sub-lote.
 
 ## Riscos conhecidos / débito técnico
 

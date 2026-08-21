@@ -106,7 +106,7 @@ async def _notify_tenant_of_approval(db, approval) -> None:
     from sqlalchemy import select
     from app.models.user import User
     from app.models.notification import Notification
-    from app.services.notification import publish_notification_ws
+    from app.services.notification import publish_notification_ws, deve_notificar
     from app.api.v1.ws import publish_event
 
     user_ids = (await db.execute(
@@ -118,16 +118,22 @@ async def _notify_tenant_of_approval(db, approval) -> None:
     )).scalars().all()
     for uid in user_ids:
         try:
-            notif = Notification(
-                user_id=uid,
-                tipo="APROVACAO_PENDENTE",
-                titulo=f"Aprovação pendente: {approval.titulo}",
-                corpo=approval.descricao,
-                priority=approval.prioridade,
-                link="/aprovacoes",
-            )
-            db.add(notif)
-            await publish_notification_ws(notif)
+            # Fase 206.2 — respeita a preferência "novas aprovações" só pra
+            # este aviso de rotina; o evento NEW_APPROVAL_PENDING abaixo (que
+            # alimenta o contador da fila) continua disparando sempre — a
+            # fila de aprovações pendentes é uma contagem real, não deve
+            # ficar defasada por uma preferência pessoal de notificação.
+            if await deve_notificar(db, uid, "APROVACAO_PENDENTE"):
+                notif = Notification(
+                    user_id=uid,
+                    tipo="APROVACAO_PENDENTE",
+                    titulo=f"Aprovação pendente: {approval.titulo}",
+                    corpo=approval.descricao,
+                    priority=approval.prioridade,
+                    link="/aprovacoes",
+                )
+                db.add(notif)
+                await publish_notification_ws(notif)
         except Exception as exc:
             log.warning("approval_notification_persist_failed", approval_id=str(approval.id), error=str(exc))
         await publish_event(str(uid), "NEW_APPROVAL_PENDING", {

@@ -3,7 +3,7 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
   PieChart, Pie, Cell,
 } from "recharts";
-import { Trophy, Users, Scale, Gauge } from "lucide-react";
+import { Trophy, Users, Scale, Gauge, ArrowUp, ArrowDown, Minus } from "lucide-react";
 
 const GOLD = "#B8954A";
 const GREEN = "#16A34A";
@@ -43,7 +43,55 @@ export interface GestaoData {
   };
 }
 
-export default function GestaoCharts({ data }: { data: GestaoData }) {
+function DeltaBadge({ atual, anterior, sufixo = "" }: { atual: number; anterior: number; sufixo?: string }) {
+  const diff = atual - anterior;
+  if (Math.abs(diff) < 0.005) {
+    return <span className="inline-flex items-center gap-0.5 text-afj-black/40 text-xs"><Minus size={11} /> estável</span>;
+  }
+  const positivo = diff > 0;
+  const cor = positivo ? "text-green-700" : "text-red-700";
+  return (
+    <span className={`inline-flex items-center gap-0.5 text-xs font-medium ${cor}`}>
+      {positivo ? <ArrowUp size={11} /> : <ArrowDown size={11} />}
+      {positivo ? "+" : ""}{diff.toFixed(sufixo === "%" ? 1 : 0)}{sufixo}
+    </span>
+  );
+}
+
+// Fase 206.3 — comparativo lado a lado com o período anterior (mesma
+// duração), quando o usuário aplica um filtro de data em Relatórios.
+function ComparativoPeriodo({ data, dataAnterior }: { data: GestaoData; dataAnterior: GestaoData }) {
+  const somaResultado = (d: GestaoData) => d.rentabilidade_clientes.reduce((acc, c) => acc + c.resultado, 0);
+  const somaDocumentos = (d: GestaoData) => d.produtividade_advogados.reduce((acc, a) => acc + a.documentos, 0);
+  const somaProcessosNovos = (d: GestaoData) => d.produtividade_advogados.reduce((acc, a) => acc + a.processos, 0);
+
+  const itens = [
+    { label: "Taxa de êxito", atual: data.taxa_exito.win_rate, anterior: dataAnterior.taxa_exito.win_rate, sufixo: "%", fmt: (v: number) => `${v}%` },
+    { label: "Resultado líquido", atual: somaResultado(data), anterior: somaResultado(dataAnterior), sufixo: "", fmt: (v: number) => `R$ ${v.toLocaleString("pt-BR", { minimumFractionDigits: 0 })}` },
+    { label: "Documentos produzidos", atual: somaDocumentos(data), anterior: somaDocumentos(dataAnterior), sufixo: "", fmt: (v: number) => `${v}` },
+    { label: "Processos novos", atual: somaProcessosNovos(data), anterior: somaProcessosNovos(dataAnterior), sufixo: "", fmt: (v: number) => `${v}` },
+  ];
+
+  return (
+    <div className="afj-card p-5">
+      <h3 className="font-semibold text-sm text-afj-black mb-4">Comparativo com o período anterior</h3>
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        {itens.map((it) => (
+          <div key={it.label}>
+            <p className="text-[11px] text-afj-black/50 uppercase tracking-wide mb-1">{it.label}</p>
+            <p className="text-lg font-semibold text-afj-black font-display">{it.fmt(it.atual)}</p>
+            <div className="flex items-center gap-2 mt-0.5">
+              <DeltaBadge atual={it.atual} anterior={it.anterior} sufixo={it.sufixo} />
+              <span className="text-[11px] text-afj-black/35">período anterior: {it.fmt(it.anterior)}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export default function GestaoCharts({ data, dataAnterior }: { data: GestaoData; dataAnterior?: GestaoData | null }) {
   const clientes = data.rentabilidade_clientes.map((c) => ({
     ...c, nome: c.cliente.length > 16 ? c.cliente.slice(0, 15) + "…" : c.cliente,
   }));
@@ -61,6 +109,8 @@ export default function GestaoCharts({ data }: { data: GestaoData }) {
 
   return (
     <div className="space-y-5">
+      {dataAnterior && <ComparativoPeriodo data={data} dataAnterior={dataAnterior} />}
+
       {/* Taxa de êxito — destaque */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         <div className="afj-card p-5 flex items-center gap-5">

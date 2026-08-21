@@ -1,6 +1,6 @@
 from sqlalchemy import String, Boolean, ForeignKey, UniqueConstraint, Text, Numeric, Integer
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy.dialects.postgresql import UUID as PGUUID
+from sqlalchemy.dialects.postgresql import UUID as PGUUID, JSONB
 import uuid
 from datetime import datetime
 from app.db.base import Base
@@ -29,6 +29,12 @@ class User(Base):
     # várias AIProviderConfig do usuário. NULL = "padrao" (ordem manual de
     # sempre). Ver app/services/ai_balance.py.
     ai_balance_mode: Mapped[str | None] = mapped_column(String(20))
+    # Fase 206.2 — preferências de notificação persistentes por tipo de evento
+    # (antes só localStorage, perdidas ao trocar de navegador/dispositivo).
+    # Chave = pref key (ver TIPO_PARA_PREF em app/services/notification.py),
+    # valor = bool. Chave ausente = notifica (default opt-in, sem regressão
+    # pra quem nunca abriu a tela de preferências).
+    notification_prefs: Mapped[dict | None] = mapped_column(JSONB)
     tenant_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("tenants.id"), nullable=True, index=True)
     linked_client_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("clients.id"), nullable=True)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

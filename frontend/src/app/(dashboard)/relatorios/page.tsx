@@ -27,9 +27,25 @@ const GestaoCharts = dynamic(() => import("@/components/relatorios/GestaoCharts"
 
 const TABS = ["Gestão", "Financeiro", "Processos", "Agentes IA"] as const;
 
+// Fase 206.3 — dado um período [from, to], devolve o período imediatamente
+// anterior de mesma duração (pra comparativo lado a lado).
+function periodoAnterior(from: string, to: string): { from: string; to: string } {
+  const DIA_MS = 24 * 60 * 60 * 1000;
+  const f = new Date(from + "T00:00:00Z");
+  const t = new Date(to + "T00:00:00Z");
+  const duracaoMs = t.getTime() - f.getTime();
+  const antTo = new Date(f.getTime() - DIA_MS);
+  const antFrom = new Date(antTo.getTime() - duracaoMs);
+  const fmt = (d: Date) => d.toISOString().slice(0, 10);
+  return { from: fmt(antFrom), to: fmt(antTo) };
+}
+
 export default function RelatoriosPage() {
   const [tab, setTab] = useState<typeof TABS[number]>("Gestão");
   const [gestao, setGestao] = useState<GestaoData | null>(null);
+  const [gestaoAnterior, setGestaoAnterior] = useState<GestaoData | null>(null);
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
   const [financial, setFinancial] = useState<FinancialData | null>(null);
   const [processos, setProcessos] = useState<ProcessoData | null>(null);
   const [agentes, setAgentes] = useState<AgentesData | null>(null);
@@ -38,8 +54,21 @@ export default function RelatoriosPage() {
   async function loadGestao() {
     setLoading(true);
     try {
-      const res = await fetch("/api/v1/system/analytics/gestao", { headers: headers() });
-      if (res.ok) setGestao(await res.json());
+      const params = new URLSearchParams();
+      if (dateFrom) params.set("date_from", dateFrom);
+      if (dateTo) params.set("date_to", dateTo);
+      const qs = params.toString() ? `?${params.toString()}` : "";
+      const res = await fetch(`/api/v1/system/analytics/gestao${qs}`, { headers: headers() });
+      setGestao(res.ok ? await res.json() : null);
+
+      if (dateFrom && dateTo) {
+        const ant = periodoAnterior(dateFrom, dateTo);
+        const paramsAnt = new URLSearchParams({ date_from: ant.from, date_to: ant.to });
+        const resAnt = await fetch(`/api/v1/system/analytics/gestao?${paramsAnt.toString()}`, { headers: headers() });
+        setGestaoAnterior(resAnt.ok ? await resAnt.json() : null);
+      } else {
+        setGestaoAnterior(null);
+      }
     } finally { setLoading(false); }
   }
 
@@ -79,7 +108,7 @@ export default function RelatoriosPage() {
   }, [tab]);
 
   function refresh() {
-    if (tab === "Gestão") { setGestao(null); loadGestao(); }
+    if (tab === "Gestão") { setGestao(null); setGestaoAnterior(null); loadGestao(); }
     if (tab === "Financeiro") { setFinancial(null); loadFinancial(); }
     if (tab === "Processos") { setProcessos(null); loadProcessos(); }
     if (tab === "Agentes IA") { setAgentes(null); loadAgentes(); }
@@ -118,11 +147,53 @@ export default function RelatoriosPage() {
 
       {/* ─── Gestão ───────────────────────────────────────────────────────── */}
       {tab === "Gestão" && (
-        loading && !gestao
-          ? <ChartSkeleton />
-          : gestao
-            ? <GestaoCharts data={gestao} />
-            : <EmptyTab icon={<BarChart2 size={28} className="text-afj-black/20" />} msg="Sem dados de gestão" />
+        <div className="space-y-4">
+          <div className="afj-card p-3 flex items-end gap-3 flex-wrap">
+            <div>
+              <label className="text-[11px] text-afj-black/55 block mb-1 uppercase tracking-widest font-semibold">De</label>
+              <input
+                type="date" value={dateFrom}
+                onChange={(e) => setDateFrom(e.target.value)}
+                className="border border-afj-cream-dark rounded-sm px-3 py-1.5 text-sm focus:outline-none focus:border-afj-gold"
+              />
+            </div>
+            <div>
+              <label className="text-[11px] text-afj-black/55 block mb-1 uppercase tracking-widest font-semibold">Até</label>
+              <input
+                type="date" value={dateTo}
+                onChange={(e) => setDateTo(e.target.value)}
+                className="border border-afj-cream-dark rounded-sm px-3 py-1.5 text-sm focus:outline-none focus:border-afj-gold"
+              />
+            </div>
+            <button
+              onClick={() => { setGestao(null); setGestaoAnterior(null); loadGestao(); }}
+              disabled={loading}
+              className="btn-afj-outline rounded-sm text-sm disabled:opacity-50"
+            >
+              Aplicar
+            </button>
+            {(dateFrom || dateTo) && (
+              <button
+                onClick={() => { setDateFrom(""); setDateTo(""); setGestao(null); setGestaoAnterior(null); loadGestao(); }}
+                className="text-xs text-afj-black/40 hover:text-afj-black underline"
+              >
+                Limpar período
+              </button>
+            )}
+            <p className="text-[11px] text-afj-black/35 ml-auto">
+              {dateFrom && dateTo
+                ? "Comparando com o período imediatamente anterior de mesma duração."
+                : "Sem período definido, mostra o histórico completo."}
+            </p>
+          </div>
+
+          {loading && !gestao
+            ? <ChartSkeleton />
+            : gestao
+              ? <GestaoCharts data={gestao} dataAnterior={gestaoAnterior} />
+              : <EmptyTab icon={<BarChart2 size={28} className="text-afj-black/20" />} msg="Sem dados de gestão" />
+          }
+        </div>
       )}
 
       {/* ─── Financeiro ───────────────────────────────────────────────────── */}

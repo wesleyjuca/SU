@@ -161,6 +161,29 @@ async def rag_jurisprudencia_favorabilidade(
         )
 
 
+@router.get("/jurisprudencia/favorabilidade/{relator}")
+async def rag_jurisprudencia_relator_detalhe(
+    relator: str,
+    current_user: User = Depends(require_role("ADMIN", "SOCIO", "ADVOGADO", "PARALEGAL", "ASSISTENTE")),
+):
+    """Fase 206.1 — perfil de um relator específico: lista dos acórdãos
+    (nº processo/data/órgão julgador/área/favorável) por trás da contagem
+    agregada de GET /jurisprudencia/favorabilidade. Sem cache — chamado sob
+    demanda ao clicar num relator, não no carregamento inicial do painel."""
+    try:
+        from app.db.qdrant import get_qdrant
+        from app.rag.aggregation import detalhar_relator
+
+        qdrant = await get_qdrant()
+        acordaos = await detalhar_relator(qdrant, relator, "jurisprudencia")
+        return {"relator": relator, "acordaos": acordaos}
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Serviço RAG indisponível: {str(exc)}",
+        )
+
+
 @router.post("/ingest", status_code=status.HTTP_202_ACCEPTED)
 async def rag_ingest(
     req: IngestRequest,

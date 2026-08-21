@@ -19,7 +19,7 @@ def check_upcoming_deadlines(self):
         from app.db.base import AsyncSessionLocal
         from app.models.process import ProcessDeadline
         from app.models.notification import Notification
-        from app.services.notification import publish_notification_ws
+        from app.services.notification import publish_notification_ws, deve_notificar
 
         async with AsyncSessionLocal() as db:
             today = date.today()
@@ -47,6 +47,13 @@ def check_upcoming_deadlines(self):
                     # Ainda marca as faixas cruzadas p/ não reprocessar sem responsável
                     if aplicaveis and set(aplicaveis) - enviados:
                         prazo.alertas_enviados = sorted(enviados | set(aplicaveis))
+                    continue
+
+                if not await deve_notificar(db, prazo.responsavel_id, "PRAZO_VENCENDO"):
+                    # Fase 206.2 — usuário desativou "novos prazos". Ainda marca
+                    # as faixas cruzadas (evita reprocessar o mesmo prazo todo
+                    # dia só porque o alerta está desligado).
+                    prazo.alertas_enviados = sorted(enviados | set(aplicaveis))
                     continue
 
                 notif = Notification(
@@ -125,6 +132,11 @@ def check_upcoming_deadlines(self):
                 if not nao_enviados or not created_by:
                     if aplicaveis and set(aplicaveis) - enviados:
                         contrato.alertas_enviados = sorted(enviados | set(aplicaveis))
+                    continue
+
+                if not await deve_notificar(db, created_by, "CONTRATO_VENCENDO"):
+                    # Fase 206.2 — mesmo tipo de opt-out de "novos prazos".
+                    contrato.alertas_enviados = sorted(enviados | set(aplicaveis))
                     continue
 
                 sufixo = " (renovação automática)" if contrato.renovacao_auto else ""

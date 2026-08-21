@@ -516,6 +516,8 @@ async def lifespan(app: FastAPI):
             "ALTER TABLE documents ADD COLUMN IF NOT EXISTS protocolado_em TIMESTAMPTZ",
             "ALTER TABLE documents ADD COLUMN IF NOT EXISTS follow_up_dias INTEGER",
             "ALTER TABLE documents ADD COLUMN IF NOT EXISTS follow_up_alertado BOOLEAN NOT NULL DEFAULT false",
+            # Fase 206.2 — preferências de notificação persistentes por tipo.
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS notification_prefs JSONB",
         ]:
             try:
                 async with engine.begin() as conn:
