@@ -984,6 +984,63 @@ async def set_ai_budget(
             "alert_pct": body.alert_pct, "message": "Limite salvo"}
 
 
+@router.post("/ai-budget/request-increase")
+async def request_ai_budget_increase(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Fase 205.5 — o usuário bloqueado pelo teto mensal de IA (429 de
+    enforce_budget) pode pedir um aumento direto pela tela, em vez do fluxo
+    manual anterior (falar com o admin fora do sistema). Notifica todo
+    ADMIN/SÓCIO/SUPERADMIN do escritório com o gasto atual — não altera o
+    teto sozinho, quem decide continua sendo o humano em /custos-ia (mesmo
+    invariante de nunca auto-aprovar do resto do sistema)."""
+    from fastapi import HTTPException
+    from app.services.ai_budget import get_budget_status
+    from app.services.notification import create_notification
+
+    status = await get_budget_status(db, current_user.id, current_user.tenant_id)
+    if not status:
+        raise HTTPException(status_code=422, detail="Você não tem um teto de IA configurado.")
+
+    # No máximo 1 solicitação por dia por usuário — evita virar gerador de
+    # notificação em massa se o usuário insistir em disparar agentes bloqueados.
+    from datetime import datetime, timezone
+    from app.models.notification import Notification
+    dia_chave = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    ja_pediu_hoje = (await db.execute(
+        select(Notification.id).where(
+            Notification.tipo == "SISTEMA",
+            Notification.extra_data["budget_increase_request_day"].astext == dia_chave,
+            Notification.extra_data["requested_by"].astext == str(current_user.id),
+        ).limit(1)
+    )).scalar_one_or_none()
+    if ja_pediu_hoje:
+        return {"message": "Você já solicitou um aumento hoje — aguarde a análise do administrador."}
+
+    gestores = (await db.execute(
+        select(User.id).where(
+            User.tenant_id == current_user.tenant_id,
+            User.role.in_(["ADMIN", "SOCIO", "SUPERADMIN"]),
+            User.is_active == True,  # noqa: E712
+        )
+    )).scalars().all()
+    for gestor_id in gestores:
+        await create_notification(
+            db, user_id=gestor_id,
+            titulo=f"{current_user.full_name} solicitou aumento do teto de IA",
+            tipo="SISTEMA",
+            corpo=(
+                f"Uso atual: US$ {status['spent_usd']:.2f} de US$ {status['limit_usd']:.2f} "
+                f"({status['pct']:.0f}%). Ajuste o teto em Custos de IA se aprovar."
+            ),
+            priority="HIGH",
+            link="/custos-ia",
+            metadata={"budget_increase_request_day": dia_chave, "requested_by": str(current_user.id)},
+        )
+    return {"message": "Solicitação enviada ao(s) administrador(es) do escritório."}
+
+
 # ─── Painel Cérebro (SUPERADMIN) — observabilidade de infra + mapa ────────────
 async def _audit_brain(user_id, action: str) -> None:
     """Registra no audit_log o acesso a dados internos do sistema (trilha)."""

@@ -509,6 +509,13 @@ async def lifespan(app: FastAPI):
             # existente, a criação falha e só loga aviso (não trava o boot).
             "CREATE UNIQUE INDEX IF NOT EXISTS tenants_slug_unique_idx ON tenants (slug)",
             "CREATE UNIQUE INDEX IF NOT EXISTS users_email_unique_idx ON users (email)",
+            # Fase 205.1 — follow-up de petição protocolada sem resposta da
+            # corte no prazo configurado (opt-in por documento, NULL = sem
+            # alerta). `protocolado_em` é carimbado à parte de `updated_at`
+            # porque este último muda a cada edição do documento.
+            "ALTER TABLE documents ADD COLUMN IF NOT EXISTS protocolado_em TIMESTAMPTZ",
+            "ALTER TABLE documents ADD COLUMN IF NOT EXISTS follow_up_dias INTEGER",
+            "ALTER TABLE documents ADD COLUMN IF NOT EXISTS follow_up_alertado BOOLEAN NOT NULL DEFAULT false",
         ]:
             try:
                 async with engine.begin() as conn:

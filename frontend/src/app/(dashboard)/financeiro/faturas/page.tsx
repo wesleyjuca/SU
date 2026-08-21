@@ -1,5 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
+import { useSearchParams } from "next/navigation";
+import Link from "next/link";
 import { Receipt, Plus, X, FileText, Trash2, CheckCircle, Send, Loader2, Link2, Copy } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
@@ -30,6 +32,8 @@ const fmtDate = (s: string | null) => (s ? new Date(s.slice(0, 10) + "T00:00:00"
 
 export default function FaturasPage() {
   const toast = useToast();
+  const searchParams = useSearchParams();
+  const clientIdFiltro = searchParams.get("client_id");
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [clientes, setClientes] = useState<Cliente[]>([]);
   const [loading, setLoading] = useState(true);
@@ -39,12 +43,15 @@ export default function FaturasPage() {
   const [form, setForm] = useState({ client_id: "", periodo_inicio: "", periodo_fim: "", data_vencimento: "" });
   const [itens, setItens] = useState<Item[]>([{ descricao: "", valor: "" }]);
 
-  useEffect(() => { fetchInvoices(); fetchClientes(); }, []);
+  useEffect(() => { fetchInvoices(); fetchClientes(); }, [clientIdFiltro]);
 
   async function fetchInvoices() {
     setLoading(true);
     try {
-      const res = await fetch("/api/v1/financial/invoices", { headers: authH() });
+      const url = clientIdFiltro
+        ? `/api/v1/financial/invoices?client_id=${encodeURIComponent(clientIdFiltro)}`
+        : "/api/v1/financial/invoices";
+      const res = await fetch(url, { headers: authH() });
       if (res.ok) setInvoices(await res.json());
     } catch { toast.error("Falha ao carregar faturas."); }
     finally { setLoading(false); }
@@ -150,6 +157,15 @@ export default function FaturasPage() {
           <Plus size={15} /> Nova fatura
         </button>
       </div>
+
+      {clientIdFiltro && (
+        <div className="flex items-center gap-2 text-xs bg-afj-gold/10 border border-afj-gold/30 rounded-sm px-3 py-2">
+          <span className="text-afj-black/70">
+            Mostrando só as faturas de <strong>{invoices[0]?.cliente || "este cliente"}</strong>
+          </span>
+          <Link href="/financeiro/faturas" className="text-afj-gold hover:underline ml-auto">Ver todas</Link>
+        </div>
+      )}
 
       <div className="grid grid-cols-3 gap-4">
         <div className="afj-stat-card"><p className="text-2xl font-bold text-afj-black">{loading ? "..." : invoices.length}</p><p className="text-xs text-afj-black/50 mt-0.5">Faturas</p></div>

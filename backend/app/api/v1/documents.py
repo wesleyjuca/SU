@@ -58,6 +58,9 @@ class DocumentResponse(BaseModel):
     tem_texto: bool = False
     tem_arquivo_original: bool = False
     ocr_status: str | None = None
+    protocolado_em: str | None = None
+    follow_up_dias: int | None = None
+    follow_up_alertado: bool = False
 
 
 class GeneratePetitionRequest(BaseModel):
@@ -74,6 +77,7 @@ async def list_documents(
     tipo: str | None = None,
     status: str | None = None,
     process_id: str | None = None,
+    client_id: str | None = None,
     limit: int = Query(default=50, le=200),
     offset: int = 0,
     current_user: User = Depends(get_current_user),
@@ -95,6 +99,8 @@ async def list_documents(
         query = query.where(Document.status != "ARQUIVADO")
     if process_id:
         query = query.where(Document.process_id == uuid.UUID(process_id))
+    if client_id:
+        query = query.where(Document.client_id == uuid.UUID(client_id))
 
     result = await db.execute(query)
     docs = result.scalars().all()
@@ -299,6 +305,10 @@ class DocumentUpdate(BaseModel):
     status: str | None = None
     conteudo_html: str | None = None
     conteudo_texto: str | None = None
+    # Fase 205.1 — dias de prazo pra follow-up de petição protocolada sem
+    # resposta da corte; NULL desativa o alerta. `0` limpa (frontend manda
+    # string vazia -> None; aqui é só o valor numérico já validado).
+    follow_up_dias: int | None = None
 
 
 @router.put("/{doc_id}", response_model=DocumentResponse)
@@ -352,8 +362,16 @@ async def update_document(
         ))
         doc.versao += 1
 
+    # Fase 205.1 — carimba protocolado_em na transição pra PROTOCOLADO (uma
+    # vez só, separado de updated_at que muda a cada edição posterior).
+    entrando_em_protocolado = updates.get("status") == "PROTOCOLADO" and doc.status != "PROTOCOLADO"
+
     for field, value in updates.items():
         setattr(doc, field, value)
+    if entrando_em_protocolado:
+        from datetime import datetime, timezone
+        doc.protocolado_em = datetime.now(timezone.utc)
+        doc.follow_up_alertado = False
     await db.flush()
 
     # Documento aprovado/protocolado → indexa (em background) no RAG do escritório,
@@ -979,6 +997,9 @@ def _to_response(d: Document) -> DocumentResponse:
         tem_texto=bool((d.conteudo_texto or "").strip()),
         tem_arquivo_original=bool(d.arquivo_storage_key or (d.arquivo_url or "").startswith("data:")),
         ocr_status=(ocr or {}).get("status") if isinstance(ocr, dict) else None,
+        protocolado_em=d.protocolado_em.isoformat() if d.protocolado_em else None,
+        follow_up_dias=d.follow_up_dias,
+        follow_up_alertado=bool(d.follow_up_alertado),
     )
 
 

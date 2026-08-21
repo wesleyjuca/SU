@@ -180,6 +180,23 @@ export default function AgentesPage() {
     }, 3000);
   }
 
+  // Fase 205.5 — chamado quando trigger falha com 429 (teto de IA atingido).
+  // Notifica ADMIN/SÓCIO/SUPERADMIN do escritório em vez de deixar o usuário
+  // ter que pedir o aumento fora do sistema.
+  async function solicitarAumentoOrcamento() {
+    try {
+      const token = localStorage.getItem("afj_access_token");
+      const res = await fetch("/api/v1/system/ai-budget/request-increase", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const d = await res.json().catch(() => ({}));
+      if (res.ok) toast.success(d.message || "Solicitação de aumento enviada.");
+    } catch {
+      // fail-soft: o toast do erro 429 original já foi mostrado
+    }
+  }
+
   async function triggerAgent(agentName: string) {
     setResult(null);
     setLastRunId(null);
@@ -210,6 +227,14 @@ export default function AgentesPage() {
         setResult(`Run iniciado: ${data.run_id}`);
         setLastRunWasChain(isChain);
         pollRunSteps(data.run_id);
+      } else if (res.status === 429) {
+        // Fase 205.5 — antes mostrava só "Erro ao iniciar agente: 429",
+        // perdendo a mensagem real do bloqueio de orçamento. Agora mostra o
+        // motivo de verdade e já dispara a solicitação de aumento pro
+        // ADMIN/SÓCIO, sem exigir que o usuário saia da tela pra pedir.
+        const d = await res.json().catch(() => ({}));
+        toast.error(d.detail || "Limite mensal de IA atingido.");
+        solicitarAumentoOrcamento();
       } else {
         toast.error(`Erro ao iniciar agente: ${res.status}`);
       }

@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect } from "react";
-import { ShieldCheck, Search, CheckCircle, XCircle, AlertTriangle } from "lucide-react";
+import { ShieldCheck, Search, CheckCircle, XCircle, AlertTriangle, Download } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 
 interface AuditLog {
@@ -29,20 +29,30 @@ export default function AuditoriaPage() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [search, setSearch] = useState("");
   const [filtroSucesso, setFiltroSucesso] = useState("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [exporting, setExporting] = useState(false);
 
   // Fase 162 — paginação real usando total/offset que o backend (GET /audit)
   // já devolvia desde a Fase 148, mas o frontend nunca usava; antes disso
   // a tela ficava presa nos 100 eventos mais recentes.
-  useEffect(() => { fetchLogs(0, false); }, [filtroSucesso]);
+  useEffect(() => { fetchLogs(0, false); }, [filtroSucesso, dateFrom, dateTo]);
+
+  function filtrosAtivos() {
+    const params = new URLSearchParams();
+    if (filtroSucesso) params.set("success", filtroSucesso);
+    if (dateFrom) params.set("date_from", dateFrom);
+    if (dateTo) params.set("date_to", dateTo);
+    return params;
+  }
 
   async function fetchLogs(novoOffset = 0, append = false) {
     if (append) setLoadingMore(true); else setLoading(true);
     try {
       const token = localStorage.getItem("afj_access_token");
-      const params = new URLSearchParams();
+      const params = filtrosAtivos();
       params.set("limit", String(PAGE_SIZE));
       params.set("offset", String(novoOffset));
-      if (filtroSucesso) params.set("success", filtroSucesso);
       const logsRes = await fetch(`/api/v1/audit?${params}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -56,6 +66,29 @@ export default function AuditoriaPage() {
       }
     } finally {
       if (append) setLoadingMore(false); else setLoading(false);
+    }
+  }
+
+  // Fase 205.4 — exporta os eventos de auditoria (com os mesmos filtros já
+  // aplicados na tela) como CSV, mesmo padrão de exportarCSV() em Financeiro.
+  async function exportarCSV() {
+    setExporting(true);
+    try {
+      const token = localStorage.getItem("afj_access_token");
+      const res = await fetch(`/api/v1/audit/export?${filtrosAtivos()}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const blob = await res.blob();
+        const a = Object.assign(document.createElement("a"), {
+          href: URL.createObjectURL(blob),
+          download: "auditoria.csv",
+        });
+        a.click();
+        URL.revokeObjectURL(a.href);
+      }
+    } finally {
+      setExporting(false);
     }
   }
 
@@ -73,6 +106,16 @@ export default function AuditoriaPage() {
           <h1 className="font-display text-2xl font-semibold text-afj-black">Auditoria</h1>
           <p className="text-afj-black/50 text-sm">Registro imutável de todas as ações do sistema</p>
         </div>
+        <button
+          onClick={exportarCSV}
+          disabled={exporting}
+          className="btn-afj-outline rounded-sm flex items-center gap-2 disabled:opacity-50"
+          title="Exportar CSV"
+          aria-label="Exportar eventos de auditoria como CSV"
+        >
+          <Download size={14} />
+          {exporting ? "Exportando..." : "Exportar"}
+        </button>
       </div>
 
       <div className="grid grid-cols-3 gap-3">
@@ -118,6 +161,20 @@ export default function AuditoriaPage() {
           <option value="true">Sucesso</option>
           <option value="false">Falha</option>
         </select>
+        <input
+          type="date"
+          value={dateFrom}
+          onChange={(e) => setDateFrom(e.target.value)}
+          title="De"
+          className="border border-afj-cream-dark rounded-sm px-3 py-2 text-sm bg-white focus:outline-none focus:border-afj-gold"
+        />
+        <input
+          type="date"
+          value={dateTo}
+          onChange={(e) => setDateTo(e.target.value)}
+          title="Até"
+          className="border border-afj-cream-dark rounded-sm px-3 py-2 text-sm bg-white focus:outline-none focus:border-afj-gold"
+        />
       </div>
 
       {loading ? (

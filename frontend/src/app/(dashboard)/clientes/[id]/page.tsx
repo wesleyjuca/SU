@@ -298,6 +298,17 @@ export default function ClienteDetailPage() {
             )}
           </div>
         </div>
+
+        {/* Navegação contextual: pula direto pros documentos/faturas SÓ deste
+            cliente, sem precisar re-buscar pelo nome nas telas genéricas. */}
+        <div className="flex items-center gap-2 mt-3">
+          <Link href={`/documentos?client_id=${id}`} className="text-xs px-3 py-1.5 rounded-sm border border-afj-cream-dark hover:border-afj-gold/40 hover:bg-afj-cream/30 text-afj-black/70 transition-colors">
+            Documentos deste cliente
+          </Link>
+          <Link href={`/financeiro/faturas?client_id=${id}`} className="text-xs px-3 py-1.5 rounded-sm border border-afj-cream-dark hover:border-afj-gold/40 hover:bg-afj-cream/30 text-afj-black/70 transition-colors">
+            Faturas deste cliente
+          </Link>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
@@ -544,7 +555,7 @@ export default function ClienteDetailPage() {
                 <div>
                   <div className="flex items-center justify-between mb-1.5">
                     <p className="text-xs font-semibold text-afj-black/70">Faturas</p>
-                    <Link href="/financeiro/faturas" className="text-[11px] text-afj-gold hover:underline">Gerenciar</Link>
+                    <Link href={`/financeiro/faturas?client_id=${id}`} className="text-[11px] text-afj-gold hover:underline">Gerenciar</Link>
                   </div>
                   {financeiro.faturas.length === 0 ? (
                     <p className="text-xs text-afj-black/35 py-2">Nenhuma fatura para este cliente.</p>

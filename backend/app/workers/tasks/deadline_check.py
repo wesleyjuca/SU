@@ -190,3 +190,81 @@ def scan_daily_publications(self):
             await lock.release()
 
     return run_worker_coro(_run_with_lock())
+
+
+@celery_app.task(
+    name="app.workers.tasks.deadline_check.check_petition_followups", bind=True,
+    time_limit=1200, soft_time_limit=1000,
+)
+def check_petition_followups(self):
+    """Fase 205.1 — alerta quando uma petição protocolada não recebeu
+    nenhum retorno da corte no prazo de acompanhamento configurado pelo
+    usuário (`Document.follow_up_dias`, opt-in por documento). Mesmo padrão
+    de dedup de faixa única já usado nos outros alertas deste arquivo, só
+    que com 1 alerta (não múltiplas faixas) — depois de disparado, cabe ao
+    advogado decidir o próximo passo (consultar o processo, reprotocolar
+    etc.), o sistema só avisa, nunca age sozinho."""
+    from app.workers.async_utils import run_worker_coro
+
+    async def _run():
+        from datetime import datetime, timedelta, timezone
+        from sqlalchemy import select
+        from app.db.base import AsyncSessionLocal
+        from app.models.document import Document
+        from app.models.notification import Notification
+        from app.rag.auto_ingest import _PETICAO_TIPOS
+        from app.services.notification import publish_notification_ws
+
+        async with AsyncSessionLocal() as db:
+            agora = datetime.now(timezone.utc)
+            rows = (await db.execute(
+                select(Document).where(
+                    Document.status == "PROTOCOLADO",
+                    Document.tipo.in_(_PETICAO_TIPOS),
+                    Document.follow_up_dias.isnot(None),
+                    Document.protocolado_em.isnot(None),
+                    Document.follow_up_alertado.is_(False),
+                    Document.created_by.isnot(None),
+                )
+            )).scalars().all()
+
+            total = 0
+            for doc in rows:
+                prazo_atingido = doc.protocolado_em + timedelta(days=doc.follow_up_dias)
+                if agora < prazo_atingido:
+                    continue
+                dias_passados = (agora - doc.protocolado_em).days
+                notif = Notification(
+                    user_id=doc.created_by,
+                    tenant_id=doc.tenant_id,
+                    tipo="SISTEMA",
+                    titulo=f"Sem retorno em {dias_passados} dias: {doc.titulo[:70]}",
+                    corpo=(
+                        f"A petição \"{doc.titulo}\" foi protocolada há {dias_passados} dias "
+                        f"sem movimentação registrada — vale a pena consultar o andamento."
+                    ),
+                    priority="NORMAL",
+                    link="/documentos",
+                )
+                db.add(notif)
+                await publish_notification_ws(notif)
+                doc.follow_up_alertado = True
+                total += 1
+
+            await db.commit()
+            log.info("petition_followups_checked", total_alertas=total)
+            return {"alertas_criados": total}
+
+    async def _run_with_lock():
+        from app.workers.task_lock import TaskLock
+
+        lock = TaskLock("check_petition_followups", ttl_seconds=1500)
+        if not await lock.acquire():
+            log.info("task_skipped_lock_held", task="check_petition_followups")
+            return {"skipped": True, "reason": "lock_held"}
+        try:
+            return await _run()
+        finally:
+            await lock.release()
+
+    return run_worker_coro(_run_with_lock())

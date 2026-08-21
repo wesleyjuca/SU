@@ -983,6 +983,75 @@ Histórico:
   - Não implementadas nesta fase (fora do escopo pedido pelo usuário): as
     16 propostas de evolução de produto da Fase 203, e as 2 observações
     não confirmadas (reset-durante-chain-HITL, walkthrough Playwright).
+- **Fase 205** — usuário escolheu, das 16 propostas de evolução da Fase
+  203, começar pelas 5 de complexidade S ("construa as pequenas
+  primeiro"). Nenhuma é achado de bug — são extensões de produto sobre
+  módulos existentes.
+  - **205.1 — Follow-up SLA em petições protocoladas**: `Document` ganha
+    `protocolado_em`/`follow_up_dias`/`follow_up_alertado` (opt-in por
+    documento). `update_document` carimba `protocolado_em` uma única vez
+    na transição pra PROTOCOLADO (separado de `updated_at`, que mudaria a
+    cada edição posterior) e reseta `follow_up_alertado=False` numa
+    reprotocolação. Nova task Celery Beat diária (7h45, mesma janela dos
+    outros alertas de prazo/publicação) `check_petition_followups` avisa
+    o advogado quando uma petição fica protocolada sem retorno da corte
+    além do prazo configurado — só avisa, nunca age sozinho. Frontend
+    (`documentos/page.tsx`) ganha o campo de dias de follow-up no modal
+    de edição, mostrado só quando o status é PROTOCOLADO. Testes novos
+    (`test_petition_followup_sla.py`, Postgres+Redis reais) confirmam o
+    carimbo único, o reset em reprotocolação, e que a task só alerta quem
+    já venceu o prazo e é idempotente (não duplica no reprocessamento).
+    **Achado colateral desta fase, corrigido de quebra**: `_to_response()`
+    em `documents.py` quebrava (`pydantic.ValidationError`) contra o
+    `_FakeDB` de `test_documents_storage_fase141.py` porque
+    `follow_up_alertado=d.follow_up_alertado` chegava `None` — o
+    `default=False` do SQLAlchemy só é aplicado num flush real contra
+    Postgres, e o Fake daquele teste nunca simula isso. Mesma classe de
+    bug já corrigida uma vez na Fase 199 (`bool(tenant.is_demo)`); mesmo
+    fix aqui (`bool(d.follow_up_alertado)`).
+  - **205.2 — Histórico de Aprovações**: `/aprovacoes` ganha abas
+    Pendentes/Resolvidas. `ApprovalCard`/`ApprovalListItem` ganham
+    `ExpiresBadge` (countdown de expiração, urgente se <24h, "vencida" se
+    passou) reaproveitando `Approval.expires_at` (Fase 191, existia mas
+    nunca aparecia na UI) e `ResolvedStatusBadge` (verde/vermelho) pra
+    aba Resolvidas, que renderiza em modo `readOnly` (sem os botões
+    Aprovar/Rejeitar).
+  - **205.3 — Navegação contextual no Cliente 360**: `GET /documents` e
+    a tela de Documentos ganham filtro `?client_id=`; Faturas já tinha
+    suporte no backend, só faltava o filtro no frontend. Cliente 360
+    ganha uma linha "Documentos deste cliente"/"Faturas deste cliente"
+    logo abaixo do cabeçalho, e o link "Gerenciar" da aba Financeiro
+    passa a levar o filtro junto.
+  - **205.4 — Filtro de data + exportação CSV em Auditoria**:
+    `GET /audit` ganha `date_from`/`date_to`; novo `GET /audit/export`
+    (mesmo padrão `StreamingResponse` de `GET /financial/export`, teto de
+    50k linhas). Frontend ganha os 2 campos de data e um botão Exportar.
+    Teste novo usa o padrão "nunca commita, deixa o rollback do fechamento
+    de sessão limpar" (não o padrão usual de DELETE explícito) porque
+    `audit_logs` é imutável por trigger de banco (Fase 148).
+  - **205.5 — Solicitar aumento de orçamento de IA**: novo endpoint
+    `POST /system/ai-budget/request-increase` — quando um usuário bate no
+    teto mensal de IA (429 de `enforce_budget`), pode pedir aumento direto
+    da tela em vez de precisar contatar o ADMIN manualmente; notifica só
+    ADMIN/SÓCIO/SUPERADMIN do MESMO tenant, com dedup de 1 pedido/dia por
+    usuário. `agentes/page.tsx` chama esse endpoint automaticamente no
+    429 (antes só mostrava a mensagem genérica de erro, descartando o
+    detalhe real do limite).
+  - Verificação: `ruff check` + `py_compile` limpos nos 8 arquivos
+    backend tocados; `tsc --noEmit` + `eslint` limpos nos 7 arquivos
+    frontend tocados (1 warning pré-existente de `exhaustive-deps` em
+    `documentos/page.tsx`, não novo desta fase). Suíte completa
+    (`pytest tests/`): 819 passed (subiu de 812 na Fase 204 — os 2 testes
+    de `test_documents_storage_fase141.py` que quebravam antes do fix do
+    achado colateral agora entram na contagem de sucesso todo run) — a
+    mesma flutuação de ERROR/FAILED entre rodadas (pool asyncpg
+    reutilizado entre event loops por-teste do pytest-asyncio, documentada
+    desde a Fase 199) apareceu de novo, confirmada como não-regressão
+    isolando cada teste novo (todos passam limpo sozinhos) e reproduzindo
+    o mesmo padrão num arquivo pré-existente não tocado
+    (`test_ai_budget_request_increase.py`, da própria 205.5).
+  - Não implementadas nesta fase: as 11 propostas restantes (M/L) da
+    Fase 203 — seguem aguardando decisão do usuário sobre priorização.
 
 ## Riscos conhecidos / débito técnico
 
