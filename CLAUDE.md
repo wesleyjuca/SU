@@ -1458,6 +1458,27 @@ Histórico:
   (contagens de lacunas corretas, score calculado certo, gate de role
   ADVOGADO→403 confirmado) — mesmo padrão das fases anteriores desde
   que a flakiness apareceu.
+- **Fase 213** (3ª das 8 propostas de evolução da Fase 209): metas de
+  captação no CRM. Novo model `CrmMeta` (`tenant_id`+`periodo` YYYY-MM+
+  `tipo` RECEITA/NOVOS_CLIENTES, unique constraint pelos 3 — 1 meta ativa
+  por período+tipo). `POST /crm/metas` (ADMIN/SOCIO/GESTOR — ação de
+  gestão, mesmo espírito do gate de escrita de `teses.py`) faz upsert em
+  vez de rejeitar com 409: revisar a meta no meio do mês é o caso comum.
+  `GET /crm/metas?periodo=` (gate `_STAFF`, mesmo de `/funil`) devolve
+  cada meta com `realizado`/`percentual` já calculados, reaproveitando
+  `Opportunity.updated_at` como proxy de "quando foi fechado" (GANHO) —
+  mesma aproximação já aceita em 205.1/206.3/207.1. Frontend: widget na
+  página do funil (`/clientes/funil`) com barra de progresso + edição
+  inline (lápis, só visível pro papel com gate de escrita). Verificado
+  via HTTP real contra Postgres real: upsert (mesmo ID, valor atualizado),
+  cálculo de realizado (só GANHO dentro do período conta — RECEITA soma
+  valor_estimado, NOVOS_CLIENTES conta quantidade), isolamento cross-
+  tenant (tenant demo não vê metas do tenant afj), gate 403 pra ADVOGADO
+  no POST, tipo inválido rejeitado com 422, delete funcional. Teste novo
+  (`test_crm_metas_fase213.py`) com a mesma flakiness de pool
+  asyncpg/pytest-asyncio documentada desde a Fase 199 — reproduzida de
+  novo mesmo neste ambiente, verificação principal via HTTP real como nas
+  fases anteriores.
 
 ## Riscos conhecidos / débito técnico
 
