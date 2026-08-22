@@ -1458,6 +1458,47 @@ Histórico:
   (contagens de lacunas corretas, score calculado certo, gate de role
   ADVOGADO→403 confirmado) — mesmo padrão das fases anteriores desde
   que a flakiness apareceu.
+- **Fase 213** (3ª das 8 propostas de evolução da Fase 209): metas de
+  captação no CRM. Novo model `CrmMeta` (`tenant_id`+`periodo` YYYY-MM+
+  `tipo` RECEITA/NOVOS_CLIENTES, unique constraint pelos 3 — 1 meta ativa
+  por período+tipo). `POST /crm/metas` (ADMIN/SOCIO/GESTOR — ação de
+  gestão, mesmo espírito do gate de escrita de `teses.py`) faz upsert em
+  vez de rejeitar com 409: revisar a meta no meio do mês é o caso comum.
+  `GET /crm/metas?periodo=` (gate `_STAFF`, mesmo de `/funil`) devolve
+  cada meta com `realizado`/`percentual` já calculados, reaproveitando
+  `Opportunity.updated_at` como proxy de "quando foi fechado" (GANHO) —
+  mesma aproximação já aceita em 205.1/206.3/207.1. Frontend: widget na
+  página do funil (`/clientes/funil`) com barra de progresso + edição
+  inline (lápis, só visível pro papel com gate de escrita). Verificado
+  via HTTP real contra Postgres real: upsert (mesmo ID, valor atualizado),
+  cálculo de realizado (só GANHO dentro do período conta — RECEITA soma
+  valor_estimado, NOVOS_CLIENTES conta quantidade), isolamento cross-
+  tenant (tenant demo não vê metas do tenant afj), gate 403 pra ADVOGADO
+  no POST, tipo inválido rejeitado com 422, delete funcional. Teste novo
+  (`test_crm_metas_fase213.py`) com a mesma flakiness de pool
+  asyncpg/pytest-asyncio documentada desde a Fase 199 — reproduzida de
+  novo mesmo neste ambiente, verificação principal via HTTP real como nas
+  fases anteriores.
+- **Fase 214** (4ª das 8 propostas de evolução da Fase 209): dossiê do
+  cliente em PDF. Novo `GET /clients/{id}/dossie-pdf` (gate
+  `ADMIN/SOCIO/GESTOR`, mesmo de `/financeiro` — o dossiê inclui dado
+  financeiro via score de saúde) reaproveita `build_report_pdf`
+  (`app/utils/pdf_builder.py`, ReportLab, já pinado, sem dependência
+  nova — existia desde antes sem nenhum call site) e chama diretamente
+  `client_health_score` (207.1) e `client_timeline` (211) em vez de
+  duplicar a lógica de agregação, junto com dados básicos do cliente e a
+  lista de processos, timbrado com o mesmo padrão de
+  `invoices.py`/`resolve_logo_data_url`. Frontend: botão "Baixar Dossiê
+  (PDF)" no Cliente 360, ao lado de "Exportar Dados" (LGPD), gated pela
+  mesma variável `canFinance` já existente na página. Verificado via
+  HTTP real contra Postgres real: PDF válido (`%PDF` no cabeçalho,
+  >500 bytes, não só status 200) pro próprio tenant, 403 pra ADVOGADO,
+  404 pra cliente de outro tenant (não vazamento). Teste novo
+  (`test_client_dossie_pdf_fase214.py`) com a mesma flakiness de pool
+  asyncpg/pytest-asyncio documentada desde a Fase 199 — reproduzida de
+  novo mesmo neste ambiente (cross-checada contra um arquivo de controle
+  não tocado, `test_crm_metas_fase213.py`, que falha de forma idêntica),
+  verificação principal via HTTP real como nas fases anteriores.
 
 ## Riscos conhecidos / débito técnico
 

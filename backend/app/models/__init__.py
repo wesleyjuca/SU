@@ -15,7 +15,7 @@ from app.models.integrations import TenantIntegration
 from app.models.sync_run import SyncRun
 from app.models.assistant import AssistantConversation, AssistantMessage
 from app.models.billing import BillingAccount, TenantPayment
-from app.models.crm import Opportunity
+from app.models.crm import Opportunity, CrmMeta
 from app.models.intimacao import Intimacao
 from app.models.tribunal import Tribunal
 from app.models.ai_config import AIProviderConfig
@@ -41,7 +41,7 @@ __all__ = [
     "AssistantConversation",
     "AssistantMessage",
     "BillingAccount", "TenantPayment",
-    "Opportunity",
+    "Opportunity", "CrmMeta",
     "Intimacao",
     "ProcessTeamMember",
     "Tribunal",

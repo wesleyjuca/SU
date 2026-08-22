@@ -1,8 +1,9 @@
 "use client";
 import { useState, useEffect } from "react";
-import { Filter, Plus, X, Loader2, Trash2, TrendingUp } from "lucide-react";
+import { Filter, Plus, X, Loader2, Trash2, TrendingUp, Target, Pencil } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
+import { useUserStore } from "@/store";
 
 interface Opp {
   id: string; titulo: string; valor_estimado: number; estagio: string; probabilidade: number;
@@ -16,6 +17,12 @@ interface Funil {
   forecast: number; pipeline_aberto: number; abertas: number;
 }
 interface Cliente { id: string; nome_completo: string }
+interface Meta { id: string; periodo: string; tipo: string; valor_meta: number; realizado: number; percentual: number | null }
+
+const PERIODO_ATUAL = (() => {
+  const hoje = new Date();
+  return `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, "0")}`;
+})();
 
 const LABEL: Record<string, string> = {
   LEAD: "Lead", QUALIFICACAO: "Qualificação", PROPOSTA: "Proposta",
@@ -34,6 +41,8 @@ const fmtBRL = (v: number) => `R$ ${v.toLocaleString("pt-BR", { minimumFractionD
 
 export default function FunilPage() {
   const toast = useToast();
+  const userRole = useUserStore((s) => s.user?.role);
+  const canDefinirMeta = ["ADMIN", "SOCIO", "GESTOR"].includes(userRole ?? "");
   const [funil, setFunil] = useState<Funil | null>(null);
   const [clientes, setClientes] = useState<Cliente[]>([]);
   const [loading, setLoading] = useState(true);
@@ -42,7 +51,38 @@ export default function FunilPage() {
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({ titulo: "", valor_estimado: "", estagio: "LEAD", probabilidade: "50", client_id: "", origem: "", expected_close: "" });
 
-  useEffect(() => { fetchFunil(); fetchClientes(); }, []);
+  const [meta, setMeta] = useState<Meta | null>(null);
+  const [editingMeta, setEditingMeta] = useState(false);
+  const [metaValor, setMetaValor] = useState("");
+  const [savingMeta, setSavingMeta] = useState(false);
+
+  useEffect(() => { fetchFunil(); fetchClientes(); fetchMeta(); }, []);
+
+  async function fetchMeta() {
+    try {
+      const res = await fetch(`/api/v1/crm/metas?periodo=${PERIODO_ATUAL}`, { headers: authH() });
+      if (res.ok) {
+        const metas: Meta[] = await res.json();
+        setMeta(metas.find((m) => m.tipo === "RECEITA") ?? null);
+      }
+    } catch { /* silencioso — widget opcional */ }
+  }
+
+  async function salvarMeta(e: React.FormEvent) {
+    e.preventDefault();
+    const valor = Number(metaValor);
+    if (!valor || valor <= 0) return;
+    setSavingMeta(true);
+    try {
+      const res = await fetch("/api/v1/crm/metas", {
+        method: "POST", headers: authH(),
+        body: JSON.stringify({ periodo: PERIODO_ATUAL, tipo: "RECEITA", valor_meta: valor }),
+      });
+      if (res.ok) { setEditingMeta(false); setMetaValor(""); fetchMeta(); }
+      else toast.error("Erro ao salvar meta.");
+    } catch { toast.error("Falha de conexão."); }
+    finally { setSavingMeta(false); }
+  }
 
   async function fetchFunil() {
     setLoading(true);
@@ -123,6 +163,56 @@ export default function FunilPage() {
         <button onClick={() => setModal(true)} className="btn-afj-primary text-sm py-2 px-4 rounded-sm flex items-center gap-2">
           <Plus size={15} /> Nova oportunidade
         </button>
+      </div>
+
+      {/* Meta de captação do mês (Fase 213) */}
+      <div className="afj-card p-4">
+        <div className="flex items-center justify-between gap-3 mb-2">
+          <span className="flex items-center gap-2 text-sm font-medium text-afj-black">
+            <Target size={14} className="text-afj-gold" />
+            Meta de receita — {PERIODO_ATUAL}
+          </span>
+          {canDefinirMeta && !editingMeta && (
+            <button onClick={() => { setMetaValor(meta ? String(meta.valor_meta) : ""); setEditingMeta(true); }}
+              className="text-afj-black/40 hover:text-afj-gold">
+              <Pencil size={13} />
+            </button>
+          )}
+        </div>
+        {editingMeta ? (
+          <form onSubmit={salvarMeta} className="flex items-center gap-2">
+            <input
+              type="number" min="1" step="0.01" autoFocus value={metaValor}
+              onChange={(e) => setMetaValor(e.target.value)}
+              placeholder="Valor da meta (R$)"
+              className="flex-1 border border-afj-cream-dark rounded-sm px-3 py-1.5 text-sm focus:outline-none focus:border-afj-gold"
+            />
+            <button type="submit" disabled={savingMeta} className="btn-afj-primary text-xs py-1.5 px-3 rounded-sm">
+              {savingMeta ? <Loader2 size={13} className="animate-spin" /> : "Salvar"}
+            </button>
+            <button type="button" onClick={() => setEditingMeta(false)} className="text-afj-black/40 hover:text-afj-black">
+              <X size={15} />
+            </button>
+          </form>
+        ) : meta ? (
+          <div>
+            <div className="flex items-baseline justify-between text-sm mb-1">
+              <span className="text-afj-black/60">Realizado: <strong className="text-afj-black">{fmtBRL(meta.realizado)}</strong></span>
+              <span className="text-afj-black/60">Meta: <strong className="text-afj-black">{fmtBRL(meta.valor_meta)}</strong></span>
+            </div>
+            <div className="h-2 bg-afj-cream-dark rounded-full overflow-hidden">
+              <div
+                className={`h-full ${(meta.percentual ?? 0) >= 100 ? "bg-green-500" : "bg-afj-gold"}`}
+                style={{ width: `${Math.min(100, meta.percentual ?? 0)}%` }}
+              />
+            </div>
+            <p className="text-xs text-afj-black/40 mt-1">{meta.percentual ?? 0}% da meta atingido</p>
+          </div>
+        ) : (
+          <p className="text-xs text-afj-black/40">
+            {canDefinirMeta ? "Nenhuma meta definida pra este mês." : "Nenhuma meta definida pra este mês pela gestão."}
+          </p>
+        )}
       </div>
 
       <div className="grid grid-cols-3 gap-4">
