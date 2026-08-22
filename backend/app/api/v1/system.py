@@ -241,13 +241,13 @@ async def analytics_financeiro(
         ]
 
         q_tot = await db.execute(
-            select(FinancialEntry.tipo, FinancialEntry.status, func.sum(FinancialEntry.valor).label("t"))
+            select(FinancialEntry.tipo, FinancialEntry.status, func.sum(FinancialEntry.valor).label("total_grupo"))
             .where(FinancialEntry.tenant_id == tid)
             .group_by(FinancialEntry.tipo, FinancialEntry.status)
         )
         totais: dict = {}
         for r in q_tot.all():
-            totais[f"{r.tipo}_{r.status}"] = float(r.t or 0)
+            totais[f"{r.tipo}_{r.status}"] = float(r.total_grupo or 0)
 
         return {
             "mensal": mensal,
