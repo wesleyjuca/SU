@@ -83,6 +83,27 @@ async def erase_client_data(
         interaction.descricao = "[Conteúdo removido — LGPD art. 18 IV]"
         interaction.metadata_json = None
 
+    # Fase 210 (achado da Fase 209) — mesma classe de lacuna que a Fase 176.3
+    # fechou pra ClientContact/ClientInteraction: `Opportunity` (CRM, Fase
+    # 161/208.2) tem `client_id` e campos de texto livre (`descricao`/
+    # `motivo_perda`) que podem conter PII do titular (nome, CPF, telefone,
+    # relato) — confirmado empiricamente que sobrevivia ao "esquecimento" e
+    # continuava visível em GET /crm/opportunities. `titulo` não é apagado
+    # de propósito: é o rótulo do negócio no funil (ex.: "Revisão
+    # contratual"), não um campo que histórico mostrou conter PII.
+    from app.models.crm import Opportunity
+    opportunities_result = await db.execute(
+        select(Opportunity).where(
+            Opportunity.client_id == uuid.UUID(client_id),
+            Opportunity.tenant_id == current_user.tenant_id,
+        )
+    )
+    for opportunity in opportunities_result.scalars().all():
+        if opportunity.descricao:
+            opportunity.descricao = "[Conteúdo removido — LGPD art. 18 IV]"
+        if opportunity.motivo_perda:
+            opportunity.motivo_perda = "[Conteúdo removido — LGPD art. 18 IV]"
+
     await db.flush()
 
     # Registra auditoria (tenant-scoped — antes nascia sem tenant_id e sumia do
@@ -142,6 +163,15 @@ async def export_client_data(
     )
     interactions = interactions_result.scalars().all()
 
+    from app.models.crm import Opportunity
+    opportunities_result = await db.execute(
+        select(Opportunity).where(
+            Opportunity.client_id == uuid.UUID(client_id),
+            Opportunity.tenant_id == current_user.tenant_id,
+        )
+    )
+    opportunities = opportunities_result.scalars().all()
+
     from app.models.audit_log import AuditLog
     db.add(AuditLog(
         user_id=current_user.id,
@@ -179,6 +209,16 @@ async def export_client_data(
                 "created_at": i.created_at.isoformat(),
             }
             for i in interactions
+        ],
+        "oportunidades_crm": [
+            {
+                "titulo": o.titulo,
+                "descricao": o.descricao,
+                "estagio": o.estagio,
+                "motivo_perda": o.motivo_perda,
+                "created_at": o.created_at.isoformat(),
+            }
+            for o in opportunities
         ],
     }
 

@@ -518,6 +518,22 @@ async def lifespan(app: FastAPI):
             "ALTER TABLE documents ADD COLUMN IF NOT EXISTS follow_up_alertado BOOLEAN NOT NULL DEFAULT false",
             # Fase 206.2 — preferências de notificação persistentes por tipo.
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS notification_prefs JSONB",
+            # Fase 210 (achado de performance da Fase 209, sob volume real) —
+            # `financial_entries.client_id`/`client_interactions.client_id`
+            # nunca tiveram índice próprio (só `tenant_id`); `EXPLAIN ANALYZE`
+            # confirmou Seq Scan na query de saúde do cliente (207.1) e na
+            # navegação contextual (205.3). Inofensivo no volume testado
+            # (centenas de linhas), mas vira full-scan por chamada em escala.
+            # Compostos com tenant_id porque toda query real já filtra por
+            # ambos juntos.
+            "CREATE INDEX IF NOT EXISTS ix_financial_entries_tenant_client ON financial_entries (tenant_id, client_id)",
+            "CREATE INDEX IF NOT EXISTS ix_client_interactions_tenant_client ON client_interactions (tenant_id, client_id)",
+            # Mesmo achado — GET /crm/previsao-caixa (208.2) e /system/
+            # analytics/gestao (206.3) filtram financial_entries por
+            # tenant+status+data_pagamento/data_vencimento sem índice
+            # correspondente.
+            "CREATE INDEX IF NOT EXISTS ix_financial_entries_tenant_status_pagamento ON financial_entries (tenant_id, status, data_pagamento)",
+            "CREATE INDEX IF NOT EXISTS ix_financial_entries_tenant_tipo_status_vencimento ON financial_entries (tenant_id, tipo, status, data_vencimento)",
         ]:
             try:
                 async with engine.begin() as conn:
