@@ -1,5 +1,5 @@
 """Endpoints CRUD de clientes / CRM."""
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, or_, func
 from pydantic import BaseModel
@@ -701,3 +701,85 @@ async def client_timeline(
 
     eventos.sort(key=lambda e: e["data"], reverse=True)
     return eventos[:limit]
+
+
+@router.get("/{client_id}/dossie-pdf")
+async def client_dossie_pdf(
+    client_id: str,
+    current_user: User = Depends(require_role("ADMIN", "SOCIO", "GESTOR")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Fase 214 (proposta de evolução da Fase 209) — dossiê do cliente em
+    PDF, reunindo dados básicos, score de saúde (207.1), processos e
+    linha do tempo (211) num único documento pra levar a uma reunião ou
+    consultar formatado. Reaproveita `client_health_score`/`client_timeline`
+    diretamente (mesma fonte de verdade da Cliente 360) em vez de duplicar
+    a lógica de agregação. Mesmo gate de `/financeiro` — o dossiê inclui
+    dado financeiro (via health-score)."""
+    from app.models.process import LegalProcess
+    from app.utils.pdf_builder import build_report_pdf
+
+    cliente = (await db.execute(
+        select(Client).where(Client.id == uuid.UUID(client_id), Client.tenant_id == current_user.tenant_id)
+    )).scalar_one_or_none()
+    if not cliente:
+        raise NotFoundError("Cliente", client_id)
+
+    health = await client_health_score(client_id, current_user, db)
+    timeline = await client_timeline(client_id, 20, current_user, db)
+    processos = (await db.execute(
+        select(LegalProcess).where(LegalProcess.client_id == cliente.id, LegalProcess.tenant_id == current_user.tenant_id)
+    )).scalars().all()
+
+    dados_cliente = "\n".join(filter(None, [
+        f"Nome: {cliente.nome_completo}",
+        f"Tipo: {cliente.tipo}",
+        f"Status: {cliente.status}",
+        f"E-mail: {cliente.email}" if cliente.email else None,
+        f"Telefone: {cliente.telefone}" if cliente.telefone else None,
+    ]))
+
+    banda_label = {"saudavel": "Saudável", "atencao": "Atenção", "risco": "Risco"}.get(health["banda"], health["banda"])
+    saude = (
+        f"Score geral: {health['score']}/100 ({banda_label})\n"
+        f"Pagamentos em dia: {health['componentes']['financeiro']['pontos']}/40\n"
+        f"Engajamento recente: {health['componentes']['engajamento']['pontos']}/30\n"
+        f"Taxa de êxito processual: {health['componentes']['processual']['pontos']}/30"
+    )
+
+    processos_txt = "\n".join(
+        f"{p.numero_cnj or '(sem número)'} — {p.tribunal} — {p.situacao}" for p in processos
+    ) or "Nenhum processo cadastrado."
+
+    timeline_txt = "\n".join(
+        f"{ev['data'][:10] if isinstance(ev['data'], str) else ev['data'].strftime('%d/%m/%Y')} — {ev['titulo']}"
+        for ev in timeline
+    ) or "Sem eventos registrados."
+
+    letterhead = None
+    from app.models.tenant import TenantConfig
+    cfg = (await db.execute(
+        select(TenantConfig).where(TenantConfig.tenant_id == current_user.tenant_id)
+    )).scalar_one_or_none()
+    if cfg:
+        letterhead = dict((cfg.document_templates or {}).get("letterhead", {}))
+        from app.services.letterhead import resolve_logo_data_url
+        logo_data_url = await resolve_logo_data_url(cfg)
+        if logo_data_url:
+            letterhead["logo_data_url"] = logo_data_url
+
+    pdf = build_report_pdf(
+        title=f"Dossiê — {cliente.nome_completo}",
+        sections=[
+            {"heading": "Dados do Cliente", "body": dados_cliente},
+            {"heading": "Saúde do Cliente", "body": saude},
+            {"heading": "Processos", "body": processos_txt},
+            {"heading": "Linha do Tempo (últimos eventos)", "body": timeline_txt},
+        ],
+        letterhead=letterhead,
+    )
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="dossie_{client_id}.pdf"'},
+    )

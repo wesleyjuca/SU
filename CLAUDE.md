@@ -1479,6 +1479,26 @@ Histórico:
   asyncpg/pytest-asyncio documentada desde a Fase 199 — reproduzida de
   novo mesmo neste ambiente, verificação principal via HTTP real como nas
   fases anteriores.
+- **Fase 214** (4ª das 8 propostas de evolução da Fase 209): dossiê do
+  cliente em PDF. Novo `GET /clients/{id}/dossie-pdf` (gate
+  `ADMIN/SOCIO/GESTOR`, mesmo de `/financeiro` — o dossiê inclui dado
+  financeiro via score de saúde) reaproveita `build_report_pdf`
+  (`app/utils/pdf_builder.py`, ReportLab, já pinado, sem dependência
+  nova — existia desde antes sem nenhum call site) e chama diretamente
+  `client_health_score` (207.1) e `client_timeline` (211) em vez de
+  duplicar a lógica de agregação, junto com dados básicos do cliente e a
+  lista de processos, timbrado com o mesmo padrão de
+  `invoices.py`/`resolve_logo_data_url`. Frontend: botão "Baixar Dossiê
+  (PDF)" no Cliente 360, ao lado de "Exportar Dados" (LGPD), gated pela
+  mesma variável `canFinance` já existente na página. Verificado via
+  HTTP real contra Postgres real: PDF válido (`%PDF` no cabeçalho,
+  >500 bytes, não só status 200) pro próprio tenant, 403 pra ADVOGADO,
+  404 pra cliente de outro tenant (não vazamento). Teste novo
+  (`test_client_dossie_pdf_fase214.py`) com a mesma flakiness de pool
+  asyncpg/pytest-asyncio documentada desde a Fase 199 — reproduzida de
+  novo mesmo neste ambiente (cross-checada contra um arquivo de controle
+  não tocado, `test_crm_metas_fase213.py`, que falha de forma idêntica),
+  verificação principal via HTTP real como nas fases anteriores.
 
 ## Riscos conhecidos / débito técnico
 

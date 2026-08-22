@@ -243,6 +243,21 @@ export default function ClienteDetailPage() {
     }
   }
 
+  async function baixarDossiePdf() {
+    const token = localStorage.getItem("afj_access_token");
+    const res = await fetch(`/api/v1/clients/${id}/dossie-pdf`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (res.ok) {
+      const blob = await res.blob();
+      const a = Object.assign(document.createElement("a"), {
+        href: URL.createObjectURL(blob),
+        download: `dossie_${id}.pdf`,
+      });
+      a.click();
+    }
+  }
+
   async function convidarPortal() {
     setInviting(true);
     try {
@@ -500,6 +515,12 @@ export default function ClienteDetailPage() {
                 <Download size={12} />
                 Exportar Dados
               </button>
+              {canFinance && (
+                <button onClick={baixarDossiePdf} className="btn-afj-outline rounded-sm flex items-center gap-1.5 text-xs">
+                  <FileCheck size={12} />
+                  Baixar Dossiê (PDF)
+                </button>
+              )}
               <button
                 onClick={() => setConfirmErase(true)}
                 className="text-xs px-3 py-2 border border-red-200 text-red-600 rounded-sm hover:bg-red-50 flex items-center gap-1.5 transition-colors"
