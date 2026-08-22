@@ -1294,6 +1294,122 @@ Histórico:
     maiores (agentes customizados como passo de chain — toca o
     orchestrator; analytics entre filiais — precisa de design cuidadoso
     de isolamento cross-tenant), conforme já planejado desde a Fase 206.
+- **Fase 209** — rodada de teste geral em larga escala, a pedido explícito
+  do usuário ("simule um uso intenso do sistema... elabore fases de
+  aplicação e inicie") — diferente de toda rodada anterior, autorização
+  prévia pra já começar a implementar os achados confirmados, sem pausar
+  pra perguntar quais valem a pena.
+  - **Volume real inédito**: nenhuma rodada anterior tinha gerado dado em
+    massa de verdade — script novo (scratchpad) gerou 2 tenants
+    descartáveis com 150 clientes, 400 processos, 200 documentos, 300
+    lançamentos financeiros, 100 oportunidades de CRM, 16 denúncias e 8
+    riscos de integridade (total combinado). Simulação de concorrência em
+    cima desse volume: leitura paralela em massa nos endpoints 205-208,
+    10 disparos simultâneos de `strategy_agent`, múltiplos
+    `resolve_approval` concorrentes na mesma Approval, chain HITL completa
+    via Postgres+Redis+Celery+uvicorn reais.
+  - **Reconfirmação dos 9 itens desde a Fase 203** (204.A-D, 205.1-205.5,
+    206.1-206.3, 207.1-207.3, 208.1-208.3) via HTTP real contra o volume
+    gerado — todos OK, nenhuma regressão de interação entre eles.
+  - **Lacuna 1 fechada — race demo-reset×chain-HITL** (hipótese aberta
+    desde a Fase 203, nunca reproduzida em 3 rodadas seguintes): 13
+    tentativas reais de concorrência (timing variado + fault injection
+    determinística com delays controlados via env var, incluindo bypass
+    do gargalo de rede do Qdrant/S3 pra isolar a variável). Conclusão:
+    a premissa de código da Fase 203 (DELETE incondicional +
+    UPDATE tardio sem lock explícito) segue válida, mas o "silent no-op"
+    hipotetizado **não é alcançável pelo caminho normal de
+    `resolve_approval`** — achado novo não previsto: o `SELECT ... FOR
+    UPDATE` na Approval (Fase 132) fica retido durante **toda** a
+    duração da requisição (inclusive `resume_chain_after_approval`
+    inteiro), porque só é liberado no commit final, que acontece dentro
+    da própria função de retomada. Como `resetar_tenant_demo` deleta
+    `Approval` antes de `AgentRun` na mesma transação, seu DELETE
+    simplesmente bloqueia atrás desse lock até o resolve terminar — não
+    existe janela pro reset intercalar um DELETE no meio da retomada.
+    Confirmado empiricamente: um delay determinístico de 3s injetado no
+    meio do resume produziu um stall medido de ~3.5s no loop de delete do
+    reset, na hora exata em que ele tenta a linha de Approval. Proteção
+    incidental (efeito colateral do lock da Fase 132), não desenhada de
+    propósito — registrado aqui pra não se perder.
+  - **Lacuna 2 fechada — walkthrough real via Playwright** (bloqueado ou
+    pulado em quase toda rodada desde a Fase 178): script Node usando o
+    Playwright global do sandbox (`/opt/node22/lib/node_modules/
+    playwright`, sem tocar `package.json`) navegou de verdade por login →
+    dashboard → `/aprovacoes` → `/relatorios` → `/etica` → `/processos` →
+    Cliente 360 → `/auditoria` → `/integracoes`, com o tenant de volume
+    logado (não o demo). **Achado real, corrigido na hora**:
+    `GET /system/analytics/financeiro` (widget financeiro do dashboard)
+    quebrava com 500 sempre que o tenant tinha algum `FinancialEntry` —
+    `Row.t` é um atributo interno depreciado do SQLAlchemy (alias da
+    própria tupla da linha), e a query rotulava a soma agregada como
+    `.label("t")`, colidindo com ele: `r.t` devolvia a linha inteira, não
+    o valor. Nunca pego antes porque nenhuma rodada tinha exercitado esse
+    endpoint específico com um browser real. Corrigido (label renomeado
+    pra `total_grupo`) e verificado via HTTP real antes mesmo da auditoria
+    formal — commit separado (`a62e0a2`).
+  - **Auditoria paralela adversarial** (4 agentes via `Agent` tool, cada
+    um reproduzindo com HTTP real contra o volume gerado, não só leitura
+    de código) — **3 achados confirmados**:
+    - **LGPD (MÉDIO-ALTO)**: `erase_client_data` não alcançava
+      `Opportunity` (CRM, Fase 208.2) — PII em `descricao`/`motivo_perda`
+      sobrevivia ao "esquecimento" e continuava visível em
+      `GET /crm/opportunities`. Mesma classe de gap já fechada uma vez
+      pra `ClientContact`/`ClientInteraction` na Fase 176.3, reaberta por
+      um modelo que só passou a existir depois daquele fix.
+    - **Performance (ALTO)**: `POST /processes/bulk-update` (207.3)
+      emitia um `UPDATE` por processo (SELECT + loop Python + flush) —
+      confirmado via log de statements do Postgres: 200 round-trips
+      separados num lote de 200. Invisível como lentidão em `localhost`
+      (sub-ms), mas estrutural: em produção (Railway→Postgres com RTT
+      real) vira 200ms-1s de latência pura de rede numa chamada que devia
+      ser de dígito único.
+    - **Performance (MÉDIO/BAIXO)**: `financial_entries.client_id` e
+      `client_interactions.client_id` sem índice próprio — `EXPLAIN
+      ANALYZE` confirmou Seq Scan em `/clients/{id}/health-score`
+      (207.1); mesma lacuna em `/crm/previsao-caixa` (208.2) e
+      `/system/analytics/gestao` (206.3) pros filtros de
+      status/data. Inofensivo no volume testado (sub-ms), mas full-scan
+      por chamada em escala maior.
+    - **Achado funcional (BAIXO, não-segurança)**: `GET /financial
+      ?client_id=` nunca declarava o parâmetro — FastAPI descartava
+      silenciosamente e a navegação contextual do Cliente 360 (205.3)
+      devolvia todos os lançamentos do tenant em vez de só os do
+      cliente, contradizendo o próprio changelog da Fase 205.3
+      ("já tinha suporte no backend"). Confirmado que não vazava dado
+      cross-tenant — só não filtrava.
+    - **Cross-tenant/segurança**: todos os 9 itens de 204-208 vieram
+      limpos (nenhum IDOR, nenhum vazamento) — reconfirmação mais ampla
+      já feita nesta mesma fase.
+    - **8 propostas de evolução de produto** levantadas (não bugs) — ver
+      Fase 211+ pra quais viraram implementação.
+  - **Fase 210** (implementação imediata dos 4 achados confirmados,
+    mesma sessão, conforme autorizado): erase_client_data estendido a
+    Opportunity + GET /lgpd/clients/{id}/export passa a incluir
+    `oportunidades_crm`; bulk-update reescrito pra `UPDATE ... WHERE id =
+    ANY(...)` único; `GET /financial` ganha o parâmetro `client_id` que
+    faltava; 4 índices novos (`financial_entries` × client_id/status+data,
+    `client_interactions` × client_id) via `CREATE INDEX IF NOT EXISTS`
+    idempotente em `events.py`. Verificado via HTTP real contra Postgres
+    real (não só os 2 testes novos com Postgres real —
+    `test_lgpd_erasure_reaches_crm_fase210`,
+    `test_financial_client_id_filter_fase210` — porque a suíte automatizada
+    apresentou a mesma flutuação de pool asyncpg/pytest-asyncio já
+    documentada desde a Fase 199, desta vez reproduzida de forma
+    consistente mesmo isolando teste a teste; confirmado não-regressão
+    reproduzindo o mesmo padrão num arquivo de controle totalmente não
+    tocado, `test_analytics_gestao_periodo.py`, que também falha isolado
+    nesta sessão — sintoma de degradação do ambiente desta sessão
+    específica, não do código). Índices confirmados criados via `\di`
+    direto no Postgres.
+  - **Próxima rodada deve**: investigar por que a flakiness de pool
+    asyncpg/pytest-asyncio, historicamente intermitente ("passa isolado"),
+    passou a ser consistente mesmo isolando teste a teste nesta sessão —
+    pode ser drift de versão de dependência (pytest-asyncio/anyio) ou algo
+    específico do ambiente desta sessão de longa duração; vale reproduzir
+    numa sessão nova antes de investir tempo em diagnóstico profundo.
+    Considerar também as 8 propostas de evolução levantadas nesta fase
+    (não implementadas ainda além do que já virou Fase 211+, se houver).
 
 ## Riscos conhecidos / débito técnico
 
