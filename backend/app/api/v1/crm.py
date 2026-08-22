@@ -10,7 +10,7 @@ import uuid
 from app.db.base import get_db
 from app.dependencies import require_role
 from app.models.user import User
-from app.models.crm import Opportunity
+from app.models.crm import Opportunity, CrmMeta
 from app.models.client import Client
 from app.models.financial import FinancialEntry
 
@@ -19,6 +19,10 @@ router = APIRouter(prefix="/crm", tags=["crm"])
 ESTAGIOS = ["LEAD", "QUALIFICACAO", "PROPOSTA", "NEGOCIACAO", "GANHO", "PERDIDO"]
 _ABERTOS = ("LEAD", "QUALIFICACAO", "PROPOSTA", "NEGOCIACAO")
 _STAFF = require_role("ADMIN", "SOCIO", "ADVOGADO", "GESTOR")
+# Fase 213 — definir meta de captação é ação de gestão, não do dia a dia de
+# um advogado individual (mesmo espírito do gate de escrita de teses.py).
+_GESTAO = require_role("ADMIN", "SOCIO", "GESTOR")
+_TIPOS_META = ("RECEITA", "NOVOS_CLIENTES")
 # Fase 161 — cards renderizados por coluna do Kanban, por estágio. Estágios
 # terminais (GANHO/PERDIDO) nunca são removidos e acumulam pra sempre —
 # sem esse teto, o funil carregaria centenas/milhares de cards conforme o
@@ -302,4 +306,103 @@ async def patch_opp(opp_id: str, body: OppPatch, current_user: User = Depends(_S
 async def delete_opp(opp_id: str, current_user: User = Depends(_STAFF), db: AsyncSession = Depends(get_db)):
     o = await _get_opp(db, opp_id, current_user.tenant_id)
     await db.delete(o)
+    await db.commit()
+
+
+class MetaCreate(BaseModel):
+    periodo: str = Field(pattern=r"^\d{4}-(0[1-9]|1[0-2])$")  # YYYY-MM
+    tipo: str
+    valor_meta: Decimal = Field(gt=0)
+
+    def _validar_tipo(self):
+        if self.tipo not in _TIPOS_META:
+            raise HTTPException(status_code=422, detail=f"tipo inválido. Use: {', '.join(_TIPOS_META)}")
+
+
+def _periodo_bounds(periodo: str) -> tuple[date, date]:
+    ano, mes = (int(p) for p in periodo.split("-"))
+    inicio = date(ano, mes, 1)
+    fim = date(ano + 1, 1, 1) if mes == 12 else date(ano, mes + 1, 1)
+    return inicio, fim
+
+
+async def _realizado(db: AsyncSession, tenant_id, tipo: str, periodo: str) -> float:
+    """Fase 213 — reaproveita `Opportunity.updated_at` como proxy de "quando
+    foi fechado" (GANHO): mesma aproximação já documentada e aceita em
+    205.1/206.3/207.1 — o model não tem timestamp dedicado de fechamento."""
+    inicio, fim = _periodo_bounds(periodo)
+    where = [
+        Opportunity.tenant_id == tenant_id,
+        Opportunity.estagio == "GANHO",
+        Opportunity.updated_at >= inicio,
+        Opportunity.updated_at < fim,
+    ]
+    if tipo == "RECEITA":
+        total = (await db.execute(select(func.sum(Opportunity.valor_estimado)).where(*where))).scalar_one_or_none()
+        return float(total or 0)
+    total = (await db.execute(select(func.count(Opportunity.id)).where(*where))).scalar_one()
+    return float(total or 0)
+
+
+@router.get("/metas")
+async def list_metas(
+    periodo: str = Query(pattern=r"^\d{4}-(0[1-9]|1[0-2])$"),
+    current_user: User = Depends(_STAFF),
+    db: AsyncSession = Depends(get_db),
+):
+    """Fase 213 — metas de captação/receita do período, com realizado e
+    percentual já calculados contra o funil (`Opportunity`)."""
+    metas = (await db.execute(
+        select(CrmMeta).where(CrmMeta.tenant_id == current_user.tenant_id, CrmMeta.periodo == periodo)
+    )).scalars().all()
+    resp = []
+    for m in metas:
+        realizado = await _realizado(db, current_user.tenant_id, m.tipo, periodo)
+        valor_meta = float(m.valor_meta)
+        resp.append({
+            "id": str(m.id),
+            "periodo": m.periodo,
+            "tipo": m.tipo,
+            "valor_meta": valor_meta,
+            "realizado": round(realizado, 2),
+            "percentual": round(100 * realizado / valor_meta, 1) if valor_meta else None,
+        })
+    return resp
+
+
+@router.post("/metas", status_code=201)
+async def create_or_update_meta(body: MetaCreate, current_user: User = Depends(_GESTAO), db: AsyncSession = Depends(get_db)):
+    """Upsert: revisar a meta no meio do período é o caso comum pra um
+    gestor, então um POST repetido pro mesmo período+tipo atualiza o valor
+    em vez de rejeitar com 409."""
+    body._validar_tipo()
+    existente = (await db.execute(
+        select(CrmMeta).where(
+            CrmMeta.tenant_id == current_user.tenant_id,
+            CrmMeta.periodo == body.periodo,
+            CrmMeta.tipo == body.tipo,
+        )
+    )).scalar_one_or_none()
+    if existente:
+        existente.valor_meta = body.valor_meta
+        existente.criado_por = current_user.id
+        m = existente
+    else:
+        m = CrmMeta(
+            tenant_id=current_user.tenant_id, periodo=body.periodo, tipo=body.tipo,
+            valor_meta=body.valor_meta, criado_por=current_user.id,
+        )
+        db.add(m)
+    await db.commit()
+    return {"id": str(m.id), "periodo": m.periodo, "tipo": m.tipo, "valor_meta": float(m.valor_meta)}
+
+
+@router.delete("/metas/{meta_id}", status_code=204)
+async def delete_meta(meta_id: str, current_user: User = Depends(_GESTAO), db: AsyncSession = Depends(get_db)):
+    m = (await db.execute(
+        select(CrmMeta).where(CrmMeta.id == uuid.UUID(meta_id), CrmMeta.tenant_id == current_user.tenant_id)
+    )).scalar_one_or_none()
+    if not m:
+        raise HTTPException(status_code=404, detail="Meta não encontrada.")
+    await db.delete(m)
     await db.commit()
