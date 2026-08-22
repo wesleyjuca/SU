@@ -5,6 +5,7 @@ from sqlalchemy import select, desc
 from pydantic import BaseModel
 from decimal import Decimal
 from datetime import date
+import statistics
 import uuid
 
 import re
@@ -491,3 +492,64 @@ def _to_response(e: FinancialEntry) -> FinancialEntryResponse:
         process_id=str(e.process_id) if e.process_id else None,
         created_at=e.created_at.isoformat(),
     )
+
+
+@router.get("/honorarios-historico")
+async def honorarios_historico(
+    area_direito: str = Query(...),
+    tipo_acao: str | None = Query(default=None),
+    desfecho: str | None = Query(default=None),
+    # Fase 215 — gate divergente do resto deste arquivo (ADMIN/SOCIO/GESTOR):
+    # a intenção da feature é o próprio advogado precificando um caso, e o
+    # payload é só estatística agregada (média/mediana/min/max/contagem),
+    # nunca um lançamento individual — mesmo espírito de `/crm/previsao-caixa`
+    # (Fase 208.2), que já expõe agregado de FinancialEntry pro grupo _STAFF.
+    current_user: User = Depends(require_role("ADMIN", "SOCIO", "ADVOGADO", "GESTOR")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Fase 215 (proposta de evolução da Fase 209) — honorários realmente
+    recebidos (RECEITA/HONORARIOS/PAGO) por área do direito, pra comparar
+    contra um valor que o advogado está pensando em propor. Puramente
+    read-only — nenhum valor proposto é enviado/persistido, a comparação é
+    feita no frontend a partir da média devolvida aqui."""
+    stmt = (
+        select(FinancialEntry.valor)
+        .join(LegalProcess, LegalProcess.id == FinancialEntry.process_id)
+        .where(
+            FinancialEntry.tenant_id == current_user.tenant_id,
+            LegalProcess.tenant_id == current_user.tenant_id,
+            FinancialEntry.tipo == "RECEITA",
+            FinancialEntry.categoria == "HONORARIOS",
+            FinancialEntry.status == "PAGO",
+            LegalProcess.area_direito == area_direito,
+        )
+    )
+    if tipo_acao:
+        stmt = stmt.where(LegalProcess.tipo_acao == tipo_acao)
+    if desfecho:
+        stmt = stmt.where(LegalProcess.desfecho == desfecho)
+
+    valores = [float(v) for (v,) in (await db.execute(stmt)).all()]
+    n = len(valores)
+
+    if n == 0:
+        return {
+            "area_direito": area_direito,
+            "filtros": {"tipo_acao": tipo_acao, "desfecho": desfecho},
+            "n": 0, "media": None, "mediana": None, "minimo": None, "maximo": None,
+            "amostra_pequena": False,
+            "mensagem": "Sem honorários pagos registrados nesta área ainda — sem histórico pra comparar.",
+        }
+
+    amostra_pequena = n < 3
+    return {
+        "area_direito": area_direito,
+        "filtros": {"tipo_acao": tipo_acao, "desfecho": desfecho},
+        "n": n,
+        "media": round(statistics.mean(valores), 2),
+        "mediana": round(statistics.median(valores), 2),
+        "minimo": round(min(valores), 2),
+        "maximo": round(max(valores), 2),
+        "amostra_pequena": amostra_pequena,
+        "mensagem": f"Só {n} registro(s) — compare com cautela." if amostra_pequena else None,
+    }

@@ -1499,6 +1499,36 @@ Histórico:
   novo mesmo neste ambiente (cross-checada contra um arquivo de controle
   não tocado, `test_crm_metas_fase213.py`, que falha de forma idêntica),
   verificação principal via HTTP real como nas fases anteriores.
+- **Fase 215** (5ª das 8 propostas de evolução da Fase 209): simulação de
+  honorários vs. histórico real. Novo `GET /financial/honorarios-
+  historico` (`area_direito` obrigatório, `tipo_acao`/`desfecho`
+  opcionais) agrega `FinancialEntry` (RECEITA/HONORARIOS/PAGO) ligado a
+  `LegalProcess` via `process_id`, calculando média/mediana/mín/máx em
+  Python (mesmo idioma de `_historico_exito_area`, Fase 208.1) — puramente
+  read-only, nenhum valor proposto é enviado/persistido, a comparação
+  "pretendido vs. média" é 100% client-side. Gate deliberadamente
+  divergente do resto de `financial.py` (que usa só ADMIN/SOCIO/GESTOR):
+  `ADMIN/SOCIO/ADVOGADO/GESTOR`, mesmo grupo `_STAFF` de `/crm/previsao-
+  caixa` (208.2) — a intenção é o próprio advogado precificando um caso, e
+  o payload é só estatística agregada, nunca um lançamento individual.
+  Amostra pequena (`n<3`) sinalizada sem esconder os números, mesmo
+  espírito do aviso de 208.1; área sem histórico devolve `n:0` +
+  mensagem (nunca 404). Frontend: novo card "Simulação de honorários vs.
+  histórico real" na aba Financeiro de `/relatorios`
+  (`FinanceiroCharts.tsx`), select de área reaproveitando a mesma lista
+  de `processos/novo/page.tsx`, busca disparada no `onChange` (não no
+  mount, diferente do `PrevisaoCaixa` que não tem parâmetro). Verificado
+  via HTTP real contra Postgres real: média/mediana/mín/máx corretos
+  (DESPESA, status≠PAGO, categoria≠HONORARIOS e lançamento sem
+  `process_id` corretamente excluídos da amostra), filtro por
+  `desfecho` reduzindo a amostra, área sem dado devolvendo mensagem,
+  ADVOGADO permitido, um usuário ASSISTENTE de teste bloqueado com 403,
+  isolamento cross-tenant confirmado (tenant demo não vê dado do tenant
+  afj). Teste novo (`test_honorarios_simulacao_fase215.py`) com a mesma
+  flakiness de pool asyncpg/pytest-asyncio documentada desde a Fase 199 —
+  reproduzida de novo mesmo neste ambiente (cross-checada contra
+  `test_crm_previsao_caixa_fase208.py`, que falha de forma idêntica),
+  verificação principal via HTTP real como nas fases anteriores.
 
 ## Riscos conhecidos / débito técnico
 
