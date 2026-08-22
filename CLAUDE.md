@@ -1408,8 +1408,27 @@ Histórico:
     pode ser drift de versão de dependência (pytest-asyncio/anyio) ou algo
     específico do ambiente desta sessão de longa duração; vale reproduzir
     numa sessão nova antes de investir tempo em diagnóstico profundo.
-    Considerar também as 8 propostas de evolução levantadas nesta fase
-    (não implementadas ainda além do que já virou Fase 211+, se houver).
+    Considerar também as 7 propostas de evolução restantes levantadas
+    nesta fase (playbooks de agentes por área, dossiê em PDF, metas de
+    captação no CRM, central de tarefas cross-módulo, score de qualidade
+    de dado LGPD-aware, alerta de risco de prescrição por tese, simulação
+    de honorários vs. histórico real).
+- **Fase 211** (1ª das 8 propostas de evolução da Fase 209, escolhida por
+  ser a mais simples/menor risco — puramente read-only, zero campo novo):
+  timeline unificada no Cliente 360. Novo `GET /clients/{id}/timeline`
+  junta interações (`ClientInteraction`), marcos processuais (abertura +
+  desfecho de `LegalProcess`, mesma aproximação de `updated_at` já aceita
+  em 205.1/206.3), pagamentos recebidos (`FinancialEntry` RECEITA/PAGO) e
+  petições protocoladas (`Document.protocolado_em`, Fase 205.1) numa
+  lista cronológica única, evitando que o advogado precise abrir 4 telas
+  separadas pra reconstruir o histórico de um cliente. Frontend: novo
+  card "Linha do tempo" no Cliente 360, logo abaixo do score de saúde
+  (207.1). Verificado via HTTP real contra Postgres real com dado da
+  volume gerada na Fase 209 (evento com os 4 tipos presentes, ordenação
+  cronológica correta); teste novo com Postgres real
+  (`test_client_timeline_fase211.py`) — mesma flakiness de pool já
+  documentada impediu rodar via pytest nesta sessão, mas a verificação
+  HTTP contra o backend real já confirma o comportamento.
 
 ## Riscos conhecidos / débito técnico
 

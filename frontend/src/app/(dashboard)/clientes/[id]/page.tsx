@@ -4,7 +4,7 @@ import { useParams, useRouter } from "next/navigation";
 import {
   ArrowLeft, Users, Plus, MessageSquare, Phone, Mail, Scale,
   Loader2, X, AlertTriangle, Download, Trash2, Settings2, Globe, Copy, Check as CheckIcon,
-  HeartPulse,
+  HeartPulse, Clock, FileCheck, DollarSign, Gavel,
 } from "lucide-react";
 import Link from "next/link";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
@@ -68,6 +68,21 @@ interface HealthScore {
   };
 }
 
+interface TimelineEvento {
+  tipo: "interacao" | "processo" | "financeiro" | "documento";
+  subtipo: string;
+  titulo: string;
+  detalhe: string | null;
+  data: string;
+}
+
+const TIMELINE_ICONS: Record<TimelineEvento["tipo"], React.ReactNode> = {
+  interacao: <MessageSquare size={12} className="text-blue-500" />,
+  processo: <Gavel size={12} className="text-purple-500" />,
+  financeiro: <DollarSign size={12} className="text-green-500" />,
+  documento: <FileCheck size={12} className="text-afj-gold" />,
+};
+
 const HEALTH_BANDA_CONFIG: Record<HealthScore["banda"], { label: string; bg: string; text: string; border: string }> = {
   saudavel: { label: "Saudável", bg: "bg-green-50", text: "text-green-700", border: "border-green-200" },
   atencao: { label: "Atenção", bg: "bg-amber-50", text: "text-amber-700", border: "border-amber-200" },
@@ -110,6 +125,7 @@ export default function ClienteDetailPage() {
   const [contatos, setContatos] = useState<Contato[]>([]);
   const [processos, setProcessos] = useState<Processo[]>([]);
   const [healthScore, setHealthScore] = useState<HealthScore | null>(null);
+  const [timeline, setTimeline] = useState<TimelineEvento[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<"interacoes" | "contatos" | "financeiro">("interacoes");
   const userRole = useUserStore((s) => s.user?.role);
@@ -148,18 +164,20 @@ export default function ClienteDetailPage() {
     const headers = { Authorization: `Bearer ${token}` };
     setLoading(true);
     try {
-      const [cRes, iRes, pRes, ctRes, hRes] = await Promise.all([
+      const [cRes, iRes, pRes, ctRes, hRes, tRes] = await Promise.all([
         fetch(`/api/v1/clients/${id}`, { headers }),
         fetch(`/api/v1/clients/${id}/interactions?limit=50`, { headers }),
         fetch(`/api/v1/processes?client_id=${id}`, { headers }),
         fetch(`/api/v1/clients/${id}/contacts`, { headers }),
         fetch(`/api/v1/clients/${id}/health-score`, { headers }),
+        fetch(`/api/v1/clients/${id}/timeline?limit=15`, { headers }),
       ]);
       if (cRes.ok) setCliente(await cRes.json());
       if (iRes.ok) setInteractions(await iRes.json());
       if (pRes.ok) setProcessos(await pRes.json());
       if (ctRes.ok) setContatos(await ctRes.json());
       if (hRes.ok) setHealthScore(await hRes.json());
+      if (tRes.ok) setTimeline(await tRes.json());
     } finally { setLoading(false); }
   }
 
@@ -414,6 +432,34 @@ export default function ClienteDetailPage() {
                     )}
                   </span>
                 </div>
+              </div>
+            </div>
+          )}
+
+          {/* Timeline unificada (Fase 211 — proposta de evolução da Fase 209) */}
+          {timeline && timeline.length > 0 && (
+            <div className="afj-card p-4">
+              <h2 className="font-semibold text-afj-black text-sm flex items-center gap-2 mb-3">
+                <Clock size={14} className="text-afj-gold" />
+                Linha do tempo
+              </h2>
+              <div className="space-y-3">
+                {timeline.map((ev, idx) => (
+                  <div key={idx} className="flex items-start gap-2 text-xs">
+                    <div className="mt-0.5 flex-shrink-0">{TIMELINE_ICONS[ev.tipo]}</div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-medium text-afj-black">{ev.titulo}</span>
+                        <span className="text-afj-black/40 flex-shrink-0">
+                          {new Date(ev.data).toLocaleDateString("pt-BR")}
+                        </span>
+                      </div>
+                      {ev.detalhe && (
+                        <p className="text-afj-black/50 truncate">{ev.detalhe}</p>
+                      )}
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
           )}

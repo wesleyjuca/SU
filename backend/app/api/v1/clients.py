@@ -617,3 +617,87 @@ async def client_health_score(
             },
         },
     }
+
+
+@router.get("/{client_id}/timeline")
+async def client_timeline(
+    client_id: str,
+    limit: int = Query(default=50, le=200),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Fase 211 (proposta de evolução da Fase 209) — timeline unificada do
+    Cliente 360: junta interações, marcos processuais (abertura/desfecho),
+    pagamentos recebidos e petições protocoladas numa única lista
+    cronológica, pra evitar que o advogado precise navegar entre 4 telas
+    separadas pra reconstruir "o que aconteceu com esse cliente".
+    Puramente read-only, agregando dado que já existe — nenhum campo novo."""
+    from app.models.document import Document
+    from app.models.financial import FinancialEntry
+    from app.models.process import LegalProcess
+
+    cliente = (await db.execute(
+        select(Client).where(Client.id == uuid.UUID(client_id), Client.tenant_id == current_user.tenant_id)
+    )).scalar_one_or_none()
+    if not cliente:
+        raise NotFoundError("Cliente", client_id)
+
+    eventos: list[dict] = []
+
+    interacoes = (await db.execute(
+        select(ClientInteraction).where(
+            ClientInteraction.client_id == cliente.id, ClientInteraction.tenant_id == current_user.tenant_id,
+        )
+    )).scalars().all()
+    for i in interacoes:
+        eventos.append({
+            "tipo": "interacao", "subtipo": i.tipo, "titulo": i.tipo,
+            "detalhe": i.descricao, "data": i.created_at,
+        })
+
+    processos = (await db.execute(
+        select(LegalProcess).where(
+            LegalProcess.client_id == cliente.id, LegalProcess.tenant_id == current_user.tenant_id,
+        )
+    )).scalars().all()
+    for p in processos:
+        eventos.append({
+            "tipo": "processo", "subtipo": "aberto", "titulo": f"Processo {p.numero_cnj} aberto",
+            "detalhe": p.tribunal, "data": p.created_at,
+        })
+        if p.desfecho:
+            # `updated_at` como proxy de "quando o desfecho foi registrado" —
+            # mesma aproximação já aceita em 205.1/206.3 (o model não tem um
+            # timestamp dedicado pra isso).
+            eventos.append({
+                "tipo": "processo", "subtipo": "desfecho", "titulo": f"Processo {p.numero_cnj} encerrado",
+                "detalhe": p.desfecho, "data": p.updated_at,
+            })
+
+    pagamentos = (await db.execute(
+        select(FinancialEntry).where(
+            FinancialEntry.client_id == cliente.id, FinancialEntry.tenant_id == current_user.tenant_id,
+            FinancialEntry.tipo == "RECEITA", FinancialEntry.status == "PAGO",
+            FinancialEntry.data_pagamento.is_not(None),
+        )
+    )).scalars().all()
+    for f in pagamentos:
+        eventos.append({
+            "tipo": "financeiro", "subtipo": "pagamento", "titulo": "Pagamento recebido",
+            "detalhe": f.descricao, "data": datetime.combine(f.data_pagamento, datetime.min.time(), tzinfo=timezone.utc),
+        })
+
+    protocolos = (await db.execute(
+        select(Document).where(
+            Document.client_id == cliente.id, Document.tenant_id == current_user.tenant_id,
+            Document.protocolado_em.is_not(None),
+        )
+    )).scalars().all()
+    for d in protocolos:
+        eventos.append({
+            "tipo": "documento", "subtipo": "protocolado", "titulo": f'"{d.titulo}" protocolada',
+            "detalhe": None, "data": d.protocolado_em,
+        })
+
+    eventos.sort(key=lambda e: e["data"], reverse=True)
+    return eventos[:limit]
