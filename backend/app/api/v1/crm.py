@@ -12,6 +12,7 @@ from app.dependencies import require_role
 from app.models.user import User
 from app.models.crm import Opportunity
 from app.models.client import Client
+from app.models.financial import FinancialEntry
 
 router = APIRouter(prefix="/crm", tags=["crm"])
 
@@ -160,6 +161,74 @@ async def funil(current_user: User = Depends(_STAFF), db: AsyncSession = Depends
         "pipeline_aberto": round(pipeline_aberto, 2),
         "abertas": sum(totais[e]["count"] for e in _ABERTOS),
     }
+
+
+@router.get("/previsao-caixa")
+async def previsao_caixa(current_user: User = Depends(_STAFF), db: AsyncSession = Depends(get_db)):
+    """Fase 208.2 — previsão de caixa dos próximos 6 meses, combinando o
+    pipeline do CRM (`Opportunity` aberta, ponderada por `probabilidade`,
+    mesmo cálculo do `/funil`) com receita já PENDENTE (`FinancialEntry`).
+    Os dois ficam separados na resposta (nunca somados num único número
+    "previsto") — pipeline é probabilístico, receita_prevista já está
+    faturada/comprometida; fundir os dois esconderia essa diferença."""
+    hoje = date.today()
+    meses: list[tuple[int, int]] = []
+    y, m = hoje.year, hoje.month
+    for _ in range(6):
+        meses.append((y, m))
+        m += 1
+        if m > 12:
+            m = 1
+            y += 1
+    inicio = date(meses[0][0], meses[0][1], 1)
+    fim_y, fim_m = meses[-1]
+    fim_m += 1
+    if fim_m > 12:
+        fim_m = 1
+        fim_y += 1
+    fim = date(fim_y, fim_m, 1)  # limite exclusivo
+
+    opps = (await db.execute(
+        select(Opportunity.expected_close, Opportunity.valor_estimado, Opportunity.probabilidade)
+        .where(
+            Opportunity.tenant_id == current_user.tenant_id,
+            Opportunity.estagio.in_(_ABERTOS),
+            Opportunity.expected_close.is_not(None),
+            Opportunity.expected_close >= inicio,
+            Opportunity.expected_close < fim,
+        )
+    )).all()
+    receitas = (await db.execute(
+        select(FinancialEntry.data_vencimento, FinancialEntry.valor)
+        .where(
+            FinancialEntry.tenant_id == current_user.tenant_id,
+            FinancialEntry.tipo == "RECEITA",
+            FinancialEntry.status == "PENDENTE",
+            FinancialEntry.data_vencimento.is_not(None),
+            FinancialEntry.data_vencimento >= inicio,
+            FinancialEntry.data_vencimento < fim,
+        )
+    )).all()
+
+    pipeline_por_mes = {ym: 0.0 for ym in meses}
+    for exp, valor, prob in opps:
+        pipeline_por_mes[(exp.year, exp.month)] += float(valor or 0) * (prob or 0) / 100.0
+
+    receita_por_mes = {ym: 0.0 for ym in meses}
+    for venc, valor in receitas:
+        receita_por_mes[(venc.year, venc.month)] += float(valor or 0)
+
+    meses_resp = []
+    for (ano, mes) in meses:
+        pipeline = round(pipeline_por_mes[(ano, mes)], 2)
+        receita = round(receita_por_mes[(ano, mes)], 2)
+        meses_resp.append({
+            "mes": f"{ano:04d}-{mes:02d}",
+            "pipeline_ponderado": pipeline,
+            "receita_prevista": receita,
+            "total": round(pipeline + receita, 2),
+        })
+    return {"meses": meses_resp}
 
 
 @router.get("/opportunities")

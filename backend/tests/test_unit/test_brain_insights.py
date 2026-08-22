@@ -1,7 +1,21 @@
-"""Fase 85 — Cérebro inteligente: parsing/montagem de contexto (lógica pura)."""
+"""Fase 85 — Cérebro inteligente: parsing/montagem de contexto (lógica pura).
+
+Fase 204 — gerar_insights() passou a envolver a chamada ao LLM em
+user_ai_creds() (fix do achado da Fase 203: rota sem fallback BYOK, ao
+contrário de toda outra rota disparadora de IA do sistema)."""
+from contextlib import asynccontextmanager
+
 import pytest
 
 from app.services import brain_insights as bi
+
+
+@asynccontextmanager
+async def _noop_user_ai_creds(session, user_id, task_type=None):
+    """Fake de user_ai_creds() pros testes que não exercitam BYOK em si —
+    só confirma que gerar_insights() entra no context manager antes de
+    chamar o LLM, sem aplicar nenhuma credencial real."""
+    yield
 
 
 # ─── parse_insights ────────────────────────────────────────────────────────────
@@ -72,7 +86,7 @@ async def test_gerar_insights_contexto_vazio_nao_chama_llm(monkeypatch):
     async def _vazio():
         return ""
     monkeypatch.setattr(bi, "montar_contexto", _vazio)
-    r = await bi.gerar_insights()
+    r = await bi.gerar_insights(db=None, user_id="u1")
     assert r["ok"] is False and r["insights"] == []
 
 
@@ -87,11 +101,43 @@ async def test_gerar_insights_fluxo_feliz(monkeypatch):
         assert messages[0]["content"] == await _ctx()
         return ('[{"tipo":"evolucao","titulo":"T","descricao":"D","prioridade":"baixa","area":"x"}]', 10, 5, 0.001)
 
+    import app.integrations.byok as byok_mod
     import app.integrations.llm_client as llm
     monkeypatch.setattr(llm, "call_llm", fake_call_llm)
+    monkeypatch.setattr(byok_mod, "user_ai_creds", _noop_user_ai_creds)
 
-    r = await bi.gerar_insights()
+    r = await bi.gerar_insights(db=None, user_id="u1")
     assert r["ok"] is True and len(r["insights"]) == 1 and r["custo_usd"] == 0.001
+
+
+@pytest.mark.asyncio
+async def test_gerar_insights_entra_no_contexto_byok_antes_de_chamar_llm(monkeypatch):
+    """Fase 204 — confirma que gerar_insights() efetivamente entra em
+    user_ai_creds() (não só chama call_llm direto, como o código quebrado
+    fazia antes do fix)."""
+    async def _ctx():
+        return "algum contexto"
+    monkeypatch.setattr(bi, "montar_contexto", _ctx)
+
+    chamadas = []
+
+    @asynccontextmanager
+    async def _tracking_user_ai_creds(session, user_id, task_type=None):
+        chamadas.append((session, user_id, task_type))
+        yield
+
+    async def fake_call_llm(*a, **k):
+        assert chamadas, "call_llm foi chamado sem passar por user_ai_creds() antes"
+        return ("[]", 1, 1, 0.0)
+
+    import app.integrations.byok as byok_mod
+    import app.integrations.llm_client as llm
+    monkeypatch.setattr(llm, "call_llm", fake_call_llm)
+    monkeypatch.setattr(byok_mod, "user_ai_creds", _tracking_user_ai_creds)
+
+    r = await bi.gerar_insights(db="fake_db", user_id="u42")
+    assert r["ok"] is True
+    assert chamadas == [("fake_db", "u42", "brain_insights")]
 
 
 @pytest.mark.asyncio
@@ -103,8 +149,10 @@ async def test_gerar_insights_llm_falha_nao_levanta(monkeypatch):
     async def fake_call_llm_falha(*a, **k):
         raise RuntimeError("sem API key")
 
+    import app.integrations.byok as byok_mod
     import app.integrations.llm_client as llm
     monkeypatch.setattr(llm, "call_llm", fake_call_llm_falha)
+    monkeypatch.setattr(byok_mod, "user_ai_creds", _noop_user_ai_creds)
 
-    r = await bi.gerar_insights()
+    r = await bi.gerar_insights(db=None, user_id="u1")
     assert r["ok"] is False and "detail" in r

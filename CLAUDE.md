@@ -597,6 +597,867 @@ Histórico:
     idêntica isolando um teste já existente e não tocado nesta fase
     (`test_hitl_flush_and_lock.py`) — todo teste novo desta fase passa
     limpo quando rodado isolado.
+- **Fase 200** — pedido do usuário: a entrada de visitante na tela de
+  login não devia mais exigir senha, já que os dados do tenant demo são
+  sempre temporários (resetados periodicamente) e não afetam usuários
+  reais. Novo endpoint `POST /auth/demo-login` (`app/api/v1/auth.py`),
+  sem nenhum parâmetro de entrada — resolve o único destino possível
+  (ADMIN do tenant `slug=="demo" AND is_demo=True`) internamente, mesmo
+  padrão de segurança do `resetar_tenant_demo` (Fase 199), tornando
+  estruturalmente impossível usar essa rota pra entrar em qualquer outro
+  tenant. Não participa do rate-limiter de senha errada (não há senha a
+  errar); ganhou teto próprio, só anti-abuso (20 requisições/5min por
+  IP), pra não virar gerador infinito de `Session` rows. O botão "Entrar
+  como visitante" do frontend (`login/page.tsx`) passou a chamar essa
+  rota em vez do `/auth/login` com a credencial fixa embutida no bundle
+  — a senha `Demo@2026` continua válida pra quem quiser logar manualmente
+  (documentada, não é secreta), só deixou de ser necessária pro clique
+  único. Verificado via HTTP real contra o backend local (Postgres+Redis
+  reais): token emitido sem corpo nenhum na requisição funciona num
+  endpoint autenticado de verdade, login por senha antigo continua
+  funcionando em paralelo, e o rate-limit de anti-abuso dispara
+  corretamente na 21ª chamada consecutiva.
+- **Fase 201** — rodada de teste geral (ambiente real: Postgres+Redis+
+  Celery worker+uvicorn+frontend subidos de verdade). Cobriu, nesta
+  ordem: (a) reconfirmação independente dos 2 achados críticos da Fase
+  197/198 — desta vez indo mais fundo que a própria Fase 198; (b) a
+  lacuna que a Fase 197 deixou documentada ("será que 188.2/190-194 têm
+  o mesmo gap estrutural do 196?"); (c) primeira rodada de teste geral
+  sobre as Fases 199-200 (nunca tinham passado por uma, só pelo teste do
+  próprio build); (d) auditoria paralela adversarial (`Agent`, não
+  `Workflow`) — a frente que a Fase 197 cortou por tempo.
+  - **198.A reconfirmado, mais fundo**: em vez de só chamar
+    `ensure_collections()` isolado (como o teste da 198 fez), este round
+    exercitou o **caminho de boot real** (`_background_warmup()`,
+    `app/core/events.py`) com `get_qdrant()` monkeypatchado pra um Qdrant
+    real em memória — confirma que a integração completa (checagem de
+    `QDRANT_URL` configurada → `get_qdrant()` → `ensure_collections()`)
+    funciona de ponta a ponta, não só a função isolada.
+  - **198.B reconfirmado com um agente diferente do testado na própria
+    Fase 198** (`compliance_agent` em vez de `strategy_agent`, disparado
+    via HTTP+Celery+Redis reais, `call_llm_stream` monkeypatchado pra não
+    depender de credencial Anthropic real): 3 eventos `AGENT_RUN_DELTA`
+    publicados na ordem certa + `AGENT_RUN_COMPLETED`, confirmando que a
+    decisão de mover streaming pro nível de `call_llm()` (não
+    `ask_llm()`) realmente generaliza pra qualquer agente que passe por
+    `call_claude`/`call_llm`, não só o testado originalmente. Também
+    testado o caso negativo pela primeira vez: uma chain de 2 passos
+    (`full_contract_flow`) real, via HTTP+Celery, confirmando **zero**
+    eventos `AGENT_RUN_DELTA` publicados (`ctx.stream_enabled = len(chain)
+    == 1`, `app/agents/brain/orchestrator.py:103`, se comporta como
+    documentado).
+  - **Lacuna da Fase 197 fechada — todos os 6 itens auditados vieram
+    limpos**: 188.2 (observabilidade de sync), 190 (S3 dos anexos), 191
+    (expiração/escalonamento de aprovação), 192 (Clicksign automático),
+    193 (snapshot de versão de agente customizado) e 194 (descoberta por
+    OAB) foram todos rastreados ponta a ponta (writer↔reader, chamador
+    real↔`beat_schedule`) e nenhum reproduz o padrão da Fase 196 (feature
+    implementada mas nunca alcançada pelo fluxo real). Fechado — não
+    precisa reabrir numa rodada futura a menos que algum desses itens
+    mude.
+  - **Primeira auditoria de teste geral sobre as Fases 199-200**:
+    reconfirmado de forma independente (não reaproveitando os testes do
+    próprio build) — login sem senha funcional via HTTP real e via
+    Next.js dev real (proxy batendo no backend local, não produção,
+    fechando a mesma classe de risco da 176.6), tentativa de bypass via
+    parâmetros extra no corpo da requisição corretamente ignorada, os 3
+    guards de I/O (e-mail/assinatura/pagamento) e o guard de teto de IA
+    todos reconfirmados via HTTP real contra o próprio ADMIN demo, teto
+    de `max_users=4` bloqueando um 5º convite (fecha a brecha de escapar
+    do teto de IA por convite), e o reset do tenant demo reconfirmado
+    **não tocando uma linha do tenant `afj`** rodando a função de serviço
+    direto contra Postgres real (não só via teste automatizado
+    pré-existente).
+  - **2 achados novos, ambos confirmados empiricamente/pela inspeção
+    direta do banco (não hipótese de leitura de código)**:
+    - **ALTO — a garantia "estruturalmente impossível" de
+      `POST /auth/demo-login` depende de uma constraint que não existe no
+      banco real deste ambiente.** O comentário do endpoint
+      (`app/api/v1/auth.py`) afirma que cruzar pra outro tenant é
+      estruturalmente impossível porque a query filtra por
+      `Tenant.slug=="demo"` + `User.email==DEMO_ADMIN_EMAIL` com
+      `scalar_one_or_none()` — o que só é uma garantia real se essas
+      colunas forem `UNIQUE` no banco. Confirmado via `\d tenants`/`\d
+      users` direto no Postgres: **não existe nenhum índice único em
+      `tenants.slug` nem em `users.email`** (só `tenants_subdomain_key`)
+      — o `unique=True` do SQLAlchemy nunca virou constraint real porque
+      o banco nasceu via `create_all()` num schema legado, sem
+      `alembic_version` (confirmado: `to_regclass('alembic_version')`
+      retorna vazio). `_seed_demo_tenant()` (`app/core/events.py`, roda
+      em todo boot, sem lock) faz um `SELECT` seguido de `INSERT` sem
+      nenhuma trava — dois processos do app subindo ao mesmo tempo (o
+      caso normal de um rolling deploy no Railway, que a CLAUDE.md já
+      documenta como disparado a cada push em `main`) poderiam ambos
+      passar pelo `SELECT` antes de qualquer `INSERT` comitar, e sem
+      constraint única nada impede a duplicata. Se isso acontecer, o
+      efeito observável não é vazamento cross-tenant (a query do
+      `demo-login` levantaria `MultipleResultsFound` → 500, falha
+      fechada) — mas o próprio `resetar_tenant_demo` também usa
+      `scalar_one_or_none()` pra achar o tenant demo, e quebraria do
+      mesmo jeito, desligando o reset diário permanentemente até
+      intervenção manual. Não reproduzido o race de boot concorrente em
+      si (exigiria subir uma 2ª instância do app), mas a premissa que o
+      torna possível — ausência da constraint única — foi confirmada
+      direto no banco, não é hipótese.
+    - **ALTO — reset do tenant demo nunca limpa Qdrant nem S3, só
+      Postgres.** `resetar_tenant_demo` (`app/services/demo_reset.py`)
+      apaga a linha `Document` do Postgres mas nunca chama
+      `delete_document_chunks()` nem nada de
+      `app/integrations/object_storage.py` — confirmado por grep: o
+      próprio módulo `object_storage.py` **não tem nenhuma função de
+      delete** (só `upload_bytes`/`get_bytes`/`generate_presigned_url`).
+      Como `documents.py` auto-ingesta no RAG qualquer documento
+      `APROVADO`/`PROTOCOLADO` sem nenhum guard de tenant demo
+      (`app/api/v1/documents.py:358-366`), um visitante que aprova um
+      documento deixa: (a) o blob no S3 órfão pra sempre (quando S3
+      estiver configurado — Fase 141), e (b) os chunks vetoriais no
+      Qdrant órfãos pra sempre, ainda marcados com o `tenant_id` do
+      tenant demo (que nunca muda entre resets) — ou seja, buscas RAG de
+      futuras sessões de visitante podem continuar trazendo conteúdo de
+      documentos que o "reset diário" supostamente apagou. Mesma classe
+      de risco já documentada nas Fases 186/188.1 (duplicação de chunks
+      no Qdrant por reingestão sem limpeza prévia), só que aqui é vazamento
+      permanente, não duplicação.
+  - **2 observações menores, não confirmadas como defeito** (registradas
+    pra não se perderem, não viram achado por falta de reprodução):
+    anomalia real de log (`ws_publish_failed error="Event loop is
+    closed"`) observada 1x durante a reconfirmação do 198.B — a mensagem
+    `AGENT_RUN_COMPLETED` ainda assim chegou ao assinante Redis, e uma 3ª
+    task no mesmo worker forkado não reproduziu o mesmo erro; a causa
+    provável é o mesmo padrão de bug já documentado e parcialmente
+    corrigido em `app/workers/async_utils.py` (conexão asyncpg presa a um
+    event loop fechado entre tasks do Celery, por isso `engine.dispose()`
+    é chamado no `finally`) — mas o `_redis_pool` singleton de
+    `app/db/redis.py` **não** recebe o mesmo tratamento (`close_redis()`
+    nunca é chamado em `run_worker_coro`), o que é a causa mais provável,
+    ainda que não 100% confirmada nem reproduzida numa 2ª tentativa. E:
+    o rate-limiter de `demo-login` (INCR seguido de EXPIRE condicional)
+    é atomicamente seguro sob concorrência normal (confirmado: `INCR` é
+    atômico, testado com >20 chamadas reais disparando 429 corretamente),
+    mas tem uma janela teórica de fail-open→trava-permanente se o `INCR`
+    suceder e o `EXPIRE` falhar por uma queda de conexão exatamente entre
+    as duas chamadas — não induzido de propósito, fica como hipótese.
+  - **Nota operacional**: o bloqueio de subagentes por um lembrete de
+    "plan mode ativo" injetado (mesmo achado da Fase 178) **recorreu
+    nesta rodada** — desta vez em 2 dos 3 agentes lançados (o de
+    Playwright real e, parcialmente, o de auditoria de segurança, que
+    corretamente se recusou a fazer qualquer escrita e caiu pra leitura
+    read-only). Isso já não é mais "transitório desta sessão" como a
+    178 supôs — recorreu numa sessão totalmente diferente. Confirma que é
+    um problema de harness a reportar, não algo que se resolve sozinho.
+    A verificação real do frontend (Playwright bloqueado) foi refeita
+    manualmente pela sessão principal: `npm run dev` real com
+    `API_URL` apontando pro backend local, confirmando via HTTP através
+    do proxy do Next.js que `/auth/demo-login` bate no backend local (não
+    produção — fecha a mesma classe de risco da 176.6) e captura de tela
+    via Chromium headless direto (sem o pacote `playwright`, que não
+    está instalado neste ambiente) confirmando o botão "Entrar como
+    visitante" renderizado corretamente em `/login`.
+  - Nenhuma correção feita nesta fase — decisão do usuário sobre quais
+    achados viram fase nova. **Próxima rodada deve**: se os 2 achados
+    ALTOS forem corrigidos, reconfirmar (a) que `_seed_demo_tenant()`
+    ganhou proteção contra corrida de boot concorrente (lock consultivo
+    ou constraint única de verdade aplicada via `ALTER TABLE ... ADD
+    CONSTRAINT` idempotente, mesmo padrão do backfill de colunas em
+    `events.py`) e (b) que o reset do tenant demo chama
+    `delete_document_chunks()` e alguma forma de limpeza S3 (ou aceita
+    documentar a limitação, se optar por não implementar delete de S3
+    nesta fase). Também vale, numa rodada futura, terminar o item que o
+    achado 5 da auditoria adversarial explicitamente deixou fora de
+    escopo por falta de tempo: uma varredura completa dos 82 endpoints
+    procurando falta de filtro por `tenant_id` — agora com um agravante
+    novo, já que qualquer JWT de ADMIN sem senha nenhuma (o próprio
+    `demo-login`) torna esse tipo de bug, se existir, um exploit público
+    sem credencial, não mais um requisito de conta comprometida.
+- **Fase 202** — implementação dos 2 achados ALTO da Fase 201, a pedido
+  do usuário ("transforme os achados em novas fases e inicie as
+  correções").
+  - **202.A** — `backend/app/core/events.py` ganhou 2
+    `CREATE UNIQUE INDEX IF NOT EXISTS` idempotentes (mesmo padrão
+    fail-soft da lista de ALTERs) em `tenants.slug` e `users.email`,
+    fechando a lacuna real confirmada na Fase 201 (nenhuma das duas
+    colunas tinha constraint única de verdade no Postgres, apesar do
+    `unique=True` do SQLAlchemy). `_seed_demo_tenant()` ganhou
+    `pg_advisory_xact_lock` logo no início, serializando boots
+    concorrentes (rolling deploy) sem mudar nada pro caso comum de 1
+    instância só. Verificado: os 2 índices foram criados sem conflito
+    no Postgres local (sem duplicata pré-existente); teste novo
+    (`test_tenant_user_unique_constraints.py`) confirma `IntegrityError`
+    real ao tentar duplicar slug/email; verificação empírica adicional
+    (não virou teste permanente) — 2 chamadas **verdadeiramente
+    concorrentes** de `_seed_demo_tenant()` (`asyncio.gather`, não
+    sequencial) contra um banco Postgres descartável resultaram em
+    exatamente 1 tenant `slug="demo"`, confirmando que o lock serializa
+    a corrida de verdade.
+  - **202.B** — `object_storage.py` ganhou `delete_bytes()` (mesmo
+    padrão try/except + `ObjectStorageError` das outras 3 funções do
+    módulo). `resetar_tenant_demo` agora lê os `Document` do tenant demo
+    ANTES do DELETE genérico e chama `delete_document_chunks()` (Qdrant,
+    reaproveitando `_collection_for` de `auto_ingest.py`) e
+    `object_storage.delete_bytes()` (S3, só se configurado) pra cada um
+    — fail-soft, uma falha de Qdrant/S3 nunca trava o reset do Postgres.
+    Fecha o vazamento real confirmado na Fase 201: documentos aprovados
+    no tenant demo não ficam mais órfãos no Qdrant/S3 a cada reset.
+    Teste novo (`test_demo_reset_cleanup.py`, Qdrant real em memória)
+    confirma que os chunks somem da collection e que `delete_bytes` é
+    chamado com a `storage_key` certa; segundo teste confirma que um
+    documento sem `storage_key` (caminho legado base64) não dispara
+    nenhuma chamada de delete no S3.
+  - Suíte de testes relacionada (unique constraints + demo reset +
+    demo login + demo guard + object storage) rodada isolada e em
+    conjunto — a mesma flakiness de pool asyncpg/pytest-asyncio já
+    documentada (Fase 199) apareceu de novo em 3 dos testes quando
+    rodados juntos, mas todos passam limpo quando isolados; nenhum é
+    específico desta fase (reproduz em testes pré-existentes não
+    tocados também).
+- **Fase 203** — rodada de teste geral a pedido do usuário, desta vez
+  também com propostas de evolução de produto (não só achados de bug).
+  Ambiente real (Postgres+Redis+Celery+uvicorn) subido de verdade.
+  - **Achado pré-existente confirmado nesta rodada** (via screenshot real
+    do usuário do painel "Insights proativos" do Cérebro, antes mesmo da
+    rodada formal começar): `backend/app/services/brain_insights.py::
+    gerar_insights()` chama `call_llm(...)` diretamente, sem nunca entrar
+    em `user_ai_creds(db, user_id)` (`app/integrations/byok.py`) — ao
+    contrário de toda outra rota disparadora de IA do sistema, essa não
+    tem NENHUM fallback pra BYOK (nem o do próprio SUPERADMIN que clicou
+    no botão). Depende 100% de `ANTHROPIC_API_KEY` estar configurada no
+    servidor; se ausente/perdida em produção, o erro é exatamente
+    `Could not resolve authentication method` do SDK Anthropic, batendo
+    com o screenshot do usuário. `db`/`current_user` já estão disponíveis
+    no call site (`app/api/v1/system.py`, `POST /system/brain/insights`)
+    — fix é threading-los através de `gerar_insights()`.
+  - **202.A/202.B reconfirmados de forma independente e mais fundo** que
+    a própria Fase 202: 202.A com 5 chamadas verdadeiramente concorrentes
+    de `_seed_demo_tenant()` (`asyncio.gather`, banco descartável — até
+    aqui só 2 tinham sido testadas) resultando em exatamente 1 tenant
+    `slug="demo"`, e os 2 índices únicos confirmados presentes no
+    Postgres local após um boot novo; 202.B reconfirmado via HTTP real de
+    ponta a ponta (não chamando `resetar_tenant_demo()` direto em Python
+    como a própria Fase 202 fez) — 2ª instância do backend com Qdrant
+    real em memória, documento criado e aprovado via HTTP real,
+    `POST /rag/search` confirma o chunk findável ANTES do reset,
+    `POST /tenants/demo/reset` disparado via HTTP como SUPERADMIN real, e
+    o mesmo `POST /rag/search` confirma `count=0` DEPOIS — o fluxo
+    completo (não só a função de serviço isolada) funciona.
+  - **Varredura completa dos ~82 endpoints por `tenant_id`** — lacuna que
+    a Fase 201 deixou documentada e nenhuma rodada seguinte tinha
+    fechado. 4 agentes paralelos, cada um auditando um subconjunto dos
+    routers de `app/api/v1/`; 3 completaram (a 4ª falhou por limite
+    semanal de uso da API do harness — refeita manualmente pela sessão
+    principal lendo os 7 arquivos restantes: `reports_admin.py`,
+    `system.py`, `tenant.py`, `tenants_admin.py`, `teses.py`, `users.py`,
+    `ws.py` — todos limpos, sem achado novo). **3 achados reais
+    confirmados**:
+    - **ALTO — `POST /rag/ingest` permite envenenamento cross-tenant do
+      RAG privado.** `app/api/v1/rag.py:154-183`. Gate é só
+      `require_role("ADMIN")` (qualquer tenant, não SUPERADMIN); o
+      payload aceita `metadata` livre do cliente e nunca sobrescreve
+      `metadata["tenant_id"]` com o `tenant_id` real do chamador (ao
+      contrário do caminho de auto-ingest confiável,
+      `app/rag/auto_ingest.py:33`, que sempre carimba o valor derivado do
+      servidor). `app/rag/retrieval.py:82` (`retrieve()`) confia
+      cegamente no `tenant_id` do payload como único mecanismo de
+      isolamento pras collections privadas
+      (`peticoes_afj`/`memorias_afj`/`documentos_clientes`/
+      `doutrina_privada`). Um ADMIN do tenant A pode plantar conteúdo
+      malicioso que passa a aparecer nas buscas jurídicas privadas do
+      tenant B como se fosse dado confiável do próprio escritório B —
+      alcançável com zero credenciais reais via `POST /auth/demo-login`
+      (Fase 200), já que o tenant demo também tem um ADMIN.
+    - **MÉDIO — `integrity.py`: `responsavel_id` de `IntegrityRisk` não é
+      validado contra o tenant do chamador**, ao contrário de todo outro
+      FK do sistema (`client_id`/`process_id` sempre passam por um
+      validador). `GET /integrity/risks` faz um outer join sem filtro de
+      tenant no lado de `User` — um ADMIN pode setar `responsavel_id` pra
+      um UUID de usuário de outro tenant (se souber/adivinhar) e ler de
+      volta o `full_name` desse usuário. Severidade limitada por exigir
+      um UUID válido em mãos primeiro (não é enumerável) — é um
+      vazamento de nome via confirmação, não exposição de linha inteira.
+    - **BAIXO — `GET /rag/coverage` devolve contagem agregada
+      cross-tenant.** `qdrant.count()` roda sem filtro de tenant pras 4
+      collections privadas — qualquer usuário staff vê o total de chunks
+      armazenados na plataforma inteira (não só do próprio tenant) em
+      cada collection. Nenhum conteúdo/PII vaza, só um sinal quantitativo.
+    - Todos os outros ~75 endpoints auditados (grupos A/C/D completos:
+      `agent_prompts`, `agents`, `ai_oauth`, `approvals`, `audit`,
+      `auth`, `billing`, `clients`, `crm`, `custom_agents`, `documents`,
+      `financial`, `google_integration`, `integrations_hub`, `invoices`,
+      `lgpd`, `notifications`, `petition_templates`, `portal`,
+      `processes`, `publications`, `push`, `rag` [`/search`,
+      `/jurisprudencia/favorabilidade`], `reports_admin`, `system`,
+      `tenant`, `tenants_admin`, `teses`, `users`, `ws`) vieram limpos.
+  - **Auditoria adicional (sessão principal, sem novos agentes por causa
+    do limite semanal já atingido)**: revisão LGPD/PII dos 5 modelos de
+    Ética/Integridade (Fase 189) — nenhum guarda PII de cliente (só dados
+    de colaborador/governança interna), fora do escopo de
+    `erase_client_data`; não é um gap, é o design correto. Revisão de
+    design (não confirmada empiricamente, registrada como observação pra
+    não se perder): `resetar_tenant_demo()` apaga `Approval`/`AgentRun`
+    do tenant demo incondicionalmente, sem checar se algum está
+    `PENDENTE`/`RUNNING` no exato momento do reset — se um worker Celery
+    estiver no meio de `resume_chain_after_approval` pra uma chain HITL
+    do tenant demo quando o reset diário (4:45am) ou o botão manual
+    disparar, o `UPDATE` subsequente do worker viraria um no-op silencioso
+    (linha já apagada) em vez de erro — não reproduzido de propósito
+    (exigiria orquestrar uma race real), fica como hipótese pra próxima
+    rodada decidir se vale a pena investigar mais fundo.
+  - **Walkthrough real do frontend via Playwright**: cortado nesta rodada
+    por decisão de tempo/recursos (o limite semanal de uso já tinha sido
+    atingido por um dos agentes da varredura de tenant_id) — não subiu o
+    frontend de verdade desta vez. Fica como lacuna explícita pra próxima
+    rodada, no mesmo padrão de transparência das rodadas anteriores.
+  - **Evolução de produto** (novo nesta rodada, a pedido do usuário — não
+    são achados de bug): 2 frentes paralelas (backend/IA e frontend/UX)
+    levantaram propostas lendo `CLAUDE.md`, `/sobre` e os módulos
+    existentes. 16 propostas no total (8 de cada frente) — ver o
+    relatório apresentado ao usuário ao final desta fase para a lista
+    completa com nome, módulo estendido, justificativa e estimativa de
+    complexidade (S/M/L). Nenhuma decisão de priorização foi tomada nesta
+    fase — cabe ao usuário escolher quais viram fase nova.
+  - Nenhuma correção foi feita nesta fase (metodologia padrão) — decisão
+    do usuário sobre quais achados/evoluções viram fase nova. **Próxima
+    rodada deve**: se os 3 achados de `tenant_id` forem corrigidos,
+    reconfirmar via HTTP real (não só teste unitário) que `POST
+    /rag/ingest` carimba o `tenant_id` do servidor, ignorando qualquer
+    valor no `metadata` do cliente; completar o walkthrough real do
+    frontend via Playwright que ficou de fora aqui; e considerar
+    investigar a hipótese não confirmada do reset-durante-chain-HITL
+    acima com uma race real orquestrada (2 processos, não só leitura de
+    código).
+- **Fase 204** — implementação dos 4 achados de bug confirmados na Fase
+  203 (o usuário optou por corrigir os achados agora, deixando as 16
+  propostas de evolução de produto pra decidir depois).
+  - **204.A** — `backend/app/services/brain_insights.py::gerar_insights()`
+    passou a receber `db`/`user_id` e envolve a chamada a `call_llm(...)`
+    em `user_ai_creds(db, user_id, "brain_insights")`
+    (`app/integrations/byok.py`), o mesmo mecanismo de fallback BYOK usado
+    por `generate_petition`/`review_document`/`manage_contract` — fecha o
+    gap real que causava o erro do screenshot do usuário
+    (`Could not resolve authentication method`) quando a
+    `ANTHROPIC_API_KEY` do servidor está ausente. `POST /system/brain/
+    insights` (`app/api/v1/system.py`) agora passa `db`/`current_user.id`.
+    Verificado via HTTP real contra o backend local (Postgres+Redis reais,
+    login SUPERADMIN real): o endpoint continua respondendo `200` com
+    `ok: False` e a mesma mensagem de erro do SDK Anthropic (nem
+    `ANTHROPIC_API_KEY` nem BYOK configurados neste sandbox) — confirma
+    que o código agora passa pelo caminho de fallback correto antes de
+    cair no erro, em vez de nunca ter tentado.
+  - **204.B** — `POST /rag/ingest` (`app/api/v1/rag.py`) agora carimba
+    `metadata["tenant_id"]` com o `current_user.tenant_id` real do servidor
+    pras 4 collections privadas (`PRIVATE_COLLECTIONS`), ignorando
+    qualquer `tenant_id` vindo no payload do cliente — mesmo padrão do
+    caminho de auto-ingest confiável (`app/rag/auto_ingest.py`). Fecha o
+    achado ALTO da Fase 203 (envenenamento cross-tenant do RAG privado).
+    Teste novo (`test_rag_ingest_tenant_stamping.py`, Qdrant real em
+    memória) reproduz o ataque de ponta a ponta: um ADMIN forja
+    `tenant_id` de outro tenant no payload, confirma que a vítima não vê o
+    conteúdo plantado em `retrieve()`, e que o conteúdo fica corretamente
+    atribuído ao tenant real do atacante (não descartado, só não
+    mal-atribuído).
+  - **204.C** — `integrity.py` ganhou `_validar_responsavel_id()` (mesmo
+    padrão de `_validar_client_id`/`_validar_process_id` de
+    `documents.py`), chamado em `create_risk`/`update_risk`; `list_risks`
+    também ganhou filtro de tenant direto no `outerjoin` com `User`
+    (defesa em profundidade, cobre até uma linha legada pré-fix). Fecha o
+    achado MÉDIO da Fase 203 (FK sem validação de tenant + vazamento de
+    nome via `GET /integrity/risks`). Testes novos
+    (`test_integrity_responsavel_tenant_scope.py`, Postgres real com 2
+    tenants de verdade) reproduzem o ataque exato (setar `responsavel_id`
+    pro usuário de outro tenant) em `create_risk`/`update_risk`
+    (bloqueado com 422) e confirmam que `list_risks` não vaza o nome
+    mesmo com uma linha inserida direto no banco simulando dado legado.
+  - **204.D** — `GET /rag/coverage` (`app/api/v1/rag.py`) agora passa um
+    `count_filter` por `tenant_id` pro `qdrant.count()` nas 4 collections
+    privadas (público continua sem filtro, por design). Fecha o achado
+    BAIXO da Fase 203 (contagem agregada cross-tenant). Teste novo
+    confirma que só as collections privadas recebem o filtro.
+  - Suíte completa rodada (`pytest tests/`): 812 passed — a mesma
+    flutuação de ERROR/FAILED entre rodadas já documentada desde a Fase
+    199 (pool asyncpg reutilizado entre event loops por-teste do
+    pytest-asyncio) apareceu de novo, incluindo em arquivos nunca tocados
+    nesta fase; confirmado que não é regressão desta fase isolando os 4
+    testes novos (todos passam limpo sozinhos) e, por precaução extra,
+    revertendo temporariamente os 4 fixes (`git stash`) pra confirmar que
+    um teste de um módulo não tocado (`test_process_fonte.py`) já falhava
+    exatamente igual antes desta fase — não é algo introduzido aqui.
+  - Não implementadas nesta fase (fora do escopo pedido pelo usuário): as
+    16 propostas de evolução de produto da Fase 203, e as 2 observações
+    não confirmadas (reset-durante-chain-HITL, walkthrough Playwright).
+- **Fase 205** — usuário escolheu, das 16 propostas de evolução da Fase
+  203, começar pelas 5 de complexidade S ("construa as pequenas
+  primeiro"). Nenhuma é achado de bug — são extensões de produto sobre
+  módulos existentes.
+  - **205.1 — Follow-up SLA em petições protocoladas**: `Document` ganha
+    `protocolado_em`/`follow_up_dias`/`follow_up_alertado` (opt-in por
+    documento). `update_document` carimba `protocolado_em` uma única vez
+    na transição pra PROTOCOLADO (separado de `updated_at`, que mudaria a
+    cada edição posterior) e reseta `follow_up_alertado=False` numa
+    reprotocolação. Nova task Celery Beat diária (7h45, mesma janela dos
+    outros alertas de prazo/publicação) `check_petition_followups` avisa
+    o advogado quando uma petição fica protocolada sem retorno da corte
+    além do prazo configurado — só avisa, nunca age sozinho. Frontend
+    (`documentos/page.tsx`) ganha o campo de dias de follow-up no modal
+    de edição, mostrado só quando o status é PROTOCOLADO. Testes novos
+    (`test_petition_followup_sla.py`, Postgres+Redis reais) confirmam o
+    carimbo único, o reset em reprotocolação, e que a task só alerta quem
+    já venceu o prazo e é idempotente (não duplica no reprocessamento).
+    **Achado colateral desta fase, corrigido de quebra**: `_to_response()`
+    em `documents.py` quebrava (`pydantic.ValidationError`) contra o
+    `_FakeDB` de `test_documents_storage_fase141.py` porque
+    `follow_up_alertado=d.follow_up_alertado` chegava `None` — o
+    `default=False` do SQLAlchemy só é aplicado num flush real contra
+    Postgres, e o Fake daquele teste nunca simula isso. Mesma classe de
+    bug já corrigida uma vez na Fase 199 (`bool(tenant.is_demo)`); mesmo
+    fix aqui (`bool(d.follow_up_alertado)`).
+  - **205.2 — Histórico de Aprovações**: `/aprovacoes` ganha abas
+    Pendentes/Resolvidas. `ApprovalCard`/`ApprovalListItem` ganham
+    `ExpiresBadge` (countdown de expiração, urgente se <24h, "vencida" se
+    passou) reaproveitando `Approval.expires_at` (Fase 191, existia mas
+    nunca aparecia na UI) e `ResolvedStatusBadge` (verde/vermelho) pra
+    aba Resolvidas, que renderiza em modo `readOnly` (sem os botões
+    Aprovar/Rejeitar).
+  - **205.3 — Navegação contextual no Cliente 360**: `GET /documents` e
+    a tela de Documentos ganham filtro `?client_id=`; Faturas já tinha
+    suporte no backend, só faltava o filtro no frontend. Cliente 360
+    ganha uma linha "Documentos deste cliente"/"Faturas deste cliente"
+    logo abaixo do cabeçalho, e o link "Gerenciar" da aba Financeiro
+    passa a levar o filtro junto.
+  - **205.4 — Filtro de data + exportação CSV em Auditoria**:
+    `GET /audit` ganha `date_from`/`date_to`; novo `GET /audit/export`
+    (mesmo padrão `StreamingResponse` de `GET /financial/export`, teto de
+    50k linhas). Frontend ganha os 2 campos de data e um botão Exportar.
+    Teste novo usa o padrão "nunca commita, deixa o rollback do fechamento
+    de sessão limpar" (não o padrão usual de DELETE explícito) porque
+    `audit_logs` é imutável por trigger de banco (Fase 148).
+  - **205.5 — Solicitar aumento de orçamento de IA**: novo endpoint
+    `POST /system/ai-budget/request-increase` — quando um usuário bate no
+    teto mensal de IA (429 de `enforce_budget`), pode pedir aumento direto
+    da tela em vez de precisar contatar o ADMIN manualmente; notifica só
+    ADMIN/SÓCIO/SUPERADMIN do MESMO tenant, com dedup de 1 pedido/dia por
+    usuário. `agentes/page.tsx` chama esse endpoint automaticamente no
+    429 (antes só mostrava a mensagem genérica de erro, descartando o
+    detalhe real do limite).
+  - Verificação: `ruff check` + `py_compile` limpos nos 8 arquivos
+    backend tocados; `tsc --noEmit` + `eslint` limpos nos 7 arquivos
+    frontend tocados (1 warning pré-existente de `exhaustive-deps` em
+    `documentos/page.tsx`, não novo desta fase). Suíte completa
+    (`pytest tests/`): 819 passed (subiu de 812 na Fase 204 — os 2 testes
+    de `test_documents_storage_fase141.py` que quebravam antes do fix do
+    achado colateral agora entram na contagem de sucesso todo run) — a
+    mesma flutuação de ERROR/FAILED entre rodadas (pool asyncpg
+    reutilizado entre event loops por-teste do pytest-asyncio, documentada
+    desde a Fase 199) apareceu de novo, confirmada como não-regressão
+    isolando cada teste novo (todos passam limpo sozinhos) e reproduzindo
+    o mesmo padrão num arquivo pré-existente não tocado
+    (`test_ai_budget_request_increase.py`, da própria 205.5).
+  - Não implementadas nesta fase: as 11 propostas restantes (M/L) da
+    Fase 203 — seguem aguardando decisão do usuário sobre priorização.
+- **Fase 206** — usuário pediu pra seguir com as 11 propostas M/L
+  restantes da Fase 203, mas deixou a ordem a critério da sessão ("eu
+  escolho a ordem"). Primeiro sub-lote: as 3 mais independentes/de menor
+  risco, guardando as 2 estruturalmente maiores (agentes customizados
+  como passo de chain — toca o orchestrator; analytics comparativo entre
+  filiais — precisa de design cuidadoso de isolamento cross-tenant) pro
+  fim.
+  - **206.1 — Perfil de relator/juiz**: a agregação por relator já
+    existia desde a Fase 138.5 (`agregar_favorabilidade_por_relator`),
+    só faltava o drill-down. Novo `detalhar_relator()` em
+    `app/rag/aggregation.py` (mesmo scroll paginado + dedup por
+    `document_id`, retendo os campos por documento em vez de só somar) e
+    endpoint `GET /rag/jurisprudencia/favorabilidade/{relator}`. Frontend:
+    linhas da tabela de favorabilidade em `busca-juridica/page.tsx`
+    viram clicáveis, abrindo um modal com a lista de acórdãos
+    (nº processo/data/órgão julgador/área/favorável) daquele relator.
+    **Achado do próprio teste, corrigido de quebra**: a implementação
+    inicial de `detalhar_relator()` não excluía acórdãos sem
+    classificação (`favoravel` ausente), ao contrário da agregação —
+    um teste com Qdrant real em memória pegou a divergência (agregado
+    dizia "2 total", drill-down devolvia 3) antes de virar bug em
+    produção; corrigido pra usar o mesmo critério de exclusão.
+  - **206.2 — Preferências de notificação persistentes**: a tela
+    Configurações → Notificações já tinha 5 checkboxes, mas
+    `saveNotifs()` só gravava em `localStorage` — nada no backend lia
+    essa preferência. `User.notification_prefs` (JSONB) + migração
+    idempotente; novos `GET/PUT /users/me/notification-preferences`;
+    novo `deve_notificar()` em `app/services/notification.py`, chamado
+    dentro de `create_notification()`/`create_batch()` (retornam
+    `None`/pulam o usuário quando desativado) e nos 2 call sites diretos
+    que criam `Notification` fora do serviço pros tipos realmente
+    gateados (`deadline_check.py` — PRAZO_VENCENDO/CONTRATO_VENCENDO;
+    `approval.py::_notify_tenant_of_approval` — APROVACAO_PENDENTE, só
+    o aviso de rotina, **não** o evento WS `NEW_APPROVAL_PENDING` que
+    alimenta o contador da fila, nem o reaper de aprovação vencida em
+    `approval_reaper.py` — escalação de SLA pra gestores não deve ficar
+    silenciada por uma preferência pessoal). Decisão de escopo
+    deliberada (mesmo espírito do alerta da Fase 196/197 — nunca fingir
+    que uma preferência alcança um fluxo que não alcança): os
+    checkboxes `publicacoes_dj` e `email_diario` continuam só no
+    frontend por enquanto — o alerta de nova intimação do DJe usa
+    `tipo="NOVO_ANDAMENTO"`, o MESMO tipo de 2 outros fluxos não
+    relacionados (notificar equipe manual, captura automática por OAB);
+    gatear o tipo inteiro sob esse toggle silenciaria os 2 fluxos
+    errados. `email_diario` não tem nenhuma rotina de resumo diário
+    ainda. Documentado no código pra próxima fase decidir se vale a
+    pena um tipo dedicado.
+  - **206.3 — Comparativo de período em Relatórios**: `date_from`/
+    `date_to` opcionais em `GET /system/analytics/gestao`, cache key
+    variando por período. Cada bloco de métrica filtra pelo campo de
+    data mais natural: rentabilidade por `FinancialEntry.data_pagamento`,
+    produtividade "processos novos"/"documentos" por `created_at`, taxa
+    de êxito por `LegalProcess.updated_at` (proxy documentado — o model
+    não tem um timestamp dedicado de "quando o desfecho foi registrado",
+    mesma classe de aproximação já aceita em `protocolado_em`/
+    `updated_at` na Fase 205.1). `processos_ativos`/`prazos_pendentes`
+    (carga atual) e `prazos_cumpridos` (sem timestamp de conclusão no
+    model) ficam de fora do filtro em qualquer período, por design.
+    Frontend: date-range picker na aba Gestão de Relatórios + cálculo
+    automático do "período anterior" de mesma duração + card de
+    comparativo com deltas (▲/▼) em `GestaoCharts.tsx`.
+  - Verificação: `ruff check` + `py_compile` limpos nos 9 arquivos
+    backend tocados; `tsc --noEmit` + `eslint` limpos nos 4 arquivos
+    frontend tocados (3 warnings pré-existentes de `exhaustive-deps`/
+    `no-img-element`, confirmados via `git stash` como não-novos desta
+    fase). 11 testes novos com Postgres/Qdrant reais, todos passando
+    isolados; a mesma flutuação de ERROR/FAILED em rodada completa
+    (pool asyncpg entre event loops do pytest-asyncio, documentada desde
+    a Fase 199, mais rate-limit de login estourando quando a suíte
+    inteira reusa a mesma credencial em sequência) reproduzida de forma
+    idêntica isolando um teste pré-existente não tocado
+    (`test_tenant_user_unique_constraints.py`) — não é regressão desta
+    fase.
+  - Não implementadas nesta fase: as 8 propostas M/L restantes (win-rate
+    histórico no strategy_agent, CRM→previsão de caixa, agentes
+    customizados como passo de chain, auto-população da Matriz de Riscos,
+    analytics entre filiais, score de saúde do cliente, ações em lote em
+    Processos, fila de aprovação mobile-first) — seguem pro próximo
+    sub-lote.
+- **Fase 207** — segundo sub-lote das evoluções M/L da Fase 203 ("eu
+  escolho a ordem"). 3 das 8 propostas restantes; guardando as 2
+  estruturalmente maiores (agentes customizados como passo de chain,
+  analytics entre filiais) e as 3 que precisam de mais decisão de produto
+  (win-rate/strategy_agent, CRM→previsão de caixa, auto-população da
+  Matriz de Riscos) pro sub-lote seguinte.
+  - **207.1 — Score de saúde do cliente**: novo `GET /clients/{id}/
+    health-score` (`app/api/v1/clients.py`) — score 0-100 puramente
+    derivado (nenhum campo novo persistido), combinando 3 sinais já
+    existentes: financeiro (40 pts, penaliza receita PENDENTE já vencida),
+    engajamento (30 pts, recência de `ClientInteraction`) e processual
+    (30 pts, taxa de êxito/acordo dos processos com desfecho), bandado em
+    saudável/atenção/risco. Gate `get_current_user` (não
+    `require_role`) — sinal agregado/derivado, menos sensível que os
+    dados financeiros brutos de `/financeiro`, qualquer advogado que
+    trabalhe a relação com o cliente deve ver. Frontend: novo card no
+    Cliente 360 (`clientes/[id]/page.tsx`) com badge geral + 3 linhas de
+    componente.
+  - **207.2 — Fila de aprovação mobile-first**: `/aprovacoes` (lista +
+    detalhe lado a lado) forçava a mesma altura fixa da tela no mobile
+    que no desktop, e o `useEffect` que auto-seleciona o 1º item da aba
+    ao carregar fazia o painel de detalhe aparecer sempre "aberto" mesmo
+    no mobile — sem forma de ver a lista primeiro. Novo estado
+    `mobileDetailOpen`, desacoplado de `selected` e setado só por
+    interação explícita do usuário (nunca pelo auto-select), habilita um
+    fluxo lista→toque→detalhe só abaixo de `lg` (desktop continua lado a
+    lado, inalterado); botão "Voltar pra lista" (`ArrowLeft`,
+    `min-h-[44px]`) só visível no mobile. `ApprovalCard`: botões
+    Aprovar/Rejeitar ganham `min-h-[44px]` + empilham em `flex-col` em
+    telas muito estreitas (antes espremidos lado a lado). Mudança
+    puramente frontend — sem endpoint novo, sem teste de backend
+    aplicável.
+  - **207.3 — Ações em lote em Processos**: novo `POST /processes/
+    bulk-update` (`app/api/v1/processes.py`) — atualiza situação e/ou
+    responsável de até 200 processos numa chamada só, mesmo padrão de
+    `reatribuir_carteira` (bulk por ids explícitos) e mesmo gate
+    (`ADMIN/SOCIO/GESTOR` — ação de gestão, não operação do dia a dia de
+    um advogado); processos de outro tenant são silenciosamente
+    excluídos da contagem (`atualizados` < `solicitados`), não um erro;
+    `responsavel_id` passa por `_validar_advogados_do_tenant` (já
+    existente). Frontend (`processos/page.tsx`): primeiro uso de
+    checkbox multi-select nesta base de código (confirmado por pesquisa
+    prévia — não havia padrão anterior a reaproveitar) — `Set<string>`
+    de selecionados, checkbox "selecionar todos visíveis" no cabeçalho
+    da tabela e por linha (tabela e grid), toolbar condicional
+    (`canBulk && selecionados.size > 0`) com dropdown de situação +
+    "Aplicar" + "Exportar CSV" (client-side, só das linhas já
+    selecionadas/carregadas) + "Limpar seleção". Escopo deliberadamente
+    cortado: reatribuição de responsável em lote não foi ligada na UI
+    ainda (exigiria carregar uma lista de advogados não usada hoje nessa
+    tela) — backend já suporta, fica pra quando fizer sentido adicionar.
+  - Testes novos: `test_client_health_score_fase207.py` (5 testes —
+    score neutro sem histórico, receita atrasada derruba o componente
+    financeiro, interação recente vs. antiga muda o componente de
+    engajamento, taxa de êxito processual, cliente de outro tenant não
+    encontrado) e `test_bulk_update_processes_fase207.py` (7 testes —
+    atualização em lote bem-sucedida, processo de outro tenant excluído
+    da contagem sem erro, responsável válido aplica a todos, responsável
+    de outro tenant rejeitado com 422, lista vazia/>200 ids/nem
+    situação-nem-responsável todos rejeitados com 422), ambos Postgres
+    real, mesmo padrão direto-por-função dos testes recentes (206.3).
+    207.2 não gerou teste de backend (mudança puramente frontend).
+  - Verificação: `ruff check` + `py_compile` limpos em `clients.py`/
+    `processes.py` + os 2 arquivos de teste novos; `tsc --noEmit` limpo;
+    `eslint` nos 4 arquivos frontend tocados — 2 warnings pré-existentes
+    de `exhaustive-deps` (`clientes/[id]/page.tsx`, `processos/page.tsx`)
+    confirmados via `git stash`/`eslint`/`git stash pop` como idênticos
+    antes desta fase (só linha deslocada pelas inserções), não
+    regressão. Os 12 testes novos passam limpos isolados; rodados junto
+    da suíte completa (819 → 831 com os novos), a mesma flutuação de
+    ERROR/FAILED entre rodadas (pool asyncpg entre event loops do
+    pytest-asyncio + rate-limit de login estourando quando a suíte
+    inteira reusa a mesma credencial em sequência, documentada desde a
+    Fase 199) reapareceu em arquivos pré-existentes não tocados nesta
+    fase (`test_auth.py`, `test_demo_login.py`, `test_clients.py`,
+    `test_process_fonte.py`, `test_tenant_user_unique_constraints.py`,
+    entre outros) — nenhuma falha nos 2 arquivos novos desta fase.
+  - Não implementadas nesta fase: as 5 propostas M/L restantes (win-rate
+    histórico no strategy_agent, CRM→previsão de caixa, auto-população
+    da Matriz de Riscos, agentes customizados como passo de chain,
+    analytics entre filiais) — seguem pro próximo sub-lote, com as 2
+    estruturalmente maiores deixadas por último como já planejado.
+- **Fase 208** — terceiro sub-lote das evoluções M/L da Fase 203, a pedido
+  do usuário ("eu escolho a ordem" segue valendo). Pega as 3 propostas que
+  precisavam de mais decisão de produto, guardando as 2 estruturalmente
+  maiores (agentes customizados como passo de chain, analytics entre
+  filiais) pro sub-lote seguinte.
+  - **208.1 — Win-rate histórico no strategy_agent**: `StrategyAgent.
+    execute()` (`app/agents/strategy/strategy_agent.py`) já recebia
+    `area_direito` mas nunca consultava o histórico de êxito do próprio
+    escritório — só jurisprudência via RAG. Novo helper privado
+    `_historico_exito_area()` (consulta direta e isolada em
+    `LegalProcess.desfecho` por tenant+área, mesmo critério EXITO+ACORDO
+    de `analytics_gestao`) injeta uma seção nova no prompt ("HISTÓRICO DE
+    ÊXITO DO ESCRITÓRIO NESTA ÁREA") antes do contexto RAG, e expõe
+    `taxa_exito_area`/`total_processos_area` no retorno do agente pra
+    auditoria/frontend. Amostra pequena (N<3) sinaliza cautela no texto
+    em vez de apresentar o percentual como confiável. Escopo cortado
+    deliberadamente: não adicionou `tribunal`/`tese_id` como inputs novos
+    do agente — só `area_direito`, que já era recebido.
+  - **208.2 — CRM → previsão de caixa**: `Opportunity` já tinha
+    `valor_estimado`/`probabilidade`/`expected_close` e `/crm/funil`
+    (Fase 161) já calculava o pipeline ponderado, só que como total único
+    sem bucket de data — nenhum schema novo foi necessário. Novo `GET
+    /crm/previsao-caixa` (mesmo gate de `/funil`) devolve os próximos 6
+    meses com `pipeline_ponderado` (Opportunity aberta × probabilidade,
+    por `expected_close`) e `receita_prevista` (FinancialEntry RECEITA/
+    PENDENTE, por `data_vencimento`) **separados** — nunca fundidos num
+    único "previsto", pra não confundir estimativa probabilística com
+    receita já comprometida. Frontend: novo card em Relatórios → Gestão
+    (`GestaoCharts.tsx`), self-fetching (independente do filtro de
+    período da página, já que é sempre prospectivo).
+  - **208.3 — Auto-população da Matriz de Riscos de Integridade**:
+    `IntegrityRisk`/`IntegrityReport` já compartilhavam a mesma lista de
+    categorias, mas sem nenhuma ligação automática — e `controles` é
+    campo obrigatório no model, exigindo autoria humana por design. Por
+    isso "auto-população" virou **sugestão pré-preenchida, nunca criação
+    automática** (mesmo espírito do reaper da Fase 191 — nunca decide
+    sozinho por quem tem que decidir): novo `GET /integrity/reports/
+    {id}/suggest-risk` devolve um rascunho (`risco`/`categoria`/
+    `probabilidade`/`impacto` derivados do relato, mais
+    `risco_existente_id` se já houver um risco ATIVO da mesma categoria,
+    pra evitar sugestão redundante) — o `POST /integrity/risks` de
+    criação continua exatamente o mesmo endpoint manual de sempre.
+    Frontend (`etica/page.tsx`): botão "Sugerir risco a partir desta
+    denúncia" em cada relato, que pré-preenche e abre o formulário
+    existente da Matriz (Fase 189.1). **Achado colateral corrigido de
+    quebra** (mesmo arquivo já sendo tocado): `create_risk`/`update_risk`
+    nunca validavam `categoria` contra a lista, ao contrário de
+    `create_report` — mesma classe de inconsistência já corrigida antes
+    (Fase 204.C).
+  - Testes novos: `test_strategy_agent_win_rate_fase208.py` (3 testes —
+    prompt+retorno com taxa de êxito calculada, ausência de histórico
+    sinalizada, amostra pequena avisa cautela no prompt),
+    `test_crm_previsao_caixa_fase208.py` (2 testes — combina pipeline
+    ponderado só de oportunidades abertas com receita só PENDENTE dentro
+    da janela de 6 meses, exclui GANHO/PERDIDO/PAGO/DESPESA/fora-da-
+    janela; tenant sem dados devolve 6 meses zerados) e
+    `test_integrity_suggest_risk_fase208.py` (5 testes — sugestão nunca
+    cria linha na matriz, sinaliza risco ativo existente da mesma
+    categoria, relato de outro tenant não encontrado, `create_risk`/
+    `update_risk` rejeitam categoria inválida com 422), todos Postgres
+    real, mesmo padrão direto-por-função das fases recentes.
+  - Verificação: `ruff check`+`py_compile` limpos nos 3 arquivos backend
+    tocados (`strategy_agent.py`, `crm.py`, `integrity.py`) + 3 arquivos
+    de teste novos; `tsc --noEmit` limpo; `eslint` nos 3 arquivos
+    frontend tocados (`GestaoCharts.tsx`, `etica/page.tsx`,
+    `relatorios/page.tsx` só por import de tipo, sem edição — confirmado
+    via `git diff --stat` vazio) — 1 warning pré-existente de
+    `exhaustive-deps` em `relatorios/page.tsx`, não novo desta fase. Os
+    10 testes novos passam limpos isolados; rodados junto da suíte
+    completa, a mesma flutuação de ERROR/FAILED entre rodadas (pool
+    asyncpg entre event loops do pytest-asyncio + rate-limit de login,
+    documentada desde a Fase 199) reapareceu em arquivos pré-existentes
+    não tocados (`test_auth.py`, `test_demo_login.py`, `test_clients.py`,
+    `test_process_fonte.py`, `test_tenant_user_unique_constraints.py`,
+    entre outros) e também bateu 1 dos testes novos
+    (`test_amostra_pequena_sinaliza_cautela_no_prompt`) só na rodada
+    completa — confirmado não-regressão isolando (passa limpo sozinho).
+  - Não implementadas nesta fase: as 2 propostas M/L estruturalmente
+    maiores (agentes customizados como passo de chain — toca o
+    orchestrator; analytics entre filiais — precisa de design cuidadoso
+    de isolamento cross-tenant), conforme já planejado desde a Fase 206.
+- **Fase 209** — rodada de teste geral em larga escala, a pedido explícito
+  do usuário ("simule um uso intenso do sistema... elabore fases de
+  aplicação e inicie") — diferente de toda rodada anterior, autorização
+  prévia pra já começar a implementar os achados confirmados, sem pausar
+  pra perguntar quais valem a pena.
+  - **Volume real inédito**: nenhuma rodada anterior tinha gerado dado em
+    massa de verdade — script novo (scratchpad) gerou 2 tenants
+    descartáveis com 150 clientes, 400 processos, 200 documentos, 300
+    lançamentos financeiros, 100 oportunidades de CRM, 16 denúncias e 8
+    riscos de integridade (total combinado). Simulação de concorrência em
+    cima desse volume: leitura paralela em massa nos endpoints 205-208,
+    10 disparos simultâneos de `strategy_agent`, múltiplos
+    `resolve_approval` concorrentes na mesma Approval, chain HITL completa
+    via Postgres+Redis+Celery+uvicorn reais.
+  - **Reconfirmação dos 9 itens desde a Fase 203** (204.A-D, 205.1-205.5,
+    206.1-206.3, 207.1-207.3, 208.1-208.3) via HTTP real contra o volume
+    gerado — todos OK, nenhuma regressão de interação entre eles.
+  - **Lacuna 1 fechada — race demo-reset×chain-HITL** (hipótese aberta
+    desde a Fase 203, nunca reproduzida em 3 rodadas seguintes): 13
+    tentativas reais de concorrência (timing variado + fault injection
+    determinística com delays controlados via env var, incluindo bypass
+    do gargalo de rede do Qdrant/S3 pra isolar a variável). Conclusão:
+    a premissa de código da Fase 203 (DELETE incondicional +
+    UPDATE tardio sem lock explícito) segue válida, mas o "silent no-op"
+    hipotetizado **não é alcançável pelo caminho normal de
+    `resolve_approval`** — achado novo não previsto: o `SELECT ... FOR
+    UPDATE` na Approval (Fase 132) fica retido durante **toda** a
+    duração da requisição (inclusive `resume_chain_after_approval`
+    inteiro), porque só é liberado no commit final, que acontece dentro
+    da própria função de retomada. Como `resetar_tenant_demo` deleta
+    `Approval` antes de `AgentRun` na mesma transação, seu DELETE
+    simplesmente bloqueia atrás desse lock até o resolve terminar — não
+    existe janela pro reset intercalar um DELETE no meio da retomada.
+    Confirmado empiricamente: um delay determinístico de 3s injetado no
+    meio do resume produziu um stall medido de ~3.5s no loop de delete do
+    reset, na hora exata em que ele tenta a linha de Approval. Proteção
+    incidental (efeito colateral do lock da Fase 132), não desenhada de
+    propósito — registrado aqui pra não se perder.
+  - **Lacuna 2 fechada — walkthrough real via Playwright** (bloqueado ou
+    pulado em quase toda rodada desde a Fase 178): script Node usando o
+    Playwright global do sandbox (`/opt/node22/lib/node_modules/
+    playwright`, sem tocar `package.json`) navegou de verdade por login →
+    dashboard → `/aprovacoes` → `/relatorios` → `/etica` → `/processos` →
+    Cliente 360 → `/auditoria` → `/integracoes`, com o tenant de volume
+    logado (não o demo). **Achado real, corrigido na hora**:
+    `GET /system/analytics/financeiro` (widget financeiro do dashboard)
+    quebrava com 500 sempre que o tenant tinha algum `FinancialEntry` —
+    `Row.t` é um atributo interno depreciado do SQLAlchemy (alias da
+    própria tupla da linha), e a query rotulava a soma agregada como
+    `.label("t")`, colidindo com ele: `r.t` devolvia a linha inteira, não
+    o valor. Nunca pego antes porque nenhuma rodada tinha exercitado esse
+    endpoint específico com um browser real. Corrigido (label renomeado
+    pra `total_grupo`) e verificado via HTTP real antes mesmo da auditoria
+    formal — commit separado (`a62e0a2`).
+  - **Auditoria paralela adversarial** (4 agentes via `Agent` tool, cada
+    um reproduzindo com HTTP real contra o volume gerado, não só leitura
+    de código) — **3 achados confirmados**:
+    - **LGPD (MÉDIO-ALTO)**: `erase_client_data` não alcançava
+      `Opportunity` (CRM, Fase 208.2) — PII em `descricao`/`motivo_perda`
+      sobrevivia ao "esquecimento" e continuava visível em
+      `GET /crm/opportunities`. Mesma classe de gap já fechada uma vez
+      pra `ClientContact`/`ClientInteraction` na Fase 176.3, reaberta por
+      um modelo que só passou a existir depois daquele fix.
+    - **Performance (ALTO)**: `POST /processes/bulk-update` (207.3)
+      emitia um `UPDATE` por processo (SELECT + loop Python + flush) —
+      confirmado via log de statements do Postgres: 200 round-trips
+      separados num lote de 200. Invisível como lentidão em `localhost`
+      (sub-ms), mas estrutural: em produção (Railway→Postgres com RTT
+      real) vira 200ms-1s de latência pura de rede numa chamada que devia
+      ser de dígito único.
+    - **Performance (MÉDIO/BAIXO)**: `financial_entries.client_id` e
+      `client_interactions.client_id` sem índice próprio — `EXPLAIN
+      ANALYZE` confirmou Seq Scan em `/clients/{id}/health-score`
+      (207.1); mesma lacuna em `/crm/previsao-caixa` (208.2) e
+      `/system/analytics/gestao` (206.3) pros filtros de
+      status/data. Inofensivo no volume testado (sub-ms), mas full-scan
+      por chamada em escala maior.
+    - **Achado funcional (BAIXO, não-segurança)**: `GET /financial
+      ?client_id=` nunca declarava o parâmetro — FastAPI descartava
+      silenciosamente e a navegação contextual do Cliente 360 (205.3)
+      devolvia todos os lançamentos do tenant em vez de só os do
+      cliente, contradizendo o próprio changelog da Fase 205.3
+      ("já tinha suporte no backend"). Confirmado que não vazava dado
+      cross-tenant — só não filtrava.
+    - **Cross-tenant/segurança**: todos os 9 itens de 204-208 vieram
+      limpos (nenhum IDOR, nenhum vazamento) — reconfirmação mais ampla
+      já feita nesta mesma fase.
+    - **8 propostas de evolução de produto** levantadas (não bugs) — ver
+      Fase 211+ pra quais viraram implementação.
+  - **Fase 210** (implementação imediata dos 4 achados confirmados,
+    mesma sessão, conforme autorizado): erase_client_data estendido a
+    Opportunity + GET /lgpd/clients/{id}/export passa a incluir
+    `oportunidades_crm`; bulk-update reescrito pra `UPDATE ... WHERE id =
+    ANY(...)` único; `GET /financial` ganha o parâmetro `client_id` que
+    faltava; 4 índices novos (`financial_entries` × client_id/status+data,
+    `client_interactions` × client_id) via `CREATE INDEX IF NOT EXISTS`
+    idempotente em `events.py`. Verificado via HTTP real contra Postgres
+    real (não só os 2 testes novos com Postgres real —
+    `test_lgpd_erasure_reaches_crm_fase210`,
+    `test_financial_client_id_filter_fase210` — porque a suíte automatizada
+    apresentou a mesma flutuação de pool asyncpg/pytest-asyncio já
+    documentada desde a Fase 199, desta vez reproduzida de forma
+    consistente mesmo isolando teste a teste; confirmado não-regressão
+    reproduzindo o mesmo padrão num arquivo de controle totalmente não
+    tocado, `test_analytics_gestao_periodo.py`, que também falha isolado
+    nesta sessão — sintoma de degradação do ambiente desta sessão
+    específica, não do código). Índices confirmados criados via `\di`
+    direto no Postgres.
+  - **Próxima rodada deve**: investigar por que a flakiness de pool
+    asyncpg/pytest-asyncio, historicamente intermitente ("passa isolado"),
+    passou a ser consistente mesmo isolando teste a teste nesta sessão —
+    pode ser drift de versão de dependência (pytest-asyncio/anyio) ou algo
+    específico do ambiente desta sessão de longa duração; vale reproduzir
+    numa sessão nova antes de investir tempo em diagnóstico profundo.
+    Considerar também as 7 propostas de evolução restantes levantadas
+    nesta fase (playbooks de agentes por área, dossiê em PDF, metas de
+    captação no CRM, central de tarefas cross-módulo, score de qualidade
+    de dado LGPD-aware, alerta de risco de prescrição por tese, simulação
+    de honorários vs. histórico real).
+- **Fase 211** (1ª das 8 propostas de evolução da Fase 209, escolhida por
+  ser a mais simples/menor risco — puramente read-only, zero campo novo):
+  timeline unificada no Cliente 360. Novo `GET /clients/{id}/timeline`
+  junta interações (`ClientInteraction`), marcos processuais (abertura +
+  desfecho de `LegalProcess`, mesma aproximação de `updated_at` já aceita
+  em 205.1/206.3), pagamentos recebidos (`FinancialEntry` RECEITA/PAGO) e
+  petições protocoladas (`Document.protocolado_em`, Fase 205.1) numa
+  lista cronológica única, evitando que o advogado precise abrir 4 telas
+  separadas pra reconstruir o histórico de um cliente. Frontend: novo
+  card "Linha do tempo" no Cliente 360, logo abaixo do score de saúde
+  (207.1). Verificado via HTTP real contra Postgres real com dado da
+  volume gerada na Fase 209 (evento com os 4 tipos presentes, ordenação
+  cronológica correta); teste novo com Postgres real
+  (`test_client_timeline_fase211.py`) — mesma flakiness de pool já
+  documentada impediu rodar via pytest nesta sessão, mas a verificação
+  HTTP contra o backend real já confirma o comportamento.
+- **Fase 212** (2ª das 8 propostas de evolução da Fase 209): score de
+  qualidade de dado LGPD-aware. Novo `GET /system/analytics/
+  lgpd-qualidade` (ADMIN/SOCIO — mesmo gate sensível de
+  erase_client_data/export_client_data, já que lista clientes com lacuna
+  de conformidade) sinaliza 3 lacunas acionáveis por cliente: (1) status
+  ATIVO sem `lgpd_consent`, (2) `lgpd_consent=True` sem
+  `lgpd_consent_at` (dado inconsistente — impossível provar QUANDO o
+  consentimento foi obtido), (3) titular sem CPF/CNPJ cadastrado. Score
+  0-100 = proporção de lacunas sobre o total possível (clientes × 3
+  checagens). Frontend: card colapsável "Qualidade de dado LGPD" no
+  topo de `/clientes`, visível só pra ADMIN/SOCIO/SUPERADMIN.
+  **Achado operacional desta fase**: o ambiente rodava num container
+  novo (Postgres/Redis/venv/node_modules zerados) — reproduzida a MESMA
+  flakiness de pool asyncpg/pytest-asyncio ("attached to a different
+  loop") mesmo num ambiente 100% fresco, o que descarta a hipótese
+  anterior de "degradação específica desta sessão longa" (Fase 209/210)
+  — é uma incompatibilidade real entre a versão pinada do
+  pytest-asyncio (event loop função-scoped por padrão) e o engine
+  assíncrono do SQLAlchemy sendo um singleton de módulo. Tentativa de
+  fix via `asyncio_default_fixture_loop_scope`/
+  `asyncio_default_test_loop_scope = session` no `pytest.ini` NÃO
+  resolveu (mesmo erro, ponto de falha ligeiramente diferente) —
+  revertida pra não arriscar efeito colateral na suíte sem entender a
+  causa raiz por completo; próxima rodada deve investigar mais fundo
+  (talvez recriar o engine por teste, ou pinar uma versão diferente do
+  pytest-asyncio). Verificado via HTTP real contra Postgres real
+  (contagens de lacunas corretas, score calculado certo, gate de role
+  ADVOGADO→403 confirmado) — mesmo padrão das fases anteriores desde
+  que a flakiness apareceu.
 
 ## Riscos conhecidos / débito técnico
 

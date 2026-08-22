@@ -37,6 +37,17 @@ class Document(Base):
     tenant_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("tenants.id"), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    # Fase 205.1 — follow-up de petição protocolada sem resposta da corte no
+    # prazo configurado. `protocolado_em` é carimbado uma única vez na
+    # transição pra PROTOCOLADO (não usa `updated_at`, que muda a cada edição
+    # do documento e subestimaria o tempo decorrido). `follow_up_dias` é
+    # opt-in por documento (NULL = sem alerta configurado, zero regressão
+    # pras petições já existentes). `follow_up_alertado` evita reenvio —
+    # mesmo padrão de dedup de `Contract.alertas_enviados`/`ProcessDeadline.
+    # alertas_enviados`, só que de 1 faixa só (não precisa de lista).
+    protocolado_em: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    follow_up_dias: Mapped[int | None] = mapped_column(Integer)
+    follow_up_alertado: Mapped[bool] = mapped_column(Boolean, default=False)
 
     process: Mapped["LegalProcess"] = relationship(back_populates="documents")
     versions: Mapped[list["DocumentVersion"]] = relationship(back_populates="document", cascade="all, delete-orphan")

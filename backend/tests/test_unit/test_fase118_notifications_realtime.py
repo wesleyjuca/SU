@@ -89,6 +89,16 @@ def test_create_notification_publica_apos_persistir():
         def add(self, obj):
             pass
 
+        async def execute(self, query):
+            # Fase 206.2 — create_notification() agora consulta
+            # User.notification_prefs via deve_notificar() antes de criar a
+            # linha; None simula "nunca configurou preferências" (default
+            # opt-in, mesmo comportamento de antes desta fase).
+            class _R:
+                def scalar_one_or_none(self):
+                    return None
+            return _R()
+
     uid = uuid.uuid4()
     result = asyncio.run(ns.create_notification(_FakeDB(), uid, "Novo prazo", tipo="PRAZO_VENCENDO"))
 

@@ -92,9 +92,14 @@ async def rag_search(
 async def rag_coverage(
     current_user: User = Depends(require_role("ADMIN", "SOCIO", "ADVOGADO", "PARALEGAL", "ASSISTENTE")),
 ):
-    """Contagem de chunks indexados por coleção (só as públicas — sem detalhe de conteúdo)."""
+    """Contagem de chunks indexados por coleção. Nas coleções privadas do
+    escritório (Fase 204, achado BAIXO da Fase 203), a contagem é escopada por
+    tenant_id — antes vazava o total agregado da plataforma inteira (todos os
+    tenants somados) pra qualquer usuário staff."""
     try:
         from app.db.qdrant import get_qdrant
+        from app.rag.retrieval import PRIVATE_COLLECTIONS
+        from qdrant_client.models import Filter, FieldCondition, MatchValue
 
         qdrant = await get_qdrant()
         existentes = {c.name for c in (await qdrant.get_collections()).collections}
@@ -104,7 +109,12 @@ async def rag_coverage(
                 colecoes.append({"collection": nome, "pontos": 0})
                 continue
             try:
-                info = await qdrant.count(collection_name=nome, exact=False)
+                count_filter = None
+                if nome in PRIVATE_COLLECTIONS and current_user.tenant_id:
+                    count_filter = Filter(must=[FieldCondition(
+                        key="tenant_id", match=MatchValue(value=str(current_user.tenant_id)),
+                    )])
+                info = await qdrant.count(collection_name=nome, count_filter=count_filter, exact=False)
                 colecoes.append({"collection": nome, "pontos": info.count})
             except Exception:
                 colecoes.append({"collection": nome, "pontos": None})
@@ -151,6 +161,29 @@ async def rag_jurisprudencia_favorabilidade(
         )
 
 
+@router.get("/jurisprudencia/favorabilidade/{relator}")
+async def rag_jurisprudencia_relator_detalhe(
+    relator: str,
+    current_user: User = Depends(require_role("ADMIN", "SOCIO", "ADVOGADO", "PARALEGAL", "ASSISTENTE")),
+):
+    """Fase 206.1 — perfil de um relator específico: lista dos acórdãos
+    (nº processo/data/órgão julgador/área/favorável) por trás da contagem
+    agregada de GET /jurisprudencia/favorabilidade. Sem cache — chamado sob
+    demanda ao clicar num relator, não no carregamento inicial do painel."""
+    try:
+        from app.db.qdrant import get_qdrant
+        from app.rag.aggregation import detalhar_relator
+
+        qdrant = await get_qdrant()
+        acordaos = await detalhar_relator(qdrant, relator, "jurisprudencia")
+        return {"relator": relator, "acordaos": acordaos}
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Serviço RAG indisponível: {str(exc)}",
+        )
+
+
 @router.post("/ingest", status_code=status.HTTP_202_ACCEPTED)
 async def rag_ingest(
     req: IngestRequest,
@@ -168,11 +201,25 @@ async def rag_ingest(
 
     try:
         from app.rag.ingestion import ingest_document
+        from app.rag.retrieval import PRIVATE_COLLECTIONS
+
+        metadata = {**req.metadata, "ingested_by": str(current_user.id)}
+        if req.collection in PRIVATE_COLLECTIONS:
+            # Fase 204 (achado ALTO da Fase 203) — antes disto, `metadata`
+            # vinha inteiramente do payload do cliente; um ADMIN podia
+            # forjar `tenant_id` de OUTRO escritório e ter o conteúdo
+            # servido de volta como se fosse dado confiável desse tenant
+            # nas buscas privadas (retrieval.py confia cegamente nesse
+            # campo pra isolar as collections privadas). Mesmo padrão do
+            # caminho de auto-ingest confiável (app/rag/auto_ingest.py):
+            # `tenant_id` sempre carimbado do lado do servidor, nunca do
+            # payload do cliente.
+            metadata["tenant_id"] = str(current_user.tenant_id)
 
         chunk_ids = await ingest_document(
             content=req.content,
             collection=req.collection,
-            metadata={**req.metadata, "ingested_by": str(current_user.id)},
+            metadata=metadata,
             document_id=req.document_id,
         )
         return {

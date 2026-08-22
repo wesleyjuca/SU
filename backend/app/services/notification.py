@@ -23,6 +23,51 @@ TIPOS_VALIDOS = {
     "SISTEMA",
 }
 
+# Fase 206.2 — preferências de notificação persistentes por tipo de evento
+# (tela Configurações → Notificações, antes só localStorage). Só os tipos com
+# um mapeamento inequívoco aqui ganham enforcement real — tipos fora deste
+# mapa (SISTEMA, INFRA_ALERTA, INTEGRACAO_ERRO, NOVO_ANDAMENTO, PORTAL...)
+# sempre notificam, sem opt-out.
+#
+# 2 dos 5 checkboxes da UI ficam de propósito SEM enforcement de backend
+# nesta fase (mesma armadilha que a Fase 196 já ensinou: nunca fingir que
+# uma preferência "alcança" um fluxo que ela não alcança de verdade):
+# - `publicacoes_dj`: o alerta de nova intimação do DJe (dje_monitor.py) usa
+#   tipo="NOVO_ANDAMENTO" — o MESMO tipo usado por "notificar equipe"
+#   manual (processes.py) e pela captura automática por OAB
+#   (oab_capture.py). Gatear NOVO_ANDAMENTO inteiro sob esse toggle
+#   silenciaria também esses 2 fluxos não relacionados a publicação do DJe
+#   — dar um tipo dedicado a isso é maior que "persistir preferência" e
+#   fica pra uma fase futura, se o usuário quiser.
+# - `email_diario`: não existe ainda uma rotina de resumo diário por
+#   e-mail que leia essa preferência.
+# Os 2 continuam só no frontend (localStorage) até um desses ganhar um
+# gancho de backend real.
+TIPO_PARA_PREF = {
+    "PRAZO_VENCENDO": "novos_prazos",
+    "CONTRATO_VENCENDO": "novos_prazos",
+    "APROVACAO_PENDENTE": "novas_aprovacoes",
+    "AGENTE_CONCLUIDO": "agente_concluiu",
+}
+
+
+async def deve_notificar(db: AsyncSession, user_id: uuid.UUID, tipo: str) -> bool:
+    """Consulta `User.notification_prefs` pro tipo de evento (Fase 206.2).
+    Tipos sem toggle na UI (fora de `TIPO_PARA_PREF`) sempre notificam.
+    Chave ausente do JSON = opt-in por padrão (nunca abriu Configurações →
+    Notificações), só `False` explícito bloqueia."""
+    pref_key = TIPO_PARA_PREF.get(tipo)
+    if not pref_key:
+        return True
+    from app.models.user import User
+
+    prefs = (await db.execute(
+        select(User.notification_prefs).where(User.id == user_id)
+    )).scalar_one_or_none()
+    if not prefs:
+        return True
+    return prefs.get(pref_key, True) is not False
+
 
 async def publish_notification_ws(notif: Notification) -> None:
     """Publica a notificação via WebSocket (Fase 118) — o sino de notificação
@@ -50,7 +95,12 @@ async def create_notification(
     priority: str = "NORMAL",
     link: Optional[str] = None,
     metadata: Optional[dict] = None,
-) -> Notification:
+) -> Optional[Notification]:
+    """Retorna None (sem criar linha nem publicar WS) se o usuário desativou
+    esse tipo de evento em Configurações → Notificações (Fase 206.2)."""
+    if not await deve_notificar(db, user_id, tipo):
+        log.info("notification_skipped_by_pref", user_id=str(user_id), tipo=tipo)
+        return None
     notif = Notification(
         user_id=user_id,
         tipo=tipo if tipo in TIPOS_VALIDOS else "SISTEMA",
@@ -77,9 +127,13 @@ async def create_batch(
     priority: str = "NORMAL",
     link: Optional[str] = None,
 ) -> int:
-    """Cria a mesma notificação para múltiplos usuários."""
+    """Cria a mesma notificação para múltiplos usuários. Pula (sem contar)
+    quem desativou esse tipo de evento (Fase 206.2)."""
     count = 0
     for uid in user_ids:
+        if not await deve_notificar(db, uid, tipo):
+            log.info("notification_skipped_by_pref", user_id=str(uid), tipo=tipo)
+            continue
         notif = Notification(
             user_id=uid,
             tipo=tipo if tipo in TIPOS_VALIDOS else "SISTEMA",

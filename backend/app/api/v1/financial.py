@@ -92,6 +92,7 @@ class FinancialEntryResponse(BaseModel):
 async def list_entries(
     tipo: str | None = None,
     status: str | None = None,
+    client_id: str | None = None,
     limit: int = Query(default=50, le=200),
     offset: int = 0,
     current_user: User = Depends(require_role("ADMIN", "SOCIO", "GESTOR")),
@@ -108,6 +109,14 @@ async def list_entries(
         query = query.where(FinancialEntry.tipo == tipo)
     if status:
         query = query.where(FinancialEntry.status == status)
+    if client_id:
+        # Fase 210 (achado da Fase 209) — o changelog da Fase 205.3 dizia que
+        # "Faturas já tinha suporte no backend", mas o parâmetro nunca foi
+        # declarado aqui: FastAPI descartava `?client_id=` silenciosamente e
+        # a navegação contextual do Cliente 360 devolvia TODOS os lançamentos
+        # do tenant em vez de só os do cliente. Confirmado empiricamente
+        # (HTTP real) que não vazava dado cross-tenant — só não filtrava.
+        query = query.where(FinancialEntry.client_id == uuid.UUID(client_id))
     result = await db.execute(query)
     entries = result.scalars().all()
     return [_to_response(e) for e in entries]

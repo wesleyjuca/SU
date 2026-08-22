@@ -50,3 +50,7 @@ Thumbs.db
 uploads/
 media/
 frontend/tsconfig.tsbuildinfo
+
+# Estado local de Celery Beat / Redis (dev)
+celerybeat-schedule.db
+dump.rdb

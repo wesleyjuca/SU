@@ -1,5 +1,7 @@
 "use client";
 import { useState, useEffect, useRef } from "react";
+import { useSearchParams } from "next/navigation";
+import Link from "next/link";
 import { FolderOpen, Search, FileText, Download, Upload, ScanLine, X, CloudUpload, FilePlus, Eye, Plus, Pencil, Trash2, Save, Loader2, History, RotateCcw, Scale, CheckCircle2, AlertTriangle, HelpCircle, Paperclip } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
@@ -20,6 +22,9 @@ interface Documento {
   tem_texto: boolean;
   tem_arquivo_original: boolean;
   ocr_status: string | null;
+  protocolado_em: string | null;
+  follow_up_dias: number | null;
+  follow_up_alertado: boolean;
 }
 
 // Chip que sinaliza o estado do texto/OCR do documento.
@@ -57,6 +62,8 @@ const PAGE_SIZE = 50;
 
 export default function DocumentosPage() {
   const toast = useToast();
+  const searchParams = useSearchParams();
+  const clientIdFiltro = searchParams.get("client_id");
   const [docs, setDocs] = useState<Documento[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -75,7 +82,7 @@ export default function DocumentosPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Criar / editar / excluir
-  const emptyForm = { titulo: "", tipo: "OUTROS", status: "RASCUNHO", conteudo_texto: "" };
+  const emptyForm = { titulo: "", tipo: "OUTROS", status: "RASCUNHO", conteudo_texto: "", follow_up_dias: "" };
   const [showNew, setShowNew] = useState(false);
   const [newForm, setNewForm] = useState(emptyForm);
   const [editDoc, setEditDoc] = useState<Documento | null>(null);
@@ -125,14 +132,15 @@ export default function DocumentosPage() {
 
   async function abrirEdicao(d: Documento) {
     setEditDoc(d);
-    setEditForm({ titulo: d.titulo, tipo: d.tipo, status: d.status, conteudo_texto: "" });
+    const followUp = d.follow_up_dias != null ? String(d.follow_up_dias) : "";
+    setEditForm({ titulo: d.titulo, tipo: d.tipo, status: d.status, conteudo_texto: "", follow_up_dias: followUp });
     setCitacoes(null);
     setLoadingEdit(true);
     try {
       const res = await fetch(`/api/v1/documents/${d.id}/content`, { headers: authH() });
       if (res.ok) {
         const c = await res.json();
-        setEditForm({ titulo: d.titulo, tipo: d.tipo, status: d.status, conteudo_texto: c.conteudo_texto || c.conteudo_html || "" });
+        setEditForm({ titulo: d.titulo, tipo: d.tipo, status: d.status, conteudo_texto: c.conteudo_texto || c.conteudo_html || "", follow_up_dias: followUp });
       }
     } catch { /* mantém o form base */ }
     finally { setLoadingEdit(false); }
@@ -142,12 +150,15 @@ export default function DocumentosPage() {
     if (!editDoc) return;
     setSaving(true);
     try {
+      const followUpDias = editForm.follow_up_dias.trim() ? parseInt(editForm.follow_up_dias, 10) : null;
+      const body: Record<string, unknown> = {
+        titulo: editForm.titulo, tipo: editForm.tipo, status: editForm.status,
+        conteudo_texto: editForm.conteudo_texto,
+      };
+      if (followUpDias != null && !isNaN(followUpDias) && followUpDias > 0) body.follow_up_dias = followUpDias;
       const res = await fetch(`/api/v1/documents/${editDoc.id}`, {
         method: "PUT", headers: authH(),
-        body: JSON.stringify({
-          titulo: editForm.titulo, tipo: editForm.tipo, status: editForm.status,
-          conteudo_texto: editForm.conteudo_texto,
-        }),
+        body: JSON.stringify(body),
       });
       const d = await res.json().catch(() => ({}));
       if (res.ok) { toast.success("Documento atualizado."); setEditDoc(null); fetchDocs(); }
@@ -197,7 +208,7 @@ export default function DocumentosPage() {
     finally { setDeleting(null); }
   }
 
-  useEffect(() => { fetchDocs(0, false); }, [filtroTipo, filtroStatus]);
+  useEffect(() => { fetchDocs(0, false); }, [filtroTipo, filtroStatus, clientIdFiltro]);
 
   // Google Workspace: mostra "Salvar no Drive" apenas para quem conectou a conta
   useEffect(() => {
@@ -248,6 +259,7 @@ export default function DocumentosPage() {
       const params = new URLSearchParams();
       if (filtroTipo) params.set("tipo", filtroTipo);
       if (filtroStatus) params.set("status", filtroStatus);
+      if (clientIdFiltro) params.set("client_id", clientIdFiltro);
       params.set("limit", String(PAGE_SIZE));
       params.set("offset", String(newOffset));
       const res = await fetch(`/api/v1/documents?${params}`, {
@@ -414,6 +426,13 @@ export default function DocumentosPage() {
           </button>
         </div>
       </div>
+
+      {clientIdFiltro && (
+        <div className="flex items-center gap-2 text-xs bg-afj-gold/10 border border-afj-gold/30 rounded-sm px-3 py-2">
+          <span className="text-afj-black/70">Mostrando só os documentos deste cliente</span>
+          <Link href="/documentos" className="text-afj-gold hover:underline ml-auto">Ver todos</Link>
+        </div>
+      )}
 
       {/* Filtros */}
       <div className="flex gap-3 flex-wrap">
@@ -673,6 +692,26 @@ export default function DocumentosPage() {
                 </select>
               </div>
             </div>
+            {editForm.status === "PROTOCOLADO" && (
+              <div>
+                <label className="text-[11px] text-afj-black/55 block mb-1 uppercase tracking-widest font-semibold">
+                  Alerta de follow-up (dias sem retorno da corte)
+                </label>
+                <input
+                  type="number" min={1}
+                  value={editForm.follow_up_dias}
+                  onChange={(e) => setEditForm({ ...editForm, follow_up_dias: e.target.value })}
+                  placeholder="ex.: 30 (deixe vazio pra não alertar)"
+                  className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold"
+                />
+                {editDoc?.protocolado_em && (
+                  <p className="text-[11px] text-afj-black/40 mt-1">
+                    Protocolada em {new Date(editDoc.protocolado_em).toLocaleDateString("pt-BR")}
+                    {editDoc.follow_up_alertado && " — alerta já disparado"}
+                  </p>
+                )}
+              </div>
+            )}
             <div>
               <label className="text-[11px] text-afj-black/55 block mb-1 uppercase tracking-widest font-semibold">Conteúdo</label>
               <textarea value={editForm.conteudo_texto} onChange={(e) => setEditForm({ ...editForm, conteudo_texto: e.target.value })}

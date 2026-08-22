@@ -1,9 +1,10 @@
 "use client";
 import { useState, useEffect } from "react";
-import { Users, Plus, Search, Phone, Mail, Pencil, Trash2, ExternalLink, Filter } from "lucide-react";
+import { Users, Plus, Search, Phone, Mail, Pencil, Trash2, ExternalLink, Filter, ShieldAlert, ChevronDown, ChevronUp } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
 import { ViewToggle } from "@/components/ui/ViewToggle";
+import { useUserStore } from "@/store";
 import Link from "next/link";
 
 interface Endereco {
@@ -42,8 +43,23 @@ const STATUS_STYLE: Record<string, string> = {
 
 const PAGE_SIZE = 50;
 
+interface LgpdQualidade {
+  total_clientes: number;
+  score_conformidade: number;
+  taxa_consentimento: number | null;
+  lacunas: {
+    sem_consentimento_ativo: { total: number };
+    consentimento_sem_data: { total: number };
+    sem_documento_identificacao: { total: number };
+  };
+}
+
 export default function ClientesPage() {
   const toast = useToast();
+  const userRole = useUserStore((s) => s.user?.role);
+  const canSeeLgpd = ["ADMIN", "SOCIO", "SUPERADMIN"].includes(userRole ?? "");
+  const [lgpdQualidade, setLgpdQualidade] = useState<LgpdQualidade | null>(null);
+  const [showLgpdDetalhes, setShowLgpdDetalhes] = useState(false);
   const [clientes, setClientes] = useState<Cliente[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -70,6 +86,15 @@ export default function ClientesPage() {
   }, [view]);
 
   useEffect(() => { fetchClientes(0, false); }, [status]);
+
+  useEffect(() => {
+    if (!canSeeLgpd) return;
+    const token = localStorage.getItem("afj_access_token");
+    fetch("/api/v1/system/analytics/lgpd-qualidade", { headers: { Authorization: `Bearer ${token}` } })
+      .then((r) => (r.ok ? r.json() : null))
+      .then(setLgpdQualidade)
+      .catch(() => {});
+  }, [canSeeLgpd]);
 
   async function fetchClientes(newOffset = 0, append = false) {
     if (append) setLoadingMore(true);
@@ -156,6 +181,44 @@ export default function ClientesPage() {
           </button>
         </div>
       </div>
+
+      {/* Qualidade LGPD (Fase 212 — proposta de evolução da Fase 209) */}
+      {canSeeLgpd && lgpdQualidade && lgpdQualidade.total_clientes > 0 && (
+        <div className="afj-card p-3">
+          <button
+            onClick={() => setShowLgpdDetalhes((v) => !v)}
+            className="w-full flex items-center justify-between gap-2 text-sm"
+          >
+            <span className="flex items-center gap-2 font-medium text-afj-black">
+              <ShieldAlert size={14} className="text-afj-gold" />
+              Qualidade de dado LGPD
+              <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
+                lgpdQualidade.score_conformidade >= 80 ? "bg-green-50 text-green-700" :
+                lgpdQualidade.score_conformidade >= 50 ? "bg-amber-50 text-amber-700" : "bg-red-50 text-red-700"
+              }`}>
+                {lgpdQualidade.score_conformidade}/100
+              </span>
+            </span>
+            {showLgpdDetalhes ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+          </button>
+          {showLgpdDetalhes && (
+            <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs text-afj-black/60">
+              <div className="flex justify-between border-l-2 border-afj-cream-dark pl-2">
+                <span>Ativos sem consentimento</span>
+                <span className="font-semibold text-afj-black">{lgpdQualidade.lacunas.sem_consentimento_ativo.total}</span>
+              </div>
+              <div className="flex justify-between border-l-2 border-afj-cream-dark pl-2">
+                <span>Consentimento sem data</span>
+                <span className="font-semibold text-afj-black">{lgpdQualidade.lacunas.consentimento_sem_data.total}</span>
+              </div>
+              <div className="flex justify-between border-l-2 border-afj-cream-dark pl-2">
+                <span>Sem CPF/CNPJ</span>
+                <span className="font-semibold text-afj-black">{lgpdQualidade.lacunas.sem_documento_identificacao.total}</span>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Filtros */}
       <div className="flex gap-3">

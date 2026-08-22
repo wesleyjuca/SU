@@ -113,6 +113,76 @@ async def login(body: LoginRequest, request: Request, db: AsyncSession = Depends
     )
 
 
+_DEMO_LOGIN_MAX = 20      # requisições por janela (anti-abuso, não é lockout de senha)
+_DEMO_LOGIN_WINDOW_SEC = 300  # 5 min
+
+
+@router.post("/demo-login", response_model=TokenResponse)
+async def demo_login(request: Request, db: AsyncSession = Depends(get_db)):
+    """Entrada sem senha no tenant público de demonstração (Fase 199+).
+
+    Não recebe nenhum parâmetro (nem email nem tenant) — resolve o único
+    destino possível (ADMIN do tenant `slug=="demo" AND is_demo=True")
+    internamente, mesmo padrão de segurança de `resetar_tenant_demo`
+    (app/services/demo_reset.py), tornando estruturalmente impossível
+    usar esta rota para entrar em qualquer outro tenant.
+    """
+    from app.db.redis import get_redis
+    from fastapi import HTTPException
+    from app.models.tenant import Tenant
+    from app.services.demo_fixtures import DEMO_ADMIN_EMAIL
+
+    ip = request.client.host if request.client else "?"
+    redis = await get_redis()
+    rl_key = f"demo_login:{ip}"
+    if redis:
+        try:
+            n = await redis.incr(rl_key)
+            if n == 1:
+                await redis.expire(rl_key, _DEMO_LOGIN_WINDOW_SEC)
+        except Exception:
+            n = 0
+        if n > _DEMO_LOGIN_MAX:
+            raise HTTPException(status_code=429, detail="Muitas tentativas. Aguarde alguns minutos e tente novamente.")
+
+    result = await db.execute(
+        select(User).join(Tenant, User.tenant_id == Tenant.id).where(
+            Tenant.slug == "demo",
+            Tenant.is_demo.is_(True),
+            User.email == DEMO_ADMIN_EMAIL,
+            User.is_active.is_(True),
+        )
+    )
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=503, detail="Ambiente de demonstração indisponível no momento.")
+
+    user.last_login_at = datetime.now(timezone.utc)
+    access_token = create_access_token(str(user.id), user.role)
+    refresh_token_str, token_hash = create_refresh_token(str(user.id))
+
+    session = Session(
+        user_id=user.id,
+        token_hash=token_hash,
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+        expires_at=datetime.now(timezone.utc) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS),
+    )
+    db.add(session)
+
+    return TokenResponse(
+        access_token=access_token,
+        refresh_token=refresh_token_str,
+        user={
+            "id": str(user.id),
+            "email": user.email,
+            "full_name": user.full_name,
+            "role": user.role,
+            "oab_number": user.oab_number,
+        },
+    )
+
+
 @router.post("/refresh", response_model=TokenResponse)
 async def refresh(body: RefreshRequest, db: AsyncSession = Depends(get_db)):
     token_hash = hash_token(body.refresh_token)

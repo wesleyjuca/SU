@@ -173,21 +173,31 @@ def parse_insights(texto: str) -> list[dict]:
     return out
 
 
-async def gerar_insights() -> dict:
+async def gerar_insights(db, user_id) -> dict:
     """Monta o contexto, chama o LLM e devolve `{ok, insights, custo_usd}` ou
-    `{ok: False, detail}` em caso de falha (contexto vazio ou erro do LLM)."""
+    `{ok: False, detail}` em caso de falha (contexto vazio ou erro do LLM).
+
+    Fase 204 — ao contrário de toda outra rota disparadora de IA do sistema,
+    esta chamava `call_llm` direto, sem nunca entrar em `user_ai_creds()`
+    (`app/integrations/byok.py`): dependia 100% da `ANTHROPIC_API_KEY` do
+    servidor, sem nenhum fallback pra IA própria do usuário (nem a do
+    próprio SUPERADMIN que clicou no botão). `db`/`user_id` agora envolvem a
+    chamada com o mesmo mecanismo BYOK usado por generate_petition/
+    review_document/manage_contract."""
     contexto = await montar_contexto()
     if not contexto:
         return {"ok": False, "insights": [], "detail": "Não foi possível montar o contexto do sistema."}
 
     try:
+        from app.integrations.byok import user_ai_creds
         from app.integrations.llm_client import call_llm
-        conteudo, _in_tok, _out_tok, custo = await call_llm(
-            messages=[{"role": "user", "content": contexto}],
-            system=SYSTEM_PROMPT,
-            max_tokens=2048,
-            temperature=0.3,
-        )
+        async with user_ai_creds(db, user_id, "brain_insights"):
+            conteudo, _in_tok, _out_tok, custo = await call_llm(
+                messages=[{"role": "user", "content": contexto}],
+                system=SYSTEM_PROMPT,
+                max_tokens=2048,
+                temperature=0.3,
+            )
     except Exception as exc:
         log.warning("insights_llm_falhou", error=str(exc))
         return {"ok": False, "insights": [], "detail": f"Falha ao consultar o modelo: {exc}"[:300]}

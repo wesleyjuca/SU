@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_, text
-from datetime import datetime, timezone, timedelta
+from datetime import date, datetime, timezone, timedelta, time as dtime
 import json
 import uuid
 from typing import Any, Callable, Awaitable
@@ -241,13 +241,13 @@ async def analytics_financeiro(
         ]
 
         q_tot = await db.execute(
-            select(FinancialEntry.tipo, FinancialEntry.status, func.sum(FinancialEntry.valor).label("t"))
+            select(FinancialEntry.tipo, FinancialEntry.status, func.sum(FinancialEntry.valor).label("total_grupo"))
             .where(FinancialEntry.tenant_id == tid)
             .group_by(FinancialEntry.tipo, FinancialEntry.status)
         )
         totais: dict = {}
         for r in q_tot.all():
-            totais[f"{r.tipo}_{r.status}"] = float(r.t or 0)
+            totais[f"{r.tipo}_{r.status}"] = float(r.total_grupo or 0)
 
         return {
             "mensal": mensal,
@@ -420,10 +420,18 @@ async def analytics_agentes(
 
 @router.get("/analytics/gestao")
 async def analytics_gestao(
+    date_from: date | None = Query(default=None, description="Filtra por período (inclusive). Sem filtro = histórico completo."),
+    date_to: date | None = Query(default=None, description="Filtra por período (inclusive). Sem filtro = histórico completo."),
     current_user: User = Depends(require_role("ADMIN", "SOCIO", "GESTOR")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Relatórios de gestão do sócio: rentabilidade, produtividade e taxa de êxito (cache 5 min)."""
+    """Relatórios de gestão do sócio: rentabilidade, produtividade e taxa de êxito
+    (cache 5 min, chave varia por período). Fase 206.3 — `date_from`/`date_to`
+    opcionais habilitam comparativo de período no frontend (2 chamadas, uma por
+    período). Cada bloco de métrica usa o campo de data mais natural pro que
+    representa — ver comentários abaixo; `processos_ativos`/`prazos_pendentes`
+    (carga ATUAL) e `prazos_cumpridos` (sem timestamp de conclusão no model)
+    ficam de fora do filtro em qualquer período, por design."""
     from app.models.financial import FinancialEntry
     from app.models.client import Client
     from app.models.process import LegalProcess, ProcessDeadline
@@ -431,12 +439,19 @@ async def analytics_gestao(
     from app.models.tese import Tese
 
     tid = current_user.tenant_id
+    periodo_ini = datetime.combine(date_from, dtime.min, tzinfo=timezone.utc) if date_from else None
+    periodo_fim = datetime.combine(date_to, dtime.max, tzinfo=timezone.utc) if date_to else None
 
     async def compute():
         # ── Rentabilidade por cliente (receita − despesa, pagos) ─────────────
+        fin_where = [FinancialEntry.tenant_id == tid, FinancialEntry.status == "PAGO"]
+        if date_from:
+            fin_where.append(FinancialEntry.data_pagamento >= date_from)
+        if date_to:
+            fin_where.append(FinancialEntry.data_pagamento <= date_to)
         fin_rows = (await db.execute(
             select(FinancialEntry.client_id, FinancialEntry.tipo, func.coalesce(func.sum(FinancialEntry.valor), 0))
-            .where(FinancialEntry.tenant_id == tid, FinancialEntry.status == "PAGO")
+            .where(*fin_where)
             .group_by(FinancialEntry.client_id, FinancialEntry.tipo)
         )).all()
         por_cliente: dict = {}
@@ -456,10 +471,15 @@ async def analytics_gestao(
             key=lambda x: x["resultado"], reverse=True,
         )[:12]
 
-        # ── Rentabilidade por processo ────────────────────────────────────────
+        # ── Rentabilidade por processo (mesmo filtro de data_pagamento) ────────
+        proc_fin_where = [FinancialEntry.tenant_id == tid, FinancialEntry.status == "PAGO", FinancialEntry.process_id.is_not(None)]
+        if date_from:
+            proc_fin_where.append(FinancialEntry.data_pagamento >= date_from)
+        if date_to:
+            proc_fin_where.append(FinancialEntry.data_pagamento <= date_to)
         proc_rows = (await db.execute(
             select(FinancialEntry.process_id, FinancialEntry.tipo, func.coalesce(func.sum(FinancialEntry.valor), 0))
-            .where(FinancialEntry.tenant_id == tid, FinancialEntry.status == "PAGO", FinancialEntry.process_id.is_not(None))
+            .where(*proc_fin_where)
             .group_by(FinancialEntry.process_id, FinancialEntry.tipo)
         )).all()
         por_proc: dict = {}
@@ -477,15 +497,27 @@ async def analytics_gestao(
             key=lambda x: x["resultado"], reverse=True,
         )[:12]
 
-        # ── Produtividade por advogado ────────────────────────────────────────
+        # ── Produtividade por advogado — "processos"/"documentos" contam só o
+        # que foi CRIADO no período (created_at); sem período = histórico
+        # completo, igual ao comportamento anterior a esta fase. ─────────────
+        proc_por_resp_where = [LegalProcess.tenant_id == tid, LegalProcess.responsavel_id.is_not(None)]
+        if periodo_ini:
+            proc_por_resp_where.append(LegalProcess.created_at >= periodo_ini)
+        if periodo_fim:
+            proc_por_resp_where.append(LegalProcess.created_at <= periodo_fim)
         proc_por_resp = dict((await db.execute(
             select(LegalProcess.responsavel_id, func.count(LegalProcess.id))
-            .where(LegalProcess.tenant_id == tid, LegalProcess.responsavel_id.is_not(None))
+            .where(*proc_por_resp_where)
             .group_by(LegalProcess.responsavel_id)
         )).all())
+        docs_where = [Document.tenant_id == tid, Document.created_by.is_not(None)]
+        if periodo_ini:
+            docs_where.append(Document.created_at >= periodo_ini)
+        if periodo_fim:
+            docs_where.append(Document.created_at <= periodo_fim)
         docs_por_autor = dict((await db.execute(
             select(Document.created_by, func.count(Document.id))
-            .where(Document.tenant_id == tid, Document.created_by.is_not(None))
+            .where(*docs_where)
             .group_by(Document.created_by)
         )).all())
         prazos_cumpridos = dict((await db.execute(
@@ -523,10 +555,19 @@ async def analytics_gestao(
             key=lambda x: x["processos"], reverse=True,
         )
 
-        # ── Taxa de êxito (processos com desfecho) ────────────────────────────
+        # ── Taxa de êxito (processos com desfecho). O model não guarda um
+        # timestamp dedicado de "quando o desfecho foi registrado" — usa
+        # `updated_at` como proxy (igual aproximação já aceita em
+        # `protocolado_em`/`updated_at` na Fase 205.1, documentada lá pelo
+        # mesmo motivo: sem campo dedicado, é a melhor data disponível). ─────
+        desf_where = [LegalProcess.tenant_id == tid, LegalProcess.desfecho.is_not(None)]
+        if periodo_ini:
+            desf_where.append(LegalProcess.updated_at >= periodo_ini)
+        if periodo_fim:
+            desf_where.append(LegalProcess.updated_at <= periodo_fim)
         desf_rows = dict((await db.execute(
             select(LegalProcess.desfecho, func.count(LegalProcess.id))
-            .where(LegalProcess.tenant_id == tid, LegalProcess.desfecho.is_not(None))
+            .where(*desf_where)
             .group_by(LegalProcess.desfecho)
         )).all())
         total_desf = sum(desf_rows.values())
@@ -534,7 +575,7 @@ async def analytics_gestao(
         win_rate = round(100 * ganhos / total_desf, 1) if total_desf else 0.0
         por_area_rows = (await db.execute(
             select(LegalProcess.area_direito, LegalProcess.desfecho, func.count(LegalProcess.id))
-            .where(LegalProcess.tenant_id == tid, LegalProcess.desfecho.is_not(None))
+            .where(*desf_where)
             .group_by(LegalProcess.area_direito, LegalProcess.desfecho)
         )).all()
         area_map: dict = {}
@@ -552,7 +593,7 @@ async def analytics_gestao(
         # texto livre — sem FK real pra Tribunal, GROUP BY funciona igual) ────
         por_tribunal_rows = (await db.execute(
             select(LegalProcess.tribunal, LegalProcess.desfecho, func.count(LegalProcess.id))
-            .where(LegalProcess.tenant_id == tid, LegalProcess.desfecho.is_not(None))
+            .where(*desf_where)
             .group_by(LegalProcess.tribunal, LegalProcess.desfecho)
         )).all()
         tribunal_map: dict = {}
@@ -570,7 +611,7 @@ async def analytics_gestao(
         # definida — a maioria hoje não tem, campo é novo) ────────────────────
         por_tese_rows = (await db.execute(
             select(LegalProcess.tese_id, LegalProcess.desfecho, func.count(LegalProcess.id))
-            .where(LegalProcess.tenant_id == tid, LegalProcess.desfecho.is_not(None), LegalProcess.tese_id.is_not(None))
+            .where(*desf_where, LegalProcess.tese_id.is_not(None))
             .group_by(LegalProcess.tese_id, LegalProcess.desfecho)
         )).all()
         tese_map: dict = {}
@@ -603,7 +644,71 @@ async def analytics_gestao(
             },
         }
 
-    return await _cached(f"gestao:{tid}", 300, compute)
+    return await _cached(f"gestao:{tid}:{date_from or ''}:{date_to or ''}", 300, compute)
+
+
+@router.get("/analytics/lgpd-qualidade")
+async def analytics_lgpd_qualidade(
+    current_user: User = Depends(require_role("ADMIN", "SOCIO")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Fase 212 (proposta de evolução da Fase 209) — painel de qualidade de
+    dado LGPD-aware: não é um relatório de gestão comum, é sensível a PII
+    (mostra quais clientes têm lacuna de conformidade), por isso restrito a
+    ADMIN/SOCIO — mesmo gate de erase_client_data/export_client_data.
+    Sinaliza 3 lacunas concretas de conformidade, cada uma acionável:
+    (1) cliente ATIVO sem `lgpd_consent` registrado, (2) `lgpd_consent=True`
+    mas sem `lgpd_consent_at` (dado inconsistente — não dá pra provar
+    QUANDO o consentimento foi obtido), (3) titular sem CPF/CNPJ cadastrado
+    (documento de identificação ausente). Cache 5 min como os outros
+    relatórios de /analytics."""
+    from app.models.client import Client
+
+    tid = current_user.tenant_id
+
+    async def compute():
+        clientes = (await db.execute(
+            select(Client.id, Client.nome_completo, Client.tipo, Client.status,
+                   Client.cpf, Client.cnpj, Client.lgpd_consent, Client.lgpd_consent_at)
+            .where(Client.tenant_id == tid)
+        )).all()
+
+        total = len(clientes)
+        sem_consentimento_ativo = []
+        consentimento_sem_data = []
+        sem_documento = []
+        for c in clientes:
+            if c.status == "ATIVO" and not c.lgpd_consent:
+                sem_consentimento_ativo.append({"id": str(c.id), "nome": c.nome_completo})
+            if c.lgpd_consent and not c.lgpd_consent_at:
+                consentimento_sem_data.append({"id": str(c.id), "nome": c.nome_completo})
+            documento_ausente = (c.tipo == "PF" and not c.cpf) or (c.tipo == "PJ" and not c.cnpj)
+            if documento_ausente:
+                sem_documento.append({"id": str(c.id), "nome": c.nome_completo, "tipo": c.tipo})
+
+        com_consentimento = sum(1 for c in clientes if c.lgpd_consent)
+        score = 100 if total == 0 else round(
+            100 * (1 - (len(sem_consentimento_ativo) + len(consentimento_sem_data) + len(sem_documento)) / (total * 3))
+        )
+
+        return {
+            "total_clientes": total,
+            "score_conformidade": max(0, score),
+            "taxa_consentimento": round(100 * com_consentimento / total, 1) if total else None,
+            "lacunas": {
+                "sem_consentimento_ativo": {
+                    "total": len(sem_consentimento_ativo), "clientes": sem_consentimento_ativo[:50],
+                },
+                "consentimento_sem_data": {
+                    "total": len(consentimento_sem_data), "clientes": consentimento_sem_data[:50],
+                },
+                "sem_documento_identificacao": {
+                    "total": len(sem_documento), "clientes": sem_documento[:50],
+                },
+            },
+        }
+
+    return await _cached(f"lgpd-qualidade:{tid}", 300, compute)
 
 
 @router.get("/health/detailed")
@@ -984,6 +1089,63 @@ async def set_ai_budget(
             "alert_pct": body.alert_pct, "message": "Limite salvo"}
 
 
+@router.post("/ai-budget/request-increase")
+async def request_ai_budget_increase(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Fase 205.5 — o usuário bloqueado pelo teto mensal de IA (429 de
+    enforce_budget) pode pedir um aumento direto pela tela, em vez do fluxo
+    manual anterior (falar com o admin fora do sistema). Notifica todo
+    ADMIN/SÓCIO/SUPERADMIN do escritório com o gasto atual — não altera o
+    teto sozinho, quem decide continua sendo o humano em /custos-ia (mesmo
+    invariante de nunca auto-aprovar do resto do sistema)."""
+    from fastapi import HTTPException
+    from app.services.ai_budget import get_budget_status
+    from app.services.notification import create_notification
+
+    status = await get_budget_status(db, current_user.id, current_user.tenant_id)
+    if not status:
+        raise HTTPException(status_code=422, detail="Você não tem um teto de IA configurado.")
+
+    # No máximo 1 solicitação por dia por usuário — evita virar gerador de
+    # notificação em massa se o usuário insistir em disparar agentes bloqueados.
+    from datetime import datetime, timezone
+    from app.models.notification import Notification
+    dia_chave = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    ja_pediu_hoje = (await db.execute(
+        select(Notification.id).where(
+            Notification.tipo == "SISTEMA",
+            Notification.extra_data["budget_increase_request_day"].astext == dia_chave,
+            Notification.extra_data["requested_by"].astext == str(current_user.id),
+        ).limit(1)
+    )).scalar_one_or_none()
+    if ja_pediu_hoje:
+        return {"message": "Você já solicitou um aumento hoje — aguarde a análise do administrador."}
+
+    gestores = (await db.execute(
+        select(User.id).where(
+            User.tenant_id == current_user.tenant_id,
+            User.role.in_(["ADMIN", "SOCIO", "SUPERADMIN"]),
+            User.is_active == True,  # noqa: E712
+        )
+    )).scalars().all()
+    for gestor_id in gestores:
+        await create_notification(
+            db, user_id=gestor_id,
+            titulo=f"{current_user.full_name} solicitou aumento do teto de IA",
+            tipo="SISTEMA",
+            corpo=(
+                f"Uso atual: US$ {status['spent_usd']:.2f} de US$ {status['limit_usd']:.2f} "
+                f"({status['pct']:.0f}%). Ajuste o teto em Custos de IA se aprovar."
+            ),
+            priority="HIGH",
+            link="/custos-ia",
+            metadata={"budget_increase_request_day": dia_chave, "requested_by": str(current_user.id)},
+        )
+    return {"message": "Solicitação enviada ao(s) administrador(es) do escritório."}
+
+
 # ─── Painel Cérebro (SUPERADMIN) — observabilidade de infra + mapa ────────────
 async def _audit_brain(user_id, action: str) -> None:
     """Registra no audit_log o acesso a dados internos do sistema (trilha)."""
@@ -1177,7 +1339,7 @@ async def brain_insights(
 
     await enforce_budget(db, current_user.id, current_user.tenant_id)
     await _audit_brain(current_user.id, "BRAIN_INSIGHTS_GENERATE")
-    return await gerar_insights()
+    return await gerar_insights(db, current_user.id)
 
 
 # ─── Assistente IA do Cérebro (SUPERADMIN — chat multi-turn + streaming SSE) ──

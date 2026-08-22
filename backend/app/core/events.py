@@ -74,11 +74,19 @@ async def _seed_demo_tenant(engine) -> None:
     "if not tenant" de cima, que só dispara com a tabela tenants inteira
     vazia — o afj pode já existir sem o demo ter sido criado)."""
     from sqlalchemy.ext.asyncio import AsyncSession
-    from sqlalchemy import select
+    from sqlalchemy import select, text
     from app.models.tenant import Tenant, TenantConfig
     import uuid
 
     async with AsyncSession(engine) as session:
+        # Fase 202 (achado da Fase 201) — lock consultivo transacional: sem
+        # isso, 2 instâncias do app subindo ao mesmo tempo (rolling deploy
+        # normal no Railway) passam ambas pelo SELECT abaixo antes de
+        # qualquer INSERT comitar, podendo duplicar o tenant demo.
+        # `pg_advisory_xact_lock` libera sozinho no commit/rollback desta
+        # sessão — a 2ª instância espera aqui até a 1ª terminar, depois vê
+        # `exists` e retorna sem duplicar.
+        await session.execute(text("SELECT pg_advisory_xact_lock(hashtext('demo_tenant_seed')::bigint)"))
         exists = (await session.execute(select(Tenant).where(Tenant.slug == "demo"))).scalar_one_or_none()
         if exists:
             return
@@ -491,6 +499,41 @@ async def lifespan(app: FastAPI):
             "UPDATE tenants SET is_demo = true WHERE slug = 'demo' "
             "AND is_demo IS DISTINCT FROM true",
             "UPDATE tenants SET is_demo = false WHERE slug = 'afj' AND is_demo IS TRUE",
+            # Fase 202 (achado da Fase 201) — o `unique=True` do SQLAlchemy em
+            # Tenant.slug/User.email nunca virou constraint real neste banco
+            # (nasceu via create_all sem alembic aplicado). Sem isso, nada no
+            # Postgres impedia duas linhas com slug='demo' ou o mesmo e-mail
+            # do ADMIN demo — a garantia de segurança de POST /auth/demo-login
+            # e de resetar_tenant_demo dependia dessa constraint sem ela
+            # existir de fato. Fail-soft: se já houver duplicata numa base
+            # existente, a criação falha e só loga aviso (não trava o boot).
+            "CREATE UNIQUE INDEX IF NOT EXISTS tenants_slug_unique_idx ON tenants (slug)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS users_email_unique_idx ON users (email)",
+            # Fase 205.1 — follow-up de petição protocolada sem resposta da
+            # corte no prazo configurado (opt-in por documento, NULL = sem
+            # alerta). `protocolado_em` é carimbado à parte de `updated_at`
+            # porque este último muda a cada edição do documento.
+            "ALTER TABLE documents ADD COLUMN IF NOT EXISTS protocolado_em TIMESTAMPTZ",
+            "ALTER TABLE documents ADD COLUMN IF NOT EXISTS follow_up_dias INTEGER",
+            "ALTER TABLE documents ADD COLUMN IF NOT EXISTS follow_up_alertado BOOLEAN NOT NULL DEFAULT false",
+            # Fase 206.2 — preferências de notificação persistentes por tipo.
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS notification_prefs JSONB",
+            # Fase 210 (achado de performance da Fase 209, sob volume real) —
+            # `financial_entries.client_id`/`client_interactions.client_id`
+            # nunca tiveram índice próprio (só `tenant_id`); `EXPLAIN ANALYZE`
+            # confirmou Seq Scan na query de saúde do cliente (207.1) e na
+            # navegação contextual (205.3). Inofensivo no volume testado
+            # (centenas de linhas), mas vira full-scan por chamada em escala.
+            # Compostos com tenant_id porque toda query real já filtra por
+            # ambos juntos.
+            "CREATE INDEX IF NOT EXISTS ix_financial_entries_tenant_client ON financial_entries (tenant_id, client_id)",
+            "CREATE INDEX IF NOT EXISTS ix_client_interactions_tenant_client ON client_interactions (tenant_id, client_id)",
+            # Mesmo achado — GET /crm/previsao-caixa (208.2) e /system/
+            # analytics/gestao (206.3) filtram financial_entries por
+            # tenant+status+data_pagamento/data_vencimento sem índice
+            # correspondente.
+            "CREATE INDEX IF NOT EXISTS ix_financial_entries_tenant_status_pagamento ON financial_entries (tenant_id, status, data_pagamento)",
+            "CREATE INDEX IF NOT EXISTS ix_financial_entries_tenant_tipo_status_vencimento ON financial_entries (tenant_id, tipo, status, data_vencimento)",
         ]:
             try:
                 async with engine.begin() as conn:

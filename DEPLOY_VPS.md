@@ -33,6 +33,77 @@ backend e todo o resto para o frontend — tudo same-origin, sem CORS no navegad
   apontando para o IP do VPS
 - Portas **80 e 443** liberadas no firewall
 
+## Provisionar de graça: Oracle Cloud "Always Free"
+
+Cobre a única lacuna real do restante deste guia: como conseguir a VPS em
+si sem custo. Vale só pra esse passo — a partir de "Passo a passo" abaixo,
+segue o fluxo genérico normalmente (SSH na VM criada aqui). Não se aplica
+a nenhum outro provedor da lista do topo (Hetzner/DigitalOcean/Contabo são
+sempre pagos, mesmo no menor plano).
+
+> ⚠️ Em 15/jun/2026 a Oracle cortou pela metade a cota Ampere A1 "Always
+> Free" (de 4 OCPU/24GB para **2 OCPU/12GB**), sem aviso público — só
+> descoberta quando instâncias começaram a ser encerradas. Contas novas já
+> nascem só com a cota reduzida. Mesmo assim, 2 OCPU/12GB continua acima
+> do mínimo pedido neste guia (≥4GB, 8GB recomendado) — só não conte com
+> a cota antiga, e não trate "grátis pra sempre" como garantia contratual:
+> a Oracle já demonstrou que muda os termos sem aviso.
+
+1. **Criar conta** em [cloud.oracle.com](https://cloud.oracle.com) — cartão
+   de crédito é exigido só pra verificação de identidade; os recursos
+   "Always Free" não são cobrados.
+2. **Criar a instância** (Menu → Compute → Instances → Create Instance):
+   - Shape: clique em "Change Shape" → aba **Ampere** → `VM.Standard.A1.Flex`
+     (o shape ARM elegível pro tier grátis — **não** use os "2 VMs Micro
+     AMD", que só têm 1GB RAM cada, insuficiente pra esse stack).
+   - Configure **2 OCPU / 12 GB RAM** (a cota Always Free inteira numa
+     única instância, em vez de dividir em várias menores).
+   - Boot volume: pode ir até ~200GB dentro da cota grátis agregada — deixe
+     bem acima dos 40GB mínimos.
+   - Imagem: Ubuntu (mais comum, mesma base dos passos de Docker abaixo).
+3. **Se aparecer "Out of host capacity"**: não é erro de configuração, é
+   disponibilidade da região — troque de Availability Domain (se a região
+   tiver mais de uma) ou tente de novo mais tarde/em outra região.
+4. **Abrir as portas 80/443 — duas vezes** (essa é a armadilha mais comum
+   de quem já tem experiência com VPS "normal" e assume que só a regra de
+   rede basta):
+   - **Nível de rede (VCN)**: Networking → Virtual Cloud Networks → sua
+     VCN → Security Lists → Default Security List → Add Ingress Rules →
+     `0.0.0.0/0`, TCP, portas `80` e `443`.
+   - **Nível do SO**: as imagens da Oracle já vêm com `iptables`
+     bloqueando tráfego não-SSH por padrão — sem isso, o Caddy nunca
+     recebe conexão mesmo com a Security List certa:
+     ```bash
+     # Ubuntu (iptables-persistent)
+     sudo iptables -I INPUT 6 -m state --state NEW -p tcp --dport 80 -j ACCEPT
+     sudo iptables -I INPUT 6 -m state --state NEW -p tcp --dport 443 -j ACCEPT
+     sudo netfilter-persistent save
+
+     # Oracle Linux (firewalld, se usar essa imagem em vez de Ubuntu)
+     sudo firewall-cmd --permanent --add-port=80/tcp
+     sudo firewall-cmd --permanent --add-port=443/tcp
+     sudo firewall-cmd --reload
+     ```
+5. **Instalar Docker** na VM ([guia oficial](https://docs.docker.com/engine/install/ubuntu/)),
+   depois seguir o "Passo a passo" abaixo normalmente.
+6. **De quebra**: como o `docker-compose.prod.yml` já sobe `frontend` +
+   `backend` + `worker` + `scheduler` + `db` + `redis` + `qdrant` + `caddy`
+   nessa mesma VM, esse caminho substitui **tanto o backend hospedado
+   quanto o frontend hospedado** de uma vez — não é preciso nenhum outro
+   provedor pago pra nada além do domínio.
+7. **Object storage sem custo**: aproveite pra configurar `S3_BUCKET`/
+   `S3_ACCESS_KEY_ID`/`S3_SECRET_ACCESS_KEY`/`S3_ENDPOINT_URL` no
+   `.env.prod` apontando pro [Cloudflare R2](https://developers.cloudflare.com/r2/)
+   (10GB grátis, egress sempre grátis, já é S3-compatível — sem isso,
+   documentos ficam em base64 dentro do próprio Postgres, inflando o
+   volume da VM à toa).
+8. **Backup do serviço `pgbackup`**: a imagem `prodrigorocha/pgbackup` não
+   tem build ARM64 confirmado — no primeiro `docker compose up`, confirme
+   com `docker compose -f docker-compose.prod.yml ps pgbackup` que o
+   container subiu; se falhar por arquitetura, substitua por um cron
+   simples na própria VM chamando o comando de backup manual da tabela de
+   Operação abaixo.
+
 ## Passo a passo
 
 ### 1. Clonar o repositório

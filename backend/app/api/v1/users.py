@@ -685,6 +685,29 @@ async def update_my_ai_balance_mode(
     return {"mode": body.mode, "message": "Modo de balanceamento salvo"}
 
 
+class NotificationPrefsUpdate(BaseModel):
+    prefs: dict[str, bool]
+
+
+@router.get("/me/notification-preferences")
+async def get_my_notification_prefs(current_user: User = Depends(get_current_user)):
+    """Fase 206.2 — preferências de notificação por tipo de evento (tela
+    Configurações → Notificações). Antes só localStorage, perdidas ao trocar
+    de navegador/dispositivo. Chave ausente = notifica (default opt-in)."""
+    return {"prefs": current_user.notification_prefs or {}}
+
+
+@router.put("/me/notification-preferences")
+async def update_my_notification_prefs(
+    body: NotificationPrefsUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await db.execute(update(User).where(User.id == current_user.id).values(notification_prefs=body.prefs))
+    await db.commit()
+    return {"prefs": body.prefs, "message": "Preferências de notificação salvas"}
+
+
 @router.get("/me")
 async def get_me(
     current_user: User = Depends(get_current_user),

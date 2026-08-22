@@ -5,7 +5,7 @@ from sqlalchemy import select, desc, or_, func
 from pydantic import BaseModel
 from typing import Any
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from app.db.base import get_db
 from app.dependencies import get_current_user, require_role
@@ -532,3 +532,172 @@ async def client_financeiro(
             } for f in faturas
         ],
     }
+
+
+@router.get("/{client_id}/health-score")
+async def client_health_score(
+    client_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Fase 207.1 — score de saúde do cliente (0-100), combinando 3 sinais já
+    existentes: confiabilidade de pagamento (40 pts), engajamento recente via
+    interações (30 pts) e taxa de êxito dos processos (30 pts). Puramente
+    informativo — não aciona nenhuma ação automática, não bloqueia nada."""
+    from app.models.financial import FinancialEntry
+    from app.models.process import LegalProcess
+
+    cliente = (await db.execute(
+        select(Client).where(Client.id == uuid.UUID(client_id), Client.tenant_id == current_user.tenant_id)
+    )).scalar_one_or_none()
+    if not cliente:
+        raise NotFoundError("Cliente", client_id)
+
+    hoje = date.today()
+
+    # ── Financeiro (40 pts) — penaliza só receita PENDENTE já vencida. Sem
+    # nenhum lançamento de receita ainda, não há sinal negativo: pontuação cheia.
+    receitas = (await db.execute(
+        select(FinancialEntry.status, FinancialEntry.data_vencimento)
+        .where(FinancialEntry.client_id == cliente.id, FinancialEntry.tenant_id == current_user.tenant_id,
+               FinancialEntry.tipo == "RECEITA")
+    )).all()
+    total_receita = len(receitas)
+    atrasadas = sum(1 for status, venc in receitas if status == "PENDENTE" and venc and venc < hoje)
+    score_financeiro = 40 if not total_receita else round(40 * max(0.0, 1 - atrasadas / total_receita))
+
+    # ── Engajamento (30 pts) — recência da última interação registrada.
+    ultima_interacao = (await db.execute(
+        select(func.max(ClientInteraction.created_at))
+        .where(ClientInteraction.client_id == cliente.id, ClientInteraction.tenant_id == current_user.tenant_id)
+    )).scalar_one_or_none()
+    dias_desde_interacao = None
+    if ultima_interacao is None:
+        score_engajamento = 15  # sem histórico ainda — neutro, não penaliza
+    else:
+        dias_desde_interacao = (datetime.now(timezone.utc) - ultima_interacao).days
+        if dias_desde_interacao <= 30:
+            score_engajamento = 30
+        elif dias_desde_interacao <= 90:
+            score_engajamento = 18
+        else:
+            score_engajamento = 8
+
+    # ── Processual (30 pts) — taxa de êxito entre os processos já encerrados.
+    # Processos em andamento (sem desfecho) não penalizam nem beneficiam.
+    desf_rows = (await db.execute(
+        select(LegalProcess.desfecho, func.count(LegalProcess.id))
+        .where(LegalProcess.client_id == cliente.id, LegalProcess.tenant_id == current_user.tenant_id,
+               LegalProcess.desfecho.is_not(None))
+        .group_by(LegalProcess.desfecho)
+    )).all()
+    total_desfecho = sum(n for _, n in desf_rows)
+    ganhos = sum(n for d, n in desf_rows if d in ("EXITO", "ACORDO"))
+    score_processual = 30 if not total_desfecho else round(30 * ganhos / total_desfecho)
+
+    score = score_financeiro + score_engajamento + score_processual
+    banda = "saudavel" if score >= 75 else "atencao" if score >= 50 else "risco"
+
+    return {
+        "score": score,
+        "banda": banda,
+        "componentes": {
+            "financeiro": {
+                "pontos": score_financeiro, "max": 40,
+                "receita_atrasada": atrasadas, "receita_total": total_receita,
+            },
+            "engajamento": {
+                "pontos": score_engajamento, "max": 30,
+                "dias_desde_ultima_interacao": dias_desde_interacao,
+            },
+            "processual": {
+                "pontos": score_processual, "max": 30,
+                "taxa_exito": round(100 * ganhos / total_desfecho, 1) if total_desfecho else None,
+                "total_com_desfecho": total_desfecho,
+            },
+        },
+    }
+
+
+@router.get("/{client_id}/timeline")
+async def client_timeline(
+    client_id: str,
+    limit: int = Query(default=50, le=200),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Fase 211 (proposta de evolução da Fase 209) — timeline unificada do
+    Cliente 360: junta interações, marcos processuais (abertura/desfecho),
+    pagamentos recebidos e petições protocoladas numa única lista
+    cronológica, pra evitar que o advogado precise navegar entre 4 telas
+    separadas pra reconstruir "o que aconteceu com esse cliente".
+    Puramente read-only, agregando dado que já existe — nenhum campo novo."""
+    from app.models.document import Document
+    from app.models.financial import FinancialEntry
+    from app.models.process import LegalProcess
+
+    cliente = (await db.execute(
+        select(Client).where(Client.id == uuid.UUID(client_id), Client.tenant_id == current_user.tenant_id)
+    )).scalar_one_or_none()
+    if not cliente:
+        raise NotFoundError("Cliente", client_id)
+
+    eventos: list[dict] = []
+
+    interacoes = (await db.execute(
+        select(ClientInteraction).where(
+            ClientInteraction.client_id == cliente.id, ClientInteraction.tenant_id == current_user.tenant_id,
+        )
+    )).scalars().all()
+    for i in interacoes:
+        eventos.append({
+            "tipo": "interacao", "subtipo": i.tipo, "titulo": i.tipo,
+            "detalhe": i.descricao, "data": i.created_at,
+        })
+
+    processos = (await db.execute(
+        select(LegalProcess).where(
+            LegalProcess.client_id == cliente.id, LegalProcess.tenant_id == current_user.tenant_id,
+        )
+    )).scalars().all()
+    for p in processos:
+        eventos.append({
+            "tipo": "processo", "subtipo": "aberto", "titulo": f"Processo {p.numero_cnj} aberto",
+            "detalhe": p.tribunal, "data": p.created_at,
+        })
+        if p.desfecho:
+            # `updated_at` como proxy de "quando o desfecho foi registrado" —
+            # mesma aproximação já aceita em 205.1/206.3 (o model não tem um
+            # timestamp dedicado pra isso).
+            eventos.append({
+                "tipo": "processo", "subtipo": "desfecho", "titulo": f"Processo {p.numero_cnj} encerrado",
+                "detalhe": p.desfecho, "data": p.updated_at,
+            })
+
+    pagamentos = (await db.execute(
+        select(FinancialEntry).where(
+            FinancialEntry.client_id == cliente.id, FinancialEntry.tenant_id == current_user.tenant_id,
+            FinancialEntry.tipo == "RECEITA", FinancialEntry.status == "PAGO",
+            FinancialEntry.data_pagamento.is_not(None),
+        )
+    )).scalars().all()
+    for f in pagamentos:
+        eventos.append({
+            "tipo": "financeiro", "subtipo": "pagamento", "titulo": "Pagamento recebido",
+            "detalhe": f.descricao, "data": datetime.combine(f.data_pagamento, datetime.min.time(), tzinfo=timezone.utc),
+        })
+
+    protocolos = (await db.execute(
+        select(Document).where(
+            Document.client_id == cliente.id, Document.tenant_id == current_user.tenant_id,
+            Document.protocolado_em.is_not(None),
+        )
+    )).scalars().all()
+    for d in protocolos:
+        eventos.append({
+            "tipo": "documento", "subtipo": "protocolado", "titulo": f'"{d.titulo}" protocolada',
+            "detalhe": None, "data": d.protocolado_em,
+        })
+
+    eventos.sort(key=lambda e: e["data"], reverse=True)
+    return eventos[:limit]

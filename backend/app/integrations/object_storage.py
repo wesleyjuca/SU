@@ -77,6 +77,19 @@ async def get_bytes(key: str) -> bytes:
         raise ObjectStorageError(str(exc)) from exc
 
 
+async def delete_bytes(key: str) -> None:
+    import aioboto3
+    from app.config import settings
+
+    try:
+        session = aioboto3.Session()
+        async with session.client("s3", **_client_kwargs()) as client:
+            await client.delete_object(Bucket=settings.S3_BUCKET, Key=key)
+    except Exception as exc:
+        log.error("object_storage_delete_failed", key=key, error=str(exc))
+        raise ObjectStorageError(str(exc)) from exc
+
+
 async def generate_presigned_url(key: str, filename: str | None = None, expires_in: int = 300) -> str:
     import aioboto3
     from app.config import settings

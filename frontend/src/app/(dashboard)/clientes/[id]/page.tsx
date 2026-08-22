@@ -3,7 +3,8 @@ import { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
 import {
   ArrowLeft, Users, Plus, MessageSquare, Phone, Mail, Scale,
-  Loader2, X, AlertTriangle, Download, Trash2, Settings2, Globe, Copy, Check as CheckIcon
+  Loader2, X, AlertTriangle, Download, Trash2, Settings2, Globe, Copy, Check as CheckIcon,
+  HeartPulse, Clock, FileCheck, DollarSign, Gavel,
 } from "lucide-react";
 import Link from "next/link";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
@@ -57,6 +58,37 @@ interface Processo {
   situacao: string;
 }
 
+interface HealthScore {
+  score: number;
+  banda: "saudavel" | "atencao" | "risco";
+  componentes: {
+    financeiro: { pontos: number; max: number; receita_atrasada: number; receita_total: number };
+    engajamento: { pontos: number; max: number; dias_desde_ultima_interacao: number | null };
+    processual: { pontos: number; max: number; taxa_exito: number | null; total_com_desfecho: number };
+  };
+}
+
+interface TimelineEvento {
+  tipo: "interacao" | "processo" | "financeiro" | "documento";
+  subtipo: string;
+  titulo: string;
+  detalhe: string | null;
+  data: string;
+}
+
+const TIMELINE_ICONS: Record<TimelineEvento["tipo"], React.ReactNode> = {
+  interacao: <MessageSquare size={12} className="text-blue-500" />,
+  processo: <Gavel size={12} className="text-purple-500" />,
+  financeiro: <DollarSign size={12} className="text-green-500" />,
+  documento: <FileCheck size={12} className="text-afj-gold" />,
+};
+
+const HEALTH_BANDA_CONFIG: Record<HealthScore["banda"], { label: string; bg: string; text: string; border: string }> = {
+  saudavel: { label: "Saudável", bg: "bg-green-50", text: "text-green-700", border: "border-green-200" },
+  atencao: { label: "Atenção", bg: "bg-amber-50", text: "text-amber-700", border: "border-amber-200" },
+  risco: { label: "Risco", bg: "bg-red-50", text: "text-red-700", border: "border-red-200" },
+};
+
 const TIPO_ICONS: Record<string, React.ReactNode> = {
   EMAIL: <Mail size={12} className="text-blue-500" />,
   LIGACAO: <Phone size={12} className="text-green-500" />,
@@ -92,6 +124,8 @@ export default function ClienteDetailPage() {
   const [interactions, setInteractions] = useState<Interaction[]>([]);
   const [contatos, setContatos] = useState<Contato[]>([]);
   const [processos, setProcessos] = useState<Processo[]>([]);
+  const [healthScore, setHealthScore] = useState<HealthScore | null>(null);
+  const [timeline, setTimeline] = useState<TimelineEvento[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<"interacoes" | "contatos" | "financeiro">("interacoes");
   const userRole = useUserStore((s) => s.user?.role);
@@ -130,16 +164,20 @@ export default function ClienteDetailPage() {
     const headers = { Authorization: `Bearer ${token}` };
     setLoading(true);
     try {
-      const [cRes, iRes, pRes, ctRes] = await Promise.all([
+      const [cRes, iRes, pRes, ctRes, hRes, tRes] = await Promise.all([
         fetch(`/api/v1/clients/${id}`, { headers }),
         fetch(`/api/v1/clients/${id}/interactions?limit=50`, { headers }),
         fetch(`/api/v1/processes?client_id=${id}`, { headers }),
         fetch(`/api/v1/clients/${id}/contacts`, { headers }),
+        fetch(`/api/v1/clients/${id}/health-score`, { headers }),
+        fetch(`/api/v1/clients/${id}/timeline?limit=15`, { headers }),
       ]);
       if (cRes.ok) setCliente(await cRes.json());
       if (iRes.ok) setInteractions(await iRes.json());
       if (pRes.ok) setProcessos(await pRes.json());
       if (ctRes.ok) setContatos(await ctRes.json());
+      if (hRes.ok) setHealthScore(await hRes.json());
+      if (tRes.ok) setTimeline(await tRes.json());
     } finally { setLoading(false); }
   }
 
@@ -298,6 +336,17 @@ export default function ClienteDetailPage() {
             )}
           </div>
         </div>
+
+        {/* Navegação contextual: pula direto pros documentos/faturas SÓ deste
+            cliente, sem precisar re-buscar pelo nome nas telas genéricas. */}
+        <div className="flex items-center gap-2 mt-3">
+          <Link href={`/documentos?client_id=${id}`} className="text-xs px-3 py-1.5 rounded-sm border border-afj-cream-dark hover:border-afj-gold/40 hover:bg-afj-cream/30 text-afj-black/70 transition-colors">
+            Documentos deste cliente
+          </Link>
+          <Link href={`/financeiro/faturas?client_id=${id}`} className="text-xs px-3 py-1.5 rounded-sm border border-afj-cream-dark hover:border-afj-gold/40 hover:bg-afj-cream/30 text-afj-black/70 transition-colors">
+            Faturas deste cliente
+          </Link>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
@@ -342,6 +391,78 @@ export default function ClienteDetailPage() {
               ))}
             </div>
           </div>
+
+          {/* Score de saúde do cliente (Fase 207.1) */}
+          {healthScore && (
+            <div className={`rounded-sm border p-4 ${HEALTH_BANDA_CONFIG[healthScore.banda].bg} ${HEALTH_BANDA_CONFIG[healthScore.banda].border}`}>
+              <div className="flex items-center justify-between gap-2 mb-3">
+                <h2 className="font-semibold text-afj-black text-sm flex items-center gap-2">
+                  <HeartPulse size={14} className={HEALTH_BANDA_CONFIG[healthScore.banda].text} />
+                  Saúde do Cliente
+                </h2>
+                <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${HEALTH_BANDA_CONFIG[healthScore.banda].text} ${HEALTH_BANDA_CONFIG[healthScore.banda].bg} border ${HEALTH_BANDA_CONFIG[healthScore.banda].border}`}>
+                  {healthScore.score}/100 · {HEALTH_BANDA_CONFIG[healthScore.banda].label}
+                </span>
+              </div>
+              <div className="space-y-1.5 text-xs text-afj-black/60">
+                <div className="flex justify-between">
+                  <span>Pagamentos em dia</span>
+                  <span className="font-medium text-afj-black">
+                    {healthScore.componentes.financeiro.pontos}/{healthScore.componentes.financeiro.max}
+                    {healthScore.componentes.financeiro.receita_atrasada > 0 && (
+                      <span className="text-red-600"> ({healthScore.componentes.financeiro.receita_atrasada} atrasada{healthScore.componentes.financeiro.receita_atrasada > 1 ? "s" : ""})</span>
+                    )}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Engajamento recente</span>
+                  <span className="font-medium text-afj-black">
+                    {healthScore.componentes.engajamento.pontos}/{healthScore.componentes.engajamento.max}
+                    {healthScore.componentes.engajamento.dias_desde_ultima_interacao !== null && (
+                      <span className="text-afj-black/40"> (última há {healthScore.componentes.engajamento.dias_desde_ultima_interacao}d)</span>
+                    )}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Taxa de êxito processual</span>
+                  <span className="font-medium text-afj-black">
+                    {healthScore.componentes.processual.pontos}/{healthScore.componentes.processual.max}
+                    {healthScore.componentes.processual.taxa_exito !== null && (
+                      <span className="text-afj-black/40"> ({healthScore.componentes.processual.taxa_exito}%)</span>
+                    )}
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Timeline unificada (Fase 211 — proposta de evolução da Fase 209) */}
+          {timeline && timeline.length > 0 && (
+            <div className="afj-card p-4">
+              <h2 className="font-semibold text-afj-black text-sm flex items-center gap-2 mb-3">
+                <Clock size={14} className="text-afj-gold" />
+                Linha do tempo
+              </h2>
+              <div className="space-y-3">
+                {timeline.map((ev, idx) => (
+                  <div key={idx} className="flex items-start gap-2 text-xs">
+                    <div className="mt-0.5 flex-shrink-0">{TIMELINE_ICONS[ev.tipo]}</div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-medium text-afj-black">{ev.titulo}</span>
+                        <span className="text-afj-black/40 flex-shrink-0">
+                          {new Date(ev.data).toLocaleDateString("pt-BR")}
+                        </span>
+                      </div>
+                      {ev.detalhe && (
+                        <p className="text-afj-black/50 truncate">{ev.detalhe}</p>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Processos vinculados */}
           <div className="afj-card p-4">
@@ -544,7 +665,7 @@ export default function ClienteDetailPage() {
                 <div>
                   <div className="flex items-center justify-between mb-1.5">
                     <p className="text-xs font-semibold text-afj-black/70">Faturas</p>
-                    <Link href="/financeiro/faturas" className="text-[11px] text-afj-gold hover:underline">Gerenciar</Link>
+                    <Link href={`/financeiro/faturas?client_id=${id}`} className="text-[11px] text-afj-gold hover:underline">Gerenciar</Link>
                   </div>
                   {financeiro.faturas.length === 0 ? (
                     <p className="text-xs text-afj-black/35 py-2">Nenhuma fatura para este cliente.</p>

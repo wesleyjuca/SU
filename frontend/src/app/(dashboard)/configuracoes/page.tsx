@@ -46,7 +46,30 @@ export default function ConfiguracoesPage() {
 
   useEffect(() => {
     if (!perfilLoaded) loadPerfil();
+    loadNotifPrefs();
   }, []);
+
+  async function loadNotifPrefs() {
+    try {
+      const token = localStorage.getItem("afj_access_token");
+      const res = await fetch("/api/v1/users/me/notification-preferences", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.prefs && Object.keys(data.prefs).length > 0) {
+          setNotifs((prev) => ({ ...prev, ...data.prefs }));
+          return;
+        }
+      }
+    } catch {}
+    // Fase 206.2 — antes da persistência no backend, essas preferências só
+    // existiam no localStorage do navegador. Migra pro backend no próximo save.
+    try {
+      const local = localStorage.getItem("afj_notif_prefs");
+      if (local) setNotifs((prev) => ({ ...prev, ...JSON.parse(local) }));
+    } catch {}
+  }
 
   async function loadPerfil() {
     try {
@@ -96,11 +119,21 @@ export default function ConfiguracoesPage() {
 
   async function saveNotifs() {
     setSaving(true);
-    // Notificações salvas localmente por enquanto
-    localStorage.setItem("afj_notif_prefs", JSON.stringify(notifs));
-    setSaved(true);
-    setTimeout(() => setSaved(false), 3000);
-    setSaving(false);
+    try {
+      const token = localStorage.getItem("afj_access_token");
+      await fetch("/api/v1/users/me/notification-preferences", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ prefs: notifs }),
+      });
+      // Fase 206.2 — persistido no backend agora; mantém o localStorage como
+      // cache instantâneo (evita flash de "tudo ligado" no próximo carregamento).
+      localStorage.setItem("afj_notif_prefs", JSON.stringify(notifs));
+      setSaved(true);
+      setTimeout(() => setSaved(false), 3000);
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function changePassword(e: React.FormEvent) {

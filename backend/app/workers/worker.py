@@ -85,6 +85,13 @@ celery_app.conf.beat_schedule = {
         "task": "app.workers.tasks.deadline_check.scan_daily_publications",
         "schedule": crontab(hour=7, minute=30),
     },
+    # Follow-up de petições protocoladas sem retorno da corte (Fase 205.1,
+    # opt-in por documento) — diário às 7h45, mesma janela dos outros
+    # alertas de prazo/publicação.
+    "check-petition-followups": {
+        "task": "app.workers.tasks.deadline_check.check_petition_followups",
+        "schedule": crontab(hour=7, minute=45),
+    },
     # Limpeza de sessões expiradas (semanal, madrugada de domingo — baixo custo)
     "cleanup-sessions": {
         "task": "app.workers.tasks.session_cleanup.cleanup_expired_sessions",

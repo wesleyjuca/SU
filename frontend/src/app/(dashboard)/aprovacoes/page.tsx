@@ -1,38 +1,79 @@
 "use client";
-import { useState, useEffect } from "react";
-import { CheckCircle } from "lucide-react";
+import { useState, useEffect, useCallback } from "react";
+import { CheckCircle, ArrowLeft } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { ApprovalCard, ApprovalListItem, type Approval } from "@/components/approvals/ApprovalCard";
 
+type Aba = "pendentes" | "resolvidas";
+
 export default function AprovacoesPage() {
-  const [approvals, setApprovals] = useState<Approval[]>([]);
+  const [aba, setAba] = useState<Aba>("pendentes");
+  const [pendentes, setPendentes] = useState<Approval[]>([]);
+  const [resolvidas, setResolvidas] = useState<Approval[]>([]);
   const [selected, setSelected] = useState<Approval | null>(null);
   const [loading, setLoading] = useState(true);
+  // Fase 207.2 — no mobile, lista e detalhe disputavam a mesma altura fixa
+  // da tela (herdada do layout desktop lista+detalhe lado a lado). Esse
+  // estado controla um fluxo "lista → toque → detalhe" só abaixo de `lg`;
+  // no desktop os dois painéis continuam sempre visíveis lado a lado, sem
+  // depender dele.
+  const [mobileDetailOpen, setMobileDetailOpen] = useState(false);
 
-  useEffect(() => {
-    fetchApprovals();
-  }, []);
-
-  async function fetchApprovals() {
-    try {
-      const token = localStorage.getItem("afj_access_token");
-      const res = await fetch("/api/v1/approvals?status=PENDENTE", {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setApprovals(data);
-        if (data.length > 0 && !selected) setSelected(data[0]);
-      }
-    } finally {
-      setLoading(false);
-    }
+  function selecionar(a: Approval) {
+    setSelected(a);
+    setMobileDetailOpen(true);
   }
 
+  const approvals = aba === "pendentes" ? pendentes : resolvidas;
+
+  const fetchPendentes = useCallback(async () => {
+    const token = localStorage.getItem("afj_access_token");
+    const res = await fetch("/api/v1/approvals?status=PENDENTE", {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (res.ok) return (await res.json()) as Approval[];
+    return [];
+  }, []);
+
+  // Fase 205.2 — "Resolvidas": junta APROVADO + REJEITADO (o backend só
+  // filtra por um status por vez) e ordena pela data de resolução mais
+  // recente primeiro.
+  const fetchResolvidas = useCallback(async () => {
+    const token = localStorage.getItem("afj_access_token");
+    const [aprovadasRes, rejeitadasRes] = await Promise.all([
+      fetch("/api/v1/approvals?status=APROVADO&limit=100", { headers: { Authorization: `Bearer ${token}` } }),
+      fetch("/api/v1/approvals?status=REJEITADO&limit=100", { headers: { Authorization: `Bearer ${token}` } }),
+    ]);
+    const [aprovadas, rejeitadas] = await Promise.all([
+      aprovadasRes.ok ? aprovadasRes.json() : [],
+      rejeitadasRes.ok ? rejeitadasRes.json() : [],
+    ]);
+    return [...aprovadas, ...rejeitadas].sort(
+      (a: Approval, b: Approval) => new Date(b.resolved_at || b.created_at).getTime() - new Date(a.resolved_at || a.created_at).getTime()
+    ) as Approval[];
+  }, []);
+
+  useEffect(() => {
+    setLoading(true);
+    setSelected(null);
+    setMobileDetailOpen(false);
+    const carregar = aba === "pendentes" ? fetchPendentes : fetchResolvidas;
+    carregar()
+      .then((data) => {
+        if (aba === "pendentes") setPendentes(data);
+        else setResolvidas(data);
+        if (data.length > 0) setSelected(data[0]);
+      })
+      .finally(() => setLoading(false));
+  }, [aba, fetchPendentes, fetchResolvidas]);
+
   function handleResolved(id: string) {
-    const remaining = approvals.filter((a) => a.id !== id);
-    setApprovals(remaining);
+    const remaining = pendentes.filter((a) => a.id !== id);
+    setPendentes(remaining);
     setSelected(remaining.length > 0 ? remaining[0] : null);
+    // Volta pra lista no mobile — o usuário toca no próximo item da fila em
+    // vez de cair direto no detalhe seguinte sem contexto.
+    setMobileDetailOpen(false);
   }
 
   return (
@@ -40,12 +81,35 @@ export default function AprovacoesPage() {
       <Breadcrumb crumbs={[{ label: "Dashboard", href: "/dashboard" }, { label: "Aprovações" }]} />
       <div className="afj-page-header">
         <div>
-          <h1 className="font-display text-2xl font-semibold text-afj-black">Aprovações Pendentes</h1>
+          <h1 className="font-display text-2xl font-semibold text-afj-black">
+            {aba === "pendentes" ? "Aprovações Pendentes" : "Histórico de Aprovações"}
+          </h1>
           <p className="text-afj-black/50 text-sm">
-            Ações que aguardam validação humana antes de serem executadas
-            {approvals.length > 0 && ` — ${approvals.length} pendente(s)`}
+            {aba === "pendentes"
+              ? `Ações que aguardam validação humana antes de serem executadas${pendentes.length > 0 ? ` — ${pendentes.length} pendente(s)` : ""}`
+              : "Aprovações e rejeições já resolvidas, mais recentes primeiro"}
           </p>
         </div>
+      </div>
+
+      {/* Abas */}
+      <div className="flex items-center gap-1 border-b border-afj-cream-dark -mt-1">
+        {([
+          { key: "pendentes", label: "Pendentes" },
+          { key: "resolvidas", label: "Resolvidas" },
+        ] as const).map((t) => (
+          <button
+            key={t.key}
+            onClick={() => setAba(t.key)}
+            className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
+              aba === t.key
+                ? "border-afj-gold text-afj-gold"
+                : "border-transparent text-afj-black/50 hover:text-afj-black"
+            }`}
+          >
+            {t.label}
+          </button>
+        ))}
       </div>
 
       {loading ? (
@@ -57,27 +121,40 @@ export default function AprovacoesPage() {
       ) : approvals.length === 0 ? (
         <div className="afj-card p-12 text-center">
           <CheckCircle className="mx-auto text-green-500 mb-3" size={40} />
-          <p className="font-semibold text-afj-black">Nenhuma aprovação pendente</p>
-          <p className="text-afj-black/40 text-sm mt-1">Todas as ações dos agentes foram revisadas</p>
+          <p className="font-semibold text-afj-black">
+            {aba === "pendentes" ? "Nenhuma aprovação pendente" : "Nenhuma aprovação resolvida ainda"}
+          </p>
+          <p className="text-afj-black/40 text-sm mt-1">
+            {aba === "pendentes" ? "Todas as ações dos agentes foram revisadas" : "Aprovações e rejeições aparecem aqui depois de resolvidas"}
+          </p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 h-[calc(100vh-200px)]">
-          {/* Lista esquerda */}
-          <div className="lg:col-span-1 overflow-y-auto space-y-2">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 lg:h-[calc(100vh-240px)]">
+          {/* Lista esquerda — escondida no mobile assim que um item é aberto */}
+          <div className={`lg:col-span-1 lg:overflow-y-auto space-y-2 ${mobileDetailOpen ? "hidden lg:block" : ""}`}>
             {approvals.map((a) => (
               <ApprovalListItem
                 key={a.id}
                 approval={a}
                 selected={selected?.id === a.id}
-                onClick={() => setSelected(a)}
+                onClick={() => selecionar(a)}
               />
             ))}
           </div>
 
-          {/* Painel de detalhes direito */}
-          <div className="lg:col-span-2 overflow-y-auto">
+          {/* Painel de detalhes direito — no mobile só aparece após tocar um item */}
+          <div className={`lg:col-span-2 lg:overflow-y-auto ${mobileDetailOpen ? "" : "hidden lg:block"}`}>
             {selected ? (
-              <ApprovalCard approval={selected} onResolved={handleResolved} />
+              <>
+                <button
+                  type="button"
+                  onClick={() => setMobileDetailOpen(false)}
+                  className="lg:hidden mb-3 min-h-[44px] flex items-center gap-1.5 text-sm text-afj-black/60 hover:text-afj-black"
+                >
+                  <ArrowLeft size={15} /> Voltar pra lista
+                </button>
+                <ApprovalCard approval={selected} onResolved={handleResolved} readOnly={aba === "resolvidas"} />
+              </>
             ) : (
               <div className="afj-card p-12 text-center text-afj-black/40">
                 Selecione uma aprovação para revisar

@@ -6,10 +6,12 @@ a melhor linha de atuação baseada em dados reais do processo e jurisprudência
 """
 import time
 from typing import ClassVar
+from sqlalchemy import select, func
 from app.agents.base.agent import BaseAgent
 from app.agents.base.result import AgentResult, AgentStatus
 from app.agents.brain.context import AgentContext
 from app.integrations.anthropic_client import call_claude, AFJ_LEGAL_SYSTEM_PROMPT
+from app.models.process import LegalProcess
 import structlog
 
 log = structlog.get_logger()
@@ -62,6 +64,8 @@ class StrategyAgent(BaseAgent):
         )
 
         ctx_str = self._formatar_contexto(estrategias_anteriores, juris)
+        taxa_exito_area, total_processos_area = await self._historico_exito_area(ctx.tenant_id, area)
+        historico_str = self._formatar_historico_exito(taxa_exito_area, total_processos_area, area)
 
         prompt = f"""ANÁLISE ESTRATÉGICA SOLICITADA
 
@@ -71,6 +75,9 @@ OBJETIVO DO CLIENTE: {objetivo}
 
 FATOS DO CASO:
 {fatos or "Não informados — baseie-se no tipo de ação"}
+
+HISTÓRICO DE ÊXITO DO ESCRITÓRIO NESTA ÁREA:
+{historico_str}
 
 CONTEXTO DISPONÍVEL:
 {ctx_str}
@@ -114,10 +121,40 @@ Produza uma análise estratégica completa com:
                 "analise_estrategica": content,
                 "precedentes_utilizados": len(juris),
                 "estrategias_anteriores_consultadas": len(estrategias_anteriores),
+                "taxa_exito_area": taxa_exito_area,
+                "total_processos_area": total_processos_area,
             },
             tokens_used=input_t + output_t,
             cost_usd=cost,
         )
+
+    async def _historico_exito_area(self, tenant_id, area: str) -> tuple[float | None, int]:
+        """Fase 208.1 — taxa de êxito (EXITO+ACORDO) do próprio escritório nesta
+        área, mesmo critério de `analytics_gestao` (`app/api/v1/system.py`).
+        Consulta focada e isolada (não reaproveita o endpoint cacheado) — só
+        este agente precisa dela."""
+        if not self.db or not tenant_id or not area:
+            return None, 0
+        rows = (await self.db.execute(
+            select(LegalProcess.desfecho, func.count(LegalProcess.id))
+            .where(
+                LegalProcess.tenant_id == tenant_id,
+                LegalProcess.area_direito == area,
+                LegalProcess.desfecho.is_not(None),
+            )
+            .group_by(LegalProcess.desfecho)
+        )).all()
+        total = sum(n for _, n in rows)
+        if not total:
+            return None, 0
+        ganhos = sum(n for d, n in rows if d in ("EXITO", "ACORDO"))
+        return round(100 * ganhos / total, 1), total
+
+    def _formatar_historico_exito(self, taxa: float | None, total: int, area: str) -> str:
+        if taxa is None:
+            return f"Sem processos com desfecho registrado na área {area or 'informada'} ainda — sem histórico interno pra basear a estimativa."
+        aviso = " (amostra pequena — considere com cautela)" if total < 3 else ""
+        return f"{taxa}% de êxito em {total} processo(s) com desfecho registrado na área {area}{aviso}."
 
     def _formatar_contexto(self, estrategias: list, juris: list) -> str:
         partes = []

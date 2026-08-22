@@ -148,10 +148,22 @@ interface RelatorFavorabilidade {
   taxa_favoravel: number;
 }
 
+interface AcordaoRelator {
+  document_id: string;
+  numero_processo?: string;
+  data?: string;
+  orgao_julgador?: string;
+  area_direito?: string;
+  favoravel?: boolean;
+}
+
 function PainelFavorabilidade() {
   const [aberto, setAberto] = useState(false);
   const [dados, setDados] = useState<RelatorFavorabilidade[] | null>(null);
   const [carregando, setCarregando] = useState(false);
+  const [relatorSelecionado, setRelatorSelecionado] = useState<string | null>(null);
+  const [acordaos, setAcordaos] = useState<AcordaoRelator[] | null>(null);
+  const [carregandoDetalhe, setCarregandoDetalhe] = useState(false);
 
   useEffect(() => {
     if (!aberto || dados) return;
@@ -163,6 +175,20 @@ function PainelFavorabilidade() {
       .catch(() => setDados([]))
       .finally(() => setCarregando(false));
   }, [aberto, dados]);
+
+  function abrirPerfilRelator(relator: string) {
+    setRelatorSelecionado(relator);
+    setAcordaos(null);
+    setCarregandoDetalhe(true);
+    const token = localStorage.getItem("afj_access_token");
+    fetch(`/api/v1/rag/jurisprudencia/favorabilidade/${encodeURIComponent(relator)}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => setAcordaos(data?.acordaos ?? []))
+      .catch(() => setAcordaos([]))
+      .finally(() => setCarregandoDetalhe(false));
+  }
 
   return (
     <div className="afj-card p-0 overflow-hidden">
@@ -200,8 +226,13 @@ function PainelFavorabilidade() {
                 </thead>
                 <tbody>
                   {dados.map((r) => (
-                    <tr key={r.relator}>
-                      <td>{r.relator}</td>
+                    <tr
+                      key={r.relator}
+                      onClick={() => abrirPerfilRelator(r.relator)}
+                      className="cursor-pointer hover:bg-afj-cream/60"
+                      title="Ver acórdãos deste relator"
+                    >
+                      <td className="text-afj-gold underline decoration-dotted">{r.relator}</td>
                       <td className="text-right">{r.total}</td>
                       <td className="text-right">{r.favoraveis}</td>
                       <td className="text-right">{(r.taxa_favoravel * 100).toFixed(0)}%</td>
@@ -211,6 +242,65 @@ function PainelFavorabilidade() {
               </table>
             </div>
           )}
+        </div>
+      )}
+
+      {relatorSelecionado && (
+        <div
+          className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4"
+          onClick={() => setRelatorSelecionado(null)}
+        >
+          <div
+            className="afj-card w-full max-w-2xl max-h-[80vh] overflow-y-auto p-6 space-y-3"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="font-display text-base font-semibold text-afj-black">Perfil do relator: {relatorSelecionado}</h3>
+              <button
+                type="button"
+                onClick={() => setRelatorSelecionado(null)}
+                className="text-afj-black/40 hover:text-afj-black text-sm"
+              >
+                Fechar
+              </button>
+            </div>
+            {carregandoDetalhe && <p className="text-xs text-afj-black/40">Carregando...</p>}
+            {!carregandoDetalhe && acordaos && acordaos.length === 0 && (
+              <p className="text-xs text-afj-black/40">Nenhum acórdão encontrado para este relator.</p>
+            )}
+            {!carregandoDetalhe && acordaos && acordaos.length > 0 && (
+              <div className="overflow-x-auto">
+                <table className="afj-table w-full text-sm">
+                  <thead>
+                    <tr>
+                      <th className="text-left">Nº processo</th>
+                      <th className="text-left">Data</th>
+                      <th className="text-left">Órgão julgador</th>
+                      <th className="text-left">Área</th>
+                      <th className="text-right">Favorável</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {acordaos.map((a) => (
+                      <tr key={a.document_id}>
+                        <td>{a.numero_processo || "—"}</td>
+                        <td>{a.data || "—"}</td>
+                        <td>{a.orgao_julgador || "—"}</td>
+                        <td>{a.area_direito || "—"}</td>
+                        <td className="text-right">
+                          {a.favoravel === true ? (
+                            <span className="text-green-700">Sim</span>
+                          ) : a.favoravel === false ? (
+                            <span className="text-red-700">Não</span>
+                          ) : "—"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>

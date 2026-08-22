@@ -88,6 +88,33 @@ async def resetar_tenant_demo(db: AsyncSession) -> dict:
         .values(linked_client_id=None)
     )
 
+    # Fase 202 (achado da Fase 201) — sem isso, documentos aprovados no
+    # tenant demo ficavam órfãos pra sempre em cada reset: o DELETE de
+    # Document abaixo só apaga a linha do Postgres, nunca os chunks
+    # vetoriais no Qdrant (buscas RAG continuariam trazendo conteúdo de
+    # documentos supostamente apagados) nem o blob no S3 (quando
+    # configurado). Lê a lista ANTES do DELETE genérico abaixo apagar as
+    # linhas. Fail-soft (best-effort): uma falha aqui não pode travar o
+    # reset do Postgres, que é a garantia principal desta função.
+    from app.integrations import object_storage
+    from app.rag.auto_ingest import _collection_for
+    from app.rag.ingestion import delete_document_chunks
+
+    documentos = (await db.execute(
+        select(Document.id, Document.tipo, Document.arquivo_storage_key)
+        .where(Document.tenant_id == demo_id)
+    )).all()
+    for doc_id, tipo, storage_key in documentos:
+        try:
+            await delete_document_chunks(_collection_for(tipo), str(doc_id))
+        except Exception as exc:
+            log.warning("demo_reset_qdrant_cleanup_failed", document_id=str(doc_id), error=str(exc))
+        if storage_key and object_storage.is_configured():
+            try:
+                await object_storage.delete_bytes(storage_key)
+            except Exception as exc:
+                log.warning("demo_reset_s3_cleanup_failed", document_id=str(doc_id), error=str(exc))
+
     for modelo in tabelas:
         result = await db.execute(delete(modelo).where(modelo.tenant_id == demo_id))
         apagados[modelo.__tablename__] = result.rowcount
