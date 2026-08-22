@@ -1429,6 +1429,35 @@ Histórico:
   (`test_client_timeline_fase211.py`) — mesma flakiness de pool já
   documentada impediu rodar via pytest nesta sessão, mas a verificação
   HTTP contra o backend real já confirma o comportamento.
+- **Fase 212** (2ª das 8 propostas de evolução da Fase 209): score de
+  qualidade de dado LGPD-aware. Novo `GET /system/analytics/
+  lgpd-qualidade` (ADMIN/SOCIO — mesmo gate sensível de
+  erase_client_data/export_client_data, já que lista clientes com lacuna
+  de conformidade) sinaliza 3 lacunas acionáveis por cliente: (1) status
+  ATIVO sem `lgpd_consent`, (2) `lgpd_consent=True` sem
+  `lgpd_consent_at` (dado inconsistente — impossível provar QUANDO o
+  consentimento foi obtido), (3) titular sem CPF/CNPJ cadastrado. Score
+  0-100 = proporção de lacunas sobre o total possível (clientes × 3
+  checagens). Frontend: card colapsável "Qualidade de dado LGPD" no
+  topo de `/clientes`, visível só pra ADMIN/SOCIO/SUPERADMIN.
+  **Achado operacional desta fase**: o ambiente rodava num container
+  novo (Postgres/Redis/venv/node_modules zerados) — reproduzida a MESMA
+  flakiness de pool asyncpg/pytest-asyncio ("attached to a different
+  loop") mesmo num ambiente 100% fresco, o que descarta a hipótese
+  anterior de "degradação específica desta sessão longa" (Fase 209/210)
+  — é uma incompatibilidade real entre a versão pinada do
+  pytest-asyncio (event loop função-scoped por padrão) e o engine
+  assíncrono do SQLAlchemy sendo um singleton de módulo. Tentativa de
+  fix via `asyncio_default_fixture_loop_scope`/
+  `asyncio_default_test_loop_scope = session` no `pytest.ini` NÃO
+  resolveu (mesmo erro, ponto de falha ligeiramente diferente) —
+  revertida pra não arriscar efeito colateral na suíte sem entender a
+  causa raiz por completo; próxima rodada deve investigar mais fundo
+  (talvez recriar o engine por teste, ou pinar uma versão diferente do
+  pytest-asyncio). Verificado via HTTP real contra Postgres real
+  (contagens de lacunas corretas, score calculado certo, gate de role
+  ADVOGADO→403 confirmado) — mesmo padrão das fases anteriores desde
+  que a flakiness apareceu.
 
 ## Riscos conhecidos / débito técnico
 

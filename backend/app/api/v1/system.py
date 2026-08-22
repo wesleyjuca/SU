@@ -647,6 +647,70 @@ async def analytics_gestao(
     return await _cached(f"gestao:{tid}:{date_from or ''}:{date_to or ''}", 300, compute)
 
 
+@router.get("/analytics/lgpd-qualidade")
+async def analytics_lgpd_qualidade(
+    current_user: User = Depends(require_role("ADMIN", "SOCIO")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Fase 212 (proposta de evolução da Fase 209) — painel de qualidade de
+    dado LGPD-aware: não é um relatório de gestão comum, é sensível a PII
+    (mostra quais clientes têm lacuna de conformidade), por isso restrito a
+    ADMIN/SOCIO — mesmo gate de erase_client_data/export_client_data.
+    Sinaliza 3 lacunas concretas de conformidade, cada uma acionável:
+    (1) cliente ATIVO sem `lgpd_consent` registrado, (2) `lgpd_consent=True`
+    mas sem `lgpd_consent_at` (dado inconsistente — não dá pra provar
+    QUANDO o consentimento foi obtido), (3) titular sem CPF/CNPJ cadastrado
+    (documento de identificação ausente). Cache 5 min como os outros
+    relatórios de /analytics."""
+    from app.models.client import Client
+
+    tid = current_user.tenant_id
+
+    async def compute():
+        clientes = (await db.execute(
+            select(Client.id, Client.nome_completo, Client.tipo, Client.status,
+                   Client.cpf, Client.cnpj, Client.lgpd_consent, Client.lgpd_consent_at)
+            .where(Client.tenant_id == tid)
+        )).all()
+
+        total = len(clientes)
+        sem_consentimento_ativo = []
+        consentimento_sem_data = []
+        sem_documento = []
+        for c in clientes:
+            if c.status == "ATIVO" and not c.lgpd_consent:
+                sem_consentimento_ativo.append({"id": str(c.id), "nome": c.nome_completo})
+            if c.lgpd_consent and not c.lgpd_consent_at:
+                consentimento_sem_data.append({"id": str(c.id), "nome": c.nome_completo})
+            documento_ausente = (c.tipo == "PF" and not c.cpf) or (c.tipo == "PJ" and not c.cnpj)
+            if documento_ausente:
+                sem_documento.append({"id": str(c.id), "nome": c.nome_completo, "tipo": c.tipo})
+
+        com_consentimento = sum(1 for c in clientes if c.lgpd_consent)
+        score = 100 if total == 0 else round(
+            100 * (1 - (len(sem_consentimento_ativo) + len(consentimento_sem_data) + len(sem_documento)) / (total * 3))
+        )
+
+        return {
+            "total_clientes": total,
+            "score_conformidade": max(0, score),
+            "taxa_consentimento": round(100 * com_consentimento / total, 1) if total else None,
+            "lacunas": {
+                "sem_consentimento_ativo": {
+                    "total": len(sem_consentimento_ativo), "clientes": sem_consentimento_ativo[:50],
+                },
+                "consentimento_sem_data": {
+                    "total": len(consentimento_sem_data), "clientes": consentimento_sem_data[:50],
+                },
+                "sem_documento_identificacao": {
+                    "total": len(sem_documento), "clientes": sem_documento[:50],
+                },
+            },
+        }
+
+    return await _cached(f"lgpd-qualidade:{tid}", 300, compute)
+
+
 @router.get("/health/detailed")
 async def health_detailed(current_user: User = Depends(get_current_user)):
     """Health check detalhado com latências — ADMIN/SOCIO/SUPERADMIN.
