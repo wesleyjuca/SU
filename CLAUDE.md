@@ -1213,6 +1213,87 @@ Histórico:
     da Matriz de Riscos, agentes customizados como passo de chain,
     analytics entre filiais) — seguem pro próximo sub-lote, com as 2
     estruturalmente maiores deixadas por último como já planejado.
+- **Fase 208** — terceiro sub-lote das evoluções M/L da Fase 203, a pedido
+  do usuário ("eu escolho a ordem" segue valendo). Pega as 3 propostas que
+  precisavam de mais decisão de produto, guardando as 2 estruturalmente
+  maiores (agentes customizados como passo de chain, analytics entre
+  filiais) pro sub-lote seguinte.
+  - **208.1 — Win-rate histórico no strategy_agent**: `StrategyAgent.
+    execute()` (`app/agents/strategy/strategy_agent.py`) já recebia
+    `area_direito` mas nunca consultava o histórico de êxito do próprio
+    escritório — só jurisprudência via RAG. Novo helper privado
+    `_historico_exito_area()` (consulta direta e isolada em
+    `LegalProcess.desfecho` por tenant+área, mesmo critério EXITO+ACORDO
+    de `analytics_gestao`) injeta uma seção nova no prompt ("HISTÓRICO DE
+    ÊXITO DO ESCRITÓRIO NESTA ÁREA") antes do contexto RAG, e expõe
+    `taxa_exito_area`/`total_processos_area` no retorno do agente pra
+    auditoria/frontend. Amostra pequena (N<3) sinaliza cautela no texto
+    em vez de apresentar o percentual como confiável. Escopo cortado
+    deliberadamente: não adicionou `tribunal`/`tese_id` como inputs novos
+    do agente — só `area_direito`, que já era recebido.
+  - **208.2 — CRM → previsão de caixa**: `Opportunity` já tinha
+    `valor_estimado`/`probabilidade`/`expected_close` e `/crm/funil`
+    (Fase 161) já calculava o pipeline ponderado, só que como total único
+    sem bucket de data — nenhum schema novo foi necessário. Novo `GET
+    /crm/previsao-caixa` (mesmo gate de `/funil`) devolve os próximos 6
+    meses com `pipeline_ponderado` (Opportunity aberta × probabilidade,
+    por `expected_close`) e `receita_prevista` (FinancialEntry RECEITA/
+    PENDENTE, por `data_vencimento`) **separados** — nunca fundidos num
+    único "previsto", pra não confundir estimativa probabilística com
+    receita já comprometida. Frontend: novo card em Relatórios → Gestão
+    (`GestaoCharts.tsx`), self-fetching (independente do filtro de
+    período da página, já que é sempre prospectivo).
+  - **208.3 — Auto-população da Matriz de Riscos de Integridade**:
+    `IntegrityRisk`/`IntegrityReport` já compartilhavam a mesma lista de
+    categorias, mas sem nenhuma ligação automática — e `controles` é
+    campo obrigatório no model, exigindo autoria humana por design. Por
+    isso "auto-população" virou **sugestão pré-preenchida, nunca criação
+    automática** (mesmo espírito do reaper da Fase 191 — nunca decide
+    sozinho por quem tem que decidir): novo `GET /integrity/reports/
+    {id}/suggest-risk` devolve um rascunho (`risco`/`categoria`/
+    `probabilidade`/`impacto` derivados do relato, mais
+    `risco_existente_id` se já houver um risco ATIVO da mesma categoria,
+    pra evitar sugestão redundante) — o `POST /integrity/risks` de
+    criação continua exatamente o mesmo endpoint manual de sempre.
+    Frontend (`etica/page.tsx`): botão "Sugerir risco a partir desta
+    denúncia" em cada relato, que pré-preenche e abre o formulário
+    existente da Matriz (Fase 189.1). **Achado colateral corrigido de
+    quebra** (mesmo arquivo já sendo tocado): `create_risk`/`update_risk`
+    nunca validavam `categoria` contra a lista, ao contrário de
+    `create_report` — mesma classe de inconsistência já corrigida antes
+    (Fase 204.C).
+  - Testes novos: `test_strategy_agent_win_rate_fase208.py` (3 testes —
+    prompt+retorno com taxa de êxito calculada, ausência de histórico
+    sinalizada, amostra pequena avisa cautela no prompt),
+    `test_crm_previsao_caixa_fase208.py` (2 testes — combina pipeline
+    ponderado só de oportunidades abertas com receita só PENDENTE dentro
+    da janela de 6 meses, exclui GANHO/PERDIDO/PAGO/DESPESA/fora-da-
+    janela; tenant sem dados devolve 6 meses zerados) e
+    `test_integrity_suggest_risk_fase208.py` (5 testes — sugestão nunca
+    cria linha na matriz, sinaliza risco ativo existente da mesma
+    categoria, relato de outro tenant não encontrado, `create_risk`/
+    `update_risk` rejeitam categoria inválida com 422), todos Postgres
+    real, mesmo padrão direto-por-função das fases recentes.
+  - Verificação: `ruff check`+`py_compile` limpos nos 3 arquivos backend
+    tocados (`strategy_agent.py`, `crm.py`, `integrity.py`) + 3 arquivos
+    de teste novos; `tsc --noEmit` limpo; `eslint` nos 3 arquivos
+    frontend tocados (`GestaoCharts.tsx`, `etica/page.tsx`,
+    `relatorios/page.tsx` só por import de tipo, sem edição — confirmado
+    via `git diff --stat` vazio) — 1 warning pré-existente de
+    `exhaustive-deps` em `relatorios/page.tsx`, não novo desta fase. Os
+    10 testes novos passam limpos isolados; rodados junto da suíte
+    completa, a mesma flutuação de ERROR/FAILED entre rodadas (pool
+    asyncpg entre event loops do pytest-asyncio + rate-limit de login,
+    documentada desde a Fase 199) reapareceu em arquivos pré-existentes
+    não tocados (`test_auth.py`, `test_demo_login.py`, `test_clients.py`,
+    `test_process_fonte.py`, `test_tenant_user_unique_constraints.py`,
+    entre outros) e também bateu 1 dos testes novos
+    (`test_amostra_pequena_sinaliza_cautela_no_prompt`) só na rodada
+    completa — confirmado não-regressão isolando (passa limpo sozinho).
+  - Não implementadas nesta fase: as 2 propostas M/L estruturalmente
+    maiores (agentes customizados como passo de chain — toca o
+    orchestrator; analytics entre filiais — precisa de design cuidadoso
+    de isolamento cross-tenant), conforme já planejado desde a Fase 206.
 
 ## Riscos conhecidos / débito técnico
 

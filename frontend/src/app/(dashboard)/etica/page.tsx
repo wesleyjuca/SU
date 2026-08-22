@@ -198,6 +198,24 @@ export default function EticaPage() {
     } catch { toast.error("Falha de conexão."); }
   }
 
+  // Fase 208.3 — pré-preenche o formulário da Matriz de Riscos a partir de um
+  // relato, mas NUNCA cria o risco sozinho: o staff ainda revisa/completa os
+  // controles e confirma via "Registrar risco" (mesmo POST manual de sempre).
+  async function sugerirRisco(reportId: string) {
+    try {
+      const res = await fetch(`/api/v1/integrity/reports/${reportId}/suggest-risk`, { headers: authH() });
+      if (!res.ok) { toast.error("Erro ao gerar sugestão de risco."); return; }
+      const d = await res.json();
+      setRiskForm({ risco: d.risco, categoria: d.categoria, probabilidade: d.probabilidade, impacto: d.impacto, controles: "" });
+      setShowRiskForm(true);
+      if (d.risco_existente_id) {
+        toast.warning("Já existe um risco ativo dessa categoria na matriz — revise antes de criar outro.");
+      } else {
+        toast.success("Sugestão pré-preenchida — revise e complete os controles antes de salvar.");
+      }
+    } catch { toast.error("Falha de conexão."); }
+  }
+
   const STATUS_BADGE: Record<string, string> = {
     ABERTO: "bg-red-50 text-red-700 border-red-200",
     EM_ANALISE: "bg-amber-50 text-amber-700 border-amber-200",
@@ -465,9 +483,14 @@ export default function EticaPage() {
                   </div>
                 </div>
                 <p className="text-xs text-afj-black/60 leading-relaxed">{r.descricao}</p>
-                <p className="text-[10px] text-afj-black/35">
-                  Protocolo {r.id.slice(0, 8).toUpperCase()} · {new Date(r.created_at).toLocaleString("pt-BR")}
-                </p>
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <p className="text-[10px] text-afj-black/35">
+                    Protocolo {r.id.slice(0, 8).toUpperCase()} · {new Date(r.created_at).toLocaleString("pt-BR")}
+                  </p>
+                  <button onClick={() => sugerirRisco(r.id)} className="text-[10px] font-medium text-afj-gold hover:underline">
+                    Sugerir risco a partir desta denúncia
+                  </button>
+                </div>
               </div>
             ))}
           </div>

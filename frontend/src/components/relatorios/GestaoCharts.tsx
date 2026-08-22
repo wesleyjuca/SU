@@ -1,9 +1,10 @@
 "use client";
+import { useEffect, useState } from "react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
   PieChart, Pie, Cell,
 } from "recharts";
-import { Trophy, Users, Scale, Gauge, ArrowUp, ArrowDown, Minus } from "lucide-react";
+import { Trophy, Users, Scale, Gauge, ArrowUp, ArrowDown, Minus, TrendingUp } from "lucide-react";
 
 const GOLD = "#B8954A";
 const GREEN = "#16A34A";
@@ -91,6 +92,63 @@ function ComparativoPeriodo({ data, dataAnterior }: { data: GestaoData; dataAnte
   );
 }
 
+interface PrevisaoCaixaMes {
+  mes: string;
+  pipeline_ponderado: number;
+  receita_prevista: number;
+  total: number;
+}
+
+const MESES_ABREV = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"];
+
+// Fase 208.2 — previsão de caixa (CRM ponderado por probabilidade + receita
+// já PENDENTE), independente do filtro de período da página (é sempre
+// prospectiva, "próximos 6 meses" a partir de hoje) — por isso busca os
+// próprios dados em vez de receber via prop como o resto do componente.
+function PrevisaoCaixa() {
+  const [dados, setDados] = useState<PrevisaoCaixaMes[] | null>(null);
+
+  useEffect(() => {
+    const token = localStorage.getItem("afj_access_token");
+    fetch("/api/v1/crm/previsao-caixa", { headers: { Authorization: `Bearer ${token}` } })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => setDados(d?.meses ?? null))
+      .catch(() => setDados(null));
+  }, []);
+
+  const chartData = (dados ?? []).map((m) => {
+    const [, mm] = m.mes.split("-");
+    return { ...m, label: MESES_ABREV[parseInt(mm, 10) - 1] };
+  });
+  const temDados = chartData.some((m) => m.pipeline_ponderado > 0 || m.receita_prevista > 0);
+
+  return (
+    <div className="afj-card p-5">
+      <h3 className="font-semibold text-sm text-afj-black mb-1 flex items-center gap-2">
+        <TrendingUp size={15} className="text-afj-gold" /> Previsão de caixa (próximos 6 meses)
+      </h3>
+      <p className="text-[10px] text-afj-black/35 mb-3">
+        Pipeline ponderado = oportunidades abertas × probabilidade (CRM). Receita prevista = já faturada, aguardando pagamento.
+      </p>
+      {dados === null ? (
+        <Empty msg="Carregando…" />
+      ) : temDados ? (
+        <ResponsiveContainer width="100%" height={220}>
+          <BarChart data={chartData} margin={{ bottom: 4 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#EAE5D8" vertical={false} />
+            <XAxis dataKey="label" tick={{ fontSize: 11, fill: "#6B6B6B" }} axisLine={false} tickLine={false} />
+            <YAxis tickFormatter={(v) => `R$${(v / 1000).toFixed(0)}k`} tick={{ fontSize: 11, fill: "#6B6B6B" }} axisLine={false} tickLine={false} width={55} />
+            <Tooltip content={<MoneyTooltip />} />
+            <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11 }} />
+            <Bar dataKey="pipeline_ponderado" name="Pipeline ponderado" stackId="a" fill={GOLD} radius={[0, 0, 0, 0]} />
+            <Bar dataKey="receita_prevista" name="Receita prevista" stackId="a" fill={NAVY} radius={[2, 2, 0, 0]} />
+          </BarChart>
+        </ResponsiveContainer>
+      ) : <Empty msg="Sem oportunidades abertas com data prevista nem receita pendente nos próximos 6 meses" />}
+    </div>
+  );
+}
+
 export default function GestaoCharts({ data, dataAnterior }: { data: GestaoData; dataAnterior?: GestaoData | null }) {
   const clientes = data.rentabilidade_clientes.map((c) => ({
     ...c, nome: c.cliente.length > 16 ? c.cliente.slice(0, 15) + "…" : c.cliente,
@@ -156,6 +214,9 @@ export default function GestaoCharts({ data, dataAnterior }: { data: GestaoData;
           </ResponsiveContainer>
         ) : <Empty msg="Sem lançamentos financeiros vinculados a clientes" />}
       </div>
+
+      {/* Fase 208.2 — previsão de caixa (CRM + receita pendente) */}
+      <PrevisaoCaixa />
 
       {/* Distribuição de carga por advogado (carga atual, para equilibrar/reatribuir) */}
       <div className="afj-card p-5">

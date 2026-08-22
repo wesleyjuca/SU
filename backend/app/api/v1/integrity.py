@@ -257,6 +257,50 @@ async def resolve_report(
     return _report_to_dict(report)
 
 
+@router.get("/reports/{report_id}/suggest-risk")
+async def suggest_risk_from_report(
+    report_id: str,
+    current_user: User = Depends(require_role("ADMIN", "SOCIO")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Fase 208.3 — rascunho de risco pré-preenchido a partir de um relato,
+    pro staff revisar/editar/confirmar em `POST /integrity/risks` (mesmo
+    endpoint manual de sempre). NUNCA cria a linha sozinho — `controles` é
+    obrigatório no model e exige julgamento humano, então "auto-população"
+    aqui é sugestão, não criação automática (mesmo espírito do reaper de
+    aprovação vencida da Fase 191: nunca decide sozinho por quem tem que
+    decidir)."""
+    report = (await db.execute(
+        select(IntegrityReport).where(
+            IntegrityReport.id == uuid.UUID(report_id),
+            IntegrityReport.tenant_id == current_user.tenant_id,
+        )
+    )).scalar_one_or_none()
+    if not report:
+        raise NotFoundError("Relato", report_id)
+
+    risco_existente = (await db.execute(
+        select(IntegrityRisk.id)
+        .where(
+            IntegrityRisk.tenant_id == current_user.tenant_id,
+            IntegrityRisk.categoria == report.categoria,
+            IntegrityRisk.status == "ATIVO",
+        )
+        .order_by(desc(IntegrityRisk.created_at))
+        .limit(1)
+    )).scalar_one_or_none()
+
+    titulo = report.descricao.strip().splitlines()[0][:200]
+    return {
+        "report_id": str(report.id),
+        "risco": titulo,
+        "categoria": report.categoria,
+        "probabilidade": "MEDIA",
+        "impacto": "MEDIO",
+        "risco_existente_id": str(risco_existente) if risco_existente else None,
+    }
+
+
 # ─── Matriz de Riscos de Integridade — Fase 189.1 ─────────────────────────────
 PROBABILIDADES = ["BAIXA", "MEDIA", "ALTA"]
 IMPACTOS = ["BAIXO", "MEDIO", "ALTO"]
@@ -339,6 +383,8 @@ async def create_risk(
     current_user: User = Depends(require_role("ADMIN", "SOCIO")),
     db: AsyncSession = Depends(get_db),
 ):
+    if body.categoria not in CATEGORIAS_DENUNCIA:
+        raise HTTPException(status_code=422, detail=f"Categoria inválida. Use: {', '.join(CATEGORIAS_DENUNCIA)}")
     if body.probabilidade not in PROBABILIDADES:
         raise HTTPException(status_code=422, detail=f"Probabilidade inválida. Use: {', '.join(PROBABILIDADES)}")
     if body.impacto not in IMPACTOS:
@@ -378,6 +424,8 @@ async def update_risk(
     if not risk:
         raise NotFoundError("Risco", risk_id)
 
+    if body.categoria is not None and body.categoria not in CATEGORIAS_DENUNCIA:
+        raise HTTPException(status_code=422, detail=f"Categoria inválida. Use: {', '.join(CATEGORIAS_DENUNCIA)}")
     if body.probabilidade is not None and body.probabilidade not in PROBABILIDADES:
         raise HTTPException(status_code=422, detail=f"Probabilidade inválida. Use: {', '.join(PROBABILIDADES)}")
     if body.impacto is not None and body.impacto not in IMPACTOS:
