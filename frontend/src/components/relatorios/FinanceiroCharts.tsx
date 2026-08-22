@@ -1,9 +1,10 @@
 "use client";
+import { useState } from "react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
   PieChart, Pie, Cell, AreaChart, Area,
 } from "recharts";
-import { TrendingUp, TrendingDown, DollarSign, BarChart2 } from "lucide-react";
+import { TrendingUp, TrendingDown, DollarSign, BarChart2, Calculator } from "lucide-react";
 
 const GOLD = "#B8954A";
 const GOLD_LIGHT = "#D4AC64";
@@ -37,6 +38,121 @@ export interface FinancialData {
   mensal: { mes: string; receitas: number; despesas: number; saldo: number }[];
   por_categoria: { categoria: string; tipo: string; total: number }[];
   summary: { receitas_pagas: number; receitas_pendentes: number; despesas_pagas: number; despesas_pendentes: number };
+}
+
+const AREAS_DIREITO = ["CIVIL", "TRABALHISTA", "TRIBUTARIO", "PENAL", "PREVIDENCIARIO", "CONSUMIDOR"];
+
+interface HonorariosHistorico {
+  area_direito: string;
+  n: number;
+  media: number | null;
+  mediana: number | null;
+  minimo: number | null;
+  maximo: number | null;
+  amostra_pequena: boolean;
+  mensagem: string | null;
+}
+
+// Fase 215 — comparação de um valor de honorários pretendido contra o que o
+// escritório efetivamente recebeu historicamente na mesma área do direito.
+// Puramente client-side: o valor pretendido nunca é enviado ao backend, só
+// a média/mediana já devolvidas são usadas pra calcular a diferença aqui.
+function SimulacaoHonorarios() {
+  const [area, setArea] = useState("");
+  const [tipoAcao, setTipoAcao] = useState("");
+  const [desfecho, setDesfecho] = useState("");
+  const [pretendido, setPretendido] = useState("");
+  const [resultado, setResultado] = useState<HonorariosHistorico | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  async function buscar(novaArea: string, novoTipoAcao: string, novoDesfecho: string) {
+    if (!novaArea) { setResultado(null); return; }
+    setLoading(true);
+    const token = localStorage.getItem("afj_access_token");
+    const params = new URLSearchParams({ area_direito: novaArea });
+    if (novoTipoAcao) params.set("tipo_acao", novoTipoAcao);
+    if (novoDesfecho) params.set("desfecho", novoDesfecho);
+    const res = await fetch(`/api/v1/financial/honorarios-historico?${params}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+    setResultado(res);
+    setLoading(false);
+  }
+
+  const valorPretendido = parseFloat(pretendido.replace(",", "."));
+  const temComparacao = resultado?.media != null && !isNaN(valorPretendido);
+  const diferenca = temComparacao ? valorPretendido - (resultado!.media as number) : 0;
+  const percentual = temComparacao && resultado!.media ? (diferenca / (resultado!.media as number)) * 100 : 0;
+
+  return (
+    <div className="afj-card p-5">
+      <h3 className="font-semibold text-sm text-afj-black mb-1 flex items-center gap-2">
+        <Calculator size={15} className="text-afj-gold" /> Simulação de honorários vs. histórico real
+      </h3>
+      <p className="text-[10px] text-afj-black/35 mb-3">
+        Compare um valor de honorários pretendido com a média efetivamente recebida pelo escritório nesta área.
+      </p>
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 mb-4">
+        <select
+          value={area}
+          onChange={(e) => { setArea(e.target.value); buscar(e.target.value, tipoAcao, desfecho); }}
+          className="text-xs border border-afj-cream-dark rounded-sm px-2 py-1.5"
+        >
+          <option value="">Área do direito…</option>
+          {AREAS_DIREITO.map((a) => <option key={a} value={a}>{a}</option>)}
+        </select>
+        <input
+          type="text" placeholder="Tipo de ação (opcional)" value={tipoAcao}
+          onChange={(e) => { setTipoAcao(e.target.value); buscar(area, e.target.value, desfecho); }}
+          className="text-xs border border-afj-cream-dark rounded-sm px-2 py-1.5"
+        />
+        <input
+          type="text" placeholder="Desfecho (opcional)" value={desfecho}
+          onChange={(e) => { setDesfecho(e.target.value); buscar(area, tipoAcao, e.target.value); }}
+          className="text-xs border border-afj-cream-dark rounded-sm px-2 py-1.5"
+        />
+        <input
+          type="text" placeholder="Valor pretendido (R$)" value={pretendido}
+          onChange={(e) => setPretendido(e.target.value)}
+          className="text-xs border border-afj-cream-dark rounded-sm px-2 py-1.5"
+        />
+      </div>
+
+      {!area ? (
+        <EmptyState msg="Escolha uma área do direito pra ver o histórico" />
+      ) : loading ? (
+        <EmptyState msg="Carregando…" />
+      ) : !resultado || resultado.n === 0 ? (
+        <EmptyState msg={resultado?.mensagem ?? "Sem histórico pra esta área"} />
+      ) : (
+        <div>
+          {resultado.amostra_pequena && (
+            <p className="text-[11px] text-afj-gold mb-2">{resultado.mensagem}</p>
+          )}
+          <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+            {[
+              { label: "Registros", value: String(resultado.n) },
+              { label: "Média", value: fmt(resultado.media as number) },
+              { label: "Mediana", value: fmt(resultado.mediana as number) },
+              { label: "Mínimo", value: fmt(resultado.minimo as number) },
+              { label: "Máximo", value: fmt(resultado.maximo as number) },
+            ].map(({ label, value }) => (
+              <div key={label}>
+                <p className="text-[10px] text-afj-black/40 uppercase">{label}</p>
+                <p className="text-sm font-semibold text-afj-black">{value}</p>
+              </div>
+            ))}
+          </div>
+          {temComparacao && (
+            <p className={`text-xs mt-3 font-medium ${diferenca >= 0 ? "text-green-600" : "text-red-500"}`}>
+              Valor pretendido está {Math.abs(percentual).toFixed(0)}%{" "}
+              {diferenca >= 0 ? "acima" : "abaixo"} da média histórica.
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default function FinanceiroCharts({ data }: { data: FinancialData }) {
@@ -124,6 +240,8 @@ export default function FinanceiroCharts({ data }: { data: FinancialData }) {
           ) : <EmptyState msg="Sem receitas pagas por categoria" />}
         </div>
       </div>
+
+      <SimulacaoHonorarios />
     </div>
   );
 }
