@@ -4,12 +4,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, or_
 from pydantic import BaseModel
 from datetime import datetime, timezone
+import re
 import uuid
 
 from app.db.base import get_db
 from app.dependencies import get_current_user, require_role
 from app.models.user import User
 from app.models.client import Client, ClientContact, ClientInteraction
+from app.models.gov_registry_lookup import GovRegistryLookup
 from app.core.exceptions import NotFoundError
 from app.core.crypto import decrypt_or_raw
 
@@ -21,6 +23,28 @@ class ConsentCreate(BaseModel):
     finalidade: str
     dados_tratados: list[str]
     aceito: bool
+
+
+async def _lookups_do_titular(
+    db: AsyncSession, tenant_id, cpf_norm: str, cnpj_norm: str,
+) -> list[GovRegistryLookup]:
+    """Fase 220 (achado da Fase 219) — `GovRegistryLookup.client_id`
+    nunca é preenchido (só `POST /clients/validar-documento` cria
+    linhas, sem esse campo), então não dá pra buscar por FK: decifra
+    `documento_consultado` de cada linha do tenant e compara os dígitos
+    normalizados, mesmo caminho que `GET /clients/match` (Fase 181) já
+    usa pra CPF/CNPJ cifrado."""
+    if not cpf_norm and not cnpj_norm:
+        return []
+    rows = (await db.execute(
+        select(GovRegistryLookup).where(GovRegistryLookup.tenant_id == tenant_id)
+    )).scalars().all()
+    matches = []
+    for row in rows:
+        doc_norm = re.sub(r"\D", "", decrypt_or_raw(row.documento_consultado) or "")
+        if doc_norm and doc_norm in (cpf_norm, cnpj_norm):
+            matches.append(row)
+    return matches
 
 
 @router.delete("/clients/{client_id}/data")
@@ -44,6 +68,8 @@ async def erase_client_data(
         raise NotFoundError("Cliente", client_id)
 
     original_name = client.nome_completo
+    cpf_norm = re.sub(r"\D", "", decrypt_or_raw(client.cpf) or "")
+    cnpj_norm = re.sub(r"\D", "", decrypt_or_raw(client.cnpj) or "")
     client.nome_completo = f"[ANONIMIZADO-{client_id[:8]}]"
     client.razao_social = None
     client.cpf = None
@@ -103,6 +129,15 @@ async def erase_client_data(
             opportunity.descricao = "[Conteúdo removido — LGPD art. 18 IV]"
         if opportunity.motivo_perda:
             opportunity.motivo_perda = "[Conteúdo removido — LGPD art. 18 IV]"
+
+    # Fase 220 (achado da Fase 219) — mesma classe de lacuna que 176.3/210
+    # fecharam pra ClientContact/ClientInteraction/Opportunity:
+    # `GovRegistryLookup` (Fase 217, guarda CPF/CNPJ cifrado consultado
+    # contra a SERPRO) sobrevivia ao "esquecimento" inteiro, decifrável.
+    # Sobrescreve em vez de deletar — mesmo espírito das linhas acima.
+    for lookup in await _lookups_do_titular(db, current_user.tenant_id, cpf_norm, cnpj_norm):
+        lookup.documento_consultado = "[REMOVIDO-LGPD]"
+        lookup.resultado_resumo = None
 
     await db.flush()
 
@@ -172,6 +207,14 @@ async def export_client_data(
     )
     opportunities = opportunities_result.scalars().all()
 
+    # Fase 220 (achado da Fase 219) — mesma classe de lacuna fechada acima
+    # em erase_client_data: sem isso, o titular não sabia que suas
+    # consultas de validação de documento (Fase 217) também são dado
+    # pessoal tratado pelo escritório.
+    cpf_norm = re.sub(r"\D", "", decrypt_or_raw(client.cpf) or "")
+    cnpj_norm = re.sub(r"\D", "", decrypt_or_raw(client.cnpj) or "")
+    lookups = await _lookups_do_titular(db, current_user.tenant_id, cpf_norm, cnpj_norm)
+
     from app.models.audit_log import AuditLog
     db.add(AuditLog(
         user_id=current_user.id,
@@ -219,6 +262,14 @@ async def export_client_data(
                 "created_at": o.created_at.isoformat(),
             }
             for o in opportunities
+        ],
+        "consultas_documentais": [
+            {
+                "tipo": lk.tipo_consulta,
+                "resumo": lk.resultado_resumo,
+                "consultado_em": lk.created_at.isoformat(),
+            }
+            for lk in lookups
         ],
     }
 

@@ -118,6 +118,31 @@ async def test_isolamento_cross_tenant_auditoria(cenario, monkeypatch):
     assert rows_outro == []
 
 
+async def test_formato_invalido_rejeitado_sem_bater_serpro_nem_gravar(cenario, monkeypatch):
+    """Fase 220 (achado da Fase 219) — antes desta fase, `body.valor` bruto
+    (sem validar tamanho) era cifrado e gravado direto em
+    `documento_consultado` (String(255)), causando 500 pra input longo.
+    Agora o formato é validado ANTES de bater SERPRO ou tocar o banco."""
+    async def fake_consultar_cpf(cpf):
+        raise AssertionError("consultar_cpf não deveria ser chamado com formato inválido")
+    monkeypatch.setattr(clients_mod, "consultar_cpf", fake_consultar_cpf)
+
+    async with AsyncSessionLocal() as db:
+        resp = await clients_mod.validar_documento(
+            clients_mod.ValidarDocumentoBody(tipo="cpf", valor="1" * 200),
+            current_user=_CurrentUser(cenario["tenant"], cenario["user"]), db=db,
+        )
+    assert resp["valido"] is False
+    assert resp["mensagem"] == "Formato de CPF/CNPJ inválido."
+
+    async with AsyncSessionLocal() as db:
+        from sqlalchemy import select
+        rows = (await db.execute(
+            select(GovRegistryLookup).where(GovRegistryLookup.tenant_id == cenario["tenant"])
+        )).scalars().all()
+    assert rows == []
+
+
 async def test_cep_nao_encontrado_devolve_campos_nulos_nao_erro(cenario, monkeypatch):
     async def fake_consultar_cep(cep):
         return None

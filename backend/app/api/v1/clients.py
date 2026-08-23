@@ -4,8 +4,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, or_, func
 from pydantic import BaseModel
 from typing import Any
+import re
 import uuid
 from datetime import date, datetime, timezone
+import structlog
 
 from app.db.base import get_db
 from app.dependencies import get_current_user, require_role
@@ -17,6 +19,7 @@ from app.models.gov_registry_lookup import GovRegistryLookup
 from app.integrations.serpro.consulta_cpf_cnpj import consultar_cpf, consultar_cnpj
 from app.integrations.publicas.cep_lookup import consultar_cep as _consultar_cep_externa
 
+log = structlog.get_logger()
 router = APIRouter(prefix="/clients", tags=["clients"])
 
 
@@ -197,7 +200,21 @@ async def validar_documento(
     if tipo not in ("cpf", "cnpj"):
         raise HTTPException(status_code=422, detail="tipo deve ser 'cpf' ou 'cnpj'")
 
-    resultado = await (consultar_cpf(body.valor) if tipo == "cpf" else consultar_cnpj(body.valor))
+    # Fase 220 (achado da Fase 219) — normaliza e valida o formato ANTES de
+    # bater SERPRO ou gravar qualquer coisa. Antes disso, `body.valor` bruto
+    # (podendo ter centenas de caracteres colados no campo) era cifrado e
+    # gravado direto em `documento_consultado` (String(255)) sem checagem de
+    # tamanho — 500 garantido em input longo. Também elimina o resto de
+    # formatação (pontos/traço) do que fica auditado.
+    numero = re.sub(r"\D", "", body.valor or "")
+    tamanho_esperado = 11 if tipo == "cpf" else 14
+    if len(numero) != tamanho_esperado:
+        return {
+            "valido": False, "nome_ou_razao_social": None, "situacao_cadastral": None,
+            "mensagem": "Formato de CPF/CNPJ inválido.",
+        }
+
+    resultado = await (consultar_cpf(numero) if tipo == "cpf" else consultar_cnpj(numero))
 
     if resultado is None:
         resposta = {
@@ -211,14 +228,23 @@ async def validar_documento(
         resposta = {"valido": True, "nome_ou_razao_social": nome, "situacao_cadastral": situacao, "mensagem": None}
         resumo = f"{nome or ''} — {situacao or ''}".strip(" —")
 
-    db.add(GovRegistryLookup(
-        tenant_id=current_user.tenant_id,
-        tipo_consulta=tipo.upper(),
-        documento_consultado=encrypt(body.valor) or body.valor,
-        resultado_resumo=resumo,
-        consultado_por=current_user.id,
-    ))
-    await db.commit()
+    # Fase 220 — `encrypt()` cifra o número já normalizado (11-14 dígitos,
+    # nunca mais estoura a coluna). Se a criptografia falhar de verdade
+    # (chave ausente/inválida), pula a gravação da auditoria em vez de cair
+    # pra texto puro — único call site do código que fazia isso antes.
+    documento_cifrado = encrypt(numero)
+    if documento_cifrado:
+        db.add(GovRegistryLookup(
+            tenant_id=current_user.tenant_id,
+            tipo_consulta=tipo.upper(),
+            documento_consultado=documento_cifrado,
+            resultado_resumo=resumo,
+            consultado_por=current_user.id,
+        ))
+        await db.commit()
+    else:
+        log.error("gov_registry_lookup_encrypt_falhou", tipo=tipo)
+
     return resposta
 
 

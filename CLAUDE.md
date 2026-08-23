@@ -1791,6 +1791,58 @@ Histórico:
     a pena um "linter" ou checklist formal pra pegar o padrão "tabela
     nova com `client_id` esquecida pelo LGPD erasure" antes de virar
     achado pela 4ª vez.
+- **Fase 220** — implementação dos 4 achados confirmados na Fase 219, a
+  pedido explícito do usuário ("Fase de correção").
+  - **220.1 — LGPD, `GovRegistryLookup` alcançado pelo esquecimento**:
+    novo helper `_lookups_do_titular()` (`lgpd.py`) decifra
+    `documento_consultado` de cada linha do tenant e compara os dígitos
+    normalizados contra o CPF/CNPJ do titular — mesmo caminho de
+    `GET /clients/match` (Fase 181), já que `GovRegistryLookup.
+    client_id` nunca é preenchido (não dá pra filtrar por FK).
+    `erase_client_data` sobrescreve `documento_consultado`/
+    `resultado_resumo` das linhas encontradas (mesmo espírito de
+    sobrescrita in loco das Fases 176.3/210, não deleta a linha).
+    `export_client_data` ganha a chave `"consultas_documentais"`. **Bug
+    do próprio fix pego durante a verificação empírica**: a primeira
+    versão comparava `client.cpf`/`client.cnpj` diretamente sem
+    decifrar (esses campos são gravados cifrados desde a Fase 149) —
+    corrigido pra `decrypt_or_raw(client.cpf)` antes de normalizar,
+    achado e corrigido antes de virar bug em produção porque o teste de
+    ponta a ponta (criar cliente com CPF real → consultar → esquecer →
+    export) não encontrava a consulta nem antes do esquecimento.
+  - **220.2/220.3 — 500 em `validar-documento` + fallback plaintext**:
+    `POST /clients/validar-documento` agora normaliza e valida o
+    formato (11/14 dígitos) **antes** de bater SERPRO ou gravar
+    qualquer coisa — reproduzido o 500 exato achado pela Fase 219 (input
+    de 200 caracteres) e confirmado que virou `200 {"valido": false,
+    ...}` sem nenhuma linha nova em `gov_registry_lookups`. `encrypt()`
+    agora cifra o número já normalizado (nunca mais estoura
+    `String(255)`); se `encrypt()` falhar de verdade, a linha de
+    auditoria é pulada (log de erro) em vez de cair pra texto puro —
+    fecha o único call site do código que tinha esse fallback.
+  - **220.4 — `GestaoCharts.tsx` key duplicado**: `GET /system/
+    analytics/gestao` (`system.py`) passa a incluir `id` (UUID do
+    usuário) em cada item de `produtividade_advogados`; a tabela de
+    produtividade agora usa `key={a.id}` em vez de `key={a.advogado}`.
+    Confirmado via HTTP real que o tenant de teste (2 usuários
+    "Administrador") devolve `id`s únicos mesmo com nomes duplicados.
+  - Verificado via HTTP real contra Postgres real (mesmo ambiente da
+    própria Fase 219, reiniciado só pra carregar o código novo): os 4
+    fixes reproduzidos de ponta a ponta, replicando exatamente os
+    cenários que a Fase 219 usou pra confirmar cada achado. `ruff`/
+    `py_compile`/`tsc --noEmit`/`eslint` limpos em todos os arquivos
+    tocados. Teste novo
+    (`test_lgpd_erasure_reaches_gov_registry_fase220.py`, mesmo idioma
+    HTTP real de `test_lgpd_erasure_reaches_crm_fase210.py`) e um caso
+    novo em `test_client_document_validation_fase217.py` — ambos batem
+    na mesma flakiness de pool asyncpg/pytest-asyncio documentada desde
+    a Fase 199; o teste LGPD especificamente reproduz o mesmo
+    comportamento de `SKIPPED` do arquivo de controle não tocado
+    (`test_lgpd_erasure_reaches_crm_fase210.py`, que usa a mesma
+    fixture `client`/`auth_headers`) — confirma que não é regressão
+    desta fase, é uma característica pré-existente dessa fixture neste
+    ambiente. Verificação principal via HTTP real, como em toda fase
+    recente.
 
 ## Riscos conhecidos / débito técnico
 

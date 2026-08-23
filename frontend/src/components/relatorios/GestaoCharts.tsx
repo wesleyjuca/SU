@@ -33,7 +33,7 @@ function Empty({ msg }: { msg: string }) {
 export interface GestaoData {
   rentabilidade_clientes: { cliente: string; receita: number; despesa: number; resultado: number }[];
   rentabilidade_processos: { processo: string; resultado: number }[];
-  produtividade_advogados: { advogado: string; processos: number; processos_ativos: number; prazos_pendentes: number; documentos: number; prazos_cumpridos: number }[];
+  produtividade_advogados: { id: string; advogado: string; processos: number; processos_ativos: number; prazos_pendentes: number; documentos: number; prazos_cumpridos: number }[];
   taxa_exito: {
     por_desfecho: Record<string, number>;
     total_com_desfecho: number;
@@ -249,7 +249,7 @@ export default function GestaoCharts({ data, dataAnterior }: { data: GestaoData;
                 <thead><tr><th>Advogado</th><th className="text-right">Ativos</th><th className="text-right">Prazos pend.</th><th className="text-right">Documentos</th><th className="text-right">Prazos ✓</th></tr></thead>
                 <tbody>
                   {data.produtividade_advogados.map((a) => (
-                    <tr key={a.advogado}>
+                    <tr key={a.id}>
                       <td className="font-medium text-afj-black">{a.advogado}</td>
                       <td className="text-right text-afj-black/70">{a.processos_ativos}</td>
                       <td className="text-right text-afj-black/70">{a.prazos_pendentes}</td>
