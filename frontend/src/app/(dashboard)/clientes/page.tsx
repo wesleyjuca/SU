@@ -436,7 +436,6 @@ export default function ClientesPage() {
               )}
               <div>
                 <label className="text-xs text-afj-black/60 block mb-2">Endereço</label>
-                <p className="text-[10px] text-afj-black/35 mb-1">CEP preenche o resto automaticamente, via BrasilAPI (fonte pública, não-governamental)</p>
                 <div className="grid grid-cols-2 gap-2">
                   <input type="text" value={editEndereco.cep ?? ""} onChange={(e) => setEditEndereco({ ...editEndereco, cep: e.target.value })}
                     onBlur={(e) => autofillCep(e.target.value, editEndereco, setEditEndereco)}
@@ -549,7 +548,6 @@ export default function ClientesPage() {
               )}
               <div>
                 <label className="text-xs text-afj-black/60 block mb-2">Endereço</label>
-                <p className="text-[10px] text-afj-black/35 mb-1">CEP preenche o resto automaticamente, via BrasilAPI (fonte pública, não-governamental)</p>
                 <div className="grid grid-cols-2 gap-2">
                   <input type="text" value={endereco.cep ?? ""} onChange={(e) => setEndereco({ ...endereco, cep: e.target.value })}
                     onBlur={(e) => autofillCep(e.target.value, endereco, setEndereco)}
