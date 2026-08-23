@@ -1529,6 +1529,92 @@ Histórico:
   reproduzida de novo mesmo neste ambiente (cross-checada contra
   `test_crm_previsao_caixa_fase208.py`, que falha de forma idêntica),
   verificação principal via HTTP real como nas fases anteriores.
+- **Fase 217** — a pedido do usuário, fora da sequência de propostas de
+  evolução da Fase 209: investigação completa das APIs governamentais do
+  Conecta gov.br (catálogo oficial, `gov.br/conecta/catalogo`) cruzadas
+  contra o sistema, seguida da implementação da única recomendação P1.
+  **Achado operacional relevante desta rodada**: `WebFetch` está
+  bloqueado neste sandbox pra QUALQUER domínio externo (confirmado
+  diretamente contra gov.br e até wikipedia.org, e depois de novo contra
+  `brasilapi.com.br` via `curl` direto — é política de rede da sessão,
+  não específica de gov.br, e não é contornável) — toda a pesquisa do
+  catálogo veio de snippets de `WebSearch`, nunca de leitura direta da
+  documentação oficial completa. Publicado como artefato ("Integração
+  Conecta gov.br") com metodologia, tabela de priorização P0-P3 e
+  descartadas, e nota explícita de confiança por item.
+  - **Achado crítico não relacionado a nova integração**: o Termo de Uso
+    da API Pública do CNJ DataJud (já em produção desde antes desta
+    sessão, `backend/app/integrations/tribunais/cnj.py`) parece vedar
+    "explorar comercialmente a API" — o AFJ é um produto comercial. Não
+    resolvido nesta fase (decisão jurídica, fora do alcance de código) —
+    registrado como pendência abaixo, mesmo padrão da retenção de
+    auditoria (Fase 148).
+  - **GOV-001 verificado e fechado nesta mesma fase** (checagem barata,
+    sem mudança de código): `integrations/dje/comunica.py` bate
+    `https://comunicaapi.pje.jus.br/api/v1/comunicacao` — API REST/JSON
+    real, não raspagem de HTML — confirma que essa integração já
+    existente usa um canal mais legítimo do que o artefato havia
+    hipotetizado como incerto.
+  - **Implementado — SERPRO CPF/CNPJ (única P1 do relatório)**: novo
+    `GET/POST` não, só `POST /clients/validar-documento` (gate
+    `get_current_user`, mesmo nível do resto de `clients.py`) chama
+    `integrations/serpro/consulta_cpf_cnpj.py` (REST puro via httpx, sem
+    SDK, OAuth2 client_credentials com token cacheado — mesmo idioma de
+    `_vertex_access_token`, Fase 195) e grava auditoria em
+    `GovRegistryLookup` (tabela nova, `documento_consultado` criptografado
+    com o mesmo mecanismo de `Client.cpf`/`cnpj`). Fail-soft via
+    `CircuitBreaker(name="serpro")` — sem `SERPRO_API_CONSUMER_KEY`
+    configurada (é o caso de todo ambiente até o usuário contratar a Loja
+    SERPRO), a validação devolve `valido: None` + mensagem, HTTP 200,
+    nunca bloqueia o cadastro do cliente. Base URLs (`config.py`) apontam
+    pro modo trial/sandbox do SERPRO por padrão, não produção.
+  - **Bônus — busca de mais APIs públicas** (pedido explícito do usuário,
+    "sempre que possível"): `Client.endereco_json` nunca teve autofill por
+    CEP em lugar nenhum do frontend (confirmado por grep, zero
+    ocorrências) — novo `POST /clients/consultar-cep` via
+    `integrations/publicas/cep_lookup.py`, usando BrasilAPI
+    (`brasilapi.com.br`, gratuita, sem credencial, agrega Correios/ViaCEP/
+    WideNet com fallback). Deliberadamente em pasta separada de
+    `integrations/serpro/` e rotulada na UI ("via BrasilAPI, fonte pública
+    não-governamental") — não é canal oficial de governo, só atende ao
+    pedido de "API pública que melhore o sistema" com atrito zero (sem
+    contrato, sem credencial). Sem linha de auditoria (não é consulta de
+    identidade pessoal).
+  - Frontend (`clientes/page.tsx`): primeiro `onBlur` do arquivo — CPF/CNPJ
+    mostram sugestão (nome/situação cadastral) abaixo do campo sem nunca
+    travar o submit; CEP autopreenche logradouro/bairro/cidade/UF sem
+    sobrescrever o que o usuário já digitou manualmente.
+  - Verificado via HTTP real contra Postgres real: tabela `gov_registry_
+    lookups` criada corretamente no boot (`create_all`, sem `ALTER TABLE`
+    necessário — tabela nova); fluxo de sucesso (SERPRO monkeypatchado)
+    grava auditoria com documento criptografado (não plaintext) e resumo
+    legível; indisponibilidade (sem credencial configurada) devolve
+    sempre 200 com `valido: None`, nunca 500; isolamento cross-tenant do
+    log de auditoria. **Achado do próprio ambiente de teste**: o proxy de
+    rede deste sandbox bloqueia egress pra `brasilapi.com.br` também (não
+    só gov.br/wikipedia) — confirmado com `curl` direto retornando `403`
+    no túnel — então a consulta de CEP real não pôde ser validada fim-a-
+    fim nesta sessão (só o caminho fail-soft, que funcionou corretamente);
+    Railway (produção) tem egress irrestrito, deve funcionar normalmente,
+    mas vale um smoke-test real assim que deployado. Teste novo
+    (`test_client_document_validation_fase217.py`) com a mesma flakiness
+    de pool asyncpg/pytest-asyncio documentada desde a Fase 199 —
+    reproduzida de novo mesmo neste ambiente (cross-checada contra
+    `test_crm_metas_fase213.py`, que falha de forma idêntica), verificação
+    principal via HTTP real/chamada direta como nas fases anteriores.
+  - **Pendências explícitas, não resolvidas nesta fase** (decisão
+    jurídica/comercial, fora do alcance de código): (1) ler o Termo de Uso
+    completo do DataJud e decidir se o uso comercial atual precisa
+    mudar; (2) obter parecer de base legal LGPD (legítimo interesse +
+    teste de balanceamento documentado) antes de ativar a validação de
+    CPF/CNPJ com uma credencial SERPRO real em produção; (3) contratar a
+    Loja SERPRO e confirmar preço/limites por leitura direta (ficam atrás
+    de login, não confirmados nesta pesquisa). Fase 216 (playbooks de
+    agentes por área) segue planejada e aprovada, mas pausada — retomar
+    depois, mesma ordem "eu escolho a ordem" já estabelecida. Os demais
+    itens P2 do relatório Conecta (Login Único gov.br, benefícios
+    previdenciários, CND, Registro de Referência de Municípios) seguem
+    como propostas não implementadas.
 
 ## Riscos conhecidos / débito técnico
 
@@ -1552,3 +1638,15 @@ de código, por isso ficam só documentados aqui, não implementados:
   de arquivamento (a tabela não aceita `DELETE` direto por causa do trigger)
   é uma decisão que precisa de orientação jurídica do escritório antes de
   qualquer implementação — não decidir um prazo arbitrário sem essa validação.
+- **Termo de Uso da API Pública do CNJ DataJud vs. uso comercial** (achado
+  da Fase 217, pesquisa de APIs governamentais) — o sistema já integra o
+  DataJud (`integrations/tribunais/cnj.py`) desde antes desta sessão pra
+  enriquecer processos com movimentações. Segundo trechos localizados do
+  Termo de Uso oficial (não lido por completo — `WebFetch` bloqueado neste
+  sandbox pra qualquer domínio externo), o texto veda "modificar,
+  distribuir, vender, ou explorar comercialmente a API ou qualquer
+  informação derivada dela". O AFJ é um produto comercial. Precisa de
+  leitura jurídica do PDF completo do termo pra decidir se o uso atual
+  está em conformidade — não decidir unilateralmente sem esse parecer.
+  Mesma classe de pendência que a retenção de auditoria acima: registrada,
+  não resolvida arbitrariamente.

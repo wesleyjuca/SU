@@ -107,6 +107,16 @@ class Settings(BaseSettings):
     PDPJ_OAUTH_CLIENT_ID: str = ""
     PDPJ_OAUTH_CLIENT_SECRET: str = ""
     PDPJ_OAUTH_TOKEN_URL: str = "https://sso.cloud.pje.jus.br/auth/realms/pje/protocol/openid-connect/token"
+    # Fase 217 — Consulta CPF/CNPJ (Loja SERPRO, canal comercial self-service,
+    # fora do Conecta gov.br gratuito). Sem CONSUMER_KEY/SECRET configurados,
+    # a validação de documento simplesmente não roda (fail-soft, nunca bloqueia
+    # cadastro de cliente). Base URLs apontam pro modo trial/sandbox por
+    # padrão — trocar pra produção só depois de um contrato pago ativo.
+    SERPRO_TOKEN_URL: str = "https://gateway.apiserpro.serpro.gov.br/token"
+    SERPRO_API_CONSUMER_KEY: str = ""
+    SERPRO_API_CONSUMER_SECRET: str = ""
+    SERPRO_CPF_BASE_URL: str = "https://gateway.apiserpro.serpro.gov.br/consulta-cpf-df-trial/v1"
+    SERPRO_CNPJ_BASE_URL: str = "https://gateway.apiserpro.serpro.gov.br/consulta-cnpj-df-trial/v2"
     DEFAULT_EMBEDDING_MODEL: str = "text-embedding-3-large"
     EMBEDDING_DIMENSIONS: int = 3072
 

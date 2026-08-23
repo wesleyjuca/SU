@@ -23,6 +23,7 @@ from app.models.jurisprudencia_ingerida import JurisprudenciaIngerida
 from app.models.tese import Tese
 from app.models.agent_prompt import AgentPromptConfig, AgentPromptVersion, AgentAttachment
 from app.models.custom_agent import CustomAgent, CustomAgentVersion
+from app.models.gov_registry_lookup import GovRegistryLookup
 
 __all__ = [
     "Tenant", "TenantConfig",
@@ -52,4 +53,5 @@ __all__ = [
     "AgentPromptVersion",
     "AgentAttachment",
     "CustomAgent", "CustomAgentVersion",
+    "GovRegistryLookup",
 ]
