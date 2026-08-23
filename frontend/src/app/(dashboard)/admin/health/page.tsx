@@ -23,6 +23,11 @@ interface AgentRun {
   started_at: string;
 }
 
+interface ModuleState {
+  state: string;
+  [key: string]: unknown;
+}
+
 interface HealthData {
   status: "operational" | "degraded";
   timestamp: string;
@@ -35,10 +40,17 @@ interface HealthData {
     qdrant: ServiceStatus;
     anthropic: ServiceStatus;
     datajud: ServiceStatus;
+    auth: ServiceStatus;
+    storage: ServiceStatus;
+    notificacoes: ServiceStatus;
   };
   email_enabled: boolean;
   sentry_enabled: boolean;
   recent_agent_runs: AgentRun[];
+  // Fase 223 — nullable: página pode carregar contra um backend ainda não
+  // atualizado (skew de deploy), então nunca assume presença.
+  publicacoes?: ModuleState | null;
+  auditoria?: ModuleState | null;
 }
 
 interface Module {
@@ -129,7 +141,14 @@ const MODULES: Module[] = [
     label: "Publicações / DJe",
     desc: "Comunica/DJEN — captura automática de intimações por OAB",
     icon: Newspaper,
-    getStatus: () => "funcionando",
+    getStatus: (d) => {
+      const p = d.publicacoes;
+      if (!p) return "atencao";
+      if (p.state === "erro") return "erro";
+      if (p.state === "obsoleto") return "atencao";
+      if (p.state === "nunca_executou") return "nao_configurado";
+      return "funcionando";
+    },
     getLatency: () => null,
   },
   {
@@ -137,8 +156,8 @@ const MODULES: Module[] = [
     label: "Autenticação",
     desc: "JWT — tokens de acesso e sessão",
     icon: Lock,
-    getStatus: () => "funcionando",
-    getLatency: () => null,
+    getStatus: (d) => d.services.auth.ok ? "funcionando" : "erro",
+    getLatency: (d) => d.services.auth.latency_ms,
   },
   {
     key: "email",
@@ -161,7 +180,13 @@ const MODULES: Module[] = [
     label: "Auditoria",
     desc: "Log imutável de ações do sistema",
     icon: FileSearch,
-    getStatus: () => "funcionando",
+    getStatus: (d) => {
+      const a = d.auditoria;
+      if (!a) return "atencao";
+      if (a.state === "sem_registros") return "atencao";
+      if (a.state === "obsoleto") return "atencao";
+      return "funcionando";
+    },
     getLatency: () => null,
   },
   {
@@ -169,7 +194,7 @@ const MODULES: Module[] = [
     label: "Notificações Push",
     desc: "Web Push (VAPID) — alertas em tempo real no navegador e no app",
     icon: Bell,
-    getStatus: () => "funcionando",
+    getStatus: (d) => d.services.notificacoes.configured ? "funcionando" : "nao_configurado",
     getLatency: () => null,
   },
   {
@@ -185,7 +210,7 @@ const MODULES: Module[] = [
     label: "Armazenamento",
     desc: "Documentos e arquivos do escritório",
     icon: Archive,
-    getStatus: () => "funcionando",
+    getStatus: (d) => d.services.storage.configured ? "funcionando" : "nao_configurado",
     getLatency: () => null,
   },
 ];
@@ -199,7 +224,7 @@ const STATUS_CONFIG: Record<ModuleStatus, { label: string; bg: string; text: str
   planejado:         { label: "Planejado",          bg: "bg-gray-50",    text: "text-gray-500",   border: "border-gray-200",  icon: Clock },
 };
 
-const PHASES = [
+const PHASES: { name: string; items: string; done: boolean; active?: boolean }[] = [
   { name: "Fundação",                 items: "Auth, Processos, Clientes, Agenda, Documentos", done: true },
   { name: "IA + HITL",                items: "19 agentes (LangGraph), Petições/Contratos com aprovação humana, RAG, BYOK", done: true },
   { name: "Financeiro + Faturamento", items: "Receitas/despesas, inadimplência, faturas a cliente (PDF timbrado)", done: true },
@@ -218,7 +243,10 @@ const PHASES = [
   { name: "Modo confidencial",        items: "Interruptor por escritório: advogado vê só a própria equipe; sócios/gestão veem tudo", done: true },
   { name: "Monitoramento processual", items: "Captura por OAB (Comunica) + enriquecimento e andamentos reais (DataJud) + aviso à equipe + sinal de possível prazo", done: true },
   { name: "Gestão documental",        items: "CRUD completo de documentos (criar/editar/arquivar) + histórico de versões com restauração", done: true },
-  { name: "Integrações externas",     items: "Gateway de pagamento, assinatura digital, WhatsApp — aguardam credenciais", done: false, active: true },
+  { name: "Integrações externas",     items: "Gateway de pagamento (Stripe/Mercado Pago), assinatura digital (Clicksign), WhatsApp (Meta Cloud API) — código pronto, ativação depende de credenciais do escritório", done: true },
+  { name: "Ética & Integridade",      items: "Matriz de Riscos, Treinamentos Obrigatórios e Comitê de Integridade", done: true },
+  { name: "Ambiente de demonstração", items: "Tenant demo público self-serve, resetável, sem efeito externo real", done: true },
+  { name: "Integrações governamentais", items: "SERPRO (validação de CPF/CNPJ), PDPJ (OAuth2), CNJ DataJud enriquecido, BrasilAPI (CEP)", done: true },
 ];
 
 // Conclusão honesta: pilares concluídos + metade dos parciais (integrações
