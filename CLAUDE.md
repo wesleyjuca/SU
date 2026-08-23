@@ -1843,6 +1843,59 @@ Histórico:
     desta fase, é uma característica pré-existente dessa fixture neste
     ambiente. Verificação principal via HTTP real, como em toda fase
     recente.
+- **Fase 221** — reformulação da tela de cadastro de cliente
+  (`/clientes`), a pedido do usuário ("reformule, teste e corrija"),
+  escopo confirmado explicitamente como estrutura+bugs, sem mudar a
+  identidade visual.
+  - **Achado mais grave, encontrado numa leitura completa do arquivo
+    antes de planejar**: o modal de exclusão da lista prometia
+    "anonimização conforme a LGPD", mas `excluirCliente()` chamava
+    `DELETE /clients/{id}` — que só limpa `cpf`/`cnpj`/`email`/
+    `telefone`/`whatsapp` e marca `INATIVO`, deixando `nome_completo`
+    (o nome real da pessoa), `observacoes`, `ClientContact`,
+    `ClientInteraction`, `Opportunity` e a auditoria SERPRO
+    (`GovRegistryLookup`, Fase 217) intactos — desalinhado com o texto
+    do próprio modal e com a página de detalhe do cliente
+    (`clientes/[id]/page.tsx::apagarDados()`), que já chamava o
+    endpoint certo (`DELETE /lgpd/clients/{id}/data`, corrigido a fundo
+    na Fase 220) desde antes. Corrigido: a lista agora aciona o mesmo
+    endpoint da página de detalhe. Botão de excluir ganhou gate
+    `ADMIN`-only no frontend (antes não tinha gate nenhum, e um
+    não-ADMIN clicando batia num 403 silencioso — o endpoint real exige
+    `require_role("ADMIN")` puro).
+  - Mesma classe de bug (falha silenciosa) em `salvarCliente()` (criar)
+    e `excluirCliente()`: nenhum dos dois tratava erro — agora os dois
+    seguem o padrão já certo de `salvarEdicao()` (`try/catch` +
+    `toast.error`). Os 3 fluxos ganharam proteção contra duplo clique
+    (`salvando`, desabilita o botão + texto "Salvando.../Removendo...").
+  - `validarDocumento()` desistia antes de perguntar ao backend quando
+    o CPF/CNPJ tinha menos de 11 dígitos — a mensagem "Formato de
+    CPF/CNPJ inválido." que o backend já devolve desde a Fase 220 nunca
+    chegava a aparecer. Corrigido pra sempre consultar (exceto campo
+    vazio) e mostrar `data.mensagem` em qualquer caso não-`válido`.
+  - Novo `frontend/src/components/clientes/ClienteFormFields.tsx` —
+    componente compartilhado que elimina ~150 linhas de JSX quase
+    idêntico entre os modais "Novo Cliente" e "Editar Cliente"
+    (tipo/razão social/CPF-CNPJ com validação SERPRO, endereço com
+    autofill de CEP, status, consentimento LGPD). Campo "Origem", que
+    só existia no modal de criar sem motivo aparente, passou a existir
+    também no de editar (ganho natural de unificar, não exigiu lógica
+    nova). Modal de editar passou a usar `<form onSubmit>` (antes era
+    só um botão com `onClick`) — Enter agora funciona igual ao de criar.
+  - Verificado via navegador real (Playwright, Chromium do sandbox,
+    `npm run dev` com `API_URL` local já confirmado batendo no backend
+    local): criar cliente com sucesso fecha o modal; CPF de 3 dígitos no
+    blur mostra "Formato de CPF/CNPJ inválido."; campo Origem presente
+    no modal de editar; ADMIN vê e consegue clicar "Remover", a
+    requisição capturada via `page.on("request")` confirma que bate em
+    `/lgpd/clients/{id}/data` (não mais `/clients/{id}`), e consulta
+    direta ao Postgres depois confirma `nome_completo` virou
+    `[ANONIMIZADO-...]` — a mesma prova de esquecimento completo já
+    usada na Fase 220; ADVOGADO (não-ADMIN) não vê nenhum botão de
+    remover na lista, mas continua vendo o de editar. `tsc --noEmit`/
+    `eslint` limpos no arquivo principal e no componente novo (1
+    warning pré-existente de `exhaustive-deps`, já documentado desde
+    fases anteriores, não novo desta fase).
 
 ## Riscos conhecidos / débito técnico
 
