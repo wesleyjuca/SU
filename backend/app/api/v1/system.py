@@ -1467,7 +1467,7 @@ async def brain_assistant(
         resposta = []
         custo = 0.0
         try:
-            async for tipo, dado in responder_stream(db, historico, pergunta):
+            async for tipo, dado in responder_stream(db, historico, pergunta, current_user.id):
                 if tipo == "delta":
                     resposta.append(dado)
                     yield f"data: {json.dumps({'delta': dado}, ensure_ascii=False)}\n\n"

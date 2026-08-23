@@ -2149,6 +2149,80 @@ Histórico:
     definição de chain de verdade, já que `TASK_ROUTE_MAP` sendo só
     código é incompatível com chain autorada pelo usuário), e nós por
     `CustomAgent` individual no Mapa do Cérebro (cosmético).
+- **Fase 226** — usuário reportou "o assistente do Cérebro não está
+  funcionando" e pediu pra verificar se ele usa a IA configurada no
+  sistema. Confirmado: `brain_assistant.py::responder_stream()`
+  chamava `call_llm_stream()` **direto**, sem nunca entrar em
+  `user_ai_creds()` — a mesma classe exata de bug já corrigida uma vez
+  na Fase 204.A para `brain_insights.py` (achado então: "ao contrário
+  de toda outra rota disparadora de IA do sistema, esta não tinha
+  fallback pra IA própria do usuário"), agora reaberta num ponto
+  diferente do código. Confirmado via leitura direta que
+  `call_llm_stream()` já lê `ai_creds_ctx.get()` pra resolver
+  BYOK — só que esse contextvar nunca era setado, porque só
+  `user_ai_creds()` o seta e o Assistente nunca chamava essa função.
+  Na prática: mesmo um SUPERADMIN com IA própria configurada em
+  "Minha IA" nunca conseguia usá-la no Assistente — dependia 100% da
+  `ANTHROPIC_API_KEY`/`GEMINI_API_KEY` central do servidor.
+  - Fix: `responder_stream()` ganhou parâmetro `user_id` (passado pelo
+    endpoint, `current_user.id`) e a chamada a `call_llm_stream()`
+    agora roda dentro de `async with user_ai_creds(creds_db, user_id,
+    "brain_assistant")`, mesmo mecanismo usado por
+    generate_petition/review_document/manage_contract/gerar_insights.
+  - **Achado adicional do próprio fix, corrigido antes de virar bug em
+    produção**: `user_ai_creds()` precisa consultar `AIProviderConfig`
+    no banco — mas a `db` que o endpoint (`system.py::brain_assistant`)
+    passa pra `responder_stream()` vem de `Depends(get_db)`, e como a
+    resposta é um `StreamingResponse`, o FastAPI fecha essa sessão
+    assim que a função do endpoint retorna, ANTES do generator
+    (`responder_stream`) começar a ser consumido de fato — mesma
+    armadilha que o próprio arquivo já documentava pra persistir a
+    resposta do assistente ("sessão nova — o generator roda após o
+    request"). Até este fix isso nunca tinha se manifestado porque
+    nenhum código dentro do generator de fato consultava `db`
+    (`_infra_resumo`/`_rag_docs` recebem `db` mas nunca fazem query
+    com ela). Corrigido abrindo uma sessão própria
+    (`AsyncSessionLocal()`) só pra resolver as credenciais, em vez de
+    reaproveitar a `db` potencialmente já fechada.
+  - Verificado: (a) script direto (Postgres real, `call_llm_stream`
+    monkeypatchado só pra reportar o que `ai_creds_ctx.get()` resolveu)
+    confirma que um SUPERADMIN de teste com BYOK cadastrado agora tem
+    sua própria chave usada dentro do Assistente — antes do fix isso
+    era estruturalmente impossível; (b) HTTP real contra o endpoint SSE
+    (`POST /system/brain/assistant`) como SUPERADMIN real: sem crash de
+    sessão fechada, resposta streamada corretamente, erro real da API
+    Anthropic (401, chave central deste sandbox é placeholder — mesma
+    limitação de ambiente já documentada em toda fase anterior) chega
+    de volta ao cliente via SSE em vez de travar; persistência de
+    conversa/mensagens em `assistant_conversations`/`assistant_messages`
+    confirmada intacta (sem regressão).
+  - **Varredura extra** (motivada pela nota acima, feita na mesma
+    fase): grep de todo `call_llm`/`call_llm_stream`/`call_claude`
+    chamado direto no backend. Os 19 agentes nativos já estão cobertos
+    (todo `agent.run()` já roda dentro de `user_ai_creds()` no
+    orquestrador, `execute_chain_step`); `documents.py` (3 call sites)
+    já estava correto; `users.py` (teste de conexão de uma config
+    específica) usa `ai_creds_ctx.set()` direto de propósito, correto
+    por desenho; `jurisprudencia_sync.py` é uma task Celery Beat
+    genuinamente sem usuário pra atribuir BYOK (fonte pública, sem
+    tenant) — chave central é o design certo, não um bug. **Achou uma
+    3ª ocorrência real**: `services/prazo_sugestao.py::sugerir_prazo()`
+    (usado por `POST /publicacoes/{id}/sugestao-prazo`, o botão de
+    sugestão de IA no modal de triagem) também chamava `call_llm`
+    direto — `db`/`current_user` já estavam disponíveis no endpoint
+    (usados ali mesmo pra `enforce_budget`), só nunca eram repassados
+    pra dentro da função. Corrigido com o mesmo padrão (`db`/`user_id`
+    novos parâmetros, chamada envolvida em `user_ai_creds(db, user_id,
+    "sugestao_prazo")`) — aqui sem precisar de sessão própria como o
+    Assistente, já que `/sugestao-prazo` é uma resposta JSON normal,
+    não um `StreamingResponse` (a `db` de `Depends(get_db)` continua
+    válida durante toda a função). 3 testes existentes
+    (`test_prazo_sugestao.py`) atualizados pra nova assinatura — os 10
+    testes do arquivo passam limpos isolados. Verificado com o mesmo
+    script direto (Postgres real, `call_llm` monkeypatchado só pra
+    reportar `ai_creds_ctx.get()`): um usuário de teste com BYOK
+    cadastrado tem a própria chave usada dentro de `sugerir_prazo()`.
+    Nenhuma 4ª ocorrência encontrada na varredura.
 
 ## Riscos conhecidos / débito técnico
 
