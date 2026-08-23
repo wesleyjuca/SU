@@ -2223,6 +2223,77 @@ Histórico:
     reportar `ai_creds_ctx.get()`): um usuário de teste com BYOK
     cadastrado tem a própria chave usada dentro de `sugerir_prazo()`.
     Nenhuma 4ª ocorrência encontrada na varredura.
+- **Fase 227** — usuário reportou "o Celery não funciona" e pediu pra
+  investigar, validar e corrigir. Investigação (código do Celery em si +
+  boot de produção, sem acesso a log/dashboard do Railway nesta sessão):
+  **o app Celery está correto** — confirmado importando
+  `app.workers.worker` e forçando o carregamento de todos os 13 módulos
+  de `include=[...]` via `celery_app.loader.import_default_modules()`,
+  zero erro, as 14 tasks (12 do `beat_schedule` + `agent_tasks.run_agent`
+  + `ocr_tasks.ocr_document`) registram normalmente. **A causa raiz real
+  está em `backend/start.sh` + `railway.toml`** (deploy Railway de
+  serviço único, web+worker no mesmo container, débito já reconhecido no
+  próprio comentário do script): o Celery subia em background (`&`) sem
+  PID guardado/monitorado, e o script terminava com `exec uvicorn ...`
+  — o `exec` troca o processo do shell pelo do uvicorn, então nada mais
+  observava o Celery depois disso. `railway.toml` só tem
+  `healthcheckPath = "/ping"` (endpoint HTTP do uvicorn) +
+  `restartPolicyType = "ON_FAILURE"` — o Railway só reinicia o container
+  se o healthcheck HTTP falhar ou o processo principal (uvicorn) morrer;
+  **zero visibilidade sobre o Celery**. Se o Celery caísse por qualquer
+  motivo depois do boot (blip de reconexão do Redis, OOM por
+  concorrência com o uvicorn no mesmo container, exceção não tratada no
+  bootstrap), o site continuava respondendo normalmente e o Railway
+  nunca percebia nada errado — as 12 tarefas agendadas (agentes de IA,
+  OCR, alertas de prazo, capturas periódicas) ficavam mortas
+  silenciosamente até o próximo deploy manual. Bate exatamente com o
+  sintoma relatado, sem nenhum erro visível na aplicação web.
+  **Nota explícita**: esta causa raiz é uma hipótese bem fundamentada a
+  partir da leitura do código/config de deploy, não uma confirmação
+  direta via log/dashboard do Railway (esta sessão não tem esse acesso).
+  - **Fix**: `backend/start.sh` ganhou um watchdog POSIX `sh` (sem
+    bashismos — produção roda em `dash`, confirmado via `/bin/sh`).
+    Celery e uvicorn agora sobem os dois em background com PID guardado
+    (`CELERY_PID`/`UVICORN_PID`); um `trap` em `TERM`/`INT` propaga o
+    sinal pros 2 filhos e espera (preserva o graceful shutdown que o
+    `exec` garantia de graça antes — sem isso um redeploy do Railway
+    mataria os filhos sem aviso); um loop de watchdog (`kill -0` a cada
+    10s) religa só o Celery se ele morrer (zero downtime do site) e
+    encerra o script inteiro com `exit 1` se o uvicorn morrer, deixando
+    o `restartPolicyType=ON_FAILURE` já configurado reiniciar o
+    container inteiro — mesmo comportamento de hoje pro caso do uvicorn.
+    Estado ideal de longo prazo (serviços `worker`/`scheduler` dedicados
+    no Railway, separando web de background de vez) segue fora do
+    alcance desta sessão (exige acesso ao dashboard do Railway) —
+    documentado no próprio script.
+  - Verificado com Postgres+Redis reais, `sh start.sh` rodando de
+    verdade (não só leitura de código): (1) os 2 processos sobem
+    normalmente, Celery registra as 12 tasks periódicas + conecta no
+    Redis, uvicorn sobe e fica pronto; (2) `kill -9` só no processo
+    principal do Celery — watchdog detecta a queda (log
+    `[AFJ][WARN] Processo Celery (pid ...) morreu — religando…`) e
+    relança um Celery novo em ~4s, sem tocar uvicorn nem o script; (3)
+    `kill -9` só no uvicorn — script detecta em ~7s
+    (`[AFJ][FATAL] ...— encerrando pra forçar restart do container.`) e
+    sai com código 1 (confirmado explicitamente capturando `$?` do
+    processo), deixando o restart pro Railway; (4) `SIGTERM` no processo
+    do script — trap dispara na hora (`[AFJ] Sinal de encerramento
+    recebido — propagando…`), Celery faz "Warm shutdown", uvicorn
+    "Shutting down"/"Application shutdown complete", e todo o processo
+    termina de forma limpa em ~7-8s (nenhum órfão, nenhum travamento —
+    uma suspeita inicial de que o SIGTERM não estava propagando se
+    mostrou, ao reexaminar com uma janela de espera maior, apenas um
+    teste anterior que checou cedo demais, não um bug real).
+    `shellcheck` não disponível neste sandbox — revisão manual cuidadosa
+    do script POSIX aplicada no lugar. **Limitação conhecida, não
+    corrigida nesta fase** (fora do escopo do sintoma reportado): um
+    `kill -9` no processo principal do Celery pode deixar processos
+    filhos já forkados (pool de workers) órfãos, sem serem religados
+    nem sinalizados pelo trap (que só conhece o PID principal capturado
+    em `$!`) — observado incidentalmente durante o teste (2), não
+    investigado a fundo por ser um modo de crash atípico (o caso comum
+    é OOM-killer, que mata o cgroup inteiro, ou exceção não tratada, que
+    tipicamente encerra o pool de forma mais limpa).
 
 ## Riscos conhecidos / débito técnico
 
