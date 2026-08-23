@@ -139,6 +139,59 @@ async def erase_client_data(
         lookup.documento_consultado = "[REMOVIDO-LGPD]"
         lookup.resultado_resumo = None
 
+    # Fase 228 (4ª ocorrência da mesma classe de lacuna — 176.3→210→220
+    # acima) — 3 tabelas confirmadas sobrevivendo ao "esquecimento" numa
+    # rodada de teste geral, cada uma reproduzida empiricamente (criar
+    # cliente com CPF real → embutir nos campos abaixo → esquecer →
+    # confirmar que o dado original ainda aparece).
+    #
+    # ProcessParty (Fase 179) tem client_id + nome/cpf_cnpj PRÓPRIOS em
+    # texto puro (nunca cifrados, ao contrário de Client.cpf/cnpj) — sem
+    # tenant_id próprio, escopo por join em LegalProcess (mesmo padrão de
+    # _get_parte_do_tenant, processes.py). cpf_cnpj vira None (como
+    # Client.cpf/cnpj), nome vira placeholder (como Client.nome_completo).
+    from app.models.process import LegalProcess, ProcessParty
+    parties_result = await db.execute(
+        select(ProcessParty)
+        .join(LegalProcess, LegalProcess.id == ProcessParty.process_id)
+        .where(
+            ProcessParty.client_id == uuid.UUID(client_id),
+            LegalProcess.tenant_id == current_user.tenant_id,
+        )
+    )
+    for party in parties_result.scalars().all():
+        party.nome = f"[ANONIMIZADO-{client_id[:8]}]"
+        party.cpf_cnpj = None
+
+    # FinancialEntry.descricao e BillingInvoice.descricao/.itens são texto
+    # livre que pode conter nome/CPF do titular (lançamentos e faturas de
+    # honorários). valor/itens[].valor são preservados — não são PII, e
+    # apagar quebraria o total de uma fatura já emitida.
+    from app.models.financial import FinancialEntry, BillingInvoice
+    financial_entries_result = await db.execute(
+        select(FinancialEntry).where(
+            FinancialEntry.client_id == uuid.UUID(client_id),
+            FinancialEntry.tenant_id == current_user.tenant_id,
+        )
+    )
+    for entry in financial_entries_result.scalars().all():
+        entry.descricao = "[Conteúdo removido — LGPD art. 18 IV]"
+
+    invoices_result = await db.execute(
+        select(BillingInvoice).where(
+            BillingInvoice.client_id == uuid.UUID(client_id),
+            BillingInvoice.tenant_id == current_user.tenant_id,
+        )
+    )
+    for invoice in invoices_result.scalars().all():
+        if invoice.descricao:
+            invoice.descricao = "[Conteúdo removido — LGPD art. 18 IV]"
+        if invoice.itens:
+            invoice.itens = [
+                {**item, "descricao": "[Conteúdo removido — LGPD art. 18 IV]"}
+                for item in invoice.itens
+            ]
+
     await db.flush()
 
     # Registra auditoria (tenant-scoped — antes nascia sem tenant_id e sumia do
@@ -215,6 +268,36 @@ async def export_client_data(
     cnpj_norm = re.sub(r"\D", "", decrypt_or_raw(client.cnpj) or "")
     lookups = await _lookups_do_titular(db, current_user.tenant_id, cpf_norm, cnpj_norm)
 
+    # Fase 228 — mesmas 3 tabelas alcançadas em erase_client_data acima;
+    # export mostra o dado real (roda antes de qualquer esquecimento).
+    from app.models.process import LegalProcess, ProcessParty
+    parties_result = await db.execute(
+        select(ProcessParty)
+        .join(LegalProcess, LegalProcess.id == ProcessParty.process_id)
+        .where(
+            ProcessParty.client_id == uuid.UUID(client_id),
+            LegalProcess.tenant_id == current_user.tenant_id,
+        )
+    )
+    parties = parties_result.scalars().all()
+
+    from app.models.financial import FinancialEntry, BillingInvoice
+    financial_entries_result = await db.execute(
+        select(FinancialEntry).where(
+            FinancialEntry.client_id == uuid.UUID(client_id),
+            FinancialEntry.tenant_id == current_user.tenant_id,
+        )
+    )
+    financial_entries = financial_entries_result.scalars().all()
+
+    invoices_result = await db.execute(
+        select(BillingInvoice).where(
+            BillingInvoice.client_id == uuid.UUID(client_id),
+            BillingInvoice.tenant_id == current_user.tenant_id,
+        )
+    )
+    invoices = invoices_result.scalars().all()
+
     from app.models.audit_log import AuditLog
     db.add(AuditLog(
         user_id=current_user.id,
@@ -270,6 +353,35 @@ async def export_client_data(
                 "consultado_em": lk.created_at.isoformat(),
             }
             for lk in lookups
+        ],
+        "partes_processo": [
+            {
+                "processo_id": str(p.process_id),
+                "tipo": p.tipo,
+                "nome": p.nome,
+                "cpf_cnpj": p.cpf_cnpj,
+                "polo": p.polo,
+            }
+            for p in parties
+        ],
+        "lancamentos_financeiros": [
+            {
+                "descricao": e.descricao,
+                "valor": str(e.valor),
+                "status": e.status,
+                "data_vencimento": e.data_vencimento.isoformat() if e.data_vencimento else None,
+            }
+            for e in financial_entries
+        ],
+        "faturas": [
+            {
+                "numero": inv.numero,
+                "descricao": inv.descricao,
+                "itens": inv.itens,
+                "valor_total": str(inv.valor_total) if inv.valor_total is not None else None,
+                "status": inv.status,
+            }
+            for inv in invoices
         ],
     }
 

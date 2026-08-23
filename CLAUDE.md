@@ -2425,6 +2425,95 @@ Histórico:
     custom_agent); se o probe do Celery for corrigido, reconfirmar que
     `/admin/health` reflete o estado real (não mais "timeout" com Celery
     saudável).
+- **Fase 229** — usuário pediu pra corrigir os 3 achados confirmados da
+  Fase 228, sem selecionar um subconjunto ("corrigir os 3").
+  - **229.1 — LGPD, 4ª ocorrência fechada** (`backend/app/api/v1/
+    lgpd.py`): `erase_client_data`/`export_client_data` ganham
+    `ProcessParty` (nome/CPF **em texto puro**, nunca cifrados —
+    escopo por join em `LegalProcess` já que a tabela não tem
+    `tenant_id` próprio, mesmo padrão de `_get_parte_do_tenant`),
+    `FinancialEntry.descricao` e `BillingInvoice.descricao`/`.itens`
+    (valor de cada item preservado — não é PII, apagar quebraria o
+    total de uma fatura já emitida; reatribuição da lista inteira em
+    vez de mutação in-place, já que SQLAlchemy não detecta mutação de
+    JSONB sem `MutableList`/`flag_modified`). Decisões de escopo
+    deliberadas, documentadas no código: não expandido pra pegar
+    `ProcessParty` com `client_id NULL` mas `cpf_cnpj` batendo com o
+    titular (ao contrário de `GovRegistryLookup`, aqui `client_id` É
+    preenchido pelo fluxo normal — comparação por texto puro entre
+    fontes de importação heterogêneas tem risco real de
+    falso-positivo/negativo, não é um fix trivial); não criptografado
+    `ProcessParty.nome`/`cpf_cnpj` at rest nesta fase (mudança maior,
+    própria — migração/backfill, mesma classe de esforço que a
+    criptografia de `Client.cpf`/`cnpj` foi no passado). Novo teste
+    `test_lgpd_erasure_reaches_process_financial_fase228.py` (3 casos,
+    um por tabela) — bate na mesma flakiness de pool asyncpg/
+    pytest-asyncio documentada desde a Fase 199 (confirmado que
+    NENHUMA diferença: até um teste pré-existente e não tocado,
+    `test_lgpd_erasure_reaches_crm_fase210.py`, falha de forma
+    idêntica rodando sozinho neste ambiente agora — não é regressão).
+    Verificação real via HTTP direto (Postgres real): as 3 tabelas
+    scrubadas corretamente após `DELETE /lgpd/clients/{id}/data`,
+    `valor`/`itens[].valor` preservados, export não vaza o dado
+    original em nenhuma das 3 seções novas (`partes_processo`,
+    `lancamentos_financeiros`, `faturas`).
+  - **229.2 — HITL, `requires_approval` travado** (`backend/app/
+    services/chain_resume.py:65-73`): o branch de retorno antecipado
+    (gate era o último passo da chain) ganhou `agent_run.
+    requires_approval = False` dentro do guard já existente, mesmo
+    padrão de comentário da Fase 174.7 que já cobria os outros 2
+    branches de finalização. Teste unitário estendido
+    (`test_resume_noop_when_gate_was_last_step`,
+    `test_chain_resume.py`) — setando `requires_approval = True` antes
+    da chamada (senão o teste passava mesmo com o bug) e afirmando
+    `False` depois. Reconfirmado também com o cenário mais realista já
+    usado na própria Fase 228 (chain de 3 gates, 2 nativos forçados +
+    1 `custom_agent`, script do scratchpad reexecutado): `requires_
+    approval` agora vira `False` corretamente no final. **Fora de
+    escopo, documentado como observação separada**: o mesmo branch (e
+    o branch FAILED de `_run_remaining_steps`) não chama
+    `_publish_completion` (push via websocket) — gap pré-existente,
+    mais amplo que este bug específico; misturar aqui arriscaria
+    consertar só pela metade. Fica pra decisão futura.
+  - **229.3 — probe de saúde do Celery, causa raiz REDIAGNOSTICADA**
+    (`backend/app/services/brain_infra.py`): a hipótese da Fase 228
+    (contenção de thread pool sob `asyncio.to_thread`) foi testada
+    primeiro (executor dedicado só pro probe) e **não resolveu** —
+    confirmado empiricamente que `celery.ok` continuava `false` mesmo
+    com o executor isolado. Instrumentação de tempo direto no código
+    real revelou a causa verdadeira: `_inspect_celery_sync` faz 4
+    round-trips SEQUENCIAIS (`ping`/`active`/`scheduled`/`stats`, cada
+    um um broadcast+collect via kombu/Redis com seu próprio timeout) —
+    medido em ~2.1s CADA UM mesmo com o worker respondendo rápido
+    (confirmado: com timeout menor o pong chega em 0.4-1.3s: o tempo
+    perto do timeout configurado é o próprio loop de coleta do kombu,
+    não lentidão real do worker). 4 × ~2.1s soma ~8.5s medido
+    diretamente, sempre estourando o orçamento de 4s compartilhado com
+    as outras sondas — não depende de thread vs. loop, é aritmética.
+    Fix: timeout por chamada reduzido de 2.0 pra 1.0 (folga generosa
+    sobre o 0.4-1.3s observado) + orçamento externo PRÓPRIO pro probe
+    do Celery (`_CELERY_PROBE_TIMEOUT = 8.0`, não o `_PROBE_TIMEOUT`
+    genérico de 4s usado pelas sondas async-nativas de round-trip
+    único). O executor dedicado (`ThreadPoolExecutor(max_workers=1)`)
+    foi mantido mesmo não sendo a causa raiz — inofensivo, isola o
+    probe de qualquer contenção futura no executor padrão. Sem teste
+    automatizado (bug de latência/ambiente real, não testável com
+    fake) — verificado com 5 chamadas HTTP reais consecutivas contra
+    `GET /system/brain/infra` e `GET /system/health/detailed`
+    (`celery.ok: true` consistente, workers corretamente listados) E
+    contra o caminho da task periódica do Celery Beat
+    (`checar_infra_periodico`, que roda `coletar_infra()` DE DENTRO de
+    um worker Celery, não do uvicorn — confirma que o fix não introduz
+    nenhum problema de fork/thread aninhado nesse contexto também):
+    `succeeded in 4.1s: {'checks': 4, 'alertas': 0, ...}`, sem alerta
+    falso de infra indisponível.
+  - `ruff check`/`py_compile` limpos nos 5 arquivos tocados (3 backend
+    + 2 de teste). Verificação principal via HTTP real contra
+    Postgres+Redis+Celery+uvicorn reais (mesmo padrão de toda fase
+    recente) — a suíte pytest bateu na mesma flakiness de pool
+    asyncpg/pytest-asyncio já documentada desde a Fase 199, confirmada
+    como não-regressão (teste pré-existente não tocado falha de forma
+    idêntica no mesmo ambiente).
 
 ## Riscos conhecidos / débito técnico
 
