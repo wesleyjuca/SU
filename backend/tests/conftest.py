@@ -12,7 +12,12 @@ async def client():
 
 @pytest.fixture
 def test_user():
-    return {"email": "admin@afjadvogados.com.br", "password": "Admin@123"}
+    # Fase 228 — achado da Fase 222: este e-mail (".com.br") não batia com
+    # nenhum dos 2 usuários ADMIN reais do seed (admin@afj.com.br,
+    # admin@afjadvogados.com, sem ".br") — todo teste dependente de
+    # `auth_headers` pulava silenciosamente com "Login failed" neste
+    # ambiente, independente da fase, desde pelo menos a Fase 222.
+    return {"email": "admin@afj.com.br", "password": "Admin@123"}
 
 
 @pytest.fixture
