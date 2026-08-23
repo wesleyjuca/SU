@@ -1684,6 +1684,113 @@ Histórico:
   excluída pelo filtro. `tsc --noEmit`/`eslint` limpos (0 warnings antes
   e depois — arquivo não tinha nenhum warning pré-existente pra
   cross-checar).
+- **Fase 219** — rodada de teste geral (ambiente real: Postgres+Redis+
+  Celery worker+uvicorn+frontend `npm run dev` com `API_URL` local,
+  confirmado batendo no backend local via log em tempo real — não
+  produção). Primeira rodada desde a Fase 209 a cobrir as Fases 210-218
+  (a 209 só tinha coberto até a 208) — cada uma delas tinha sido
+  verificada isoladamente no momento da implementação, nunca em
+  conjunto. Reconfirmação independente: os 4 fixes da Fase 210 (índices,
+  filtro `client_id` em `/financial`, `bulk-update` reescrito,
+  `erase_client_data` alcançando `Opportunity`) — todos OK. Interação
+  entre fases nunca testada antes: um `generate_strategy` disparado via
+  HTTP real → Celery real → orquestrador real → `StrategyAgent.execute()`
+  (não a chamada direta em Python que os próprios testes da Fase 216
+  usavam) — confirmado que o caminho de produção completo chega até a
+  injeção do playbook sem exceção, falhando só no limite esperado (401
+  da Anthropic, sem chave real neste sandbox) — nunca verificado por
+  esse caminho antes.
+  - **Achado confirmado empiricamente (não hipótese)**: `erase_client_data`/
+    `export_client_data` (`lgpd.py`) nunca alcançam `GovRegistryLookup`
+    (Fase 217) — mesma classe de lacuna já fechada 2 vezes antes (Fase
+    176.3 pra `ClientContact`/`ClientInteraction`, Fase 210 pra
+    `Opportunity`). Reproduzido de ponta a ponta: criou cliente com CPF
+    real, gerou uma consulta real (`gov_registry_lookups`), "esqueceu" o
+    cliente via `DELETE /lgpd/clients/{id}/data`, e o CPF **continuou
+    decifrável** (`decrypt_or_raw`) na tabela de auditoria depois do
+    esquecimento. Achado mais fundo do que a hipótese original:
+    `GovRegistryLookup.client_id` é uma **coluna morta** — o único
+    caminho que cria linhas (`POST /clients/validar-documento`) nunca a
+    preenche — então nem um filtro `WHERE client_id=` funcionaria sem
+    reescrever a busca pelo padrão decifra-e-compara já usado em
+    `GET /clients/match` (Fase 181). Terceira ocorrência da mesma classe
+    de lacuna (176.3 → 210 → esta) e segunda ocorrência de "coluna FK
+    morta, nunca escrita" nesta sessão (a primeira foi `Approval.
+    assignee_id`, achada durante o planejamento da Fase 218) — padrão
+    recorrente que vale a pena vigiar em toda tabela nova com `client_id`.
+  - **Achado real, confirmado empiricamente**: `POST /clients/
+    validar-documento` devolve 500 de forma reprodutível quando `valor`
+    passa de ~100-125 caracteres — `GovRegistryLookup.documento_
+    consultado` é `String(255)`, mas o valor bruto (não normalizado)
+    é cifrado (Fernet, ~57 bytes + inflação base64) *antes* de qualquer
+    validação de tamanho, e só depois disso o número de dígitos é
+    checado (`len(numero) != 11` já teria descartado, mas tarde demais
+    — o INSERT já falhou). Confirmado por busca binária ao vivo: 100
+    chars → 200 OK, 130 chars → 500. Backend se recupera limpo depois
+    (rollback funciona), não é um bug de sessão travada, só um 500
+    garantido em qualquer input razoavelmente longo colado no campo.
+  - **Achado de design, confirmado por grep**: o mesmo endpoint usa
+    `encrypt(body.valor) or body.valor` — único call site de `encrypt()`
+    em todo o código com fallback pra texto puro (todos os outros —
+    `clients.py` linhas 116/118/281, `integration_hub.py`, `ai_oauth.py`,
+    `users.py` — deixam `encrypt()` falhar como `None`, nunca caem pra
+    plaintext). Não disparável nos testes feitos (a criptografia nunca
+    falhou), mas é uma regressão silenciosa esperando uma condição rara
+    (ex. `ENCRYPTION_KEY` ausente) pra vazar CPF/CNPJ em texto puro numa
+    tabela pensada pra ser sempre cifrada.
+  - **Achado de design (não urgente)**: `/clients/validar-documento` cai
+    no rate-limit genérico (200 req/min por IP), não no tratamento
+    especial de custo por chamada que `agents_trigger`/
+    `brain_assistant`/`documents_generate` já têm — inerte hoje (SERPRO
+    não configurado em lugar nenhum), mas vira ao mesmo tempo um vetor de
+    abuso de custo E um oráculo de validade de CPF/CNPJ em escala assim
+    que uma credencial real for configurada.
+  - **Achado real, não relacionado às fases desta rodada** (pego durante
+    o walkthrough Playwright da aba Gestão de `/relatorios`):
+    `GestaoCharts.tsx` usa `key={a.advogado}` (nome de exibição) na
+    tabela de "Produtividade por advogado" — React acusou chave
+    duplicada porque o tenant `afj` deste ambiente tem 2 usuários de
+    teste chamados "Administrador" e 2 chamados "Advogado" (resíduo de
+    seeds antigos). O bug é real independente do resíduo: dois
+    colaboradores reais com o mesmo nome completo colidiriam do mesmo
+    jeito em produção — a chave deveria ser `User.id`, não `full_name`.
+  - **Varredura cross-tenant dedicada nos 7 endpoints novos desde a Fase
+    213** (nunca feita antes, cada endpoint só tinha sido testado
+    isoladamente): `/crm/metas`, `/clients/{id}/dossie-pdf`,
+    `/financial/honorarios-historico`, `/playbooks`, `/clients/
+    validar-documento` (+ tabela `gov_registry_lookups`), `/clients/
+    consultar-cep`, e o reuso de `/approvals`/`/notifications` em
+    `/minha-area` — **todos confirmados isolados**, sem vazamento,
+    testado com dois tenants reais (`afj`/`demo`) e IDs reais, não só
+    leitura de código.
+  - **Walkthrough real do frontend via Playwright** (bloqueio de plan
+    mode em subagentes que recorreu em rodadas passadas — Fases 178/201
+    — não ocorreu desta vez) cobrindo as 6 telas novas desde a Fase 211
+    que nunca tinham sido percorridas visualmente: `/agentes`
+    (playbooks — salva e persiste após reload), `/minha-area` (6 stat
+    cards, empty states corretos), `/clientes` (CPF/CNPJ e CEP falham
+    de forma graciosa sem SERPRO/egress externo configurados),
+    `/clientes/funil` (widget de metas), `/relatorios` (simulação de
+    honorários com dado real), `/clientes/{id}` (dossiê PDF baixa de
+    verdade, PDF válido). Todas as 6 vieram limpas.
+  - Segurança da integração externa nova (SERPRO/BrasilAPI, Fase 217):
+    SSRF limpo, vazamento de credencial em log limpo, circuit breaker
+    global consistente com o padrão já estabelecido pras outras fontes
+    (não é bug novo) — os 2 achados reais (500 por tamanho de input,
+    fallback plaintext) já estão registrados acima.
+  - **Fora do foco desta rodada, deixado pra trás de propósito**: a
+    investigação mais profunda da flakiness pytest-asyncio/asyncpg
+    (causa raiz já identificada na Fase 212, fix tentado e revertido) —
+    não haveria tempo pra fazer isso com o cuidado que merece nesta
+    mesma rodada.
+  - Nenhuma correção feita nesta fase (metodologia padrão) — decisão do
+    usuário sobre quais achados viram fase nova. **Próxima rodada deve**:
+    se os achados do `GovRegistryLookup`/`validar-documento` forem
+    corrigidos, reconfirmar com o mesmo teste de ponta a ponta usado
+    aqui (criar→consultar→esquecer→tentar decifrar); considerar se vale
+    a pena um "linter" ou checklist formal pra pegar o padrão "tabela
+    nova com `client_id` esquecida pelo LGPD erasure" antes de virar
+    achado pela 4ª vez.
 
 ## Riscos conhecidos / débito técnico
 
