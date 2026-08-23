@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { Play, Loader2, XCircle, Sparkles, Plus, CheckCircle2, Circle, AlertCircle } from "lucide-react";
+import { Play, Loader2, XCircle, Sparkles, Plus, CheckCircle2, Circle, AlertCircle, BookOpen } from "lucide-react";
 import { AgentStatusCard } from "@/components/agents/AgentStatusCard";
 import { AgentDetailDrawer } from "@/components/agents/AgentDetailDrawer";
 import { ProposeCustomAgentModal } from "@/components/agents/ProposeCustomAgentModal";
@@ -119,6 +119,13 @@ export default function AgentesPage() {
   const user = useUserStore((s) => s.user);
   const isSuperadmin = user?.role === "SUPERADMIN";
   const podePropoAgente = ["ADMIN", "SOCIO", "SUPERADMIN"].includes(user?.role ?? "");
+  // Fase 216 — gate próprio (não reaproveita podePropoAgente, que é sobre
+  // um assunto diferente: propor agente customizado).
+  const podeEditarPlaybook = ["ADMIN", "SOCIO", "GESTOR"].includes(user?.role ?? "");
+  const [playbooks, setPlaybooks] = useState<{ id: string; area_direito: string; texto: string }[]>([]);
+  const [areaSelecionada, setAreaSelecionada] = useState("CIVIL");
+  const [textoPlaybook, setTextoPlaybook] = useState("");
+  const [salvandoPlaybook, setSalvandoPlaybook] = useState(false);
   const [detailAgent, setDetailAgent] = useState<string | null>(null);
   const [mostrarPropor, setMostrarPropor] = useState(false);
   const [customAgents, setCustomAgents] = useState<CustomAgent[]>([]);
@@ -286,6 +293,38 @@ export default function AgentesPage() {
     carregarCustomAgents();
   }, []);
 
+  // Fase 216 — playbooks de agentes por área.
+  async function carregarPlaybooks() {
+    try {
+      const data = await api.get<{ id: string; area_direito: string; texto: string }[]>("/playbooks");
+      setPlaybooks(data);
+    } catch {
+      // fail-soft: seção de playbooks simplesmente não aparece
+    }
+  }
+
+  useEffect(() => {
+    carregarPlaybooks();
+  }, []);
+
+  useEffect(() => {
+    const atual = playbooks.find((p) => p.area_direito === areaSelecionada);
+    setTextoPlaybook(atual?.texto ?? "");
+  }, [areaSelecionada, playbooks]);
+
+  async function salvarPlaybook() {
+    setSalvandoPlaybook(true);
+    try {
+      await api.post("/playbooks", { area_direito: areaSelecionada, texto: textoPlaybook });
+      await carregarPlaybooks();
+      toast.success("Orientação salva.");
+    } catch {
+      toast.error("Erro ao salvar orientação. Tente novamente.");
+    } finally {
+      setSalvandoPlaybook(false);
+    }
+  }
+
   return (
     <div className="max-w-7xl mx-auto space-y-6">
       <Breadcrumb crumbs={[{ label: "Dashboard", href: "/dashboard" }, { label: "Agentes IA" }]} />
@@ -434,6 +473,62 @@ export default function AgentesPage() {
                 placeholder="backend/app/..., frontend/src/..."
                 className="w-full border border-afj-cream-dark rounded-md px-3 py-2 text-sm focus:outline-none focus:border-afj-gold bg-white"
               />
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Fase 216 — Playbooks de agentes por área */}
+      <div className="afj-card-premium p-5">
+        <h2 className="font-semibold text-sm text-afj-black mb-3 flex items-center gap-2">
+          <BookOpen size={14} className="text-afj-gold" />
+          Playbooks por Área
+        </h2>
+        <p className="text-xs text-afj-black/50 mb-3">
+          Orientação/checklist do escritório, injetada automaticamente na análise estratégica (&quot;Gerar Estratégia&quot;) sempre que a área bater.
+        </p>
+        <div className="space-y-3">
+          <select
+            value={areaSelecionada}
+            onChange={(e) => setAreaSelecionada(e.target.value)}
+            className="border border-afj-cream-dark rounded-md px-3 py-2 text-sm text-afj-black bg-white focus:outline-none focus:border-afj-gold"
+          >
+            {["CIVIL", "TRABALHISTA", "TRIBUTARIO", "PENAL", "PREVIDENCIARIO", "CONSUMIDOR"].map((a) => (
+              <option key={a} value={a}>{a}</option>
+            ))}
+          </select>
+          <textarea
+            value={textoPlaybook}
+            onChange={(e) => setTextoPlaybook(e.target.value)}
+            readOnly={!podeEditarPlaybook}
+            placeholder={podeEditarPlaybook ? "Ex: sempre checar prescrição antes de propor a tese principal..." : "Nenhuma orientação cadastrada pra esta área."}
+            rows={3}
+            className={`w-full border border-afj-cream-dark rounded-md px-3 py-2 text-sm focus:outline-none focus:border-afj-gold ${podeEditarPlaybook ? "bg-white" : "bg-afj-cream/40"}`}
+          />
+          {podeEditarPlaybook && (
+            <button
+              onClick={salvarPlaybook}
+              disabled={salvandoPlaybook}
+              className="btn-afj-primary rounded-md disabled:opacity-50"
+            >
+              {salvandoPlaybook ? "Salvando..." : "Salvar orientação"}
+            </button>
+          )}
+          {playbooks.length > 0 && (
+            <div className="pt-2 border-t border-afj-cream-dark">
+              <p className="text-[10px] uppercase tracking-wide text-afj-black/40 mb-1.5">Áreas com orientação cadastrada</p>
+              <div className="flex flex-wrap gap-1.5">
+                {playbooks.map((p) => (
+                  <button
+                    key={p.id}
+                    onClick={() => setAreaSelecionada(p.area_direito)}
+                    className="text-xs px-2 py-1 rounded-full bg-afj-cream border border-afj-cream-dark hover:border-afj-gold transition-colors"
+                    title={p.texto.slice(0, 120)}
+                  >
+                    {p.area_direito}
+                  </button>
+                ))}
+              </div>
             </div>
           )}
         </div>

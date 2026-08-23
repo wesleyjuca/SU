@@ -12,6 +12,7 @@ from app.agents.base.result import AgentResult, AgentStatus
 from app.agents.brain.context import AgentContext
 from app.integrations.anthropic_client import call_claude, AFJ_LEGAL_SYSTEM_PROMPT
 from app.models.process import LegalProcess
+from app.models.agent_playbook import AgentAreaPlaybook
 import structlog
 
 log = structlog.get_logger()
@@ -66,6 +67,7 @@ class StrategyAgent(BaseAgent):
         ctx_str = self._formatar_contexto(estrategias_anteriores, juris)
         taxa_exito_area, total_processos_area = await self._historico_exito_area(ctx.tenant_id, area)
         historico_str = self._formatar_historico_exito(taxa_exito_area, total_processos_area, area)
+        playbook_texto = await self._playbook_area(ctx.tenant_id, area)
 
         prompt = f"""ANÁLISE ESTRATÉGICA SOLICITADA
 
@@ -78,6 +80,9 @@ FATOS DO CASO:
 
 HISTÓRICO DE ÊXITO DO ESCRITÓRIO NESTA ÁREA:
 {historico_str}
+
+ORIENTAÇÃO INTERNA DO ESCRITÓRIO PARA ESTA ÁREA:
+{playbook_texto or "Nenhuma orientação específica cadastrada pra esta área."}
 
 CONTEXTO DISPONÍVEL:
 {ctx_str}
@@ -123,6 +128,7 @@ Produza uma análise estratégica completa com:
                 "estrategias_anteriores_consultadas": len(estrategias_anteriores),
                 "taxa_exito_area": taxa_exito_area,
                 "total_processos_area": total_processos_area,
+                "playbook_aplicado": bool(playbook_texto),
             },
             tokens_used=input_t + output_t,
             cost_usd=cost,
@@ -149,6 +155,17 @@ Produza uma análise estratégica completa com:
             return None, 0
         ganhos = sum(n for d, n in rows if d in ("EXITO", "ACORDO"))
         return round(100 * ganhos / total, 1), total
+
+    async def _playbook_area(self, tenant_id, area: str) -> str | None:
+        """Fase 216 — orientação editável por ADMIN/SOCIO/GESTOR
+        (AgentAreaPlaybook), injetada como prática interna do escritório
+        pra esta área. None quando não configurado — nunca quebra o agente."""
+        if not self.db or not tenant_id or not area:
+            return None
+        return (await self.db.execute(
+            select(AgentAreaPlaybook.texto)
+            .where(AgentAreaPlaybook.tenant_id == tenant_id, AgentAreaPlaybook.area_direito == area)
+        )).scalar_one_or_none()
 
     def _formatar_historico_exito(self, taxa: float | None, total: int, area: str) -> str:
         if taxa is None:

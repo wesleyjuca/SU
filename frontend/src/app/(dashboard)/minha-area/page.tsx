@@ -3,11 +3,17 @@ import { useState, useEffect } from "react";
 import Link from "next/link";
 import {
   Briefcase, Scale, CalendarClock, Newspaper, AlertTriangle,
-  ChevronRight, Loader2, Users2,
+  ChevronRight, Loader2, Users2, ShieldCheck, Bell,
 } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
-import { useUserStore } from "@/store";
+import { useUserStore, useNotificationStore } from "@/store";
+import { useNotifications } from "@/hooks/useNotifications";
+import { PriorityBadge } from "@/components/approvals/ApprovalCard";
 import type { Processo } from "@/types";
+
+// Fase 218 — ecos de ProcessDeadline/Approval já mostrados nos cards de
+// prazos/aprovações desta mesma página; sem excluir, apareceriam 2-3x.
+const TIPOS_NOTIFICACAO_ECO = ["PRAZO_VENCENDO", "APROVACAO_PENDENTE"];
 
 interface MeuPrazo {
   id: string;
@@ -32,6 +38,16 @@ interface MinhaIntimacao {
   tipo_comunicacao: string | null;
   status: string;
 }
+
+interface MinhaAprovacao {
+  id: string;
+  titulo: string;
+  descricao: string | null;
+  prioridade: string;
+  expires_at: string | null;
+  created_at: string;
+}
+
 
 function diasPara(data: string | null): number | null {
   if (!data) return null;
@@ -58,7 +74,16 @@ export default function MinhaAreaPage() {
   const [prazos, setPrazos] = useState<MeuPrazo[]>([]);
   const [processos, setProcessos] = useState<Processo[]>([]);
   const [intimacoes, setIntimacoes] = useState<MinhaIntimacao[]>([]);
+  const [aprovacoes, setAprovacoes] = useState<MinhaAprovacao[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // Fase 218 — o store global já é mantido fresco por useNotifications()
+  // no layout do dashboard; não precisa de fetch próprio aqui.
+  const { notifications } = useNotificationStore();
+  const { markNotificationRead } = useNotifications();
+  const notificacoesRelevantes = notifications.filter(
+    (n) => !TIPOS_NOTIFICACAO_ECO.includes(n.tipo ?? "")
+  );
 
   useEffect(() => {
     const token = localStorage.getItem("afj_access_token");
@@ -66,14 +91,16 @@ export default function MinhaAreaPage() {
     async function fetchAll() {
       setLoading(true);
       try {
-        const [rP, rProc, rInt] = await Promise.all([
+        const [rP, rProc, rInt, rApr] = await Promise.all([
           fetch("/api/v1/processes/agenda?dias=7&mine=true", { headers }),
           fetch("/api/v1/processes?mine=true", { headers }),
           fetch("/api/v1/publicacoes?status=NOVA&mine=true", { headers }),
+          fetch("/api/v1/approvals?status=PENDENTE&limit=50", { headers }),
         ]);
         if (rP.ok) setPrazos(await rP.json());
         if (rProc.ok) setProcessos(await rProc.json());
         if (rInt.ok) setIntimacoes(await rInt.json());
+        if (rApr.ok) setAprovacoes(await rApr.json());
       } finally {
         setLoading(false);
       }
@@ -96,13 +123,13 @@ export default function MinhaAreaPage() {
             <Briefcase size={22} className="text-afj-gold" /> Minha Área{primeiroNome ? ` — ${primeiroNome}` : ""}
           </h1>
           <p className="text-afj-black/45 text-sm mt-1">
-            Seu dia de trabalho: prazos da semana, processos sob sua responsabilidade e intimações a triar — somente o que é seu (responsável ou equipe).
+            Seu dia de trabalho: prazos da semana, processos sob sua responsabilidade e intimações a triar (somente o que é seu, responsável ou equipe), além das aprovações pendentes do escritório e suas notificações recentes.
           </p>
         </div>
       </div>
 
       {/* Resumo */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-6 gap-4">
         <div className="afj-stat-card">
           <p className="text-[11px] uppercase tracking-wider text-afj-black/45 font-semibold">Prazos hoje/atraso</p>
           <p className={`text-2xl font-display font-bold mt-1 ${hoje.length > 0 ? "text-red-600" : "text-afj-black"}`}>{loading ? "—" : hoje.length}</p>
@@ -118,6 +145,14 @@ export default function MinhaAreaPage() {
         <div className="afj-stat-card">
           <p className="text-[11px] uppercase tracking-wider text-afj-black/45 font-semibold">Intimações a triar</p>
           <p className={`text-2xl font-display font-bold mt-1 ${intimacoes.length > 0 ? "text-amber-600" : "text-afj-black"}`}>{loading ? "—" : intimacoes.length}</p>
+        </div>
+        <div className="afj-stat-card">
+          <p className="text-[11px] uppercase tracking-wider text-afj-black/45 font-semibold">Aprovações pendentes</p>
+          <p className={`text-2xl font-display font-bold mt-1 ${aprovacoes.length > 0 ? "text-amber-600" : "text-afj-black"}`}>{loading ? "—" : aprovacoes.length}</p>
+        </div>
+        <div className="afj-stat-card">
+          <p className="text-[11px] uppercase tracking-wider text-afj-black/45 font-semibold">Notificações não lidas</p>
+          <p className="text-2xl font-display font-bold text-afj-black mt-1">{notificacoesRelevantes.filter((n) => !n.lida).length}</p>
         </div>
       </div>
 
@@ -179,6 +214,72 @@ export default function MinhaAreaPage() {
                     </Link>
                   </li>
                 ))}
+              </ul>
+            )}
+          </div>
+
+          {/* Aprovações pendentes — Fase 218 */}
+          <div className="afj-card p-0 overflow-hidden">
+            <div className="afj-section-header flex items-center justify-between px-4 pt-4">
+              <span className="flex items-center gap-2"><ShieldCheck size={16} className="text-afj-gold" /> Aprovações pendentes</span>
+              <Link href="/aprovacoes" className="text-xs text-afj-gold hover:underline flex items-center gap-0.5">Ver todas <ChevronRight size={12} /></Link>
+            </div>
+            {aprovacoes.length === 0 ? (
+              <p className="text-sm text-afj-black/40 px-4 pb-5">Nenhuma aprovação pendente no escritório. ✓</p>
+            ) : (
+              <ul className="divide-y divide-afj-cream-dark/60">
+                {aprovacoes.slice(0, 8).map((a) => (
+                  <li key={a.id}>
+                    <Link href="/aprovacoes" className="flex items-center justify-between gap-3 px-4 py-3 hover:bg-afj-cream/60 transition-colors">
+                      <div className="min-w-0">
+                        <p className="text-sm text-afj-black/80 truncate">{a.titulo}</p>
+                        {a.descricao && <p className="text-xs text-afj-black/40 mt-0.5 truncate">{a.descricao}</p>}
+                      </div>
+                      <span className="shrink-0"><PriorityBadge prioridade={a.prioridade} /></span>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
+          {/* Notificações recentes — Fase 218 */}
+          <div className="afj-card p-0 overflow-hidden">
+            <div className="afj-section-header flex items-center px-4 pt-4">
+              <span className="flex items-center gap-2"><Bell size={16} className="text-afj-gold" /> Notificações recentes</span>
+            </div>
+            {notificacoesRelevantes.length === 0 ? (
+              <p className="text-sm text-afj-black/40 px-4 pb-5">Nenhuma notificação recente. ✓</p>
+            ) : (
+              <ul className="divide-y divide-afj-cream-dark/60">
+                {notificacoesRelevantes.slice(0, 8).map((n) => {
+                  const conteudo = (
+                    <div className="min-w-0">
+                      <p className={`text-sm truncate ${n.lida ? "text-afj-black/60" : "text-afj-black font-medium"}`}>{n.titulo}</p>
+                      {n.corpo && <p className="text-xs text-afj-black/40 mt-0.5 truncate">{n.corpo}</p>}
+                    </div>
+                  );
+                  return (
+                    <li key={n.id}>
+                      {n.link ? (
+                        <Link
+                          href={n.link}
+                          onClick={() => !n.lida && markNotificationRead(n.id)}
+                          className="flex items-center justify-between gap-3 px-4 py-3 hover:bg-afj-cream/60 transition-colors"
+                        >
+                          {conteudo}
+                        </Link>
+                      ) : (
+                        <button
+                          onClick={() => !n.lida && markNotificationRead(n.id)}
+                          className="w-full text-left flex items-center justify-between gap-3 px-4 py-3 hover:bg-afj-cream/60 transition-colors"
+                        >
+                          {conteudo}
+                        </button>
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
             )}
           </div>
