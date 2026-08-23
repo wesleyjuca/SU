@@ -74,6 +74,8 @@ export default function ClientesPage() {
   const [editEndereco, setEditEndereco] = useState<Endereco>(ENDERECO_VAZIO);
   const [form, setForm] = useState({ tipo: "PF", nome_completo: "", email: "", telefone: "", whatsapp: "", cpf: "", cnpj: "", status: "PROSPECTO", origem: "", lgpd_consent: false });
   const [endereco, setEndereco] = useState<Endereco>(ENDERECO_VAZIO);
+  const [docSugestao, setDocSugestao] = useState<string | null>(null);
+  const [editDocSugestao, setEditDocSugestao] = useState<string | null>(null);
   const [view, setView] = useState<"table" | "grid">(() => {
     if (typeof window !== "undefined") {
       return (localStorage.getItem("clientes_view") as "table" | "grid") ?? "grid";
@@ -143,6 +145,52 @@ export default function ClientesPage() {
     if (res.ok) { setDeletingId(null); fetchClientes(0, false); }
   }
 
+  // Fase 217 — valida/enriquece CPF ou CNPJ contra a Loja SERPRO no blur do
+  // campo. Nunca bloqueia o cadastro: `data.valido` pode vir `null` quando a
+  // validação está indisponível, e a sugestão só aparece quando há dado real.
+  async function validarDocumento(tipo: "cpf" | "cnpj", valor: string, setSugestao: (s: string | null) => void) {
+    if (!valor || valor.replace(/\D/g, "").length < 11) { setSugestao(null); return; }
+    try {
+      const token = localStorage.getItem("afj_access_token");
+      const res = await fetch("/api/v1/clients/validar-documento", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ tipo, valor }),
+      });
+      if (!res.ok) { setSugestao(null); return; }
+      const data = await res.json();
+      setSugestao(data.valido && data.nome_ou_razao_social
+        ? `${data.nome_ou_razao_social}${data.situacao_cadastral ? ` — ${data.situacao_cadastral}` : ""}`
+        : null);
+    } catch { setSugestao(null); }
+  }
+
+  // Fase 217 — autofill de endereço a partir do CEP (BrasilAPI, fonte
+  // pública gratuita, não-governamental). Só preenche campos ainda vazios,
+  // nunca sobrescreve o que o usuário já digitou.
+  async function autofillCep(cep: string, atual: Endereco, setEnd: (e: Endereco) => void) {
+    if (!cep || cep.replace(/\D/g, "").length !== 8) return;
+    try {
+      const token = localStorage.getItem("afj_access_token");
+      const res = await fetch("/api/v1/clients/consultar-cep", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ cep }),
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.logradouro || data.cidade) {
+        setEnd({
+          ...atual,
+          logradouro: atual.logradouro || data.logradouro || "",
+          bairro: atual.bairro || data.bairro || "",
+          cidade: atual.cidade || data.cidade || "",
+          uf: atual.uf || data.uf || "",
+        });
+      }
+    } catch { /* fail-soft — endereço continua editável manualmente */ }
+  }
+
   async function salvarCliente(e: React.FormEvent) {
     e.preventDefault();
     const token = localStorage.getItem("afj_access_token");
@@ -176,7 +224,7 @@ export default function ClientesPage() {
             <Filter size={15} />Funil
           </Link>
           <ViewToggle view={view} onChange={setView} />
-          <button onClick={() => setShowModal(true)} className="btn-afj-primary rounded-sm flex items-center gap-2">
+          <button onClick={() => { setShowModal(true); setDocSugestao(null); }} className="btn-afj-primary rounded-sm flex items-center gap-2">
             <Plus size={15} />Novo Cliente
           </button>
         </div>
@@ -273,7 +321,7 @@ export default function ClientesPage() {
                 <div className="flex items-center gap-2">
                   {!c.lgpd_consent && <span className="text-xs text-amber-600">⚠ LGPD</span>}
                   <Link href={`/clientes/${c.id}`} className="text-afj-black/30 hover:text-afj-gold transition-colors" aria-label="Ver detalhes"><ExternalLink size={12} /></Link>
-                  <button onClick={() => { setEditingId(c.id); setEditForm({ nome_completo: c.nome_completo, email: c.email ?? "", telefone: c.telefone ?? "", whatsapp: c.whatsapp ?? "", razao_social: c.razao_social ?? "", cpf: c.cpf ?? "", cnpj: c.cnpj ?? "", observacoes: c.observacoes ?? "", status: c.status, lgpd_consent: c.lgpd_consent, tipo: c.tipo }); setEditEndereco({ ...ENDERECO_VAZIO, ...(c.endereco_json ?? {}) }); }} className="text-afj-black/30 hover:text-afj-gold transition-colors" aria-label="Editar cliente"><Pencil size={12} /></button>
+                  <button onClick={() => { setEditingId(c.id); setEditForm({ nome_completo: c.nome_completo, email: c.email ?? "", telefone: c.telefone ?? "", whatsapp: c.whatsapp ?? "", razao_social: c.razao_social ?? "", cpf: c.cpf ?? "", cnpj: c.cnpj ?? "", observacoes: c.observacoes ?? "", status: c.status, lgpd_consent: c.lgpd_consent, tipo: c.tipo }); setEditEndereco({ ...ENDERECO_VAZIO, ...(c.endereco_json ?? {}) }); setEditDocSugestao(null); }} className="text-afj-black/30 hover:text-afj-gold transition-colors" aria-label="Editar cliente"><Pencil size={12} /></button>
                   <button onClick={() => setDeletingId(c.id)} className="text-afj-black/30 hover:text-red-500 transition-colors" aria-label="Remover cliente"><Trash2 size={12} /></button>
                 </div>
               </div>
@@ -317,7 +365,7 @@ export default function ClientesPage() {
                       <div className="flex items-center gap-2">
                         {!c.lgpd_consent && <span className="text-xs text-amber-600">⚠</span>}
                         <Link href={`/clientes/${c.id}`} className="text-afj-black/30 hover:text-afj-gold transition-colors" aria-label="Ver detalhes"><ExternalLink size={12} /></Link>
-                        <button onClick={() => { setEditingId(c.id); setEditForm({ nome_completo: c.nome_completo, email: c.email ?? "", telefone: c.telefone ?? "", whatsapp: c.whatsapp ?? "", razao_social: c.razao_social ?? "", cpf: c.cpf ?? "", cnpj: c.cnpj ?? "", observacoes: c.observacoes ?? "", status: c.status, lgpd_consent: c.lgpd_consent, tipo: c.tipo }); setEditEndereco({ ...ENDERECO_VAZIO, ...(c.endereco_json ?? {}) }); }} className="text-afj-black/30 hover:text-afj-gold transition-colors" aria-label="Editar cliente"><Pencil size={12} /></button>
+                        <button onClick={() => { setEditingId(c.id); setEditForm({ nome_completo: c.nome_completo, email: c.email ?? "", telefone: c.telefone ?? "", whatsapp: c.whatsapp ?? "", razao_social: c.razao_social ?? "", cpf: c.cpf ?? "", cnpj: c.cnpj ?? "", observacoes: c.observacoes ?? "", status: c.status, lgpd_consent: c.lgpd_consent, tipo: c.tipo }); setEditEndereco({ ...ENDERECO_VAZIO, ...(c.endereco_json ?? {}) }); setEditDocSugestao(null); }} className="text-afj-black/30 hover:text-afj-gold transition-colors" aria-label="Editar cliente"><Pencil size={12} /></button>
                         <button onClick={() => setDeletingId(c.id)} className="text-afj-black/30 hover:text-red-500 transition-colors" aria-label="Remover cliente"><Trash2 size={12} /></button>
                       </div>
                     </td>
@@ -370,22 +418,28 @@ export default function ClientesPage() {
                   <div>
                     <label className="text-xs text-afj-black/60 block mb-1">CNPJ</label>
                     <input type="text" value={editForm.cnpj ?? ""} onChange={(e) => setEditForm({ ...editForm, cnpj: e.target.value })}
+                      onBlur={(e) => validarDocumento("cnpj", e.target.value, setEditDocSugestao)}
                       placeholder="00.000.000/0000-00"
                       className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold" />
+                    {editDocSugestao && <p className="text-xs text-afj-gold mt-1">{editDocSugestao}</p>}
                   </div>
                 </>
               ) : (
                 <div>
                   <label className="text-xs text-afj-black/60 block mb-1">CPF</label>
                   <input type="text" value={editForm.cpf ?? ""} onChange={(e) => setEditForm({ ...editForm, cpf: e.target.value })}
+                    onBlur={(e) => validarDocumento("cpf", e.target.value, setEditDocSugestao)}
                     placeholder="000.000.000-00"
                     className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold" />
+                  {editDocSugestao && <p className="text-xs text-afj-gold mt-1">{editDocSugestao}</p>}
                 </div>
               )}
               <div>
                 <label className="text-xs text-afj-black/60 block mb-2">Endereço</label>
+                <p className="text-[10px] text-afj-black/35 mb-1">CEP preenche o resto automaticamente, via BrasilAPI (fonte pública, não-governamental)</p>
                 <div className="grid grid-cols-2 gap-2">
                   <input type="text" value={editEndereco.cep ?? ""} onChange={(e) => setEditEndereco({ ...editEndereco, cep: e.target.value })}
+                    onBlur={(e) => autofillCep(e.target.value, editEndereco, setEditEndereco)}
                     placeholder="CEP" className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold" />
                   <input type="text" value={editEndereco.uf ?? ""} onChange={(e) => setEditEndereco({ ...editEndereco, uf: e.target.value.toUpperCase().slice(0, 2) })}
                     placeholder="UF" maxLength={2} className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold" />
@@ -477,22 +531,28 @@ export default function ClientesPage() {
                   <div>
                     <label className="text-xs text-afj-black/60 block mb-1">CNPJ</label>
                     <input type="text" value={form.cnpj} onChange={(e) => setForm({...form, cnpj: e.target.value})}
+                      onBlur={(e) => validarDocumento("cnpj", e.target.value, setDocSugestao)}
                       placeholder="00.000.000/0000-00"
                       className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold" />
+                    {docSugestao && <p className="text-xs text-afj-gold mt-1">{docSugestao}</p>}
                   </div>
                 </div>
               ) : (
                 <div>
                   <label className="text-xs text-afj-black/60 block mb-1">CPF</label>
                   <input type="text" value={form.cpf} onChange={(e) => setForm({...form, cpf: e.target.value})}
+                    onBlur={(e) => validarDocumento("cpf", e.target.value, setDocSugestao)}
                     placeholder="000.000.000-00"
                     className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold" />
+                  {docSugestao && <p className="text-xs text-afj-gold mt-1">{docSugestao}</p>}
                 </div>
               )}
               <div>
                 <label className="text-xs text-afj-black/60 block mb-2">Endereço</label>
+                <p className="text-[10px] text-afj-black/35 mb-1">CEP preenche o resto automaticamente, via BrasilAPI (fonte pública, não-governamental)</p>
                 <div className="grid grid-cols-2 gap-2">
                   <input type="text" value={endereco.cep ?? ""} onChange={(e) => setEndereco({ ...endereco, cep: e.target.value })}
+                    onBlur={(e) => autofillCep(e.target.value, endereco, setEndereco)}
                     placeholder="CEP" className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold" />
                   <input type="text" value={endereco.uf ?? ""} onChange={(e) => setEndereco({ ...endereco, uf: e.target.value.toUpperCase().slice(0, 2) })}
                     placeholder="UF" maxLength={2} className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold" />

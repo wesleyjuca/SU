@@ -1,5 +1,5 @@
 """Endpoints CRUD de clientes / CRM."""
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Depends, Query, Response, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, or_, func
 from pydantic import BaseModel
@@ -13,6 +13,9 @@ from app.models.user import User
 from app.models.client import Client, ClientContact, ClientInteraction
 from app.core.exceptions import NotFoundError
 from app.core.crypto import encrypt, decrypt_or_raw
+from app.models.gov_registry_lookup import GovRegistryLookup
+from app.integrations.serpro.consulta_cpf_cnpj import consultar_cpf, consultar_cnpj
+from app.integrations.publicas.cep_lookup import consultar_cep as _consultar_cep_externa
 
 router = APIRouter(prefix="/clients", tags=["clients"])
 
@@ -168,6 +171,74 @@ async def match_client(
         sugestoes = [{"id": str(cid), "nome_completo": nome_completo} for cid, nome_completo in rows]
 
     return {"match": match, "sugestoes": sugestoes}
+
+
+class ValidarDocumentoBody(BaseModel):
+    tipo: str  # "cpf" ou "cnpj"
+    valor: str
+
+
+@router.post("/validar-documento")
+async def validar_documento(
+    body: ValidarDocumentoBody,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Fase 217 — valida/enriquece CPF ou CNPJ contra a Loja SERPRO no
+    momento do cadastro (blur do campo no frontend). `Client.cpf`/`cnpj`
+    nunca tiveram nenhuma validação de formato ou existência até aqui.
+
+    `valido: None` (não `False`) sempre que a consulta externa não pôde ser
+    feita (não configurado, indisponível, circuito aberto) — `False` é
+    reservado pro caso em que a SERPRO respondeu e o documento é
+    inválido/irregular. Sempre HTTP 200: indisponibilidade externa nunca
+    pode bloquear o cadastro de um cliente."""
+    tipo = (body.tipo or "").strip().lower()
+    if tipo not in ("cpf", "cnpj"):
+        raise HTTPException(status_code=422, detail="tipo deve ser 'cpf' ou 'cnpj'")
+
+    resultado = await (consultar_cpf(body.valor) if tipo == "cpf" else consultar_cnpj(body.valor))
+
+    if resultado is None:
+        resposta = {
+            "valido": None, "nome_ou_razao_social": None, "situacao_cadastral": None,
+            "mensagem": "Validação indisponível no momento — tente novamente mais tarde.",
+        }
+        resumo = None
+    else:
+        nome = resultado.get("nome") or resultado.get("razao_social") or resultado.get("nome_empresarial")
+        situacao = (resultado.get("situacao") or {}).get("nome") if isinstance(resultado.get("situacao"), dict) else resultado.get("situacao_cadastral")
+        resposta = {"valido": True, "nome_ou_razao_social": nome, "situacao_cadastral": situacao, "mensagem": None}
+        resumo = f"{nome or ''} — {situacao or ''}".strip(" —")
+
+    db.add(GovRegistryLookup(
+        tenant_id=current_user.tenant_id,
+        tipo_consulta=tipo.upper(),
+        documento_consultado=encrypt(body.valor) or body.valor,
+        resultado_resumo=resumo,
+        consultado_por=current_user.id,
+    ))
+    await db.commit()
+    return resposta
+
+
+class ConsultarCepBody(BaseModel):
+    cep: str
+
+
+@router.post("/consultar-cep")
+async def consultar_cep_endpoint(
+    body: ConsultarCepBody,
+    current_user: User = Depends(get_current_user),
+):
+    """Fase 217 — autofill de endereço a partir do CEP, via BrasilAPI
+    (pública, gratuita, terceiro — não é canal oficial de governo, ver
+    docstring de `integrations/publicas/cep_lookup.py`). Sem gravação de
+    auditoria — não é consulta de identidade pessoal."""
+    resultado = await _consultar_cep_externa(body.cep)
+    if resultado is None:
+        return {"logradouro": None, "bairro": None, "cidade": None, "uf": None}
+    return resultado
 
 
 @router.get("/{client_id}", response_model=ClientResponse)
