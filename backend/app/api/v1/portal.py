@@ -8,7 +8,7 @@ from app.db.base import get_db
 from app.dependencies import get_current_user
 from app.models.user import User
 from app.models.client import Client
-from app.models.process import LegalProcess, ProcessMovement, ProcessDeadline
+from app.models.process import LegalProcess, ProcessMovement, ProcessDeadline, client_linked_processes_filter
 from app.models.document import Document
 from app.models.financial import FinancialEntry
 from app.core.exceptions import ForbiddenError
@@ -57,7 +57,7 @@ async def portal_summary(
 
     proc_result = await db.execute(
         select(LegalProcess).where(
-            LegalProcess.client_id == client_id,
+            client_linked_processes_filter(client_id),
             LegalProcess.situacao == "ATIVO",
             LegalProcess.tenant_id == user.tenant_id,
         )
@@ -102,7 +102,7 @@ async def portal_processes(
     result = await db.execute(
         select(LegalProcess)
         .where(
-            LegalProcess.client_id == client_id,
+            client_linked_processes_filter(client_id),
             LegalProcess.tenant_id == user.tenant_id,
         )
         .order_by(desc(LegalProcess.updated_at))
@@ -141,7 +141,7 @@ async def portal_process_detail(
     result = await db.execute(
         select(LegalProcess).where(
             LegalProcess.id == uuid.UUID(process_id),
-            LegalProcess.client_id == client_id,
+            client_linked_processes_filter(client_id),
             LegalProcess.tenant_id == user.tenant_id,
         )
     )
