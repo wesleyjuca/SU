@@ -2294,6 +2294,137 @@ Histórico:
     investigado a fundo por ser um modo de crash atípico (o caso comum
     é OOM-killer, que mata o cgroup inteiro, ou exceção não tratada, que
     tipicamente encerra o pool de forma mais limpa).
+- **Fase 228** — rodada de teste geral, escolhida pelo usuário como "próxima
+  fase" depois do fix do Celery (Fase 227). Ambiente real (Postgres+Redis+
+  Celery worker+uvicorn+frontend `npm run dev` com `API_URL` local)
+  subido de verdade. Cobriu, pela primeira vez numa única rodada, as Fases
+  220-227 inteiras (nenhuma tinha passado por teste geral desde a própria
+  implementação) — reconfirmação independente via HTTP real de 220
+  (LGPD→GovRegistryLookup, 500 de input longo, fallback plaintext, key
+  duplicado), 221 (rota LGPD no delete da lista de clientes — Playwright
+  confirmou a requisição real batendo em `/lgpd/clients/{id}/data`, com
+  anonimização confirmada direto no Postgres), 222
+  (`client_linked_processes_filter`, os 7 call sites, sem regressão/
+  duplicata), 223 (os 6 módulos antes hardcoded do `/admin/health`, todos
+  dinâmicos de verdade), 224 (fusão de Configurações, zonas/redirects
+  corretos por papel), 226 (BYOK do Assistente do Cérebro e da sugestão de
+  prazo — desta vez provado com uma resposta 401 REAL da Anthropic,
+  confirmando que a chave BYOK plantada foi genuinamente usada ponta a
+  ponta, não só um mock). 227 já tinha sido verificado na própria fase.
+  `tests/conftest.py::test_user` (achado pré-existente da Fase 222,
+  nunca corrigido) também foi corrigido nesta rodada — tooling de teste,
+  não achado de produto, por isso resolvido inline em vez de virar fase:
+  o e-mail não batia com nenhum usuário ADMIN real do seed, fazendo todo
+  teste dependente de `auth_headers` pular silenciosamente; confirmado
+  que `POST /auth/login` agora retorna 200 em vez de skip.
+  - **Frente mais funda que a Fase 225 conseguiu**: uma chain real com 3
+    gates HITL em sequência (2 nativos forçados via monkeypatch de
+    `requires_human_approval` + 1 `custom_agent`, a primeira vez que essa
+    combinação foi exercitada) — rodada com Postgres real, cada resolução
+    de Approval chamando as MESMAS funções de serviço que o endpoint HTTP
+    usa (`execute_approved_action`/`resume_chain_after_approval`).
+    Confirmado que a chain completa corretamente os 3 gates até SUCCESS,
+    5 `AgentStep` na ordem certa, sem duplicata — a classe de bug da Fase
+    183 (2º+ gate não criado) não reapareceu. **Mas achou um bug novo,
+    real, no processo**: quando o gate aprovado é o ÚLTIMO passo da
+    chain, o branch de retorno antecipado em
+    `resume_chain_after_approval` (`app/services/chain_resume.py:65-73`)
+    seta `agent_run.status = "SUCCESS"` mas NUNCA `agent_run.
+    requires_approval = False` — ao contrário dos outros 2 branches de
+    finalização (`_run_remaining_steps`, corrigidos desde a Fase 174.7),
+    que sempre zeram os dois juntos. Resultado: o run fica com status
+    SUCCESS mas `requires_approval` travado em `True` pra sempre — em
+    qualquer UI/consulta que filtre "precisa de atenção" por esse campo,
+    o run nunca some da lista mesmo já tendo terminado com sucesso. Bug
+    pré-existente desde a Fase 171 (não introduzido pela 225), mas a Fase
+    225 é o que tornou comum a combinação "chain onde o ÚLTIMO passo é o
+    que exige aprovação" (custom_agent anexado ao final + `requires_
+    human_approval=True`) — antes disso a situação era rara/inexistente
+    nas 3 chains nativas.
+  - **Auditoria paralela adversarial** (3 `Agent`, não `Workflow`, sem
+    bloqueio de plan mode desta vez):
+    - **Varredura cross-tenant em 7 superfícies novas desde a Fase 219**
+      (`/integrity/risks`, `/playbooks`, SERPRO/`gov_registry_lookups`
+      via export LGPD, `/clients/consultar-cep`, timeline+dossiê-PDF,
+      custom-agent-como-passo-de-chain + `PATCH /custom-agents/{id}`,
+      `/tenant/theme`+`/tenant/branding`) — **todas as 7 vieram limpas**,
+      cada tentativa de acesso cross-tenant bloqueada com 404/403/422
+      reais, testado com HTTP real contra os tenants `afj`/`demo`.
+    - **LGPD/PII — 4ª ocorrência confirmada da mesma classe de bug já
+      fechada 3x antes** (Fase 176.3→`ClientContact`/`ClientInteraction`,
+      Fase 210→`Opportunity`, Fase 220→`GovRegistryLookup`): reproduzido
+      de ponta a ponta (criar cliente com CPF real → embutir o
+      nome/CPF numa tabela nova → `DELETE /lgpd/clients/{id}/data` →
+      confirmar que a tabela nova ainda mostra o dado original) em 3
+      lugares que `erase_client_data`/`export_client_data` nunca tocam:
+      - **`ProcessParty.nome`/`.cpf_cnpj`** (`app/models/process.py`,
+        populado por `POST /processes/{id}/partes`) — o mais grave dos
+        3: são campos **em texto puro, nunca cifrados** (ao contrário de
+        `Client.cpf`), então isso não é só "sobrevive ao esquecimento",
+        é PII em claro guardada permanentemente numa tabela que já tinha
+        um `client_id` (o mesmo FK que a Fase 222, nesta mesma sessão,
+        acabou de tornar central pro vínculo cliente↔processo). O join
+        (`cliente_nome`) já mostra `[ANONIMIZADO-...]` corretamente — só
+        os campos próprios da parte ficaram de fora.
+      - **`FinancialEntry.descricao`** — texto livre que sobrevive
+        intacto (nome+CPF originais) depois do esquecimento.
+      - **`BillingInvoice.descricao`/`.itens`** — mesmo padrão; o campo
+        `cliente` (join) já é anonimizado, os campos de texto livre da
+        própria fatura não.
+      Confirmado como NÃO regressão: `Opportunity.descricao`/
+      `motivo_perda` (fix da Fase 209/210) e `AgentAreaPlaybook`
+      (nunca teve PII por desenho, sem `client_id`) seguem limpos.
+    - **Walkthrough real via Playwright** (Chromium do sandbox, sem
+      bloqueio de plan mode desta vez) nas 4 telas mudadas desde a Fase
+      219 — todas limpas, sem console error atribuível a elas (só um
+      warning de key duplicada pré-existente em `/dashboard`, não
+      relacionado). Confirmou ao vivo, via `page.on("request")` +
+      Postgres depois, que o botão de remover cliente da LISTA bate em
+      `/lgpd/clients/{id}/data` (não mais `/clients/{id}`) e produz
+      `[ANONIMIZADO-...]` de verdade — mesma prova de ponta a ponta já
+      usada nas Fases 220/221/222 pra outros endpoints. **Achado
+      incidental, visto 2x de fontes independentes na mesma sessão**: o
+      card "Celery" de `/admin/health` mostrou "timeout" ao vivo, e
+      `/minha-area` mostrou uma notificação real não lida "Infra
+      indisponível: Celery (workers)" — bate exatamente com o achado
+      técnico abaixo (probe de saúde do Celery quebrado), não com o
+      Celery em si (que a própria Fase 227, mais cedo nesta sessão,
+      confirmou funcionando de verdade).
+  - **Achado técnico adicional, fora do escopo original de reconfirmação,
+    encontrado ao investigar por que `/admin/health` mostrava "Celery:
+    timeout" mesmo com o Celery real funcionando** (Fase 227 confirmado
+    minutos antes na mesma sessão): `_celery()` em
+    `app/services/brain_infra.py` chama `celery_app.control.
+    inspect(timeout=2.0).ping()` via `asyncio.to_thread(...)` — essa
+    chamada **sempre expira** (o wrapper `_com_timeout` de 4s estoura)
+    quando executada de dentro do event loop já rodando da aplicação
+    real, mesmo que a MESMA chamada síncrona, fora desse contexto (um
+    processo Python novo, sem asyncio), retorne um pong real em menos de
+    1s. Reproduzido isoladamente 2x (chamada direta síncrona → funciona;
+    `await _celery()` num script asyncio → timeout idêntico ao da app
+    real). Efeito prático: o card "Celery" da tela de saúde e qualquer
+    lógica que dependa dele reportam Celery como fora do ar mesmo quando
+    está saudável — o tipo de falso-negativo que pode levar alguém a
+    achar que o fix da própria Fase 227 não funcionou. Causa raiz exata
+    (por que `asyncio.to_thread` + `control.inspect()` interagem mal)
+    não investigada a fundo — fica pra quem for corrigir decidir entre
+    trocar o probe por outro mecanismo (ex.: checar liveness via Redis
+    diretamente, como `_redis()` já faz) ou investigar a interação
+    thread-pool+kombu mais a fundo.
+  - Nenhuma correção de achado de produto foi feita nesta fase (metodologia
+    padrão) — decisão do usuário sobre quais achados viram fase nova.
+    **Próxima rodada deve**: se os 3 achados de LGPD (ProcessParty/
+    FinancialEntry/BillingInvoice) forem corrigidos, reconfirmar com o
+    mesmo padrão criar→embutir→esquecer→verificar usado aqui, e
+    considerar se vale a pena um mecanismo estrutural (não mais um fix
+    pontual pela 4ª vez) pra pegar "tabela nova com `client_id` esquecida
+    pelo LGPD erasure" antes de virar achado de novo — a mesma pergunta
+    que a Fase 219 já tinha deixado em aberto; se o bug do
+    `requires_approval` travado for corrigido, reconfirmar especificamente
+    o cenário "gate HITL é o último passo da chain" (nativo E
+    custom_agent); se o probe do Celery for corrigido, reconfirmar que
+    `/admin/health` reflete o estado real (não mais "timeout" com Celery
+    saudável).
 
 ## Riscos conhecidos / débito técnico
 
