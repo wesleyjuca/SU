@@ -184,6 +184,9 @@ async def test_resume_noop_when_gate_was_last_step():
     # (review_agent, o último, teria de alguma forma pedido aprovação —
     # cenário sintético só pra exercitar o guard de "não sobra passo").
     agent_run = _make_agent_run("generate_and_review_petition", status="AWAITING_APPROVAL")
+    # Fase 228 — achado do teste geral: sem isso, o teste passava mesmo no
+    # código com o bug (requires_approval nunca era resetado neste branch).
+    agent_run.requires_approval = True
     steps = [
         _make_step(0, "jurisprudence_agent", "SUCCESS"),
         _make_step(1, "petition_agent", "SUCCESS"),
@@ -194,6 +197,7 @@ async def test_resume_noop_when_gate_was_last_step():
     assert result["resumed"] is False
     assert "último passo" in result["reason"]
     assert agent_run.status == "SUCCESS"  # finaliza mesmo sem rodar mais nada
+    assert agent_run.requires_approval is False
 
 
 async def test_resume_stops_on_failed_step(monkeypatch):

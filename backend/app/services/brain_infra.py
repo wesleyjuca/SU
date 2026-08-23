@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone, timedelta
 
 import structlog
@@ -19,10 +20,32 @@ log = structlog.get_logger()
 
 _PROBE_TIMEOUT = 4.0
 
+# Fase 228 (achado do teste geral, causa raiz diagnosticada nesta mesma
+# fase) — `_celery()` sempre "expirava" com o Celery genuinamente saudável.
+# A hipótese inicial (contenção de thread pool sob asyncio.to_thread) foi
+# testada e NÃO era a causa — confirmado rodando `_inspect_celery_sync` com
+# instrumentação de tempo, tanto dentro de um executor dedicado quanto num
+# script standalone: a causa real é que `_inspect_celery_sync` faz 4
+# round-trips SEQUENCIAIS (`ping`/`active`/`scheduled`/`stats`, cada um um
+# broadcast+collect via kombu/Redis com seu próprio `timeout=2.0`) — medido
+# empiricamente em ~2.1s CADA UM mesmo com o worker respondendo rápido
+# (confirmado: com timeout=1.0 o pong chega em ~0.4-1.3s; o tempo próximo
+# do timeout configurado parece ser o próprio loop de coleta do kombu, não
+# lentidão real do worker). 4 × ~2.1s soma ~8.5s, sempre estourando o
+# orçamento de 4s do `_PROBE_TIMEOUT` compartilhado — não é uma condição de
+# corrida nem depende do ambiente, é aritmética. Fix: timeout por chamada
+# reduzido pra 1.0 (folga generosa sobre o ~0.4-1.3s observado) e um
+# orçamento externo próprio pro probe do Celery, dimensionado pro pior caso
+# das 4 chamadas em sequência + margem — não o `_PROBE_TIMEOUT` genérico de
+# 4s usado pelas sondas async-nativas (essas são single-round-trip, não
+# precisam do mesmo orçamento).
+_CELERY_PROBE_TIMEOUT = 8.0
+_celery_probe_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="celery-health-probe")
 
-async def _com_timeout(coro, fallback):
+
+async def _com_timeout(coro, fallback, timeout: float = _PROBE_TIMEOUT):
     try:
-        return await asyncio.wait_for(coro, timeout=_PROBE_TIMEOUT)
+        return await asyncio.wait_for(coro, timeout=timeout)
     except Exception as exc:
         log.warning("brain_probe_timeout", error=str(exc))
         return fallback
@@ -33,7 +56,11 @@ def _inspect_celery_sync() -> dict:
     """celery inspect é síncrono/bloqueante — roda em thread via _celery()."""
     try:
         from app.workers.worker import celery_app
-        insp = celery_app.control.inspect(timeout=2.0)
+        # Fase 228 — timeout por chamada reduzido de 2.0 pra 1.0 (ver
+        # comentário de _CELERY_PROBE_TIMEOUT acima): worker saudável
+        # responde bem antes disso, e são 4 chamadas sequenciais somando
+        # o orçamento total.
+        insp = celery_app.control.inspect(timeout=1.0)
         ping = insp.ping() or {}
         if not ping:
             return {"ok": False, "workers": 0, "detail": "nenhum worker respondeu ao ping"}
@@ -67,7 +94,12 @@ def _inspect_celery_sync() -> dict:
 
 
 async def _celery() -> dict:
-    return await _com_timeout(asyncio.to_thread(_inspect_celery_sync), {"ok": False, "workers": 0, "detail": "timeout"})
+    loop = asyncio.get_running_loop()
+    return await _com_timeout(
+        loop.run_in_executor(_celery_probe_executor, _inspect_celery_sync),
+        {"ok": False, "workers": 0, "detail": "timeout"},
+        timeout=_CELERY_PROBE_TIMEOUT,
+    )
 
 
 # ─── Redis ────────────────────────────────────────────────────────────────────

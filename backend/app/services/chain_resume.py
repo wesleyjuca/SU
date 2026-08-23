@@ -70,6 +70,14 @@ async def resume_chain_after_approval(db, agent_run, approval, modifications: di
         if agent_run.status not in ("SUCCESS", "FAILED", "CANCELADO"):
             agent_run.status = "SUCCESS"
             agent_run.completed_at = datetime.utcnow()
+            # Fase 228 (achado do teste geral) — mesma correção da Fase
+            # 174.7 aplicada nos outros 2 branches de finalização abaixo
+            # (_run_remaining_steps): sem isso, o flag ficava travado em
+            # True pra sempre quando o gate aprovado era o último passo
+            # da chain — o run terminava SUCCESS mas continuava aparecendo
+            # como "precisa de atenção" em qualquer UI/consulta que
+            # filtre por requires_approval.
+            agent_run.requires_approval = False
         return {"resumed": False, "reason": "gate era o último passo da chain"}
 
     lock = TaskLock(f"agent_run_resume:{agent_run.id}", ttl_seconds=300)
