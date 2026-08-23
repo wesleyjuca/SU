@@ -4,8 +4,8 @@
 import {
   LayoutDashboard, Scale, FileText, Users, FolderOpen, Bot, CheckSquare,
   DollarSign, Shield, Shapes, Settings, FileEdit, BarChart2, CalendarClock,
-  BookOpen, Activity, Users2, Palette, KeyRound, GraduationCap, Compass,
-  Coins, ShieldCheck, Plug, Gauge, Building2, Receipt, Gavel, MonitorPlay,
+  BookOpen, Activity, Users2, KeyRound, GraduationCap, Compass,
+  Coins, ShieldCheck, Plug, Gauge, Building2, Receipt, MonitorPlay,
   Newspaper, Briefcase, Brain,
 } from "lucide-react";
 
@@ -61,8 +61,6 @@ export const navSections: NavSection[] = [
     { href: "/admin/relatorios-banca", label: "Relatórios da Banca", icon: BarChart2, roles: ["SUPERADMIN", "ADMIN", "SOCIO"] },
     { href: "/admin/usuarios", label: "Usuários", icon: Users2, roles: ["ADMIN", "SUPERADMIN"] },
     { href: "/admin/plano", label: "Plano & Uso", icon: Gauge, roles: ["ADMIN", "SUPERADMIN"] },
-    { href: "/admin/personalizacao", label: "Personalização", icon: Palette, roles: ["ADMIN", "SUPERADMIN"] },
-    { href: "/admin/juridico", label: "Config. Jurídica", icon: Gavel, roles: ["ADMIN", "SUPERADMIN"] },
     { href: "/integracoes", label: "Integrações", icon: Plug, roles: ["ADMIN", "SUPERADMIN"] },
     // Auditoria do escritório (ADMIN/SOCIO). O SUPERADMIN usa a aba Auditoria do
     // Cérebro (visão de plataforma) — evita entrada duplicada no menu.

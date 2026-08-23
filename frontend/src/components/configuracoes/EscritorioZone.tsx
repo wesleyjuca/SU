@@ -1,10 +1,11 @@
 "use client";
 import { useState, useRef, useEffect } from "react";
-import { Palette, Type, Layout, Download, Upload, Check, Sun, ImageIcon, Building2, Puzzle, LayoutDashboard, Undo2, History } from "lucide-react";
+import { useSearchParams } from "next/navigation";
+import { Palette, Type, Layout, Download, Upload, Check, Sun, ImageIcon, Building2, Puzzle, LayoutDashboard, Undo2, History, Gavel } from "lucide-react";
 import { applyTheme } from "@/lib/theme";
 import { useThemeStore } from "@/store";
-import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
+import { JuridicoTab } from "./JuridicoTab";
 
 const TABS = [
   { id: "escritorio", label: "Escritório", icon: Building2 },
@@ -15,6 +16,7 @@ const TABS = [
   { id: "modulos", label: "Módulos", icon: Puzzle },
   { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
   { id: "exportar", label: "Exportar / Importar", icon: Download },
+  { id: "juridico", label: "Jurídico", icon: Gavel },
 ] as const;
 type TabId = (typeof TABS)[number]["id"];
 
@@ -158,10 +160,29 @@ function LivePreview({ color, font }: { color: string; font: string }) {
   );
 }
 
-export default function PersonalizacaoPage() {
+/** Fase 224 — zona "Escritório & Jurídico" de Configurações (ADMIN/SUPERADMIN
+ * apenas). Fusão de `admin/personalizacao` (8 abas, inalteradas) +
+ * `admin/juridico` (3 cards, agora a aba "Jurídico"). Lógica/handlers
+ * idênticos ao que já existia em cada página — só a casca de página
+ * (Breadcrumb/título) saiu, movida pro orquestrador de `/configuracoes`. */
+export function EscritorioZone() {
   const { theme, setTheme } = useThemeStore();
   const toast = useToast();
+  const searchParams = useSearchParams();
   const [tab, setTab] = useState<TabId>("escritorio");
+
+  // ?aba= na URL (ex.: redirect de /admin/personalizacao ou /admin/juridico)
+  // tem prioridade sobre a última aba salva — senão o link nunca abriria na
+  // aba certa. Mesmo padrão de `admin/cerebro`.
+  useEffect(() => {
+    const daUrl = searchParams.get("aba");
+    if (daUrl && TABS.some((t) => t.id === daUrl)) {
+      setTab(daUrl as TabId);
+      return;
+    }
+    const salva = typeof window !== "undefined" ? localStorage.getItem("afj_configuracoes_aba") : null;
+    if (salva && TABS.some((t) => t.id === salva)) setTab(salva as TabId);
+  }, [searchParams]);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [previewColor, setPreviewColor] = useState(theme.primaryColor);
@@ -415,6 +436,11 @@ export default function PersonalizacaoPage() {
     URL.revokeObjectURL(a.href);
   }
 
+  function trocarTab(id: TabId) {
+    setTab(id);
+    try { localStorage.setItem("afj_configuracoes_aba", id); } catch { /* noop */ }
+  }
+
   function importTheme(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -435,32 +461,24 @@ export default function PersonalizacaoPage() {
   }
 
   return (
-    <div className="max-w-6xl mx-auto space-y-6">
-      <Breadcrumb crumbs={[{ label: "Dashboard", href: "/dashboard" }, { label: "Admin" }, { label: "Personalização" }]} />
-
-      <div className="afj-page-header">
-        <div>
-          <h1 className="afj-page-title">Personalização do Sistema</h1>
-          <p className="text-afj-black/40 text-sm mt-0.5">Configure a identidade visual, cores, tipografia e temas do sistema.</p>
-        </div>
-        <div className="flex items-center gap-2">
-          {previousTheme && (
-            <button onClick={handleUndo} className="btn-afj-outline text-xs py-1.5 px-3 rounded-sm flex items-center gap-1.5">
-              <Undo2 size={12} /> Desfazer
-            </button>
-          )}
-          <button onClick={() => setShowHistory(true)} className="btn-afj-outline text-xs py-1.5 px-3 rounded-sm flex items-center gap-1.5">
-            <History size={12} /> Histórico
+    <div className="space-y-6">
+      <div className="flex items-center justify-end gap-2">
+        {previousTheme && (
+          <button onClick={handleUndo} className="btn-afj-outline text-xs py-1.5 px-3 rounded-sm flex items-center gap-1.5">
+            <Undo2 size={12} /> Desfazer
           </button>
-        </div>
+        )}
+        <button onClick={() => setShowHistory(true)} className="btn-afj-outline text-xs py-1.5 px-3 rounded-sm flex items-center gap-1.5">
+          <History size={12} /> Histórico
+        </button>
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-1 bg-afj-cream border border-afj-cream-dark rounded-sm p-1 overflow-x-auto">
+      <div role="tablist" aria-label="Seções de Escritório & Jurídico" className="flex gap-1 bg-afj-cream border border-afj-cream-dark rounded-sm p-1 overflow-x-auto">
         {TABS.map(({ id, label, icon: Icon }) => (
           <button
             key={id}
-            onClick={() => setTab(id)}
+            onClick={() => trocarTab(id)}
             className={`flex items-center gap-2 px-4 py-2 rounded-sm text-xs font-semibold uppercase tracking-wider whitespace-nowrap transition-colors ${
               tab === id
                 ? "bg-white text-afj-black shadow-sm"
@@ -1016,6 +1034,9 @@ export default function PersonalizacaoPage() {
               </div>
             </div>
           )}
+
+          {/* ── Tab: Jurídico ── */}
+          {tab === "juridico" && <JuridicoTab />}
         </div>
 
         {/* Preview lateral */}
