@@ -1,7 +1,7 @@
 from sqlalchemy import String, Boolean, ForeignKey, Text, Numeric, Date, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID as PGUUID, JSONB
-from sqlalchemy import DateTime, func
+from sqlalchemy import DateTime, func, or_, exists
 import uuid
 from datetime import datetime, date
 from decimal import Decimal
@@ -139,3 +139,22 @@ class ProcessParty(Base):
 
     process: Mapped["LegalProcess"] = relationship(back_populates="parties")
     client: Mapped["Client | None"] = relationship()
+
+
+def client_linked_processes_filter(client_id: uuid.UUID):
+    """Fase 222 — condição pra "processos de um cliente" que cobre os 2
+    jeitos independentes de vínculo hoje existentes: `LegalProcess.client_id`
+    direto (comum em processo criado manualmente) OU uma `ProcessParty`
+    vinculada ao cliente (Fase 179, comum em processo importado por OAB,
+    que nunca popula `LegalProcess.client_id`). Sem isso, um processo só
+    alcançável pelo 2º caminho nunca aparece como "vinculado" em nenhuma
+    tela/endpoint que filtra só pelo 1º. Usa `exists()` (subquery
+    correlacionada), não `join`, pra nunca duplicar a linha do processo
+    quando 2+ partes estão vinculadas ao mesmo cliente."""
+    return or_(
+        LegalProcess.client_id == client_id,
+        exists().where(
+            ProcessParty.process_id == LegalProcess.id,
+            ProcessParty.client_id == client_id,
+        ),
+    )

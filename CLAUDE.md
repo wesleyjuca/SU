@@ -1896,6 +1896,60 @@ Histórico:
     `eslint` limpos no arquivo principal e no componente novo (1
     warning pré-existente de `exhaustive-deps`, já documentado desde
     fases anteriores, não novo desta fase).
+- **Fase 222** — usuário reportou com 2 screenshots que a Cliente 360 de
+  um cliente real ("Marcelo Augusto Alves Freire") mostrava "Processos
+  Vinculados (0)", apesar de um processo real
+  (`5008963-31.2025.8.01.0001`) já listar esse mesmo cliente como parte
+  vinculada em "Partes". Investigado (Explore agent + leitura direta de
+  código) e confirmado como bug real de sincronização, não erro visual:
+  `LegalProcess.client_id` (usado por `GET /processes?client_id=`, que
+  alimenta o card da Cliente 360, o score de saúde — 207.1 —, a
+  timeline — 211 — e o dossiê PDF — 214) e `ProcessParty.client_id`
+  (Fase 179, setado ao vincular manualmente uma parte a um cliente já
+  cadastrado) são 2 FKs independentes que nada no código sincroniza.
+  `LegalProcess.client_id` nunca é populado pela importação automática
+  por OAB (`oab_capture.py`, o caminho mais comum de entrada de
+  processo no sistema) nem por nenhuma tela depois que o processo já
+  existe — então qualquer processo importado por OAB cujo único vínculo
+  a um cliente seja uma parte manual nunca aparecia como "vinculado" em
+  lugar nenhum. Grep de todo `LegalProcess.client_id ==` no backend
+  achou mais 3 call sites com o mesmo filtro estreito além do já
+  descrito (`clients.py`: health-score, timeline, dossiê) e mais 3 no
+  portal do cliente externo (`portal.py`: resumo, lista de processos,
+  detalhe de 1 processo) — mesma causa raiz, não bugs separados (mesma
+  classe de "dado alcançável por um caminho mas invisível pelo caminho
+  que a tela consulta" já vista 3x nesta sessão pra LGPD erasure, Fase
+  176.3→210→220). Fix: novo `client_linked_processes_filter()`
+  (`backend/app/models/process.py`) — condição SQLAlchemy única
+  (`LegalProcess.client_id == X OR EXISTS(ProcessParty vinculada a X)`,
+  via `exists()` correlacionado, não `join`, pra nunca duplicar a linha
+  do processo quando 2+ partes apontam pro mesmo cliente) — reaproveitada
+  nos 7 call sites (`processes.py`, `clients.py` × 3, `portal.py` × 3)
+  em vez de 7 patches inline independentes. Nenhuma mudança de
+  frontend — os 7 endpoints já devolviam pro frontend o formato certo,
+  só não encontravam a linha. Verificado via HTTP real contra Postgres
+  real, reproduzindo o cenário exato do usuário (processo `fonte`
+  implícita OAB, `client_id=NULL`, parte REU vinculada manualmente
+  depois): antes do fix `GET /processes?client_id=` devolvia `[]`,
+  depois devolve o processo; regressão confirmada (processo com
+  `client_id` direto, sem parte, continua aparecendo); sem duplicata
+  confirmada (2 partes vinculadas ao mesmo cliente → processo aparece
+  1x só); health-score/timeline/dossiê-pdf confirmados refletindo o
+  processo agora alcançável. Teste novo
+  (`test_client_linked_processes_fase222.py`) reproduz os mesmos 4
+  cenários via `AsyncClient` HTTP real — bate na mesma flakiness de
+  pool asyncpg/pytest-asyncio documentada desde a Fase 199 quando
+  rodada em lote; **achado adicional, pré-existente e fora do escopo
+  desta fase**: `tests/conftest.py::test_user` usa o e-mail
+  `admin@afjadvogados.com.br` (com `.br`), mas o seed real
+  (`app/core/events.py`) só cria `admin@afj.com.br` e
+  `admin@afjadvogados.com` (sem `.br`) — todo teste que dependa da
+  fixture `auth_headers` pula com "Login failed" neste ambiente,
+  independente da fase; não corrigido aqui (fora do escopo do bug
+  reportado), registrado pra a próxima rodada de teste geral decidir se
+  vale a pena corrigir o e-mail do fixture. Verificação principal desta
+  fase foi HTTP real (curl) contra o backend local, como em toda fase
+  recente desta sessão.
 
 ## Riscos conhecidos / débito técnico
 

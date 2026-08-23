@@ -8,7 +8,10 @@ import uuid
 from app.db.base import get_db
 from app.dependencies import get_current_user, require_role
 from app.models.user import User
-from app.models.process import LegalProcess, ProcessMovement, ProcessDeadline, ProcessTeamMember, ProcessParty
+from app.models.process import (
+    LegalProcess, ProcessMovement, ProcessDeadline, ProcessTeamMember, ProcessParty,
+    client_linked_processes_filter,
+)
 from app.core.exceptions import NotFoundError
 
 router = APIRouter(prefix="/processes", tags=["processes"])
@@ -375,7 +378,7 @@ async def list_processes(
     if situacao:
         query = query.where(LegalProcess.situacao == situacao)
     if client_id:
-        query = query.where(LegalProcess.client_id == uuid.UUID(client_id))
+        query = query.where(client_linked_processes_filter(uuid.UUID(client_id)))
     if q:
         termo = f"%{q.strip()}%"
         query = query.where(or_(

@@ -642,7 +642,7 @@ async def client_health_score(
     interações (30 pts) e taxa de êxito dos processos (30 pts). Puramente
     informativo — não aciona nenhuma ação automática, não bloqueia nada."""
     from app.models.financial import FinancialEntry
-    from app.models.process import LegalProcess
+    from app.models.process import LegalProcess, client_linked_processes_filter
 
     cliente = (await db.execute(
         select(Client).where(Client.id == uuid.UUID(client_id), Client.tenant_id == current_user.tenant_id)
@@ -684,7 +684,7 @@ async def client_health_score(
     # Processos em andamento (sem desfecho) não penalizam nem beneficiam.
     desf_rows = (await db.execute(
         select(LegalProcess.desfecho, func.count(LegalProcess.id))
-        .where(LegalProcess.client_id == cliente.id, LegalProcess.tenant_id == current_user.tenant_id,
+        .where(client_linked_processes_filter(cliente.id), LegalProcess.tenant_id == current_user.tenant_id,
                LegalProcess.desfecho.is_not(None))
         .group_by(LegalProcess.desfecho)
     )).all()
@@ -731,7 +731,7 @@ async def client_timeline(
     Puramente read-only, agregando dado que já existe — nenhum campo novo."""
     from app.models.document import Document
     from app.models.financial import FinancialEntry
-    from app.models.process import LegalProcess
+    from app.models.process import LegalProcess, client_linked_processes_filter
 
     cliente = (await db.execute(
         select(Client).where(Client.id == uuid.UUID(client_id), Client.tenant_id == current_user.tenant_id)
@@ -754,7 +754,7 @@ async def client_timeline(
 
     processos = (await db.execute(
         select(LegalProcess).where(
-            LegalProcess.client_id == cliente.id, LegalProcess.tenant_id == current_user.tenant_id,
+            client_linked_processes_filter(cliente.id), LegalProcess.tenant_id == current_user.tenant_id,
         )
     )).scalars().all()
     for p in processos:
@@ -813,7 +813,7 @@ async def client_dossie_pdf(
     diretamente (mesma fonte de verdade da Cliente 360) em vez de duplicar
     a lógica de agregação. Mesmo gate de `/financeiro` — o dossiê inclui
     dado financeiro (via health-score)."""
-    from app.models.process import LegalProcess
+    from app.models.process import LegalProcess, client_linked_processes_filter
     from app.utils.pdf_builder import build_report_pdf
 
     cliente = (await db.execute(
@@ -825,7 +825,7 @@ async def client_dossie_pdf(
     health = await client_health_score(client_id, current_user, db)
     timeline = await client_timeline(client_id, 20, current_user, db)
     processos = (await db.execute(
-        select(LegalProcess).where(LegalProcess.client_id == cliente.id, LegalProcess.tenant_id == current_user.tenant_id)
+        select(LegalProcess).where(client_linked_processes_filter(cliente.id), LegalProcess.tenant_id == current_user.tenant_id)
     )).scalars().all()
 
     dados_cliente = "\n".join(filter(None, [
