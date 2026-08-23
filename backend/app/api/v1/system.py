@@ -799,8 +799,26 @@ async def health_detailed(current_user: User = Depends(get_current_user)):
         except Exception:
             return False, -1
 
+    def probe_auth() -> tuple[bool, int]:
+        """Fase 223 — round-trip real de JWT (assina + decodifica com o
+        SECRET_KEY ativo), substituindo o card que antes sempre dizia
+        "funcionando" sem checar nada. Síncrono, sem I/O — mesmo padrão
+        de `_ai_configured` abaixo (calculado inline, não via gather)."""
+        t0 = time.monotonic()
+        try:
+            from app.core.security import create_access_token, decode_access_token
+            token = create_access_token(subject="healthcheck", role="ADMIN")
+            payload = decode_access_token(token)
+            ok = payload.get("sub") == "healthcheck"
+            return ok, int((time.monotonic() - t0) * 1000)
+        except Exception:
+            return False, -1
+
     from app.db.base import AsyncSessionLocal
     from app.models.agent_run import AgentRun
+    from app.models.sync_run import SyncRun
+    from app.models.audit_log import AuditLog
+    from app.integrations.object_storage import is_configured as storage_is_configured
 
     async with AsyncSessionLocal() as db_check:
         pg_ok, pg_ms = await probe_postgres(db_check)
@@ -808,8 +826,12 @@ async def health_detailed(current_user: User = Depends(get_current_user)):
     (redis_ok, redis_ms), (qdrant_ok, qdrant_ms), (anthropic_ok, anthropic_ms), (datajud_ok, datajud_ms) = await asyncio.gather(
         probe_redis(), probe_qdrant(), probe_anthropic(), probe_datajud()
     )
+    auth_ok, auth_ms = probe_auth()
 
-    # Recent agent activity (last 24h)
+    # Recent agent activity (last 24h) + Fase 223: última captura de
+    # publicações (Comunica/DJe, global — não filtra por tenant) e último
+    # registro de auditoria, substituindo os 2 cards que antes sempre
+    # diziam "funcionando" sem consultar nada.
     async with AsyncSessionLocal() as db2:
         cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
         q = await db2.execute(
@@ -823,6 +845,36 @@ async def health_detailed(current_user: User = Depends(get_current_user)):
             for r in q.all()
         ]
 
+        sync_row = (await db2.execute(
+            select(SyncRun.status, SyncRun.started_at)
+            .where(SyncRun.fonte == "comunica")
+            .order_by(SyncRun.started_at.desc())
+            .limit(1)
+        )).first()
+        if sync_row is None:
+            publicacoes_state = {"state": "nunca_executou", "last_run_at": None, "last_status": None}
+        else:
+            stale = (datetime.now(timezone.utc) - sync_row.started_at) > timedelta(hours=26)
+            publicacoes_state = {
+                "state": "erro" if sync_row.status == "ERRO" else ("obsoleto" if stale else "ok"),
+                "last_run_at": sync_row.started_at.isoformat(),
+                "last_status": sync_row.status,
+            }
+
+        ultimo_audit_at = (await db2.execute(
+            select(AuditLog.timestamp).order_by(AuditLog.timestamp.desc()).limit(1)
+        )).scalar_one_or_none()
+        if ultimo_audit_at is None:
+            auditoria_state = {"state": "sem_registros", "last_event_at": None}
+        else:
+            stale = (datetime.now(timezone.utc) - ultimo_audit_at) > timedelta(hours=6)
+            auditoria_state = {
+                "state": "obsoleto" if stale else "ok",
+                "last_event_at": ultimo_audit_at.isoformat(),
+            }
+
+    storage_configured = storage_is_configured()
+
     # Celery: workers vivos + tarefas ativas (leve — inspect com timeout curto).
     try:
         from app.services.brain_infra import _celery as _celery_probe
@@ -833,6 +885,8 @@ async def health_detailed(current_user: User = Depends(get_current_user)):
     from app.config import settings as cfg
     from app.core.events import APP_START_TIME
     from app.integrations.llm_client import resolve_provider as _resolve_provider
+
+    push_configured = bool(cfg.PUSH_ENABLED and cfg.VAPID_PRIVATE_KEY and cfg.VAPID_PUBLIC_KEY)
 
     # IA central: qual provider está ativo e se há chave de sistema configurada.
     # BYOK-first: sem chave central não é erro (usuários trazem a própria chave).
@@ -855,6 +909,9 @@ async def health_detailed(current_user: User = Depends(get_current_user)):
             "provider": _ai_provider,
         },
         "datajud": {"ok": datajud_ok, "latency_ms": datajud_ms},
+        "auth": {"ok": auth_ok, "latency_ms": auth_ms},
+        "storage": {"ok": storage_configured, "latency_ms": -1, "configured": storage_configured},
+        "notificacoes": {"ok": push_configured, "latency_ms": -1, "configured": push_configured},
     }
     core_ok = all(services[k]["ok"] for k in ("postgresql", "redis"))
 
@@ -872,6 +929,8 @@ async def health_detailed(current_user: User = Depends(get_current_user)):
         "recent_agent_runs": recent_runs,
         "celery": {"ok": celery_status.get("ok"), "workers": celery_status.get("workers", 0),
                    "total_ativas": celery_status.get("total_ativas", 0)},
+        "publicacoes": publicacoes_state,
+        "auditoria": auditoria_state,
     }
 
 

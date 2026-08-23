@@ -1950,6 +1950,80 @@ Histórico:
   vale a pena corrigir o e-mail do fixture. Verificação principal desta
   fase foi HTTP real (curl) contra o backend local, como em toda fase
   recente desta sessão.
+- **Fase 223** — usuário pediu "elabore uma nova versão do saúde do
+  sistema e analise, valide e corrija cada módulo presente. No modo
+  cérebro, valide e corrija cada módulo presente." Investigação
+  (Explore + leitura direta) confirmou que as 2 telas já existiam e
+  eram maduras — não era construir do zero.
+  - **Parte A — `/admin/health` ("Saúde do Sistema")**: dos 13 cards de
+    módulo, 5 já eram reais (postgresql/redis/qdrant/anthropic/
+    datajud) mas **6 eram hardcoded pra sempre dizer "funcionando"**
+    sem checar nada — `publicacoes`, `auth`, `auditoria`,
+    `notificacoes`, `storage` e `backup`. `backup` já era honesto
+    (`"planejado"`, confirmado por grep que não existe NENHUM
+    mecanismo de backup no código — não mexido). Os outros 5 ganharam
+    checagem real em `health_detailed()`
+    (`backend/app/api/v1/system.py`): `auth` — round-trip de JWT
+    (`create_access_token`/`decode_access_token`) usando o
+    `SECRET_KEY` ativo; `storage` — reaproveita
+    `object_storage.is_configured()` (Fase 141) direto; `notificacoes`
+    — mesmo gate que `webpush.py` já usa (`PUSH_ENABLED` + VAPID
+    keys); `publicacoes` — última linha real de `SyncRun` com
+    `fonte="comunica"`; `auditoria` — última linha real de
+    `AuditLog.timestamp`. Frontend (`admin/health/page.tsx`) trocou os
+    5 `getStatus` hardcoded por leitura real dos campos novos, mesmo
+    padrão dos 5 já reais. Também corrigido o "Progresso do Projeto"
+    (`PHASES`), que estava congelado ~80 Fases atrás e marcava
+    "Integrações externas" como pendente — confirmado por grep que
+    gateway de pagamento (Stripe/Mercado Pago), assinatura digital
+    (Clicksign) e WhatsApp (Meta Cloud API, 3 call sites reais em
+    produção: `dje_monitor.py`, `invoices.py`,
+    `deadline_check.py`) já estão implementados (só a ativação depende
+    de credencial do escritório) — linha corrigida pra `done: true`, e
+    3 linhas novas na mesma granularidade grossa das existentes
+    resumindo o que foi entregue desde então (Ética & Integridade —
+    Fase 189; ambiente de demonstração — Fases 199-200; integrações
+    governamentais SERPRO/PDPJ/BrasilAPI — Fase 217).
+    `COMPLETION_PERCENT` (lista mantida à mão, sem fonte de dado
+    dinâmica barata e óbvia pra substituir) passou a refletir 100% com
+    o dado corrigido — mantido como está, não construído um mecanismo
+    dinâmico novo.
+  - **Parte B — "Modo Cérebro" (`/admin/cerebro`)**: a aba Mapa já era
+    um grafo real introspectado (não hardcoded) — "cada módulo
+    presente" aqui foi interpretado como os nós reais do Mapa
+    (agentes/providers/fontes/infra), não as outras 7 abas (que são
+    visualizações do mesmo dado). Validação roteirizada contra o
+    sistema rodando de verdade: as 20 entradas de
+    `resolve_agent_class` importam sem erro; `integration_hub.
+    list_status()` roda limpo pra um tenant real cobrindo os 10
+    providers registrados; as 2 fontes de captura (`comunica`,
+    `datajud`) têm `nome`/`capabilities` válidos. **Nenhum bug
+    encontrado** — os 3 pontos vieram limpos, nenhuma correção
+    necessária nesta parte. `POST /system/brain/insights`
+    (auto-análise por IA) testado contra o sistema real — falha
+    graciosamente (200, `ok:false`) por falta de credencial Anthropic
+    neste sandbox, comportamento fail-soft esperado (mesmo padrão da
+    Fase 204.A), não um bug.
+  - Verificado via HTTP real + Postgres real (Postgres/Redis/uvicorn
+    reiniciados neste container, que tinha sido reciclado): os 5
+    módulos corrigidos testados com o padrão antes/depois — `auth`
+    forçado a falhar de verdade com `JWT_ALGORITHM` inválido
+    (confirmado via chamada direta às primitivas, já que um
+    `SECRET_KEY` vazio mas autoconsistente não quebra o round-trip —
+    limitação inerente ao desenho, não um bug); `storage`/
+    `notificacoes` alternando entre não configurado/configurado via
+    env vars reais; `publicacoes` alternando ERRO/OK via `SyncRun`
+    inserido direto no Postgres. Walkthrough real via Playwright
+    (Chromium do sandbox) em `/admin/health` (13 cards com status
+    reais, roadmap com as 4 linhas corrigidas/novas, 100%) e
+    `/admin/cerebro` → Mapa (grafo carregando sem erro de console,
+    42 nós/42 arestas, nenhuma aresta órfã) como ADMIN e SUPERADMIN
+    reais. `ruff check`/`py_compile` no backend tocado; `tsc --noEmit`/
+    `eslint` no frontend tocado (precisou de uma anotação de tipo
+    explícita em `PHASES` depois de remover o único `active: true` da
+    lista, senão o TS inferia um tipo sem o campo `active` e quebrava
+    a renderização do roadmap — pego pelo próprio `tsc`, corrigido
+    antes do commit).
 
 ## Riscos conhecidos / débito técnico
 
