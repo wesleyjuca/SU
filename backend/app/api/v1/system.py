@@ -545,7 +545,7 @@ async def analytics_gestao(
             select(User).where(User.tenant_id == tid, User.is_active == True, User.role != "CLIENT")  # noqa: E712
         )).scalars().all()
         produtividade = sorted(
-            [{"advogado": u.full_name,
+            [{"id": str(u.id), "advogado": u.full_name,
               "processos": int(proc_por_resp.get(u.id, 0)),
               "processos_ativos": int(proc_ativos_por_resp.get(u.id, 0)),
               "prazos_pendentes": int(prazos_pendentes.get(u.id, 0)),
