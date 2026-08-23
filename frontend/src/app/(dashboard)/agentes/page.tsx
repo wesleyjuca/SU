@@ -139,6 +139,7 @@ export default function AgentesPage() {
   const [runSteps, setRunSteps] = useState<RunStep[] | null>(null);
   const [runStatus, setRunStatus] = useState<string | null>(null);
   const [lastRunWasChain, setLastRunWasChain] = useState(false);
+  const [chainCustomAgentId, setChainCustomAgentId] = useState("");
   const isChain = CHAIN_TASK_TYPES.some((c) => c.value === taskType);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // Fase 196 — resposta de IA em streaming: só populado pra disparo direto
@@ -216,6 +217,10 @@ export default function AgentesPage() {
       const task_input: Record<string, unknown> = { descricao: taskDesc || `Tarefa via agente ${agentName}` };
       if (taskType === "generate_code" && arquivosInput.trim()) {
         task_input.arquivos = arquivosInput.split(",").map((s) => s.trim()).filter(Boolean);
+      }
+      // Fase 225 — anexa 1 agente customizado ao final da chain, se escolhido.
+      if (isChain && chainCustomAgentId) {
+        task_input.custom_agent_id = chainCustomAgentId;
       }
       const res = await fetch("/api/v1/agents/trigger", {
         method: "POST",
@@ -473,6 +478,23 @@ export default function AgentesPage() {
                 placeholder="backend/app/..., frontend/src/..."
                 className="w-full border border-afj-cream-dark rounded-md px-3 py-2 text-sm focus:outline-none focus:border-afj-gold bg-white"
               />
+            </div>
+          )}
+          {isChain && customAgents.length > 0 && (
+            <div>
+              <label className="text-xs text-afj-black/60 block mb-1">
+                Anexar agente customizado ao final (opcional)
+              </label>
+              <select
+                value={chainCustomAgentId}
+                onChange={(e) => setChainCustomAgentId(e.target.value)}
+                className="w-full border border-afj-cream-dark rounded-md px-3 py-2 text-sm text-afj-black bg-white focus:outline-none focus:border-afj-gold"
+              >
+                <option value="">Nenhum</option>
+                {customAgents.map((a) => (
+                  <option key={a.id} value={a.id}>{a.name}</option>
+                ))}
+              </select>
             </div>
           )}
         </div>

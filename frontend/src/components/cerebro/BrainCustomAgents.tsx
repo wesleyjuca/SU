@@ -12,6 +12,7 @@ interface CustomAgentRow {
   rag_collections: string[] | null;
   status: string;
   max_cost_usd_per_run: number;
+  requires_human_approval: boolean;
   created_by: string;
   created_at: string;
 }
@@ -31,7 +32,7 @@ export function BrainCustomAgents() {
   const [resolvendo, setResolvendo] = useState<string | null>(null);
   // Fase 193 — editar um agente já APROVADO (antes só dava pra recriar do zero).
   const [editandoId, setEditandoId] = useState<string | null>(null);
-  const [editForm, setEditForm] = useState({ description: "", system_prompt: "", rag_collections: "", max_cost_usd_per_run: "" });
+  const [editForm, setEditForm] = useState({ description: "", system_prompt: "", rag_collections: "", max_cost_usd_per_run: "", requires_human_approval: false });
   const [salvandoEdicao, setSalvandoEdicao] = useState(false);
 
   const carregar = useCallback(async () => {
@@ -72,6 +73,7 @@ export function BrainCustomAgents() {
       system_prompt: a.system_prompt,
       rag_collections: (a.rag_collections || []).join(", "),
       max_cost_usd_per_run: String(a.max_cost_usd_per_run),
+      requires_human_approval: a.requires_human_approval,
     });
   }
 
@@ -86,6 +88,7 @@ export function BrainCustomAgents() {
         system_prompt: editForm.system_prompt,
         rag_collections,
         max_cost_usd_per_run: Number(editForm.max_cost_usd_per_run) || 0,
+        requires_human_approval: editForm.requires_human_approval,
       });
       toast.success("Agente atualizado.");
       setAgentes((prev) => (prev ?? []).map((a) => (a.id === id ? atualizado : a)));
@@ -203,6 +206,12 @@ export function BrainCustomAgents() {
                             className="w-full border border-afj-cream-dark rounded-sm px-2.5 py-1.5 focus:outline-none focus:border-afj-gold" />
                         </div>
                       </div>
+                      <label className="flex items-center gap-2 cursor-pointer select-none">
+                        <input type="checkbox" checked={editForm.requires_human_approval}
+                          onChange={(e) => setEditForm((f) => ({ ...f, requires_human_approval: e.target.checked }))}
+                          className="accent-afj-gold w-3.5 h-3.5" />
+                        <span className="text-afj-black/70">Exigir aprovação humana quando usado em uma chain</span>
+                      </label>
                       <div className="flex gap-2">
                         <button onClick={() => salvarEdicao(a.id)} disabled={salvandoEdicao}
                           className="btn-afj-primary text-xs py-1.5 px-3 rounded-sm flex items-center gap-1.5 disabled:opacity-50">
@@ -227,6 +236,7 @@ export function BrainCustomAgents() {
                       )}
                       <p className="text-afj-black/40">
                         Teto de custo por execução: US$ {a.max_cost_usd_per_run.toFixed(2)} · Proposto em {new Date(a.created_at).toLocaleString("pt-BR")}
+                        {a.requires_human_approval && " · Exige aprovação humana quando usado em uma chain"}
                       </p>
                     </div>
                   )}

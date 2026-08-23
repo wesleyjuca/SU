@@ -2075,6 +2075,80 @@ Histórico:
   se resincroniza sozinha após o fetch assíncrono resolver. Registrado
   aqui pra não se perder; não investigado a fundo por estar fora do
   escopo do pedido (fusão de páginas, não correção de bug de tema).
+- **Fase 225** — última das 16 propostas de evolução da Fase 203 ainda
+  não implementada (guardada por último desde a Fase 206 por "tocar o
+  orchestrator"): agente customizado como passo de chain. Antes, um
+  agente customizado só rodava sozinho (`run_custom_agent`, chain de 1
+  passo). Investigação (leitura direta de `router.py`/`chain_resume.py`/
+  `agent_tasks.py`/`chain_projectors.py`) achou o fato que decidiu todo
+  o design: nenhum dos 3 pontos que retomam uma chain (aprovação HITL,
+  crash/retry de worker) guarda "a forma da chain" em lugar nenhum —
+  todos recalculam `get_chain(task_type, input_data)` do zero a partir
+  do payload ORIGINAL do disparo (`agent_run.input_data` persistido, ou
+  os argumentos originais da task Celery). Ou seja, qualquer campo no
+  payload original sobrevive intacto a qualquer resume, sem precisar
+  mexer em `execute_chain_step`/`resolve_agent_class`/persistência de
+  `AgentStep`. Escopo definido a partir disso: **anexar 1 agente
+  customizado já aprovado ao FINAL** de uma das 3 chains existentes
+  (`new_process_intake`, `generate_and_review_petition`,
+  `full_contract_flow`) via `custom_agent_id` no payload do disparo —
+  não um chain-builder genérico (não existe UI de composição de chain
+  nenhuma hoje, e `CustomAgent` já é platform-wide, não por tenant).
+  - `router.py::get_chain()` ganhou `CUSTOM_AGENT_APPENDABLE_CHAINS`
+    (allowlist explícito) e anexa `"custom_agent"` no final SE
+    `custom_agent_id` estiver no payload E o `task_type` estiver na
+    allowlist — as 3 chains sem esse campo ficam byte-idênticas.
+  - `chain_projectors.py` ganhou `_any_to_custom_agent()` — 1 fallback
+    genérico (não pontes por par, já que o passo customizado pode vir
+    de qualquer uma das 3 chains) que tenta as chaves de texto mais
+    prováveis da saída do passo anterior; o `descricao` explícito do
+    usuário no disparo original sempre vence por cima (invariante já
+    existente do projeto).
+  - `CustomAgent`/`CustomAgentVersion` ganharam
+    `requires_human_approval: bool` (migração pelo padrão já
+    estabelecido — `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`
+    idempotente em `events.py`, não Alembic). `CustomAgentExecutor`
+    seta `self.requires_human_approval` como atributo de instância
+    dentro de `execute()` — `BaseAgent.run()` já lê isso DEPOIS de
+    `execute()` retornar, então o gate HITL genérico (o mesmo dos 19
+    agentes nativos) passa a funcionar pro passo customizado sem
+    nenhuma mudança em `agent.py`. `POST /custom-agents/{id}/resolve`
+    e `PATCH /custom-agents/{id}` (SUPERADMIN-only) controlam o campo.
+  - Frontend: `/agentes` ganha um `<select>` ("Anexar agente
+    customizado ao final") quando o `task_type` escolhido é uma chain,
+    reaproveitando a lista de customAgents já buscada pra
+    `CustomAgentCard`; `BrainCustomAgents.tsx` ganha um checkbox no
+    form de edição já existente pro campo `requires_human_approval`.
+  - Verificado com um script real (não só pytest — Postgres real,
+    orquestrador real, `call_claude` monkeypatchado nos módulos
+    relevantes, `review_agent.execute()` inteiro substituído por um
+    mock simples já que sua lógica interna de 4 sub-chamadas paralelas
+    é ortogonal a esta fase): (a) regressão — `full_contract_flow` sem
+    `custom_agent_id` continua exatamente igual (2 passos, mesmo
+    comportamento de sempre); (b) com `custom_agent_id`, a chain vira 3
+    passos e completa em SUCCESS, com o passo customizado recebendo
+    `descricao` via o fallback genérico do projector; (c) com
+    `requires_human_approval=True` no agente customizado, a chain para
+    de novo APÓS o passo customizado (2º gate HITL na mesma chain,
+    `Approval` real com `tipo=CUSTOM_AGENT_REVIEW`), e aprovar essa
+    2ª Approval finaliza a run em SUCCESS; (d) **o teste mais
+    importante** — chamando `_resume_chain_from_steps` diretamente com
+    2 `AgentStep`s já persistidos (simulando um worker que morreu
+    depois de terminar os 2 primeiros passos), confirmado que NÃO
+    reexecuta os passos já feitos, só roda o passo customizado que
+    faltava, com `custom_agent_id` ainda resolvendo corretamente — a
+    premissa central do design (payload original sobrevive a qualquer
+    resume) se confirmou empiricamente, não só por leitura de código.
+    Frontend verificado via Playwright real: o `<select>` novo aparece
+    só pra `task_type` de chain e o POST real de `/agents/trigger`
+    inclui `custom_agent_id`; o checkbox novo faz round-trip real via
+    `PATCH /custom-agents/{id}`.
+  - Fora de escopo, documentado como P2 no código: forma de passo
+    parametrizada (pra 2+ agentes customizados ou posição não-final na
+    mesma chain), chain-builder genérico (precisaria de uma tabela de
+    definição de chain de verdade, já que `TASK_ROUTE_MAP` sendo só
+    código é incompatível com chain autorada pelo usuário), e nós por
+    `CustomAgent` individual no Mapa do Cérebro (cosmético).
 
 ## Riscos conhecidos / débito técnico
 
