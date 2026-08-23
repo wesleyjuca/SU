@@ -1609,12 +1609,50 @@ Histórico:
     teste de balanceamento documentado) antes de ativar a validação de
     CPF/CNPJ com uma credencial SERPRO real em produção; (3) contratar a
     Loja SERPRO e confirmar preço/limites por leitura direta (ficam atrás
-    de login, não confirmados nesta pesquisa). Fase 216 (playbooks de
-    agentes por área) segue planejada e aprovada, mas pausada — retomar
-    depois, mesma ordem "eu escolho a ordem" já estabelecida. Os demais
-    itens P2 do relatório Conecta (Login Único gov.br, benefícios
-    previdenciários, CND, Registro de Referência de Municípios) seguem
-    como propostas não implementadas.
+    de login, não confirmados nesta pesquisa). Os demais itens P2 do
+    relatório Conecta (Login Único gov.br, benefícios previdenciários,
+    CND, Registro de Referência de Municípios) seguem como propostas não
+    implementadas.
+- **Fase 216** (6ª das 8 propostas de evolução da Fase 209, retomada após
+  a Fase 217): playbooks de agentes por área. `strategy_agent` já
+  injetava um dado próprio do escritório no prompt — taxa de êxito
+  interna por área (`_historico_exito_area`, Fase 208.1). Novo model
+  `AgentAreaPlaybook` (`tenant_id`+`area_direito`, unique constraint —
+  1 orientação ativa por área) + `GET/POST/DELETE /playbooks`
+  (`_STAFF`/`_GESTAO`, mesmo padrão de `_STAFF`/`_GESTAO` de `crm.py`,
+  Fase 213) permitem que ADMIN/SOCIO/GESTOR cadastrem uma
+  orientação/checklist em texto livre por área, injetada
+  automaticamente sob um novo cabeçalho "ORIENTAÇÃO INTERNA DO
+  ESCRITÓRIO PARA ESTA ÁREA" no prompt do `strategy_agent`, imediatamente
+  ao lado (não em substituição) do bloco de histórico de êxito já
+  existente. Fail-soft: sem playbook cadastrado, o agente usa uma
+  mensagem de fallback e nunca quebra (`_playbook_area()`, mesmo padrão
+  de `_historico_exito_area()`). Escopo deliberadamente restrito ao
+  `strategy_agent` — `petition_agent`/`jurisprudence_agent`/
+  `review_agent` usam `area_direito` só pra montar query de busca RAG,
+  sem ponto de injeção limpo de um bloco só de texto. Frontend
+  (`agentes/page.tsx`): nova seção "Playbooks por Área" entre "Disparar
+  Tarefa" e o grid de agentes — select de área + textarea + lista de
+  áreas já cobertas; gate próprio (`podeEditarPlaybook`, ADMIN/SOCIO/
+  GESTOR) deliberadamente separado de `podePropoAgente` (assunto
+  diferente — propor agente customizado). Verificado via HTTP real
+  contra Postgres real: upsert (mesmo id, texto atualizado), isolamento
+  cross-tenant, ADVOGADO lê mas não escreve (403 no POST). Injeção no
+  prompt verificada chamando `StrategyAgent.execute()` diretamente com
+  `call_claude` monkeypatchado (nunca bateu a API real da Anthropic):
+  playbook configurado aparece no prompt com o texto exato semeado;
+  área sem playbook usa o fallback sem quebrar o agente; os blocos de
+  208.1 e 216 coexistem no mesmo prompt (nenhum clobera o outro). Testes
+  novos (`test_agent_playbooks_fase216.py`,
+  `test_strategy_agent_playbook_fase216.py`) com a mesma flakiness de
+  pool asyncpg/pytest-asyncio documentada desde a Fase 199 — reproduzida
+  de novo mesmo neste ambiente (cross-checada contra
+  `test_crm_metas_fase213.py` e `test_strategy_agent_win_rate_fase208.py`,
+  que falham de forma idêntica), verificação principal via HTTP
+  real/chamada direta como nas fases anteriores. Limitação herdada de
+  208.1: `area_direito` é texto livre sem enum — o match do playbook é
+  por igualdade exata de string, mesma inconsistência pré-existente
+  (case/acentuação) já presente no histórico de êxito.
 
 ## Riscos conhecidos / débito técnico
 

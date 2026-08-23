@@ -24,6 +24,7 @@ from app.models.tese import Tese
 from app.models.agent_prompt import AgentPromptConfig, AgentPromptVersion, AgentAttachment
 from app.models.custom_agent import CustomAgent, CustomAgentVersion
 from app.models.gov_registry_lookup import GovRegistryLookup
+from app.models.agent_playbook import AgentAreaPlaybook
 
 __all__ = [
     "Tenant", "TenantConfig",
@@ -54,4 +55,5 @@ __all__ = [
     "AgentAttachment",
     "CustomAgent", "CustomAgentVersion",
     "GovRegistryLookup",
+    "AgentAreaPlaybook",
 ]
