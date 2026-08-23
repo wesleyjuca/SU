@@ -43,6 +43,17 @@ TASK_ROUTE_MAP: dict[str, str | list[str]] = {
     ],
 }
 
+# Fase 225 — chains elegíveis a receber 1 passo de agente customizado
+# anexado ao FINAL (não é um chain-builder genérico — só as 3 chains
+# multi-agente já existentes). Allowlist explícita em vez de "qualquer
+# chain com len>1": evita que um task_type futuro que aceite
+# custom_agent_id por outro motivo mude de comportamento sem intenção.
+CUSTOM_AGENT_APPENDABLE_CHAINS: set[str] = {
+    "new_process_intake",
+    "generate_and_review_petition",
+    "full_contract_flow",
+}
+
 # Palavras-chave para inferência automática de task_type
 INTENT_KEYWORDS: dict[str, list[str]] = {
     "generate_petition": ["petição", "peticao", "recurso", "contestação", "contestacao", "inicial", "memorial"],
@@ -70,15 +81,27 @@ def get_chain(task_type: str, task_input: dict | None = None) -> list[str]:
 
     if task_type in TASK_ROUTE_MAP:
         route = TASK_ROUTE_MAP[task_type]
-        return list(route) if isinstance(route, list) else [route]
+        chain = list(route) if isinstance(route, list) else [route]
+    else:
+        chain = None
+        text = (task_input.get("descricao") or task_input.get("query") or "").lower()
+        for intent, keywords in INTENT_KEYWORDS.items():
+            if any(kw in text for kw in keywords):
+                route = TASK_ROUTE_MAP.get(intent, "orchestration_agent")
+                chain = list(route) if isinstance(route, list) else [route]
+                break
+        if chain is None:
+            chain = ["orchestration_agent"]
 
-    text = (task_input.get("descricao") or task_input.get("query") or "").lower()
-    for intent, keywords in INTENT_KEYWORDS.items():
-        if any(kw in text for kw in keywords):
-            route = TASK_ROUTE_MAP.get(intent, "orchestration_agent")
-            return list(route) if isinstance(route, list) else [route]
+    # Fase 225 — anexa 1 passo de agente customizado ao final, se pedido
+    # explicitamente no disparo. Funciona em qualquer retomada (aprovação
+    # HITL ou crash de worker) porque get_chain() é sempre recalculada a
+    # partir do payload ORIGINAL persistido/reentregue, nunca do
+    # ctx.task_input mutado em memória — ver chain_resume.py/agent_tasks.py.
+    if task_input.get("custom_agent_id") and task_type in CUSTOM_AGENT_APPENDABLE_CHAINS:
+        chain = chain + ["custom_agent"]
 
-    return ["orchestration_agent"]
+    return chain
 
 
 def classify_task(task_type: str, task_input: dict) -> str:

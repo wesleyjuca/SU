@@ -51,7 +51,7 @@ def test_todos_tipos_validos_batem_com_frontend():
 
 @pytest.mark.asyncio
 async def test_sugerir_prazo_texto_vazio_nao_chama_llm():
-    resultado = await sugerir_prazo("", None, None)
+    resultado = await sugerir_prazo(None, None, "", None, None)
     assert resultado == {"ok": False, "detail": "Intimação sem texto para analisar."}
 
 
@@ -64,7 +64,7 @@ async def test_sugerir_prazo_llm_falha_e_fail_soft(monkeypatch):
 
     monkeypatch.setattr(llm_client, "call_llm", _falha)
 
-    resultado = await sugerir_prazo("Intime-se para contestar.", "Intimação", "TJSP")
+    resultado = await sugerir_prazo(None, None, "Intime-se para contestar.", "Intimação", "TJSP")
     assert resultado["ok"] is False
     assert "detail" in resultado
 
@@ -78,7 +78,7 @@ async def test_sugerir_prazo_llm_ok_repassa_sugestao(monkeypatch):
 
     monkeypatch.setattr(llm_client, "call_llm", _ok)
 
-    resultado = await sugerir_prazo("Intime-se para contestar.", "Intimação", "TJSP")
+    resultado = await sugerir_prazo(None, None, "Intime-se para contestar.", "Intimação", "TJSP")
     assert resultado["ok"] is True
     assert resultado["tipo"] == "CONTESTACAO"
     assert resultado["dias"] == 15

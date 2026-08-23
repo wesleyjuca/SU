@@ -42,6 +42,7 @@ class CustomAgentResolveRequest(BaseModel):
     approved: bool
     rejection_reason: str | None = None
     max_cost_usd_per_run: float | None = None
+    requires_human_approval: bool | None = None
 
 
 class CustomAgentUpdateRequest(BaseModel):
@@ -52,6 +53,7 @@ class CustomAgentUpdateRequest(BaseModel):
     system_prompt: str | None = None
     rag_collections: list[str] | None = None
     max_cost_usd_per_run: float | None = None
+    requires_human_approval: bool | None = None
     change_summary: str | None = None
 
     @field_validator("rag_collections")
@@ -70,6 +72,7 @@ class CustomAgentVersionResponse(BaseModel):
     system_prompt: str
     rag_collections: list[str] | None
     max_cost_usd_per_run: float
+    requires_human_approval: bool
     changed_by: str | None
     change_summary: str | None
     created_at: str
@@ -83,6 +86,7 @@ class CustomAgentResponse(BaseModel):
     rag_collections: list[str] | None
     status: str
     max_cost_usd_per_run: float
+    requires_human_approval: bool
     created_by: str
     approved_by: str | None
     approved_at: str | None
@@ -95,6 +99,7 @@ class CustomAgentResponse(BaseModel):
             id=str(row.id), name=row.name, description=row.description,
             system_prompt=row.system_prompt, rag_collections=row.rag_collections,
             status=row.status, max_cost_usd_per_run=row.max_cost_usd_per_run,
+            requires_human_approval=row.requires_human_approval,
             created_by=str(row.created_by),
             approved_by=str(row.approved_by) if row.approved_by else None,
             approved_at=row.approved_at.isoformat() if row.approved_at else None,
@@ -192,6 +197,8 @@ async def resolve_custom_agent(
         row.rejection_reason = body.rejection_reason
     if body.approved and body.max_cost_usd_per_run is not None:
         row.max_cost_usd_per_run = body.max_cost_usd_per_run
+    if body.approved and body.requires_human_approval is not None:
+        row.requires_human_approval = body.requires_human_approval
     await db.flush()
 
     # Notifica o proponente do resultado.
@@ -227,6 +234,7 @@ async def update_custom_agent(
     db.add(CustomAgentVersion(
         agent_id=row.id, description=row.description, system_prompt=row.system_prompt,
         rag_collections=row.rag_collections, max_cost_usd_per_run=row.max_cost_usd_per_run,
+        requires_human_approval=row.requires_human_approval,
         changed_by=current_user.id, change_summary=body.change_summary,
     ))
 
@@ -238,6 +246,8 @@ async def update_custom_agent(
         row.rag_collections = body.rag_collections
     if body.max_cost_usd_per_run is not None:
         row.max_cost_usd_per_run = body.max_cost_usd_per_run
+    if body.requires_human_approval is not None:
+        row.requires_human_approval = body.requires_human_approval
     await db.flush()
     return CustomAgentResponse.from_row(row)
 
@@ -258,6 +268,7 @@ async def list_custom_agent_versions(
     return [CustomAgentVersionResponse(
         id=str(v.id), description=v.description, system_prompt=v.system_prompt,
         rag_collections=v.rag_collections, max_cost_usd_per_run=v.max_cost_usd_per_run,
+        requires_human_approval=v.requires_human_approval,
         changed_by=str(v.changed_by) if v.changed_by else None,
         change_summary=v.change_summary, created_at=v.created_at.isoformat(),
     ) for v in rows]

@@ -96,20 +96,42 @@ async def montar_system_prompt(db, pergunta: str) -> str:
     return "\n\n".join(partes)
 
 
-async def responder_stream(db, historico: list[dict], pergunta: str):
+async def responder_stream(db, historico: list[dict], pergunta: str, user_id=None):
     """Gerador assíncrono que emite ("delta", txt) e ("done", {...}).
 
     `historico` = mensagens anteriores [{role, content}]; `pergunta` = nova
     mensagem do usuário (já incluída no fim de historico pelo chamador OU passada
-    aqui). Monta o system prompt com fatos + infra + RAG."""
+    aqui). Monta o system prompt com fatos + infra + RAG.
+
+    Fase 226 — achado do usuário ("assistente não funciona"), mesma classe de
+    bug da Fase 204.A (`brain_insights.py`): esta chamava `call_llm_stream`
+    direto, sem nunca entrar em `user_ai_creds()` — dependia 100% da
+    `ANTHROPIC_API_KEY`/`GEMINI_API_KEY` do servidor, sem fallback pra IA
+    própria do SUPERADMIN que está conversando. `user_id` agora envolve a
+    chamada com o mesmo mecanismo BYOK usado por generate_petition/
+    review_document/manage_contract/gerar_insights.
+
+    Sessão PRÓPRIA (não a `db` recebida) pra resolver as credenciais: `db`
+    aqui vem de `Depends(get_db)` do endpoint (`system.py::brain_assistant`),
+    que a essa altura já foi fechada pelo FastAPI — a resposta é um
+    `StreamingResponse`, e a limpeza da dependência roda assim que a função
+    do endpoint retorna, antes do generator (este aqui) começar a ser
+    consumido. Mesma armadilha já documentada no próprio arquivo pra
+    persistir a resposta do assistente ("sessão nova — o generator roda
+    após o request") — `db` nunca era usada de fato até este fix (`_infra_
+    resumo`/`_rag_docs` não fazem query nenhuma com ela), por isso o risco
+    nunca tinha se manifestado antes."""
+    from app.db.base import AsyncSessionLocal
+    from app.integrations.byok import user_ai_creds
     from app.integrations.llm_client import call_llm_stream
 
     system = await montar_system_prompt(db, pergunta)
     # limita o histórico p/ não estourar contexto/custo
     mensagens = [{"role": m["role"], "content": m["content"]} for m in historico][-12:]
 
-    async for evento in call_llm_stream(mensagens, system=system, max_tokens=2048, temperature=0.2):
-        yield evento
+    async with AsyncSessionLocal() as creds_db, user_ai_creds(creds_db, user_id, "brain_assistant"):
+        async for evento in call_llm_stream(mensagens, system=system, max_tokens=2048, temperature=0.2):
+            yield evento
 
 
 # ─── Reindexação da documentação do sistema ──────────────────────────────────

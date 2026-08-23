@@ -79,7 +79,15 @@ class CustomAgentExecutor(BaseAgent):
             "cost_usd": round(cost, 4), "duration_ms": duration_ms,
         })
 
-        return AgentResult(
+        # Fase 225 — atributo de instância sombra o ClassVar (requires_human_
+        # approval=False por padrão); BaseAgent.run() lê self.requires_human_
+        # approval DEPOIS de execute() retornar, então isso já basta pra
+        # acionar o gate HITL genérico quando o agente customizado em si foi
+        # marcado como exigindo aprovação (só relevante quando anexado ao
+        # final de uma chain — no dispatch avulso não muda o comportamento).
+        self.requires_human_approval = row.requires_human_approval
+
+        result = AgentResult(
             status=AgentStatus.SUCCESS,
             agent_name=self.name,
             output={
@@ -91,3 +99,10 @@ class CustomAgentExecutor(BaseAgent):
             tokens_used=tokens_in + tokens_out,
             cost_usd=cost,
         )
+        if row.requires_human_approval:
+            result.approval_required = {
+                "tipo": "CUSTOM_AGENT_REVIEW",
+                "titulo": f"Revisar execução de '{row.name}' (agente customizado)",
+                "descricao": f"O agente customizado '{row.name}' requer aprovação humana antes de ser considerado concluído.",
+            }
+        return result

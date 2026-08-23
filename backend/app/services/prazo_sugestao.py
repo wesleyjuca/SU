@@ -94,9 +94,17 @@ def parse_sugestao(texto: str) -> dict | None:
     }
 
 
-async def sugerir_prazo(texto_intimacao: str, tipo_comunicacao: str | None, tribunal: str | None) -> dict:
+async def sugerir_prazo(db, user_id, texto_intimacao: str, tipo_comunicacao: str | None, tribunal: str | None) -> dict:
     """Chama o LLM e devolve `{ok, tipo, dias, dias_uteis, confianca, justificativa}`
-    ou `{ok: False, detail}` — nunca levanta exceção (fail-soft)."""
+    ou `{ok: False, detail}` — nunca levanta exceção (fail-soft).
+
+    Fase 226 — 2ª ocorrência confirmada da mesma classe de bug já corrigida
+    na Fase 204.A (`brain_insights.py`) e nesta mesma fase
+    (`brain_assistant.py`): chamava `call_llm` direto, sem `user_ai_creds()`
+    — dependia 100% da chave central do servidor, mesmo o chamador
+    (`publications.py::sugestao_prazo`) já tendo `db`/`current_user`
+    disponíveis (usados ali mesmo pra `enforce_budget`), só nunca
+    repassados pra cá."""
     if not (texto_intimacao or "").strip():
         return {"ok": False, "detail": "Intimação sem texto para analisar."}
 
@@ -107,13 +115,15 @@ async def sugerir_prazo(texto_intimacao: str, tipo_comunicacao: str | None, trib
         contexto += f"\nTRIBUNAL: {tribunal}"
 
     try:
+        from app.integrations.byok import user_ai_creds
         from app.integrations.llm_client import call_llm
-        conteudo, _in_tok, _out_tok, _custo = await call_llm(
-            messages=[{"role": "user", "content": contexto}],
-            system=SYSTEM_PROMPT,
-            max_tokens=400,
-            temperature=0.2,
-        )
+        async with user_ai_creds(db, user_id, "sugestao_prazo"):
+            conteudo, _in_tok, _out_tok, _custo = await call_llm(
+                messages=[{"role": "user", "content": contexto}],
+                system=SYSTEM_PROMPT,
+                max_tokens=400,
+                temperature=0.2,
+            )
     except Exception as exc:
         log.warning("sugestao_prazo_llm_falhou", error=str(exc))
         return {"ok": False, "detail": f"Falha ao consultar o modelo: {exc}"[:300]}

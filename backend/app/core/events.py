@@ -534,6 +534,13 @@ async def lifespan(app: FastAPI):
             # correspondente.
             "CREATE INDEX IF NOT EXISTS ix_financial_entries_tenant_status_pagamento ON financial_entries (tenant_id, status, data_pagamento)",
             "CREATE INDEX IF NOT EXISTS ix_financial_entries_tenant_tipo_status_vencimento ON financial_entries (tenant_id, tipo, status, data_vencimento)",
+            # Fase 225 — agente customizado pode exigir aprovação humana quando
+            # usado como passo final de uma chain (SUPERADMIN decide em
+            # /resolve ou /PATCH, nunca o proponente) — reaproveita o mesmo
+            # mecanismo requires_human_approval que BaseAgent.run() já checa
+            # pros 19 agentes nativos, não um gate paralelo.
+            "ALTER TABLE custom_agents ADD COLUMN IF NOT EXISTS requires_human_approval BOOLEAN NOT NULL DEFAULT false",
+            "ALTER TABLE custom_agent_versions ADD COLUMN IF NOT EXISTS requires_human_approval BOOLEAN NOT NULL DEFAULT false",
         ]:
             try:
                 async with engine.begin() as conn:

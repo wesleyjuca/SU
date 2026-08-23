@@ -121,6 +121,23 @@ def _contract_to_review(result: AgentResult, ctx: AgentContext) -> dict:
     return overrides
 
 
+def _any_to_custom_agent(result: AgentResult, ctx: AgentContext) -> dict:
+    """Fallback genérico p/ QUALQUER agente → custom_agent (Fase 225): o
+    passo customizado pode ser anexado ao final de qualquer uma das chains
+    em CUSTOM_AGENT_APPENDABLE_CHAINS (router.py), não uma combinação fixa
+    — por isso, ao contrário das pontes acima, esta NÃO é por par. Tenta as
+    chaves de texto mais prováveis da saída do passo anterior, na ordem de
+    "mais provável ter texto substancial" primeiro. Só entra como default
+    (project_output já dá prioridade a um bridge exato quando existe, e ao
+    task_input explícito do usuário sempre)."""
+    output = result.output or {}
+    for key in ("conteudo_texto", "conteudo", "resposta", "analise_estrategica", "analise_ia", "descricao_caso"):
+        value = output.get(key)
+        if value:
+            return {"descricao": str(value)[:8000]}
+    return {}
+
+
 CHAIN_PROJECTORS: dict[tuple[str, str], Bridge] = {
     ("process_agent", "jurisprudence_agent"): _process_to_jurisprudence,
     ("jurisprudence_agent", "strategy_agent"): _jurisprudence_to_strategy,
@@ -140,5 +157,7 @@ def project_output(from_agent: str, to_agent: str, result: AgentResult, ctx: Age
     ele o payload original do trigger ou já resultado de uma projeção
     anterior na mesma chain)."""
     bridge = CHAIN_PROJECTORS.get((from_agent, to_agent))
+    if not bridge and to_agent == "custom_agent":
+        bridge = _any_to_custom_agent
     overrides = bridge(result, ctx) if bridge else _default_projector(result, ctx)
     return {**overrides, **ctx.task_input}

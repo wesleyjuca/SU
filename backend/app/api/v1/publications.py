@@ -178,7 +178,7 @@ async def sugestao_prazo(
         raise NotFoundError("Intimação", intimacao_id)
 
     await enforce_budget(db, current_user.id, current_user.tenant_id)
-    return await sugerir_prazo(intim.texto or "", intim.tipo_comunicacao, intim.tribunal)
+    return await sugerir_prazo(db, current_user.id, intim.texto or "", intim.tipo_comunicacao, intim.tribunal)
 
 
 @router.post("/{intimacao_id}/ignorar")

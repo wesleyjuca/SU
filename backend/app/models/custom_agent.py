@@ -10,7 +10,7 @@ Fase 193 — edição de um agente já APROVADO agora é possível (débito
 técnico documentado desde a 140.2), seguindo o padrão apontado aqui desde
 então: `CustomAgentVersion` snapshota o estado ANTERIOR a cada edição,
 mesmo padrão de `AgentPromptVersion` (app/models/agent_prompt.py)."""
-from sqlalchemy import String, ForeignKey, Text, Float
+from sqlalchemy import String, ForeignKey, Text, Float, Boolean
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import UUID as PGUUID, JSONB
 from sqlalchemy import DateTime, func
@@ -36,6 +36,12 @@ class CustomAgent(Base):
     # (não o proponente no POST), evita um ADMIN se auto-conceder orçamento
     # alto que o aprovador aceita sem notar.
     max_cost_usd_per_run: Mapped[float] = mapped_column(Float, nullable=False, default=0.50)
+    # Fase 225 — só relevante quando o agente é anexado ao final de uma chain
+    # multi-agente (router.py::CUSTOM_AGENT_APPENDABLE_CHAINS); no dispatch
+    # avulso (run_custom_agent) não muda nada. Reaproveita o mesmo mecanismo
+    # de HITL que BaseAgent.run() já checa pros 19 agentes nativos — quem
+    # controla é o SUPERADMIN no /resolve ou /PATCH, nunca o proponente.
+    requires_human_approval: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     # Fase 180 — nullable pra permitir exclusão real de usuário (SUPERADMIN):
     # o agente aprovado é plataforma-wide, não pode ser apagado junto do
     # proponente. NULL = "proponente removido", nunca escrito no fluxo normal
@@ -61,6 +67,7 @@ class CustomAgentVersion(Base):
     system_prompt: Mapped[str] = mapped_column(Text, nullable=False)
     rag_collections: Mapped[list[str] | None] = mapped_column(JSONB)
     max_cost_usd_per_run: Mapped[float] = mapped_column(Float, nullable=False)
+    requires_human_approval: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     changed_by: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"))
     change_summary: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
