@@ -1653,6 +1653,37 @@ Histórico:
   208.1: `area_direito` é texto livre sem enum — o match do playbook é
   por igualdade exata de string, mesma inconsistência pré-existente
   (case/acentuação) já presente no histórico de êxito.
+- **Fase 218** — central de tarefas cross-módulo, última das 8 propostas
+  de evolução da auditoria adversarial da Fase 209 (fecha a lista
+  aberta desde então — todas as 8 entregues: 211-218). Achado que mudou
+  o formato da feature: `frontend/src/app/(dashboard)/minha-area/
+  page.tsx` já fazia ~80% do que a proposta original pedia (une prazos,
+  processos e intimações via `Promise.all` + cards separados, desde
+  antes desta sessão) — em vez de criar uma rota `/tarefas` nova e
+  concorrente, a fase estendeu essa página já existente com as 2 fontes
+  que faltavam (aprovações, notificações), sem tocar backend algum — os
+  3 endpoints necessários já existiam (`GET /processes/agenda?mine=true`,
+  `GET /approvals?status=PENDENTE`, `GET /notifications`). Achado
+  colateral relevante: `Approval.assignee_id` é uma coluna morta, nunca
+  escrita em lugar nenhum do backend — aprovações são uma caixa de
+  entrada broadcast do tenant inteiro, não atribuída por usuário; o novo
+  card "Aprovações pendentes" mostra por isso o mesmo dado agregado de
+  `/aprovacoes` (não um filtro "minhas"), decisão deliberada em vez de
+  fingir uma atribuição que não existe. Card de notificações reaproveita
+  o store global já mantido fresco por `useNotifications()`
+  (`(dashboard)/layout.tsx`) — sem fetch próprio — e exclui os tipos
+  `PRAZO_VENCENDO`/`APROVACAO_PENDENTE` (ecos automáticos dos 2 cards já
+  existentes de prazo/aprovação — sem esse filtro a mesma coisa
+  apareceria 2-3x na tela; risco confirmado, não hipotético: os dois
+  fluxos de disparo automático de notificação — `deadline_check.py` e
+  `approval.py` — já geram exatamente esses 2 tipos hoje). Verificado
+  via HTTP real contra Postgres real: `GET /approvals`/`GET
+  /notifications` retornam o shape esperado; uma `Approval` e 2
+  `Notification` (uma `NOVO_ANDAMENTO`, uma `PRAZO_VENCENDO`) semeadas
+  diretamente no banco confirmaram que a segunda é corretamente
+  excluída pelo filtro. `tsc --noEmit`/`eslint` limpos (0 warnings antes
+  e depois — arquivo não tinha nenhum warning pré-existente pra
+  cross-checar).
 
 ## Riscos conhecidos / débito técnico
 
