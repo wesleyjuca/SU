@@ -1,7 +1,6 @@
 "use client";
 import { useState, useEffect } from "react";
-import { Gavel, Plus, X, Save, Loader2, CalendarClock, BadgeCheck, DownloadCloud, EyeOff } from "lucide-react";
-import { Breadcrumb } from "@/components/layout/Breadcrumb";
+import { Plus, X, Save, Loader2, CalendarClock, BadgeCheck, DownloadCloud, EyeOff } from "lucide-react";
 import { useToast } from "@/components/ui/Toast";
 
 interface Feriado { data: string; descricao: string | null }
@@ -14,7 +13,11 @@ function authH(): HeadersInit {
   return { "Content-Type": "application/json", Authorization: `Bearer ${t}` };
 }
 
-export default function JuridicoPage() {
+/** Fase 224 — antes uma página própria (`admin/juridico`), fundida como aba
+ * dentro da zona "Escritório & Jurídico" de Configurações. Conteúdo/lógica
+ * inalterados, só sem a casca de página (breadcrumb/título) que agora vive
+ * no orquestrador da zona. */
+export function JuridicoTab() {
   const toast = useToast();
   const [feriados, setFeriados] = useState<Feriado[]>([]);
   const [loading, setLoading] = useState(true);
@@ -128,17 +131,7 @@ export default function JuridicoPage() {
   }
 
   return (
-    <div className="max-w-3xl mx-auto space-y-5">
-      <Breadcrumb crumbs={[{ label: "Dashboard", href: "/dashboard" }, { label: "Admin" }, { label: "Config. Jurídica" }]} />
-      <div className="afj-page-header">
-        <div>
-          <h1 className="font-display text-2xl font-semibold text-afj-black flex items-center gap-2">
-            <Gavel size={22} className="text-afj-gold" /> Configuração Jurídica
-          </h1>
-          <p className="text-afj-black/50 text-sm mt-0.5">Parâmetros que afetam o cálculo de prazos do escritório.</p>
-        </div>
-      </div>
-
+    <div className="space-y-5">
       <div className="afj-card p-5">
         <div className="flex items-center gap-2 mb-1">
           <CalendarClock size={16} className="text-afj-gold" />

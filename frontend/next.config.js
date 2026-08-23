@@ -37,6 +37,16 @@ const nextConfig = {
       },
     ];
   },
+  // Fase 224 — Personalização e Config. Jurídica foram fundidas em
+  // /configuracoes (zona "Escritório & Jurídico"). Redirect só pra
+  // bookmark/histórico do navegador — nenhum link interno aponta mais pras
+  // rotas antigas. `permanent: false` (307): mudança de IA interna, não SEO.
+  async redirects() {
+    return [
+      { source: "/admin/personalizacao", destination: "/configuracoes?zona=admin&aba=escritorio", permanent: false },
+      { source: "/admin/juridico", destination: "/configuracoes?zona=admin&aba=juridico", permanent: false },
+    ];
+  },
 };
 
 module.exports = nextConfig;

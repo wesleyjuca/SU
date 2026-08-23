@@ -2024,6 +2024,57 @@ Histórico:
     lista, senão o TS inferia um tipo sem o campo `active` e quebrava
     a renderização do roadmap — pego pelo próprio `tsc`, corrigido
     antes do commit).
+- **Fase 224** — usuário pediu pra verificar se era viável juntar
+  "Config. Jurídica" e "Personalização" dentro de "Configurações", de
+  forma remodelada. Investigação (3 Explore agents, cada um lendo uma
+  página inteira) confirmou viabilidade — mudança 100% de frontend,
+  todo endpoint que a página fundida chama já existia e já estava
+  corretamente gateado no backend. O problema real era de information
+  architecture, não técnico: `/configuracoes` era aberta a todo papel
+  (`roles: null`) enquanto `/admin/personalizacao` e `/admin/juridico`
+  eram só ADMIN/SUPERADMIN — fundir exigia 2 zonas internas, não uma
+  simples concatenação de abas. **Achado real confirmado durante a
+  investigação**: a aba "Aparência" de `/configuracoes` já era
+  visível a todo papel mas gravava em `PUT /tenant/branding`
+  (`require_role("ADMIN")` no backend) — um usuário sem esse papel
+  preenchia o formulário e o save dava 403 silencioso; também era uma
+  versão capenga (3 campos) do que a Personalização já fazia melhor
+  (8 campos, preview ao vivo). Implementação: `/configuracoes` agora
+  tem 2 zonas selecionáveis por pill — "Pessoal" (Perfil/Notificações/
+  Segurança, todo mundo, aba Aparência antiga removida — bug fechado)
+  e "Escritório & Jurídico" (só ADMIN/SUPERADMIN, mesmo cálculo de
+  `admin/layout.tsx`) com as 8 abas de Personalização inalteradas +
+  1 aba nova "Jurídico" com os 3 cards de Config. Jurídica como
+  estavam. Padrão de estado de aba (URL `?zona=`/`?aba=` → localStorage
+  → default) espelha `admin/cerebro/page.tsx`, aplicado numa camada a
+  mais (zona + aba dentro da zona). Novo
+  `frontend/src/components/configuracoes/` (`PersonalZone.tsx`,
+  `EscritorioZone.tsx`, `JuridicoTab.tsx`) — conteúdo/lógica das abas
+  extraído sem mudança das 2 páginas antigas, que foram apagadas.
+  `nav.ts` perde as 2 entradas antigas; `next.config.js` ganha
+  `redirects()` (307, mecanismo novo pro projeto — não havia nenhum
+  antes) de `/admin/personalizacao`/`/admin/juridico` pra
+  `/configuracoes?zona=admin&aba=...`, só pra bookmark/histórico do
+  navegador (grep confirmou zero links internos apontando pras rotas
+  antigas). Verificado via Playwright real contra backend real: ADMIN
+  vê as 2 zonas, clica nas 9 abas sem erro de console, aba Jurídico
+  com os 3 cards presentes, preview ao vivo funcionando; não-admin só
+  vê a zona Pessoal e, forçando `?zona=admin` na URL, cai de volta pra
+  Pessoal sem vazar UI administrativa; os 2 redirects testados de
+  ponta a ponta (URL antiga → zona+aba certas); sidebar/busca
+  confirmadas sem "Personalização"/"Config. Jurídica". **Achado
+  colateral, não corrigido nesta fase**: um teste de round-trip
+  (salvar nome do sistema na aba Aparência → recarregar a página)
+  mostrou o campo voltando com um valor desatualizado — reproduzido
+  também contra a página `admin/personalizacao` ORIGINAL (antes desta
+  fase, via `git stash`), confirmando que é uma race pré-existente
+  entre a hidratação assíncrona do tema (`fetchAndApplyTheme()` no
+  layout) e o `useState(theme.appName)` local de cada aba, não uma
+  regressão desta fusão — o backend persiste corretamente (confirmado
+  via `GET /tenant/theme` direto), só a UI de uma aba específica não
+  se resincroniza sozinha após o fetch assíncrono resolver. Registrado
+  aqui pra não se perder; não investigado a fundo por estar fora do
+  escopo do pedido (fusão de páginas, não correção de bug de tema).
 
 ## Riscos conhecidos / débito técnico
 
