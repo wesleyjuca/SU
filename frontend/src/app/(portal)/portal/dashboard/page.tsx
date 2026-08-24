@@ -1,9 +1,12 @@
 "use client";
 import { useState, useEffect } from "react";
-import { Scale, FileText, DollarSign, MessageSquare, ArrowRight } from "lucide-react";
-import Link from "next/link";
+import { Scale, FileText, DollarSign } from "lucide-react";
 import { portalApi } from "@/lib/portalApi";
 import { useToast } from "@/components/ui/Toast";
+import { ProcessosSection } from "@/components/portal/ProcessosSection";
+import { DocumentosSection } from "@/components/portal/DocumentosSection";
+import { FinanceiroSection } from "@/components/portal/FinanceiroSection";
+import { MensagensSection } from "@/components/portal/MensagensSection";
 
 interface PortalSummary {
   active_processes: number;
@@ -20,6 +23,14 @@ function formatBRL(value: number) {
   return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(value);
 }
 
+/** Fase 233 — usuário pediu "o portal do cliente deve conter somente um
+ * dashboard com toda a sua situação processual". O portal virou uma
+ * única tela: processos (sempre visível, seção principal) + documentos/
+ * financeiro/mensagens (cartões colapsáveis abaixo) — sem navegação por
+ * abas separadas. As 5 rotas antigas (`/portal/processos[/id]`,
+ * `/portal/documentos`, `/portal/financeiro`, `/portal/mensagens`)
+ * deixaram de existir; os mesmos endpoints de `portal.py` seguem sendo
+ * usados, só que por componentes desta página em vez de páginas soltas. */
 export default function PortalDashboardPage() {
   const toast = useToast();
   const [me, setMe] = useState<PortalMe | null>(null);
@@ -42,13 +53,10 @@ export default function PortalDashboardPage() {
       }
     }
     load();
-  }, []);
+  }, [toast]);
 
   const today = new Date().toLocaleDateString("pt-BR", {
-    weekday: "long",
-    day: "numeric",
-    month: "long",
-    year: "numeric",
+    weekday: "long", day: "numeric", month: "long", year: "numeric",
   });
 
   if (loading) {
@@ -60,6 +68,7 @@ export default function PortalDashboardPage() {
             <div key={i} className="bg-white rounded-xl border border-gray-200 p-5 h-24 animate-pulse bg-gray-100/50" />
           ))}
         </div>
+        <div className="bg-white rounded-xl border border-gray-200 p-5 h-40 animate-pulse" />
       </div>
     );
   }
@@ -74,70 +83,50 @@ export default function PortalDashboardPage() {
         <p className="text-sm text-gray-500 mt-0.5 capitalize">{today}</p>
       </div>
 
-      {/* Stats */}
+      {/* Stats — resumo visual, sem link (só 1 página no portal agora) */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div className="bg-white rounded-xl border border-gray-200 p-5">
-          <div className="flex items-center gap-3 mb-3">
+          <div className="flex items-center gap-3 mb-2">
             <div className="w-9 h-9 rounded-lg bg-blue-50 flex items-center justify-center">
               <Scale size={18} className="text-blue-600" />
             </div>
             <p className="text-sm font-medium text-gray-600">Processos Ativos</p>
           </div>
           <p className="text-3xl font-bold text-gray-900">{summary?.active_processes ?? 0}</p>
-          <Link href="/portal/processos" className="text-xs text-blue-600 hover:underline flex items-center gap-1 mt-2">
-            Ver processos <ArrowRight size={11} />
-          </Link>
         </div>
 
         <div className="bg-white rounded-xl border border-gray-200 p-5">
-          <div className="flex items-center gap-3 mb-3">
+          <div className="flex items-center gap-3 mb-2">
             <div className="w-9 h-9 rounded-lg bg-green-50 flex items-center justify-center">
               <FileText size={18} className="text-green-600" />
             </div>
             <p className="text-sm font-medium text-gray-600">Documentos</p>
           </div>
           <p className="text-3xl font-bold text-gray-900">{summary?.available_docs ?? 0}</p>
-          <Link href="/portal/documentos" className="text-xs text-green-600 hover:underline flex items-center gap-1 mt-2">
-            Ver documentos <ArrowRight size={11} />
-          </Link>
         </div>
 
         <div className="bg-white rounded-xl border border-gray-200 p-5">
-          <div className="flex items-center gap-3 mb-3">
+          <div className="flex items-center gap-3 mb-2">
             <div className="w-9 h-9 rounded-lg bg-amber-50 flex items-center justify-center">
               <DollarSign size={18} className="text-amber-600" />
             </div>
             <p className="text-sm font-medium text-gray-600">Saldo Pendente</p>
           </div>
           <p className="text-2xl font-bold text-gray-900">{formatBRL(summary?.outstanding_total ?? 0)}</p>
-          <Link href="/portal/financeiro" className="text-xs text-amber-600 hover:underline flex items-center gap-1 mt-2">
-            Ver financeiro <ArrowRight size={11} />
-          </Link>
         </div>
       </div>
 
-      {/* Quick actions */}
+      {/* Situação processual — seção principal, sempre visível */}
       <div>
-        <h2 className="text-sm font-semibold text-gray-700 uppercase tracking-wider mb-3">Acesso Rápido</h2>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          {[
-            { href: "/portal/processos", label: "Meus Processos", icon: Scale, color: "text-blue-600 bg-blue-50" },
-            { href: "/portal/documentos", label: "Documentos", icon: FileText, color: "text-green-600 bg-green-50" },
-            { href: "/portal/financeiro", label: "Financeiro", icon: DollarSign, color: "text-amber-600 bg-amber-50" },
-            { href: "/portal/mensagens", label: "Falar com o Escritório", icon: MessageSquare, color: "text-purple-600 bg-purple-50" },
-          ].map(({ href, label, icon: Icon, color }) => (
-            <Link
-              key={label}
-              href={href}
-              className="bg-white rounded-xl border border-gray-200 p-4 flex flex-col items-center gap-2 text-center hover:border-[#B8954A]/40 hover:shadow-sm transition-all"
-            >
-              <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${color}`}>
-                <Icon size={20} />
-              </div>
-              <span className="text-xs font-medium text-gray-700">{label}</span>
-            </Link>
-          ))}
-        </div>
+        <h2 className="text-sm font-semibold text-gray-700 uppercase tracking-wider mb-3">Situação Processual</h2>
+        <ProcessosSection />
+      </div>
+
+      {/* Demais seções — colapsáveis, fechadas por padrão */}
+      <div className="space-y-3">
+        <DocumentosSection />
+        <FinanceiroSection />
+        <MensagensSection />
       </div>
 
       {/* Client info */}

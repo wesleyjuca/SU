@@ -76,6 +76,11 @@ export default function ClientesPage() {
   const [editEndereco, setEditEndereco] = useState<Endereco>(ENDERECO_VAZIO);
   const [form, setForm] = useState<ClienteFormValues>(FORM_VAZIO);
   const [endereco, setEndereco] = useState<Endereco>(ENDERECO_VAZIO);
+  // Fase 233 — confirmação visual de geocodificação, populada a partir da
+  // resposta do POST/PUT /clients (mesmo padrão de EscritorioZone.tsx),
+  // nunca do preview de autofill de CEP (que não tem coordenada nenhuma).
+  const [enderecoTemCoordenadas, setEnderecoTemCoordenadas] = useState(false);
+  const [editEnderecoTemCoordenadas, setEditEnderecoTemCoordenadas] = useState(false);
   const [docSugestao, setDocSugestao] = useState<string | null>(null);
   const [editDocSugestao, setEditDocSugestao] = useState<string | null>(null);
   const [view, setView] = useState<"table" | "grid">(() => {
@@ -131,6 +136,7 @@ export default function ClientesPage() {
       status: c.status, lgpd_consent: c.lgpd_consent, tipo: c.tipo,
     });
     setEditEndereco({ ...ENDERECO_VAZIO, ...(c.endereco_json ?? {}) });
+    setEditEnderecoTemCoordenadas(c.endereco_json?.latitude != null && c.endereco_json?.longitude != null);
     setEditDocSugestao(null);
   }
 
@@ -144,8 +150,16 @@ export default function ClientesPage() {
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({ ...editForm, endereco_json: editEndereco }),
       });
-      if (res.ok) { setEditingId(null); fetchClientes(0, false); }
-      else toast.error("Erro ao salvar cliente. Tente novamente.");
+      if (res.ok) {
+        const saved = await res.json();
+        const geocodificado = saved.endereco_json?.latitude != null && saved.endereco_json?.longitude != null;
+        setEditEnderecoTemCoordenadas(geocodificado);
+        toast.success(geocodificado ? "Cliente salvo — localização geográfica capturada." : "Cliente salvo.");
+        setEditingId(null);
+        fetchClientes(0, false);
+      } else {
+        toast.error("Erro ao salvar cliente. Tente novamente.");
+      }
     } catch {
       toast.error("Erro de conexão. Tente novamente.");
     } finally {
@@ -238,9 +252,13 @@ export default function ClientesPage() {
         body: JSON.stringify({ ...form, endereco_json: endereco }),
       });
       if (res.ok) {
+        const saved = await res.json();
+        const geocodificado = saved.endereco_json?.latitude != null && saved.endereco_json?.longitude != null;
+        toast.success(geocodificado ? "Cliente criado — localização geográfica capturada." : "Cliente criado.");
         setShowModal(false);
         setForm(FORM_VAZIO);
         setEndereco(ENDERECO_VAZIO);
+        setEnderecoTemCoordenadas(false);
         fetchClientes(0, false);
       } else {
         toast.error("Erro ao criar cliente. Tente novamente.");
@@ -468,6 +486,7 @@ export default function ClientesPage() {
                 docSugestao={editDocSugestao}
                 onDocumentoBlur={(tipo, valor) => validarDocumento(tipo, valor, setEditDocSugestao)}
                 onCepBlur={(cep) => autofillCep(cep, editEndereco, setEditEndereco)}
+                temCoordenadas={editEnderecoTemCoordenadas}
               />
               <div className="flex gap-3 mt-5">
                 <button type="button" onClick={() => setEditingId(null)} className="flex-1 btn-afj-outline rounded-sm">Cancelar</button>
@@ -507,6 +526,7 @@ export default function ClientesPage() {
                 docSugestao={docSugestao}
                 onDocumentoBlur={(tipo, valor) => validarDocumento(tipo, valor, setDocSugestao)}
                 onCepBlur={(cep) => autofillCep(cep, endereco, setEndereco)}
+                temCoordenadas={enderecoTemCoordenadas}
               />
               <div className="flex gap-3 pt-2">
                 <button type="button" onClick={() => setShowModal(false)} className="flex-1 btn-afj-outline rounded-sm">Cancelar</button>
