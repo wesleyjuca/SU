@@ -183,6 +183,78 @@ async def demo_login(request: Request, db: AsyncSession = Depends(get_db)):
     )
 
 
+_PORTAL_REDEEM_MAX = 20          # requisições por janela (anti-brute-force de token)
+_PORTAL_REDEEM_WINDOW_SEC = 300  # 5 min
+
+
+class PortalRedeemRequest(BaseModel):
+    token: str
+
+
+@router.post("/portal-redeem", response_model=TokenResponse)
+async def portal_redeem(body: PortalRedeemRequest, request: Request, db: AsyncSession = Depends(get_db)):
+    """Fase 234 — troca o token do link de acesso ao Portal do Cliente
+    (gerado em `POST /clients/{id}/portal-access`, Controle de Clientes)
+    por uma sessão real — mesmo mecanismo exato de `/login`/`/demo-login`
+    acima (JWT + refresh + Session), sem duplicar lógica. Nunca recebe
+    client_id/e-mail do chamador — o único dado de entrada é o token,
+    resolvido só contra o hash salvo (mesmo espírito estruturalmente
+    seguro de `/demo-login`). Fica aqui (não em `portal.py`) porque
+    `api_router.include_router(portal.router, dependencies=_BLOCK)`
+    (`app/api/v1/router.py`) exige um usuário já autenticado pra QUALQUER
+    rota daquele router — inclusive uma feita pra ser pública. `auth.router`
+    é o único router sem dependência global, mesmo motivo de `/login`/
+    `/demo-login` estarem aqui."""
+    from fastapi import HTTPException
+    from app.db.redis import get_redis
+    from app.models.client import ClientPortalAccess
+
+    ip = request.client.host if request.client else "?"
+    redis = await get_redis()
+    rl_key = f"portal_redeem:{ip}"
+    if redis:
+        try:
+            n = await redis.incr(rl_key)
+            if n == 1:
+                await redis.expire(rl_key, _PORTAL_REDEEM_WINDOW_SEC)
+        except Exception:
+            n = 0
+        if n > _PORTAL_REDEEM_MAX:
+            raise HTTPException(status_code=429, detail="Muitas tentativas. Aguarde alguns minutos e tente novamente.")
+
+    access = (await db.execute(
+        select(ClientPortalAccess).where(ClientPortalAccess.token_hash == hash_token(body.token))
+    )).scalar_one_or_none()
+    # Mensagem genérica sempre igual (token inexistente/revogado/expirado)
+    # — nunca revela qual dos 3 motivos, evita virar oráculo de enumeração.
+    invalid = UnauthorizedError("Link inválido ou expirado.")
+    if not access or access.revoked_at is not None or access.expires_at < datetime.now(timezone.utc):
+        raise invalid
+
+    user_result = await db.execute(select(User).where(User.id == access.portal_user_id, User.is_active.is_(True)))
+    user = user_result.scalar_one_or_none()
+    if not user:
+        raise invalid
+
+    user.last_login_at = datetime.now(timezone.utc)
+    access_token = create_access_token(str(user.id), user.role)
+    refresh_token_str, token_hash_val = create_refresh_token(str(user.id))
+    db.add(Session(
+        user_id=user.id,
+        token_hash=token_hash_val,
+        ip_address=ip,
+        user_agent=request.headers.get("user-agent"),
+        expires_at=datetime.now(timezone.utc) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS),
+    ))
+    await db.commit()
+
+    return TokenResponse(
+        access_token=access_token,
+        refresh_token=refresh_token_str,
+        user={"id": str(user.id), "email": user.email, "full_name": user.full_name, "role": user.role, "oab_number": None},
+    )
+
+
 @router.post("/refresh", response_model=TokenResponse)
 async def refresh(body: RefreshRequest, db: AsyncSession = Depends(get_db)):
     token_hash = hash_token(body.refresh_token)

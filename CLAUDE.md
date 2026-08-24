@@ -2836,6 +2836,131 @@ Histórico:
     fixture `cenario`/`AsyncSessionLocal`); por isso a prova real
     definitiva desta fase veio do script standalone descrito acima, não
     do pytest.
+- **Fase 234** — usuário pediu pra separar o acesso do cliente ao Portal
+  do resto do cadastro de usuários internos, substituindo por link
+  temporário/seguro com validade configurável, revogação e regeneração,
+  numa nova área administrativa "Controle de Clientes". Pediu
+  explicitamente pra investigar a arquitetura atual antes de
+  implementar. Investigação (leitura direta — o Explore agent falhou
+  por limite de sessão da API; um 2º Explore, sobre padrões de token,
+  completou) confirmou: o mecanismo antigo (`POST /users/{client_id}/
+  invite-portal`) criava um `User` real permanente (`role="CLIENT"`,
+  senha temporária, sem expiração/revogação); `get_current_user`
+  (`app/dependencies.py`, usado por TODOS os ~82 endpoints) resolve o
+  JWT direto contra `SELECT * FROM users WHERE id=sub` — reescrever essa
+  dependência compartilhada era desnecessário e de alto risco pro que
+  foi pedido. Decisão de design: manter um `User` técnico oculto por
+  trás do link (nunca exposto ao admin, já consistente com o comentário
+  pré-existente em `users.py:52`, *"CLIENT nasce apenas pelo fluxo do
+  portal — nunca por convite/edição"*) — a separação que importa é de
+  produto/UX (admin nunca cria/gerencia um "usuário", só gera/revoga um
+  link), não a eliminação total do `User` como implementação.
+  - **Backend**: novo model `ClientPortalAccess`
+    (`app/models/client.py`, tabela nova via `create_all()`, sem ALTER)
+    — 1 registro por cliente (`client_id` UNIQUE), `token_hash` (SHA-256
+    via `hash_token()`, mesmo padrão de `Session.token_hash`),
+    `expires_at`/`revoked_at`. Três endpoints novos em `clients.py`:
+    `GET /clients/portal-access` (lista todo cliente do tenant + status
+    computado na leitura: SEM_ACESSO/ATIVO/EXPIRADO/REVOGADO — precisou
+    ser declarado ANTES de `GET /{client_id}` no arquivo, senão o
+    roteamento por ordem de declaração do FastAPI casava `/portal-
+    access` como `client_id="portal-access"`), `POST /{id}/portal-
+    access` (gera/regenera — reaproveita o `User` técnico existente ou
+    cria um com e-mail sintético `portal-{client_id}@clients.internal`,
+    nunca exige e-mail do cliente ao contrário do fluxo antigo; token
+    bruto devolvido uma única vez, nunca recuperável depois), `DELETE
+    /{id}/portal-access` (revoga — `revoked_at` + `is_active=False` no
+    User técnico, bloqueio imediato reaproveitando o filtro que
+    `get_current_user`/`/auth/refresh` já fazem). Removido `POST /users/
+    {client_id}/invite-portal` (`users.py`) — único call site era o
+    botão antigo do Cliente 360, também substituído.
+  - **Backend — novo endpoint de troca de token**: `POST /auth/portal-
+    redeem` (`auth.py`, não `portal.py`) — **achado real de arquitetura
+    descoberto durante a implementação, corrigido na hora**: a 1ª
+    tentativa colocou esse endpoint em `portal.py`, mas
+    `api_router.include_router(portal.router, dependencies=_BLOCK)`
+    (`app/api/v1/router.py:48`) aplica `require_active_tenant` (que por
+    sua vez exige `get_current_user`) a QUALQUER rota daquele router —
+    inclusive uma pensada pra ser pública, fazendo o redeem sempre
+    devolver 401 "Token de autenticação não fornecido" antes mesmo do
+    handler rodar. `auth.router` é o único router sem dependência
+    global (mesmo motivo de `/login`/`/demo-login` estarem lá) — mesmo
+    mecanismo exato de emissão (JWT+refresh+`Session`), sem duplicar
+    lógica; rate-limit por IP (20/5min, mesmo padrão de `/demo-login`);
+    mensagem de erro sempre genérica (token inexistente/revogado/
+    expirado tratados igual, evita virar oráculo). `get_portal_client()`
+    (`portal.py`) ganhou uma checagem viva de `ClientPortalAccess.
+    expires_at` além do `is_active` do User — cobre "expirou agora mesmo,
+    reaper ainda não rodou", bloqueio no instante exato da expiração.
+    Novo reaper diário (`app/workers/tasks/client_portal_access_reaper.py`,
+    mesmo padrão de `session_cleanup.py`) desativa o User técnico de
+    acessos vencidos-não-revogados — higiene, não a garantia de
+    segurança em si (essa já é a checagem viva).
+  - **Frontend — Controle de Clientes**: novo
+    `frontend/src/components/clientes/ClientPortalAccessPanel.tsx` —
+    tabela Cliente/Status/Criado em/Expira em/Ações, seletor de validade
+    (1/3/7/15/30 dias) por linha, Gerar/Regerar, Revogar (com
+    confirmação), modal de link copiável (mesmo padrão do antigo modal
+    de senha temporária do Cliente 360, que foi removido).
+    `clientes/page.tsx` ganha pills "Clientes"/"Controle de Clientes"
+    (`?aba=`, mesmo padrão de estado de aba já usado em Configurações/
+    Cérebro), visível só pra ADMIN (mesmo gate do backend). Cliente 360
+    (`clientes/[id]/page.tsx`): removidos `convidarPortal`/
+    `showPortalModal`/`portalCredentials`/`copyPassword`/estado
+    associado — o botão "Portal" agora é um link pra `/clientes?aba=
+    controle-portal`.
+  - **Frontend — Portal do Cliente**: nova página `/portal/acesso/
+    [token]/page.tsx` — troca o token da URL por sessão real via `POST
+    /auth/portal-redeem`, salva tokens (incl. `afj_portal_refresh_
+    token`, nunca usado antes) e redireciona pro dashboard; erro mostra
+    "Link inválido ou expirado" na própria página, sem navegação.
+    `/portal/login/page.tsx` reescrita — perde o formulário de e-mail/
+    senha (nenhum caminho do sistema dá mais senha usável a um cliente),
+    vira página informativa; mantida na mesma rota porque `(portal)/
+    layout.tsx` (logout) e `portalApi.ts` (sessão expirada) já
+    redirecionam pra cá. **Achado real, corrigido na hora**:
+    `frontend/src/middleware.ts` protege toda rota `/portal/*` atrás do
+    cookie `afj_portal_session`, com only `/portal/login`/`/portal` na
+    allowlist — a nova rota `/portal/acesso/[token]` (que é justamente o
+    que CRIA esse cookie) caía nesse guard e nunca chegava a rodar,
+    redirecionando pra `/portal/login` antes de qualquer fetch —
+    confirmado ao vivo via Playwright com captura de rede (zero
+    requisições disparadas) antes do fix; `/portal/acesso/` adicionado à
+    allowlist do middleware resolveu. `portalApi.ts` ganha renovação via
+    `/auth/refresh` no primeiro 401 (usando o refresh token agora salvo)
+    antes de desistir — sem isso a remoção da senha viraria regressão
+    real (sessão de 30 min sem forma de renovar, hoje sem uso desse
+    endpoint no portal). Logout (`(portal)/layout.tsx`) passou a chamar
+    `POST /auth/logout` de verdade (achado colateral: nunca chamava,
+    só limpava local) — invalida a `Session`/refresh no backend.
+  - Verificado via HTTP real contra Postgres real: fluxo completo
+    gerar→redeem→`GET /portal/me` funciona; token inexistente → 401;
+    revogar bloqueia IMEDIATAMENTE mesmo com o JWT ainda "válido" por
+    data (via `is_active`); regenerar após revogar reativa o acesso com
+    um token NOVO — o antigo (mesmo sem ter expirado por data) para de
+    funcionar porque o hash mudou; forçar `expires_at` no passado direto
+    no Postgres bloqueia via a checagem viva (403), mesmo sem revogação
+    explícita, e um novo redeem com o mesmo token também falha (401);
+    reaper roda limpo e idempotente numa 2ª rodada; isolamento
+    cross-tenant confirmado — ADMIN do tenant demo recebe 404 ao tentar
+    gerar/revogar acesso de um cliente do tenant afj, e a listagem nunca
+    inclui esse cliente; rate-limit do redeem dispara na 14ª chamada
+    consecutiva; endpoint antigo `invite-portal` confirmado removido
+    (404). Playwright real (Chromium do sandbox, `npm run dev` com
+    `API_URL` local): ADMIN gera link na aba Controle de Clientes,
+    abre o link numa sessão de navegador totalmente limpa (novo
+    `BrowserContext`) → cai direto no dashboard do portal com dado
+    real; ADMIN revoga → o MESMO link, reaberto, mostra "Link inválido
+    ou expirado" em vez do dashboard. `tsc --noEmit`/`eslint`
+    limpos em todos os arquivos novos/tocados (backend e frontend).
+  - **Decisão de escopo deliberada, não corrigida nesta fase**:
+    `erase_client_data` (LGPD) não revoga automaticamente o
+    `ClientPortalAccess` de um cliente esquecido — os 2 são conceitos
+    ortogonais (esquecimento apaga PII, acesso ao portal é controle de
+    autorização) e o admin já tem a ação de Revogar manual disponível
+    na mesma tela; registrado aqui como observação, não achado, caso o
+    usuário decida numa fase futura que "esquecer" deveria também
+    revogar automaticamente.
 
 ## Riscos conhecidos / débito técnico
 

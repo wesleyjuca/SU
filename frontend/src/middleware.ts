@@ -17,7 +17,10 @@ export function middleware(request: NextRequest) {
 
   // Portal routes — protected by afj_portal_session cookie
   if (pathname.startsWith("/portal")) {
-    if (pathname === "/portal/login" || pathname === "/portal") {
+    // Fase 234 — /portal/acesso/[token] é o que CRIA a sessão (troca o link
+    // temporário por cookie/JWT via /auth/portal-redeem) — teria que já ter
+    // a sessão pra passar no guard abaixo, senão nunca conseguiria rodar.
+    if (pathname === "/portal/login" || pathname === "/portal" || pathname.startsWith("/portal/acesso/")) {
       return NextResponse.next();
     }
     const portalSession = request.cookies.get("afj_portal_session");

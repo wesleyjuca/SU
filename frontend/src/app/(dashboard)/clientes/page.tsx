@@ -1,12 +1,16 @@
 "use client";
 import { useState, useEffect } from "react";
-import { Users, Plus, Search, Phone, Mail, Pencil, Trash2, ExternalLink, Filter, ShieldAlert, ChevronDown, ChevronUp } from "lucide-react";
+import { useSearchParams } from "next/navigation";
+import { Users, Plus, Search, Phone, Mail, Pencil, Trash2, ExternalLink, Filter, ShieldAlert, ChevronDown, ChevronUp, ShieldCheck } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
 import { ViewToggle } from "@/components/ui/ViewToggle";
 import { useUserStore } from "@/store";
 import { ClienteFormFields, type ClienteFormValues, type Endereco } from "@/components/clientes/ClienteFormFields";
+import { ClientPortalAccessPanel } from "@/components/clientes/ClientPortalAccessPanel";
 import Link from "next/link";
+
+type Aba = "clientes" | "controle-portal";
 
 interface Cliente {
   id: string;
@@ -53,12 +57,23 @@ interface LgpdQualidade {
 
 export default function ClientesPage() {
   const toast = useToast();
+  const searchParams = useSearchParams();
+  const [aba, setAba] = useState<Aba>("clientes");
+  useEffect(() => {
+    const daUrl = searchParams.get("aba");
+    if (daUrl === "controle-portal") setAba("controle-portal");
+  }, [searchParams]);
   const userRole = useUserStore((s) => s.user?.role);
   const canSeeLgpd = ["ADMIN", "SOCIO", "SUPERADMIN"].includes(userRole ?? "");
   // Reformulação — o botão de excluir agora aciona o esquecimento LGPD de
   // verdade (ver excluirCliente), que no backend exige ADMIN puro
   // (require_role("ADMIN"), lgpd.py) — antes não tinha gate nenhum aqui.
   const isAdmin = userRole === "ADMIN";
+  // Defesa: link antigo/query param forçado apontando pra Controle de
+  // Clientes sem ser ADMIN nunca deixa a aba restrita "vazar".
+  useEffect(() => {
+    if (aba === "controle-portal" && !isAdmin) setAba("clientes");
+  }, [aba, isAdmin]);
   const [lgpdQualidade, setLgpdQualidade] = useState<LgpdQualidade | null>(null);
   const [showLgpdDetalhes, setShowLgpdDetalhes] = useState(false);
   const [clientes, setClientes] = useState<Cliente[]>([]);
@@ -294,19 +309,50 @@ export default function ClientesPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="font-display text-2xl font-semibold text-afj-black">Clientes</h1>
-          <p className="text-afj-black/50 text-sm">{filtrados.length} cliente(s)</p>
+          <p className="text-afj-black/50 text-sm">
+            {aba === "clientes" ? `${filtrados.length} cliente(s)` : "Gerencie o acesso dos clientes ao Portal"}
+          </p>
         </div>
-        <div className="flex items-center gap-3">
-          <Link href="/clientes/funil" className="btn-afj-outline rounded-sm flex items-center gap-2" title="Funil de vendas">
-            <Filter size={15} />Funil
-          </Link>
-          <ViewToggle view={view} onChange={setView} />
-          <button onClick={() => { setShowModal(true); setDocSugestao(null); }} className="btn-afj-primary rounded-sm flex items-center gap-2">
-            <Plus size={15} />Novo Cliente
-          </button>
-        </div>
+        {aba === "clientes" && (
+          <div className="flex items-center gap-3">
+            <Link href="/clientes/funil" className="btn-afj-outline rounded-sm flex items-center gap-2" title="Funil de vendas">
+              <Filter size={15} />Funil
+            </Link>
+            <ViewToggle view={view} onChange={setView} />
+            <button onClick={() => { setShowModal(true); setDocSugestao(null); }} className="btn-afj-primary rounded-sm flex items-center gap-2">
+              <Plus size={15} />Novo Cliente
+            </button>
+          </div>
+        )}
       </div>
 
+      {/* Fase 234 — Controle de Clientes: acesso ao Portal via link temporário */}
+      {isAdmin && (
+        <div className="flex items-center gap-1 border-b border-afj-cream-dark">
+          <button
+            onClick={() => setAba("clientes")}
+            className={`px-3 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
+              aba === "clientes" ? "border-afj-gold text-afj-gold" : "border-transparent text-afj-black/50 hover:text-afj-black"
+            }`}
+          >
+            Clientes
+          </button>
+          <button
+            onClick={() => setAba("controle-portal")}
+            className={`px-3 py-2 text-sm font-medium border-b-2 -mb-px flex items-center gap-1.5 transition-colors ${
+              aba === "controle-portal" ? "border-afj-gold text-afj-gold" : "border-transparent text-afj-black/50 hover:text-afj-black"
+            }`}
+          >
+            <ShieldCheck size={13} />
+            Controle de Clientes
+          </button>
+        </div>
+      )}
+
+      {aba === "controle-portal" && isAdmin && <ClientPortalAccessPanel />}
+
+      {aba === "clientes" && (
+      <>
       {/* Qualidade LGPD (Fase 212 — proposta de evolução da Fase 209) */}
       {canSeeLgpd && lgpdQualidade && lgpdQualidade.total_clientes > 0 && (
         <div className="afj-card p-3">
@@ -469,6 +515,8 @@ export default function ClientesPage() {
             {loadingMore ? "Carregando..." : `Carregar mais clientes`}
           </button>
         </div>
+      )}
+      </>
       )}
 
       {/* Modal edição cliente */}
