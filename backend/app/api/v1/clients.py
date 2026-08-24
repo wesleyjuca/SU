@@ -104,6 +104,24 @@ async def list_clients(
     return [_to_response(c) for c in clients]
 
 
+async def _geocodificar_endereco(endereco: dict | None) -> dict | None:
+    """Fase 230 — preenche latitude/longitude no endereço via BrasilAPI
+    (mesma fonte de `POST /clients/consultar-cep`, Fase 217) quando o
+    endereço tem CEP mas ainda não tem coordenadas — groundwork pro mapa
+    com marcadores de cliente/escritório planejado pra uma fase futura.
+    Fail-soft: nunca lança, nunca bloqueia o save do cliente/escritório se
+    a geocodificação falhar/estiver indisponível; precisão de CEP, não do
+    número exato do endereço (limitação da própria BrasilAPI)."""
+    if not endereco or not endereco.get("cep"):
+        return endereco
+    if endereco.get("latitude") is not None and endereco.get("longitude") is not None:
+        return endereco
+    resultado = await _consultar_cep_externa(endereco["cep"])
+    if resultado and resultado.get("latitude") is not None:
+        endereco = {**endereco, "latitude": resultado["latitude"], "longitude": resultado["longitude"]}
+    return endereco
+
+
 @router.post("", response_model=ClientResponse, status_code=201)
 async def create_client(
     body: ClientCreate,
@@ -119,6 +137,8 @@ async def create_client(
         data["cpf"] = encrypt(data["cpf"])
     if "cnpj" in data:
         data["cnpj"] = encrypt(data["cnpj"])
+    if "endereco_json" in data:
+        data["endereco_json"] = await _geocodificar_endereco(data["endereco_json"])
 
     client = Client(**data)
     db.add(client)
@@ -263,7 +283,7 @@ async def consultar_cep_endpoint(
     auditoria — não é consulta de identidade pessoal."""
     resultado = await _consultar_cep_externa(body.cep)
     if resultado is None:
-        return {"logradouro": None, "bairro": None, "cidade": None, "uf": None}
+        return {"logradouro": None, "bairro": None, "cidade": None, "uf": None, "latitude": None, "longitude": None}
     return resultado
 
 
@@ -305,6 +325,8 @@ async def update_client(
     for field, value in body.model_dump(exclude_none=True).items():
         if field in ("cpf", "cnpj"):
             value = encrypt(value)
+        elif field == "endereco_json":
+            value = await _geocodificar_endereco(value)
         setattr(client, field, value)
     if body.lgpd_consent and not client.lgpd_consent:
         client.lgpd_consent_at = datetime.now(timezone.utc)

@@ -41,6 +41,12 @@ class Tenant(Base):
     unit_label: Mapped[str | None] = mapped_column(String(120), nullable=True)
     max_users: Mapped[int] = mapped_column(Integer, default=10)
     max_storage_gb: Mapped[int] = mapped_column(Integer, default=50)
+    # Fase 230 — endereço físico do próprio escritório (mesmo formato de
+    # Client.endereco_json: {cep, logradouro, bairro, cidade, uf, latitude,
+    # longitude}), groundwork pro mapa com marcadores de escritório+clientes
+    # planejado pra uma fase futura. Geocodificado via BrasilAPI no momento
+    # do save (ver _geocodificar_endereco em app/api/v1/clients.py).
+    endereco_json: Mapped[dict | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
