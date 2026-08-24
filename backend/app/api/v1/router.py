@@ -40,8 +40,17 @@ api_router.include_router(ws.router)
 api_router.include_router(audit.router, dependencies=_STAFF)
 api_router.include_router(rag.router, dependencies=_BLOCK_STAFF)
 api_router.include_router(notifications.router, dependencies=_BLOCK)
-api_router.include_router(tenant.router)
-api_router.include_router(system.router)
+# Fase 235 (rodada de teste geral) — achado real: estes 2 routers eram os
+# ÚNICOS de negócio montados sem nenhuma dependência de role, ao contrário
+# de TODOS os outros acima — contrariando o próprio comentário deste
+# arquivo (linhas 21-24, "CLIENT só acessa /portal/* e /auth/*"). Antes da
+# Fase 234, "CLIENT" era um papel raro (só nascia por convite manual); com
+# o acesso via link temporário, virou um crachá fácil de obter — um
+# cliente com link de portal válido conseguia `GET /system/analytics/
+# financeiro` (números do escritório inteiro) e qualquer outra rota
+# destes 2 routers, nenhuma delas pensada pra esse papel.
+api_router.include_router(tenant.router, dependencies=_BLOCK_STAFF)
+api_router.include_router(system.router, dependencies=_BLOCK_STAFF)
 api_router.include_router(lgpd.router, dependencies=_STAFF)
 api_router.include_router(push.router, dependencies=_BLOCK)
 api_router.include_router(users.router, dependencies=_STAFF)

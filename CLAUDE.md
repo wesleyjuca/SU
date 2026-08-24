@@ -2961,6 +2961,116 @@ Histórico:
     na mesma tela; registrado aqui como observação, não achado, caso o
     usuário decida numa fase futura que "esquecer" deveria também
     revogar automaticamente.
+- **Fase 235** — usuário pediu explicitamente "faça o teste geral do
+  sistema e suas devidas correções", desta vez COM correção na mesma
+  rodada (diferente do padrão histórico do projeto, precedente já usado
+  uma vez, Fase 209). Releitura do histórico: a última rodada de teste
+  geral de verdade foi a Fase 228 (achou 3 bugs, corrigidos na 229) —
+  desde então, **5 fases inteiras (230-234) nunca passaram por nenhuma
+  rodada de teste geral**, incluindo a mais nova e mais sensível: acesso
+  ao Portal via link temporário (Fase 234, autenticação sem senha).
+  - **Auditoria (2 Explore agents, código — prova empírica na
+    implementação)**: (A) mapeamento completo de todo model com
+    `client_id` cruzado contra `erase_client_data`/`export_client_data`
+    — finalmente responde de vez uma pergunta repetida desde a Fase 219
+    e reaberta na 228 ("vale um mecanismo estrutural pra não achar
+    tabela esquecida pela Nª vez?"); (B) revisão de segurança dedicada
+    ao ponto mais novo (Fase 234).
+  - **A. LGPD — 5 lacunas reais, todas corrigidas e verificadas
+    empiricamente** (criar cliente com PII real → embutir nas 5
+    tabelas → export confirma real → esquecer → export confirma
+    scrubado, via HTTP real contra Postgres real):
+    1. **`User.full_name`** — o `User` técnico oculto por trás do link
+       de acesso ao portal (Fase 234) copia `client.nome_completo` na
+       criação e nunca era tocado pelo esquecimento — nome original
+       sobrevivia indefinidamente nesse `User`.
+    2. **`Document.conteudo_texto`/`.conteudo_html`** — corpo inteiro de
+       petições/documentos, nunca alcançado (`titulo`/`status`
+       preservados, são histórico do escritório, não PII do titular).
+    3. **`Contract.assinaturas`** (JSONB, pode ter nome/CPF do
+       signatário) — nunca alcançado.
+    4. **`AgentRun.input_data`/`.output_data`/`.error_message`** —
+       prompts/resultados de IA pro cliente, texto livre (`tokens_used`/
+       `cost_usd`/`status` preservados — auditoria de custo, não PII).
+    5. **`LegalProcess.descricao`** — só era alcançado indiretamente via
+       `ProcessParty`; o processo em si nunca. Fix reaproveita
+       `client_linked_processes_filter()` (Fase 222) pra cobrir os 2
+       caminhos de vínculo (client_id direto E via ProcessParty), mais
+       completo que um filtro ingênuo por client_id sozinho.
+    `LGPDConsentRecord` (tem `client_id`, mas nenhum endpoint grava
+    linha nela hoje) e `ClientPortalAccess` (só token_hash/expiração,
+    sem PII) auditados e confirmados como não-achado — registrado, não
+    ligado, pra não virar susto numa rodada futura.
+  - **B. Segurança do Portal via link — 3 achados reais, todos
+    corrigidos e verificados empiricamente**:
+    1. **CRÍTICO — papel CLIENT alcançava endpoints internos do
+       escritório inteiro.** `tenant.router` e `system.router`
+       (`app/api/v1/router.py`) eram os ÚNICOS 2 routers de negócio
+       montados sem NENHUMA dependência de role — contrariando o
+       próprio comentário do arquivo ("CLIENT só acessa /portal/* e
+       /auth/*"). Achado pré-existente, mas a Fase 234 tornou "CLIENT"
+       um crachá fácil de obter (só um link, sem senha) em vez de um
+       papel raro (convite manual) — mesmo bug antigo, exploração muito
+       mais fácil. Concretamente: `GET /system/analytics/financeiro`
+       devolvia os números do escritório INTEIRO pra qualquer cliente
+       com link de portal válido. Fix: `dependencies=_BLOCK_STAFF` nos
+       2 routers (mesmo padrão de `clients.router`/`processes.router`/
+       etc.). Confirmado via HTTP real: cliente com JWT de portal
+       recebe 403 em `/system/analytics/financeiro`/`/tenant/theme`/
+       `/system/health/detailed`/`/tenant/billing` (antes 200); ADMIN
+       continua acessando tudo normalmente (sem regressão); `/portal/me`
+       do mesmo cliente continua 200 (portal em si intacto); Playwright
+       real confirma que o dashboard interno do staff carrega sem
+       quebrar nada depois do fix.
+    2. **ALTO — revogar não matava sessões de refresh já emitidas.**
+       `gerar_portal_access`/`revogar_portal_access` nunca tocavam a
+       tabela `sessions`. Sequência real: cliente resgata o link →
+       ganha uma `Session` de refresh (até 7 dias) → admin revoga
+       (`is_active=False`, bloqueia certo) → admin REGENERA um link
+       novo (`is_active=True` de novo) → a `Session` antiga, que devia
+       ter morrido na revogação, voltava a funcionar em `POST
+       /auth/refresh` — alguém com o refresh token antigo conseguia
+       token novo mesmo depois de "revogado". Fix: `revogar_portal_
+       access` agora deleta todas as `Session` do `User` técnico no
+       momento da revogação. Confirmado via HTTP real: refresh token
+       capturado antes da revogação → revoga → refresh falha (401) →
+       regenera um link novo → o refresh ANTIGO continua morto (401),
+       mesmo depois da regeneração — fecha o cenário completo do
+       achado, não só a revogação isolada.
+    3. **BAIXO — corrida no 1º `POST /.../portal-access` virava 500
+       cru.** Reproduzido uma vez com 2 chamadas concorrentes reais
+       pro mesmo cliente pela 1ª vez: a 2ª batia na constraint única de
+       `users.email` (e-mail sintético igual pras 2, já que o `User`
+       técnico só existe no `else` de "não existe access ainda") ANTES
+       de chegar na constraint de `client_id` do `ClientPortalAccess` —
+       o `try/except` original só cobria o commit final, não essa
+       falha mais cedo. Fix: `try/except IntegrityError` agora envolve
+       a sequência inteira (criação do `User` + do `ClientPortalAccess`),
+       devolvendo 409 limpo em vez de 500. Não foi possível forçar a
+       mesma corrida de novo depois do fix (~18 tentativas concorrentes,
+       incluindo chamada direta de função via `asyncio.gather` sem
+       round-trip HTTP, todas OK sem conflito — janela de corrida
+       estreita e nao-determinística) — confiança vem da leitura de
+       código confirmando que o `try/except` agora envolve exatamente o
+       ponto que quebrou antes, não de uma reprodução ao vivo do "antes
+       vs. depois" idêntica.
+  - **Reconfirmação independente** (nunca feita numa rodada de teste
+    geral seguinte até agora): Fase 229 — probe de saúde do Celery
+    reflete estado real (`celery.ok: true`, 1 worker, com Celery+Redis
+    reais rodando de verdade, não fallback in-process) e o teste
+    unitário do HITL (`requires_approval` zera quando o gate é o último
+    passo) passa limpo. Fases 230-234 — Playwright real confirma que
+    `/mapa`, o Timbrado auto/personalizado (Fase 232) e a aba Controle
+    de Clientes (Fase 234) continuam funcionando sem erro de console
+    depois de todas as correções acima.
+  - Suíte `pytest` bateu na mesma flakiness de pool asyncpg/pytest-
+    asyncio documentada desde a Fase 199 — reproduzida de novo mesmo
+    isolando teste a teste, e cross-checada contra um arquivo de
+    controle não tocado nesta fase (`test_crm_metas_fase213.py`, falha
+    de forma idêntica) — não é regressão desta fase; verificação
+    principal foi HTTP real contra Postgres/Redis/Celery reais, como em
+    toda fase recente desta sessão.
+
 
 ## Riscos conhecidos / débito técnico
 

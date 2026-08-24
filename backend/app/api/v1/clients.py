@@ -1,7 +1,8 @@
 """Endpoints CRUD de clientes / CRM."""
 from fastapi import APIRouter, Depends, Query, Response, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc, or_, func
+from sqlalchemy import select, desc, or_, func, delete
+from sqlalchemy.exc import IntegrityError
 from pydantic import BaseModel
 from typing import Any
 import re
@@ -12,7 +13,7 @@ import structlog
 
 from app.db.base import get_db
 from app.dependencies import get_current_user, require_role
-from app.models.user import User
+from app.models.user import User, Session
 from app.models.client import Client, ClientContact, ClientInteraction, ClientPortalAccess
 from app.core.exceptions import NotFoundError
 from app.core.crypto import encrypt, decrypt_or_raw
@@ -984,50 +985,65 @@ async def gerar_portal_access(
         select(ClientPortalAccess).where(ClientPortalAccess.client_id == client.id)
     )).scalar_one_or_none()
 
-    if access:
-        portal_user = (await db.execute(
-            select(User).where(User.id == access.portal_user_id)
-        )).scalar_one_or_none()
-        if portal_user:
-            portal_user.is_active = True
-    else:
-        # E-mail sintético — o User técnico nunca loga por senha/e-mail,
-        # então não depende do cliente ter e-mail cadastrado (diferente
-        # do fluxo antigo que exigia).
-        portal_user = User(
-            id=uuid.uuid4(),
-            email=f"portal-{client.id}@clients.internal",
-            full_name=client.nome_completo,
-            role="CLIENT",
-            hashed_password=hash_password(secrets.token_urlsafe(32)),
-            is_active=True,
-            tenant_id=current_user.tenant_id,
-            linked_client_id=client.id,
-        )
-        db.add(portal_user)
-        await db.flush()
-
     raw_token = secrets.token_urlsafe(32)
     expires_at = datetime.now(timezone.utc) + timedelta(days=body.validade_dias)
 
-    if access:
-        access.token_hash = hash_token(raw_token)
-        access.expires_at = expires_at
-        access.revoked_at = None
-        access.created_at = datetime.now(timezone.utc)
-        access.created_by = current_user.id
-    else:
-        access = ClientPortalAccess(
-            client_id=client.id,
-            tenant_id=current_user.tenant_id,
-            portal_user_id=portal_user.id,
-            token_hash=hash_token(raw_token),
-            created_by=current_user.id,
-            expires_at=expires_at,
-        )
-        db.add(access)
+    try:
+        if access:
+            portal_user = (await db.execute(
+                select(User).where(User.id == access.portal_user_id)
+            )).scalar_one_or_none()
+            if portal_user:
+                portal_user.is_active = True
 
-    await db.commit()
+            access.token_hash = hash_token(raw_token)
+            access.expires_at = expires_at
+            access.revoked_at = None
+            access.created_at = datetime.now(timezone.utc)
+            access.created_by = current_user.id
+        else:
+            # E-mail sintético — o User técnico nunca loga por senha/e-mail,
+            # então não depende do cliente ter e-mail cadastrado (diferente
+            # do fluxo antigo que exigia).
+            portal_user = User(
+                id=uuid.uuid4(),
+                email=f"portal-{client.id}@clients.internal",
+                full_name=client.nome_completo,
+                role="CLIENT",
+                hashed_password=hash_password(secrets.token_urlsafe(32)),
+                is_active=True,
+                tenant_id=current_user.tenant_id,
+                linked_client_id=client.id,
+            )
+            db.add(portal_user)
+            await db.flush()
+
+            access = ClientPortalAccess(
+                client_id=client.id,
+                tenant_id=current_user.tenant_id,
+                portal_user_id=portal_user.id,
+                token_hash=hash_token(raw_token),
+                created_by=current_user.id,
+                expires_at=expires_at,
+            )
+            db.add(access)
+
+        await db.commit()
+    except IntegrityError:
+        # Fase 235 (rodada de teste geral) — achado real: 2 chamadas
+        # concorrentes de "gerar pela 1ª vez" pro MESMO cliente liam
+        # access=None nas 2 e cada uma tentava criar o User técnico com o
+        # MESMO e-mail sintético (`portal-{client_id}@clients.internal`)
+        # — a 2ª batia na constraint única de `users.email` já no
+        # `db.flush()` do User (não só na constraint de `client_id` do
+        # `ClientPortalAccess`, que só seria alcançada depois), virando
+        # 500 cru em vez de erro limpo. Try/except cobre a sequência
+        # inteira (User + ClientPortalAccess), não só o commit final.
+        await db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="Outra geração de acesso para este cliente está em andamento — tente novamente.",
+        )
     return {
         "path": f"/portal/acesso/{raw_token}",
         "expires_at": expires_at.isoformat(),
@@ -1055,6 +1071,20 @@ async def revogar_portal_access(
     )).scalar_one_or_none()
     if portal_user:
         portal_user.is_active = False
+        # Fase 235 (rodada de teste geral) — achado real: revogar só
+        # marcava is_active=False, mas nunca apagava as Sessions (refresh
+        # token, até 7 dias de validade, REFRESH_TOKEN_EXPIRE_DAYS) já
+        # emitidas pro User técnico. Sequência reproduzida: cliente
+        # resgata o link → ganha uma Session → admin revoga (bloqueia
+        # certo) → admin REGENERA um link novo (is_active volta a True)
+        # → a Session antiga, que devia ter morrido na revogação, voltava
+        # a funcionar em POST /auth/refresh (que só olha Session.
+        # token_hash/expiry + User.is_active, não sabe de "geração" de
+        # acesso) — quem guardou o refresh token antigo conseguia token
+        # novo mesmo depois de "revogado". Matar todas as Sessions no
+        # momento da revogação garante que não sobra nenhuma pra
+        # ressuscitar numa regeneração futura.
+        await db.execute(delete(Session).where(Session.user_id == portal_user.id))
 
     await db.commit()
     return {"message": "Acesso revogado."}
