@@ -423,6 +423,45 @@ async def update_feriados(
     return {"feriados": itens}
 
 
+# ─── Endereço do escritório ───────────────────────────────────────────────────
+class EnderecoUpdate(BaseModel):
+    cep: str | None = None
+    logradouro: str | None = None
+    bairro: str | None = None
+    cidade: str | None = None
+    uf: str | None = None
+
+
+@router.get("/endereco")
+async def get_endereco(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Fase 230 — endereço físico do próprio escritório, groundwork pro mapa
+    com marcadores de escritório+clientes planejado pra uma fase futura."""
+    tenant, _ = await _get_or_create_config(db, current_user)
+    return tenant.endereco_json or {}
+
+
+@router.put("/endereco")
+async def update_endereco(
+    body: EnderecoUpdate,
+    current_user: User = Depends(require_role("ADMIN")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Salva o endereço do escritório e geocodifica via BrasilAPI (mesma
+    fonte/limitação de precisão de `Client.endereco_json`, ver
+    `_geocodificar_endereco` em `app/api/v1/clients.py`)."""
+    from app.api.v1.clients import _geocodificar_endereco
+
+    tenant, _ = await _get_or_create_config(db, current_user)
+    endereco = body.model_dump(exclude_none=True)
+    tenant.endereco_json = await _geocodificar_endereco(endereco) if endereco else None
+    await db.flush()
+    await invalidate_tenant_cache(tenant.slug)
+    return tenant.endereco_json or {}
+
+
 # ─── Modo confidencial (advogado vê só os processos da sua equipe) ───────────
 class ConfidencialUpdate(BaseModel):
     modo_confidencial: bool

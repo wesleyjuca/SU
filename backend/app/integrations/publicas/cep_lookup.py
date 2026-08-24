@@ -22,9 +22,26 @@ _BASE_URL = "https://brasilapi.com.br/api/cep/v2"
 _breaker = CircuitBreaker(name="brasilapi_cep")
 
 
+def _extrair_coordenadas(data: dict) -> tuple[float | None, float | None]:
+    """Fase 230 — a BrasilAPI v2 devolve (quando a fonte subjacente,
+    viacep/correios/widenet, tiver o dado) um bloco `location.coordinates.
+    {latitude,longitude}` — precisão de CEP/quadra, não do número exato do
+    endereço. `location` pode vir ausente ou `{}` quando nenhuma fonte tem
+    a coordenada; nunca levanta exceção, só devolve (None, None) nesse caso."""
+    coords = ((data.get("location") or {}).get("coordinates")) or {}
+    try:
+        lat = float(coords["latitude"])
+        lng = float(coords["longitude"])
+        return lat, lng
+    except (KeyError, TypeError, ValueError):
+        return None, None
+
+
 async def consultar_cep(cep: str) -> dict | None:
-    """Devolve `{logradouro, bairro, cidade, uf}` ou `None` — CEP inválido,
-    não encontrado, ou serviço indisponível. Nunca levanta exceção."""
+    """Devolve `{logradouro, bairro, cidade, uf, latitude, longitude}` ou
+    `None` — CEP inválido, não encontrado, ou serviço indisponível. Nunca
+    levanta exceção. `latitude`/`longitude` vêm `None` quando a BrasilAPI
+    não tiver essa coordenada pro CEP consultado (comum, best-effort)."""
     numero = re.sub(r"\D", "", cep or "")
     if len(numero) != 8:
         return None
@@ -36,11 +53,14 @@ async def consultar_cep(cep: str) -> dict | None:
                 log.warning("brasilapi_cep_http", status=resp.status_code)
                 raise RuntimeError(f"BrasilAPI status {resp.status_code}")
             data = resp.json()
+            latitude, longitude = _extrair_coordenadas(data)
             return {
                 "logradouro": data.get("street") or "",
                 "bairro": data.get("neighborhood") or "",
                 "cidade": data.get("city") or "",
                 "uf": data.get("state") or "",
+                "latitude": latitude,
+                "longitude": longitude,
             }
 
     return await _breaker.run(_f, default=None)

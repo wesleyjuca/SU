@@ -196,6 +196,12 @@ export function EscritorioZone() {
   const [useLogoAsFavicon, setUseLogoAsFavicon] = useState(false);
   const [officeName, setOfficeName] = useState("");
   const [slogan, setSlogan] = useState("");
+  // Fase 230 — endereço físico do escritório, geocodificado no backend
+  // (groundwork pro mapa com marcadores planejado pra uma fase futura).
+  const [endereco, setEndereco] = useState({ cep: "", logradouro: "", bairro: "", cidade: "", uf: "" });
+  const [enderecoTemCoordenadas, setEnderecoTemCoordenadas] = useState(false);
+  const [enderecoSaving, setEnderecoSaving] = useState(false);
+  const [enderecoSaved, setEnderecoSaved] = useState(false);
   // Timbrado dos documentos (PDFs gerados)
   const [lh, setLh] = useState({ office_name: "", address: "", contact: "", oab: "", footer: "", use_logo: true });
   const [lhSaving, setLhSaving] = useState(false);
@@ -213,9 +219,69 @@ export function EscritorioZone() {
   useEffect(() => {
     fetchConfig();
     fetchLetterhead();
+    fetchEndereco();
     const stored = localStorage.getItem("afj_theme_history");
     if (stored) { try { setThemeHistory(JSON.parse(stored)); } catch {} }
   }, []);
+
+  async function fetchEndereco() {
+    try {
+      const token = localStorage.getItem("afj_access_token");
+      const res = await fetch("/api/v1/tenant/endereco", { headers: { Authorization: `Bearer ${token}` } });
+      if (res.ok) {
+        const d = await res.json();
+        setEndereco({
+          cep: d.cep || "", logradouro: d.logradouro || "", bairro: d.bairro || "",
+          cidade: d.cidade || "", uf: d.uf || "",
+        });
+        setEnderecoTemCoordenadas(d.latitude != null && d.longitude != null);
+      }
+    } catch { /* mantém defaults */ }
+  }
+
+  async function autofillCepEscritorio(cep: string) {
+    if (!cep || cep.replace(/\D/g, "").length !== 8) return;
+    try {
+      const token = localStorage.getItem("afj_access_token");
+      const res = await fetch("/api/v1/clients/consultar-cep", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ cep }),
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.logradouro || data.cidade) {
+        setEndereco((atual) => ({
+          ...atual,
+          logradouro: atual.logradouro || data.logradouro || "",
+          bairro: atual.bairro || data.bairro || "",
+          cidade: atual.cidade || data.cidade || "",
+          uf: atual.uf || data.uf || "",
+        }));
+      }
+    } catch { /* fail-soft — endereço continua editável manualmente */ }
+  }
+
+  async function saveEndereco() {
+    setEnderecoSaving(true);
+    try {
+      const token = localStorage.getItem("afj_access_token");
+      const res = await fetch("/api/v1/tenant/endereco", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify(endereco),
+      });
+      if (res.ok) {
+        const d = await res.json();
+        setEnderecoTemCoordenadas(d.latitude != null && d.longitude != null);
+        setEnderecoSaved(true);
+        setTimeout(() => setEnderecoSaved(false), 2000);
+      } else {
+        toast.error("Erro ao salvar o endereço.");
+      }
+    } catch { toast.error("Erro de conexão."); }
+    finally { setEnderecoSaving(false); }
+  }
 
   async function fetchLetterhead() {
     try {
@@ -548,6 +614,64 @@ export function EscritorioZone() {
                 className="btn-afj-primary py-2.5 rounded-sm flex items-center gap-2">
                 {saved ? <Check size={14} /> : null}
                 {saving ? "Salvando..." : saved ? "Salvo!" : "Salvar Escritório"}
+              </button>
+            </div>
+
+            {/* ── Endereço do Escritório ── */}
+            <div className="afj-card p-6 space-y-5">
+              <div className="afj-section-header">
+                <p className="afj-section-title">Endereço do Escritório</p>
+              </div>
+              <p className="text-xs text-afj-black/45 -mt-2">
+                Usado como base pro futuro mapa com marcadores de escritório e clientes.
+                A localização geográfica é aproximada (centro do CEP, não o número exato).
+              </p>
+              <div className="space-y-4">
+                <div className="max-w-[200px]">
+                  <label className="block text-[10px] font-semibold text-afj-black/55 mb-1.5 uppercase tracking-widest">CEP</label>
+                  <input type="text" value={endereco.cep}
+                    onChange={(e) => setEndereco({ ...endereco, cep: e.target.value })}
+                    onBlur={(e) => autofillCepEscritorio(e.target.value)}
+                    placeholder="00000-000"
+                    className="w-full bg-afj-cream border border-afj-cream-dark rounded-sm px-4 py-2.5 text-sm focus:outline-none focus:border-afj-gold focus:bg-white transition-colors" />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-semibold text-afj-black/55 mb-1.5 uppercase tracking-widest">Logradouro</label>
+                  <input type="text" value={endereco.logradouro}
+                    onChange={(e) => setEndereco({ ...endereco, logradouro: e.target.value })}
+                    placeholder="Rua, número, complemento"
+                    className="w-full bg-afj-cream border border-afj-cream-dark rounded-sm px-4 py-2.5 text-sm focus:outline-none focus:border-afj-gold focus:bg-white transition-colors" />
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-[10px] font-semibold text-afj-black/55 mb-1.5 uppercase tracking-widest">Bairro</label>
+                    <input type="text" value={endereco.bairro}
+                      onChange={(e) => setEndereco({ ...endereco, bairro: e.target.value })}
+                      className="w-full bg-afj-cream border border-afj-cream-dark rounded-sm px-4 py-2.5 text-sm focus:outline-none focus:border-afj-gold focus:bg-white transition-colors" />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-semibold text-afj-black/55 mb-1.5 uppercase tracking-widest">Cidade</label>
+                    <input type="text" value={endereco.cidade}
+                      onChange={(e) => setEndereco({ ...endereco, cidade: e.target.value })}
+                      className="w-full bg-afj-cream border border-afj-cream-dark rounded-sm px-4 py-2.5 text-sm focus:outline-none focus:border-afj-gold focus:bg-white transition-colors" />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-semibold text-afj-black/55 mb-1.5 uppercase tracking-widest">UF</label>
+                    <input type="text" value={endereco.uf} maxLength={2}
+                      onChange={(e) => setEndereco({ ...endereco, uf: e.target.value.toUpperCase() })}
+                      className="w-full bg-afj-cream border border-afj-cream-dark rounded-sm px-4 py-2.5 text-sm focus:outline-none focus:border-afj-gold focus:bg-white transition-colors" />
+                  </div>
+                </div>
+                {enderecoTemCoordenadas && (
+                  <p className="text-[11px] text-green-700 flex items-center gap-1.5">
+                    <Check size={12} /> Localização geográfica capturada.
+                  </p>
+                )}
+              </div>
+              <button onClick={saveEndereco} disabled={enderecoSaving}
+                className="btn-afj-primary py-2.5 rounded-sm flex items-center gap-2">
+                {enderecoSaved ? <Check size={14} /> : null}
+                {enderecoSaving ? "Salvando..." : enderecoSaved ? "Salvo!" : "Salvar Endereço"}
               </button>
             </div>
 

@@ -541,6 +541,10 @@ async def lifespan(app: FastAPI):
             # pros 19 agentes nativos, não um gate paralelo.
             "ALTER TABLE custom_agents ADD COLUMN IF NOT EXISTS requires_human_approval BOOLEAN NOT NULL DEFAULT false",
             "ALTER TABLE custom_agent_versions ADD COLUMN IF NOT EXISTS requires_human_approval BOOLEAN NOT NULL DEFAULT false",
+            # Fase 230 — endereço físico do próprio escritório (mesmo formato
+            # de Client.endereco_json), groundwork pro mapa com marcadores de
+            # escritório+clientes planejado pra uma fase futura.
+            "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS endereco_json JSONB",
         ]:
             try:
                 async with engine.begin() as conn:

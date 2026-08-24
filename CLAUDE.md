@@ -2514,6 +2514,107 @@ Histórico:
     asyncpg/pytest-asyncio já documentada desde a Fase 199, confirmada
     como não-regressão (teste pré-existente não tocado falha de forma
     idêntica no mesmo ambiente).
+- **Fase 230** — usuário pediu 3 coisas na mesma mensagem: (1) integrar o
+  sistema à página pública www.afjadvogados.com, que em breve terá um
+  link de acesso; (2) capturar referências geográficas ao cadastrar o
+  endereço do escritório (groundwork pro mapa com marcadores de
+  escritório+clientes, "em breve"); (3) avaliar o sistema e preparar
+  uma área de geração de relatórios. Escopo desta fase confirmado com o
+  usuário via perguntas: geocodificação via BrasilAPI (já integrada,
+  sem credencial nova), só a base agora (sem mapa visual ainda), do
+  lado do site só confirmar a URL de login (sem UTM/domínio próprio), e
+  relatórios só avaliação escrita (sem construir nada).
+  - **Achado de investigação, confirmado de novo nesta fase**: este
+    sandbox bloqueia egress pra `www.afjadvogados.com` (confirmado via
+    tentativa de acesso direto) e pra `brasilapi.com.br` (já
+    documentado desde a Fase 217) — não deu pra navegar o site real nem
+    validar a chamada de geocodificação contra uma resposta real da
+    BrasilAPI nesta sessão. Tentativa de confirmar a URL de produção
+    via MCP do Vercel também retornou 403 (sem acesso à conta desta
+    sessão).
+  - **Geocodificação — `backend/app/integrations/publicas/
+    cep_lookup.py`**: `consultar_cep()` passou a extrair `latitude`/
+    `longitude` do bloco `location.coordinates` que a BrasilAPI v2 já
+    devolve (quando a fonte subjacente — viacep/correios/widenet — tem
+    a coordenada) — precisão de CEP/quadra, não do número exato.
+    Fail-soft: `_extrair_coordenadas()` nunca lança exceção,
+    `(None, None)` quando ausente/inválido. Verificado com dado
+    sintético no formato real documentado da BrasilAPI (já que o
+    egress real está bloqueado neste sandbox): extração correta de
+    coordenadas válidas, e degrada graciosamente pra `(None, None)` em
+    4 cenários (`location` ausente, `location` vazio, `coordinates`
+    vazio, valor não-numérico).
+  - **`Client.endereco_json`**: sem migração de schema (já era JSONB)
+    — `POST/PUT /clients` (`backend/app/api/v1/clients.py`) ganharam um
+    novo helper `_geocodificar_endereco()`, chamado automaticamente ao
+    salvar um cliente com CEP no endereço; nunca bloqueia o save se a
+    geocodificação falhar, e não rechama a API se o endereço já tiver
+    coordenadas (evita round-trip desnecessário numa edição que não
+    mexeu no endereço). Verificado via HTTP real (criar cliente com
+    endereço real) e via mock da chamada externa (4 cenários: sucesso
+    mescla lat/lng, coordenadas existentes são preservadas sem
+    rechamar, endereço sem CEP passa intacto, `None` passa intacto).
+  - **`Tenant.endereco_json` — campo novo** (`backend/app/models/
+    tenant.py`, `Tenant` não tinha NENHUM campo de endereço antes desta
+    fase): mesmo formato de `Client.endereco_json`. Migração idempotente
+    (`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS endereco_json JSONB`)
+    em `app/core/events.py`, mesmo padrão de toda coluna nova deste
+    projeto. Novo par `GET/PUT /tenant/endereco`
+    (`backend/app/api/v1/tenant.py`), seguindo exatamente o padrão já
+    estabelecido nesse arquivo (`/feriados`, `/confidencial` —
+    `require_role("ADMIN")` no PUT, mesmo helper de geocodificação do
+    Client). Frontend: nova seção "Endereço do Escritório" na aba
+    Escritório de `/configuracoes`
+    (`frontend/src/components/configuracoes/EscritorioZone.tsx`, Fase
+    224) — CEP com autofill (mesmo padrão de `ClienteFormFields.tsx`/
+    `clientes/page.tsx::autofillCep`), indicador visual quando a
+    localização foi capturada. Verificado via HTTP real (GET vazio
+    inicialmente, PUT salva e degrada sem coordenadas neste sandbox,
+    GET reflete o salvo), 403 pra ADVOGADO no PUT, isolamento
+    cross-tenant confirmado (tenant demo não vê o endereço do tenant
+    afj) — e via Playwright real (Chromium do sandbox, `npm run dev`
+    com `API_URL` local): seção renderiza, CEP/Logradouro presentes,
+    save funciona ("Salvo!"), zero console error atribuível à mudança
+    (só o warning de key duplicada pré-existente em `/dashboard`, já
+    documentado em fases anteriores, não relacionado).
+  - **Avaliação escrita — URL de login pro site público** (sem mudança
+    de código, conforme escopo confirmado): o sistema já tem uma página
+    pública em `/` (`frontend/src/app/page.tsx`) com botão "Entrar no
+    Sistema" → `/login` — destino natural pro link do site. Não há
+    domínio próprio configurado hoje (roda em `*.vercel.app`, alias
+    exato só visível no dashboard do Vercel, fora do alcance desta
+    sessão — tentativa via MCP retornou 403). CORS
+    (`backend/app/main.py:58`) só importa se o site tentar EMBUTIR algo
+    chamando a API diretamente (iframe/widget) — pra um link simples,
+    irrelevante. Ação recomendada fora do alcance de código: usuário
+    confirma a URL de produção no dashboard Vercel e repassa pro time
+    do site; se quiser domínio com a marca (`app.afjadvogados.com`), é
+    mudança de DNS+Vercel fora daqui — só a parte de CORS em
+    `main.py:58` fica pra código, quando/se o domínio for definido.
+  - **Avaliação escrita — área de geração de relatórios** (sem mudança
+    de código): `/relatorios` (`frontend/src/app/(dashboard)/
+    relatorios/page.tsx`) hoje é só 4 abas de gráficos
+    (Gestão/Financeiro/Processos/Agentes IA) — nenhum botão de
+    exportar, nenhum PDF/CSV/XLSX. `/admin/relatorios-banca` já tem
+    exatamente o padrão que falta ali — escolha de formato via `GET
+    /reports/consolidated/export?format=`, incluindo XLSX
+    (`backend/app/api/v1/reports_admin.py:253-310`).
+    `backend/app/utils/pdf_builder.py::build_report_pdf` (linha 428) é
+    o único builder genérico (`{heading, body}` → PDF); os outros 3 são
+    específicos de um documento (petição, matriz de banca, fatura). Não
+    existe hoje nenhum conceito de "relatório customizável" — cada
+    exportação é um endpoint dedicado a um dataset fixo; uma área de
+    geração de relatórios de verdade seria essa abstração pela primeira
+    vez, não uma extensão de algo existente. Recomendação pra quando o
+    usuário quiser avançar: estender `/relatorios` com exportar por aba
+    (reaproveitando o padrão PDF/CSV/XLSX de `reports_admin.py`) e
+    reservar uma aba "Geográfico" pra quando o mapa existir — decisão
+    de nav (`frontend/src/lib/nav.ts`) e escopo de dado ficam pra essa
+    fase futura.
+  - `ruff check`/`py_compile` limpos nos 5 arquivos backend tocados;
+    `tsc --noEmit`/`eslint` limpos no arquivo frontend tocado (1
+    warning pré-existente de `exhaustive-deps`, confirmado via `git
+    stash` como não-novo desta fase).
 
 ## Riscos conhecidos / débito técnico
 
