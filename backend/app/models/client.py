@@ -54,6 +54,29 @@ class ClientContact(Base):
     client: Mapped["Client"] = relationship(back_populates="contacts")
 
 
+class ClientPortalAccess(Base):
+    """Fase 234 — acesso ao Portal do Cliente via link temporário, separado
+    do cadastro de usuários internos. 1 registro por cliente (regenerar
+    substitui token/validade no lugar); `portal_user_id` aponta pra um
+    `User` técnico oculto (role=CLIENT, senha aleatória nunca exposta,
+    nunca listado em `GET /users`) que só existe pra reaproveitar o
+    mecanismo de JWT/sessão já usado por todo o sistema
+    (`get_current_user`, `/auth/refresh`) sem reescrevê-lo. `token_hash`
+    é o SHA-256 (`hash_token()`, mesmo padrão de `Session.token_hash`) —
+    o token bruto nunca é persistido, só devolvido uma vez na geração."""
+    __tablename__ = "client_portal_access"
+
+    id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    client_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("clients.id", ondelete="CASCADE"), nullable=False, unique=True)
+    tenant_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("tenants.id"), nullable=True, index=True)
+    portal_user_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_by: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class ClientInteraction(Base):
     __tablename__ = "client_interactions"
 

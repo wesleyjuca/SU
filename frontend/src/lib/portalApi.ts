@@ -15,10 +15,45 @@ async function clearPortalSession() {
     });
   } catch {}
   localStorage.removeItem("afj_portal_token");
+  localStorage.removeItem("afj_portal_refresh_token");
   localStorage.removeItem("afj_portal_user");
 }
 
-async function portalRequest<T>(path: string, options: RequestInit = {}): Promise<T> {
+// Fase 234 — o portal deixou de ter login por senha (só o link temporário
+// gera sessão), então um 401 por token de acesso expirado (30 min,
+// ACCESS_TOKEN_EXPIRE_MINUTES) não tem mais como "relogar" — sem isto o
+// cliente seria expulso a cada 30 min de uso. Tenta renovar 1x via
+// /auth/refresh (mesmo endpoint genérico já usado pelo app inteiro) antes
+// de desistir e mandar pra página informativa.
+let refreshEmAndamento: Promise<boolean> | null = null;
+
+async function tentarRenovarSessao(): Promise<boolean> {
+  if (refreshEmAndamento) return refreshEmAndamento;
+  refreshEmAndamento = (async () => {
+    const refreshToken = typeof window !== "undefined" ? localStorage.getItem("afj_portal_refresh_token") : null;
+    if (!refreshToken) return false;
+    try {
+      const res = await fetch(`${BASE}/auth/refresh`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refresh_token: refreshToken }),
+      });
+      if (!res.ok) return false;
+      const data = await res.json();
+      localStorage.setItem("afj_portal_token", data.access_token);
+      localStorage.setItem("afj_portal_refresh_token", data.refresh_token);
+      localStorage.setItem("afj_portal_user", JSON.stringify(data.user));
+      return true;
+    } catch {
+      return false;
+    }
+  })();
+  const ok = await refreshEmAndamento;
+  refreshEmAndamento = null;
+  return ok;
+}
+
+async function portalRequest<T>(path: string, options: RequestInit = {}, tentouRenovar = false): Promise<T> {
   const token = getPortalToken();
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -27,6 +62,9 @@ async function portalRequest<T>(path: string, options: RequestInit = {}): Promis
   };
   const res = await fetch(`${BASE}${path}`, { ...options, headers });
   if (res.status === 401) {
+    if (!tentouRenovar && (await tentarRenovarSessao())) {
+      return portalRequest<T>(path, options, true);
+    }
     await clearPortalSession();
     window.location.href = "/portal/login";
     throw new Error("Sessão expirada");

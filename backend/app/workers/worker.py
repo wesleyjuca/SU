@@ -56,6 +56,7 @@ celery_app = Celery(
         "app.workers.tasks.approval_reaper",
         "app.workers.tasks.oab_discovery",
         "app.workers.tasks.demo_reset",
+        "app.workers.tasks.client_portal_access_reaper",
     ],
 )
 
@@ -96,6 +97,14 @@ celery_app.conf.beat_schedule = {
     "cleanup-sessions": {
         "task": "app.workers.tasks.session_cleanup.cleanup_expired_sessions",
         "schedule": crontab(hour=3, minute=0, day_of_week=0),
+    },
+    # Fase 234 — higiene do Controle de Clientes: desativa o User técnico de
+    # acessos ao portal vencidos. Diário (não semanal como sessions) porque a
+    # janela de validade típica de um link é bem menor (1-30 dias) — a
+    # garantia de segurança em si já é o check ao vivo em get_portal_client().
+    "desativar-portal-access-vencidos": {
+        "task": "app.workers.tasks.client_portal_access_reaper.desativar_portal_access_vencidos",
+        "schedule": crontab(hour=3, minute=15),
     },
     # Sincronização diária de jurisprudência do STJ (Fase 138.1) — casa com a
     # cadência de atualização incremental do próprio portal.

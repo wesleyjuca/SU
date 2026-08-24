@@ -20,6 +20,20 @@ export default function PortalLayout({ children }: { children: React.ReactNode }
 
   async function handleLogout() {
     try {
+      const token = localStorage.getItem("afj_portal_token");
+      const refreshToken = localStorage.getItem("afj_portal_refresh_token");
+      if (refreshToken) {
+        // Invalida a Session/refresh no backend (mesmo endpoint genérico de
+        // sempre) — sem isto o token continua tecnicamente válido até expirar.
+        await fetch("/api/v1/auth/logout", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          body: JSON.stringify({ refresh_token: refreshToken }),
+        }).catch(() => {});
+      }
       await fetch("/api/portal/session", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -27,6 +41,7 @@ export default function PortalLayout({ children }: { children: React.ReactNode }
       });
     } finally {
       localStorage.removeItem("afj_portal_token");
+      localStorage.removeItem("afj_portal_refresh_token");
       localStorage.removeItem("afj_portal_user");
       router.push("/portal/login");
     }

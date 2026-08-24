@@ -2,12 +2,14 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, or_
+from pydantic import BaseModel
+from datetime import datetime, timezone
 import uuid
 
 from app.db.base import get_db
 from app.dependencies import get_current_user
 from app.models.user import User
-from app.models.client import Client
+from app.models.client import Client, ClientPortalAccess
 from app.models.process import LegalProcess, ProcessMovement, ProcessDeadline, client_linked_processes_filter
 from app.models.document import Document
 from app.models.financial import FinancialEntry
@@ -18,11 +20,21 @@ router = APIRouter(prefix="/portal", tags=["portal"])
 
 async def get_portal_client(
     current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ) -> tuple[User, uuid.UUID]:
     if current_user.role != "CLIENT":
         raise ForbiddenError("Acesso exclusivo para clientes do escritório")
     if not current_user.linked_client_id:
         raise ForbiddenError("Usuário não vinculado a nenhum cliente")
+    # Fase 234 — checagem viva além do `is_active` do User (que só reflete
+    # revogação explícita ou a última rodada do reaper diário): cobre "link
+    # expirou agora mesmo, ainda não foi revogado nem reaper rodou de novo"
+    # — bloqueio no instante exato da expiração, não só na próxima limpeza.
+    access = (await db.execute(
+        select(ClientPortalAccess).where(ClientPortalAccess.client_id == current_user.linked_client_id)
+    )).scalar_one_or_none()
+    if not access or access.revoked_at is not None or access.expires_at < datetime.now(timezone.utc):
+        raise ForbiddenError("Acesso ao portal expirado ou revogado.")
     return current_user, current_user.linked_client_id
 
 
@@ -313,7 +325,6 @@ async def portal_financial(
 
 
 # ─── Mensagens cliente ↔ escritório (Fase 6 — Portal Cliente) ─────────────────
-from pydantic import BaseModel
 from app.models.client import ClientInteraction
 
 

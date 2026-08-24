@@ -1,6 +1,6 @@
 from app.models.tenant import Tenant, TenantConfig
 from app.models.user import User, UserPermission, Session
-from app.models.client import Client, ClientContact, ClientInteraction
+from app.models.client import Client, ClientContact, ClientInteraction, ClientPortalAccess
 from app.models.process import LegalProcess, ProcessMovement, ProcessDeadline, ProcessParty, ProcessTeamMember
 from app.models.document import Document, DocumentVersion, Petition, Contract
 from app.models.agent_run import AgentRun, AgentStep, Approval, AgentMemory
@@ -29,7 +29,7 @@ from app.models.agent_playbook import AgentAreaPlaybook
 __all__ = [
     "Tenant", "TenantConfig",
     "User", "UserPermission", "Session",
-    "Client", "ClientContact", "ClientInteraction",
+    "Client", "ClientContact", "ClientInteraction", "ClientPortalAccess",
     "LegalProcess", "ProcessMovement", "ProcessDeadline", "ProcessParty",
     "Document", "DocumentVersion", "Petition", "Contract",
     "AgentRun", "AgentStep", "Approval", "AgentMemory",

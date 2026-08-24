@@ -5,16 +5,18 @@ from sqlalchemy import select, desc, or_, func
 from pydantic import BaseModel
 from typing import Any
 import re
+import secrets
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 import structlog
 
 from app.db.base import get_db
 from app.dependencies import get_current_user, require_role
 from app.models.user import User
-from app.models.client import Client, ClientContact, ClientInteraction
+from app.models.client import Client, ClientContact, ClientInteraction, ClientPortalAccess
 from app.core.exceptions import NotFoundError
 from app.core.crypto import encrypt, decrypt_or_raw
+from app.core.security import hash_password, hash_token
 from app.models.gov_registry_lookup import GovRegistryLookup
 from app.integrations.serpro.consulta_cpf_cnpj import consultar_cpf, consultar_cnpj
 from app.integrations.publicas.cep_lookup import consultar_cep as _consultar_cep_externa
@@ -285,6 +287,45 @@ async def consultar_cep_endpoint(
     if resultado is None:
         return {"logradouro": None, "bairro": None, "cidade": None, "uf": None, "latitude": None, "longitude": None}
     return resultado
+
+
+# Fase 234 — precisa vir ANTES de "GET /{client_id}" (linha logo abaixo),
+# senão o roteamento por ordem de declaração do FastAPI casa
+# "/portal-access" como se fosse o path param client_id="portal-access".
+def _status_portal_access(access: ClientPortalAccess | None) -> str:
+    if access is None:
+        return "SEM_ACESSO"
+    if access.revoked_at is not None:
+        return "REVOGADO"
+    if access.expires_at < datetime.now(timezone.utc):
+        return "EXPIRADO"
+    return "ATIVO"
+
+
+@router.get("/portal-access")
+async def list_portal_access(
+    current_user: User = Depends(require_role("ADMIN")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Controle de Clientes — todo cliente do tenant + status do acesso
+    ao portal (SEM_ACESSO/ATIVO/EXPIRADO/REVOGADO), computado na leitura."""
+    result = await db.execute(
+        select(Client, ClientPortalAccess)
+        .outerjoin(ClientPortalAccess, ClientPortalAccess.client_id == Client.id)
+        .where(Client.tenant_id == current_user.tenant_id)
+        .order_by(Client.nome_completo)
+    )
+    return [
+        {
+            "client_id": str(client.id),
+            "nome": client.nome_completo,
+            "tipo": client.tipo,
+            "status": _status_portal_access(access),
+            "created_at": access.created_at.isoformat() if access else None,
+            "expires_at": access.expires_at.isoformat() if access else None,
+        }
+        for client, access in result.all()
+    ]
 
 
 @router.get("/{client_id}", response_model=ClientResponse)
@@ -902,3 +943,118 @@ async def client_dossie_pdf(
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="dossie_{client_id}.pdf"'},
     )
+
+
+# ── Fase 234 — Controle de Clientes: acesso ao Portal via link temporário,
+# separado do cadastro de usuários internos. `User` técnico oculto (role=
+# CLIENT, e-mail sintético, senha aleatória nunca exposta) existe só pra
+# reaproveitar o mecanismo de JWT/sessão já usado pelo sistema inteiro
+# (get_current_user, /auth/refresh) sem reescrevê-lo — o admin nunca vê/
+# gerencia esse User, só o link. Ver POST /auth/portal-redeem (auth.py)
+# pra onde o token vira sessão de verdade.
+
+_PORTAL_ACCESS_VALIDADES = (1, 3, 7, 15, 30)
+
+
+class PortalAccessCreate(BaseModel):
+    validade_dias: int = 7
+
+
+@router.post("/{client_id}/portal-access")
+async def gerar_portal_access(
+    client_id: str,
+    body: PortalAccessCreate,
+    current_user: User = Depends(require_role("ADMIN")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Gera (ou regenera) o link de acesso ao portal pra um cliente. O
+    token bruto só existe nesta resposta — nunca é persistido nem pode
+    ser recuperado depois (mesmo espírito de senha temporária mostrada
+    uma única vez)."""
+    if body.validade_dias not in _PORTAL_ACCESS_VALIDADES:
+        raise HTTPException(status_code=422, detail="Validade inválida.")
+
+    client = (await db.execute(
+        select(Client).where(Client.id == uuid.UUID(client_id), Client.tenant_id == current_user.tenant_id)
+    )).scalar_one_or_none()
+    if not client:
+        raise NotFoundError("Cliente", client_id)
+
+    access = (await db.execute(
+        select(ClientPortalAccess).where(ClientPortalAccess.client_id == client.id)
+    )).scalar_one_or_none()
+
+    if access:
+        portal_user = (await db.execute(
+            select(User).where(User.id == access.portal_user_id)
+        )).scalar_one_or_none()
+        if portal_user:
+            portal_user.is_active = True
+    else:
+        # E-mail sintético — o User técnico nunca loga por senha/e-mail,
+        # então não depende do cliente ter e-mail cadastrado (diferente
+        # do fluxo antigo que exigia).
+        portal_user = User(
+            id=uuid.uuid4(),
+            email=f"portal-{client.id}@clients.internal",
+            full_name=client.nome_completo,
+            role="CLIENT",
+            hashed_password=hash_password(secrets.token_urlsafe(32)),
+            is_active=True,
+            tenant_id=current_user.tenant_id,
+            linked_client_id=client.id,
+        )
+        db.add(portal_user)
+        await db.flush()
+
+    raw_token = secrets.token_urlsafe(32)
+    expires_at = datetime.now(timezone.utc) + timedelta(days=body.validade_dias)
+
+    if access:
+        access.token_hash = hash_token(raw_token)
+        access.expires_at = expires_at
+        access.revoked_at = None
+        access.created_at = datetime.now(timezone.utc)
+        access.created_by = current_user.id
+    else:
+        access = ClientPortalAccess(
+            client_id=client.id,
+            tenant_id=current_user.tenant_id,
+            portal_user_id=portal_user.id,
+            token_hash=hash_token(raw_token),
+            created_by=current_user.id,
+            expires_at=expires_at,
+        )
+        db.add(access)
+
+    await db.commit()
+    return {
+        "path": f"/portal/acesso/{raw_token}",
+        "expires_at": expires_at.isoformat(),
+    }
+
+
+@router.delete("/{client_id}/portal-access")
+async def revogar_portal_access(
+    client_id: str,
+    current_user: User = Depends(require_role("ADMIN")),
+    db: AsyncSession = Depends(get_db),
+):
+    access = (await db.execute(
+        select(ClientPortalAccess).where(
+            ClientPortalAccess.client_id == uuid.UUID(client_id),
+            ClientPortalAccess.tenant_id == current_user.tenant_id,
+        )
+    )).scalar_one_or_none()
+    if not access:
+        raise NotFoundError("Acesso ao portal", client_id)
+
+    access.revoked_at = datetime.now(timezone.utc)
+    portal_user = (await db.execute(
+        select(User).where(User.id == access.portal_user_id)
+    )).scalar_one_or_none()
+    if portal_user:
+        portal_user.is_active = False
+
+    await db.commit()
+    return {"message": "Acesso revogado."}
