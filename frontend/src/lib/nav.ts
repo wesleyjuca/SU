@@ -3,7 +3,7 @@
 // divergência (ex.: BottomNav mostrava Aprovações/Agentes a papéis proibidos).
 import {
   LayoutDashboard, Scale, FileText, Users, FolderOpen, Bot, CheckSquare,
-  DollarSign, Shield, Shapes, Settings, FileEdit, BarChart2, CalendarClock,
+  DollarSign, Shield, Shapes, Settings, FileEdit, BarChart2, CalendarClock, MapPin,
   BookOpen, Activity, Users2, KeyRound, GraduationCap, Compass,
   Coins, ShieldCheck, Plug, Gauge, Building2, Receipt, MonitorPlay,
   Newspaper, Briefcase, Brain,
@@ -46,6 +46,7 @@ export const navSections: NavSection[] = [
   { title: "GESTÃO", items: [
     { href: "/financeiro", label: "Financeiro", icon: DollarSign, roles: GESTAO },
     { href: "/relatorios", label: "Relatórios", icon: BarChart2, roles: GESTAO },
+    { href: "/mapa", label: "Mapa", icon: MapPin, roles: GESTAO },
     { href: "/custos-ia", label: "Custos de IA", icon: Coins, roles: ["ADMIN", "SOCIO"] },
     { href: "/tv", label: "Painel TV", icon: MonitorPlay, roles: GESTAO, newTab: true },
   ]},

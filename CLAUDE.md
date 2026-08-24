@@ -2615,6 +2615,76 @@ Histórico:
     `tsc --noEmit`/`eslint` limpos no arquivo frontend tocado (1
     warning pré-existente de `exhaustive-deps`, confirmado via `git
     stash` como não-novo desta fase).
+- **Fase 231** — usuário pediu pra continuar com a peça que a Fase 230
+  deixou como "em breve": o mapa visual com marcadores de
+  escritório+clientes, agora que a geocodificação (lat/lng) já está em
+  produção. Primeira integração de biblioteca de mapa neste projeto —
+  investigação (Explore) confirmou que nenhuma lib de mapa existia
+  antes, e que `GET /tenant/endereco`/`GET /clients` já trazem tudo
+  que o mapa precisa (sem endpoint novo).
+  - **`leaflet` + `react-leaflet@4` + `@types/leaflet`** — OpenStreetMap
+    (tiles gratuitos, sem chave de API), mesmo espírito
+    "grátis/sem credencial" já usado pra BrasilAPI (Fase 217/230).
+  - **`frontend/src/components/mapa/EscritorioClientesMap.tsx`** (novo,
+    `"use client"`) — `MapContainer`/`TileLayer`/`Marker`/`Popup` do
+    react-leaflet. Ícones de marcador custom via `L.divIcon` (SVG
+    inline) em vez do ícone padrão do Leaflet — evita o bug clássico
+    de paths de imagem quebrados sob bundler (webpack/Next), sem
+    precisar copiar assets pra `/public`. Cor lida em runtime via
+    `getComputedStyle(...).getPropertyValue('--brand-primary'/
+    '--brand-secondary')` — ouro pro escritório, navy pros clientes,
+    theme-aware (tenant pode ter cor própria, Fase 224). Enquadramento
+    automático via `map.fitBounds()` — nunca um centro fixo hardcoded
+    do Brasil, já que o escritório pode ficar em qualquer lugar.
+  - **`frontend/src/app/(dashboard)/mapa/page.tsx`** (novo) — mesmo
+    padrão estrutural de `relatorios/page.tsx`: `Breadcrumb` +
+    `.afj-page-header`, busca `GET /tenant/endereco` + `GET /clients`
+    em paralelo, filtra client-side por `endereco_json.latitude !=
+    null`, carrega o mapa via `dynamic(..., { ssr: false })` (Leaflet
+    acessa `window`/`document` no import — quebra em SSR sem isso,
+    mesmo padrão já usado pra `GestaoCharts`/`ProcessosCharts`).
+    Estado vazio explícito ("Nenhum endereço geocodificado ainda")
+    quando nem o escritório nem nenhum cliente tem coordenadas — não
+    tenta renderizar um mapa sem marcador nenhum.
+  - **Nav** (`frontend/src/lib/nav.ts`): novo item "Mapa" (ícone
+    `MapPin`) na seção GESTÃO, logo após "Relatórios" — mesmo gate de
+    papel (`GESTAO` = ADMIN/SUPERADMIN/SOCIO/GESTOR) que `/relatorios`/
+    `/financeiro`, sem proteção adicional server-side (sem precedente
+    disso neste projeto — gate real é o backend, que já filtra por
+    tenant/papel nos 2 endpoints reaproveitados).
+  - **Achado incidental corrigido durante a verificação**: o primeiro
+    teste via Playwright do link "Mapa" no menu deu falso-negativo —
+    não era bug (confirmado num 2º teste, com mais tempo de espera
+    após o login, que achou o link normalmente); o teste original
+    checava o DOM cedo demais, antes do sidebar acabar de hidratar.
+  - Verificado via HTTP real (Postgres real): `GET /tenant/endereco`/
+    `GET /clients` respondem no formato esperado. Como este sandbox
+    bloqueia egress pra `brasilapi.com.br` (Fase 217/230) e também pra
+    `tile.openstreetmap.org` (achado novo desta fase — mesma classe de
+    restrição, domínio diferente), nenhum endereço real tinha lat/lng
+    neste ambiente — populado manualmente via script (simulando o que
+    a geocodificação real preencheria em produção: 1 escritório + 3
+    clientes) pra testar o mapa de fato. Playwright real (Chromium do
+    sandbox) confirmou: container do Leaflet renderiza, 4 marcadores
+    aparecem (1 ouro pro escritório + 3 navy pros clientes), popup
+    abre ao clicar com o texto certo, zero console error atribuível à
+    mudança (só os `ERR_TUNNEL_CONNECTION_FAILED` esperados das
+    imagens de tile bloqueadas pelo proxy deste sandbox — as próprias
+    tiles não carregam aqui, mas a estrutura/marcadores/popups do mapa
+    funcionam perfeitamente; produção com egress real deve mostrar o
+    mapa de fundo normalmente). Screenshot confirma visualmente o
+    resultado (marcador ouro do escritório com popup aberto, marcadores
+    navy dos clientes, atribuição do OpenStreetMap, controles de
+    zoom — tudo com a paleta certa da marca).
+  - `tsc --noEmit`/`eslint` limpos nos arquivos novos/tocados (1
+    warning pré-existente de `exhaustive-deps` na nova página, mesmo
+    padrão já aceito em `relatorios/page.tsx` e toda página que busca
+    dado só no mount).
+  - Fora de escopo desta fase (não pedido): filtro/busca de cliente no
+    mapa, cluster de marcadores pra volumes grandes, e a "extração de
+    relatórios" a partir do mapa mencionada no pedido original da Fase
+    230 — essa última seguirá aguardando a área de geração de
+    relatórios já avaliada (e não construída) naquela fase.
 
 ## Riscos conhecidos / débito técnico
 
