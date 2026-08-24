@@ -149,6 +149,13 @@ async def update_branding(
     if meta_updates:
         current_meta = config.extra_data or {}
         config.extra_data = {**current_meta, **meta_updates}
+        # Fase 232 — sincroniza o nome do timbrado (document_templates.
+        # letterhead.office_name) com "Nome do Escritório", a menos que já
+        # tenha sido personalizado explicitamente no próprio timbrado.
+        # Não confundir com "Nome do Sistema" (app_name, branding do
+        # produto) — conceito diferente, não entra nesta sincronização.
+        if "office_name" in meta_updates:
+            _sync_letterhead_derivado(config, "office_name", "office_name_custom", meta_updates["office_name"])
     await db.flush()
     await invalidate_tenant_cache(tenant.slug)
     meta = config.extra_data or {}
@@ -326,9 +333,46 @@ async def _get_or_create_config(db: AsyncSession, current_user: User) -> tuple[T
 
 
 # ─── Timbrado dos documentos (padrão do escritório) ──────────────────────────
+def _endereco_para_texto(endereco: dict | None) -> str | None:
+    """Fase 232 — formata `{logradouro, bairro, cidade, uf, cep}` numa
+    linha só, mesmo formato usado em `/mapa` (`enderecoTexto()` no
+    frontend) — reaproveitado aqui pra alimentar o timbrado
+    automaticamente a partir do "Endereço do Escritório" (Fase 230),
+    sem exigir uma segunda digitação do mesmo endereço."""
+    if not endereco:
+        return None
+    partes = [endereco.get("logradouro"), endereco.get("bairro")]
+    cidade_uf = "/".join(x for x in (endereco.get("cidade"), endereco.get("uf")) if x)
+    if cidade_uf:
+        partes.append(cidade_uf)
+    texto = " — ".join(p for p in partes if p)
+    cep = endereco.get("cep")
+    if cep:
+        texto = f"{texto} — CEP {cep}" if texto else f"CEP {cep}"
+    return texto or None
+
+
+def _sync_letterhead_derivado(config: "TenantConfig", campo: str, flag_custom: str, valor_auto) -> None:
+    """Fase 232 — mantém um campo do timbrado (nome/endereço) sincronizado
+    com o cadastro de origem ("Nome do Escritório"/"Endereço do
+    Escritório"), a menos que o usuário tenha explicitamente
+    personalizado esse campo no próprio timbrado. Chamado a partir de
+    `update_endereco`/`update_branding` — mantém `document_templates.
+    letterhead` sempre correto pros geradores de PDF, sem precisar
+    tocar em nenhum dos 7 call sites que já leem esse JSONB direto."""
+    templates = dict(config.document_templates or {})
+    lh = dict(templates.get("letterhead") or {})
+    if not lh.get(flag_custom):
+        lh[campo] = valor_auto
+        templates["letterhead"] = lh
+        config.document_templates = templates
+
+
 class LetterheadUpdate(BaseModel):
     office_name: str | None = None
+    office_name_custom: bool = False
     address: str | None = None
+    address_custom: bool = False
     contact: str | None = None
     oab: str | None = None
     footer: str | None = None
@@ -340,12 +384,28 @@ async def get_letterhead(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Timbrado configurado do escritório (usado nos PDFs gerados)."""
-    _, config = await _get_or_create_config(db, current_user)
-    lh = (config.document_templates or {}).get("letterhead", {})
+    """Timbrado configurado do escritório (usado nos PDFs gerados).
+
+    Fase 232 — "office_name"/"address" resolvem automaticamente a partir
+    de "Nome do Escritório"/"Endereço do Escritório" (abas Escritório),
+    a menos que tenham sido explicitamente personalizados aqui no
+    timbrado (`office_name_custom`/`address_custom`). Resolvido na
+    LEITURA (não só confiando no que foi sincronizado por escrita em
+    `update_endereco`/`update_branding`) pra cobrir também um tenant que
+    já tinha nome/endereço cadastrados antes desta fase e nunca salvou
+    o timbrado — sem precisar de backfill/migração."""
+    tenant, config = await _get_or_create_config(db, current_user)
+    lh = (config.document_templates or {}).get("letterhead") or {}
+    meta = config.extra_data or {}
+    office_name_custom = bool(lh.get("office_name_custom"))
+    address_custom = bool(lh.get("address_custom"))
+    office_name = lh.get("office_name") if office_name_custom else (meta.get("office_name") or lh.get("office_name"))
+    address = lh.get("address") if address_custom else (_endereco_para_texto(tenant.endereco_json) or lh.get("address"))
     return {
-        "office_name": lh.get("office_name"),
-        "address": lh.get("address"),
+        "office_name": office_name,
+        "office_name_custom": office_name_custom,
+        "address": address,
+        "address_custom": address_custom,
         "contact": lh.get("contact"),
         "oab": lh.get("oab"),
         "footer": lh.get("footer"),
@@ -360,12 +420,24 @@ async def update_letterhead(
     current_user: User = Depends(require_role("ADMIN")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Salva o timbrado do escritório em TenantConfig.document_templates (JSONB)."""
+    """Salva o timbrado do escritório em TenantConfig.document_templates
+    (JSONB). Fase 232 — quando `office_name_custom`/`address_custom` vêm
+    `False` (usuário optou por "usar automaticamente"), recalcula o
+    valor a partir do cadastro de origem em vez de confiar no que o
+    corpo da requisição mandou — garante que "voltar ao automático"
+    sempre produz o valor certo mesmo com um frontend desatualizado."""
     tenant, config = await _get_or_create_config(db, current_user)
+    meta = config.extra_data or {}
+
+    office_name_val = ((body.office_name or "").strip() or None) if body.office_name_custom else meta.get("office_name")
+    address_val = ((body.address or "").strip() or None) if body.address_custom else _endereco_para_texto(tenant.endereco_json)
+
     templates = dict(config.document_templates or {})
     templates["letterhead"] = {
-        "office_name": (body.office_name or "").strip() or None,
-        "address": (body.address or "").strip() or None,
+        "office_name": office_name_val,
+        "office_name_custom": body.office_name_custom,
+        "address": address_val,
+        "address_custom": body.address_custom,
         "contact": (body.contact or "").strip() or None,
         "oab": (body.oab or "").strip() or None,
         "footer": (body.footer or "").strip() or None,
@@ -451,12 +523,18 @@ async def update_endereco(
 ):
     """Salva o endereço do escritório e geocodifica via BrasilAPI (mesma
     fonte/limitação de precisão de `Client.endereco_json`, ver
-    `_geocodificar_endereco` em `app/api/v1/clients.py`)."""
+    `_geocodificar_endereco` em `app/api/v1/clients.py`).
+
+    Fase 232 — também sincroniza o endereço do timbrado (`document_
+    templates.letterhead.address`), a menos que já tenha sido
+    personalizado explicitamente lá — elimina o cadastro duplicado que
+    existia entre esta seção e "Timbrado dos Documentos"."""
     from app.api.v1.clients import _geocodificar_endereco
 
-    tenant, _ = await _get_or_create_config(db, current_user)
+    tenant, config = await _get_or_create_config(db, current_user)
     endereco = body.model_dump(exclude_none=True)
     tenant.endereco_json = await _geocodificar_endereco(endereco) if endereco else None
+    _sync_letterhead_derivado(config, "address", "address_custom", _endereco_para_texto(tenant.endereco_json))
     await db.flush()
     await invalidate_tenant_cache(tenant.slug)
     return tenant.endereco_json or {}

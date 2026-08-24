@@ -2685,6 +2685,70 @@ Histórico:
     relatórios" a partir do mapa mencionada no pedido original da Fase
     230 — essa última seguirá aguardando a área de geração de
     relatórios já avaliada (e não construída) naquela fase.
+- **Fase 232** — usuário apontou, com 2 screenshots, 2 cadastros
+  duplicados: (1) "Endereço do Escritório" (Fase 230) e "Timbrado dos
+  Documentos → Endereço" (pré-existente) pedindo o mesmo endereço duas
+  vezes; (2) a aba "Contatos" do Cliente 360 aparecendo vazia mesmo
+  pra um cliente PF (pessoa física), redundante com o telefone/whatsapp
+  já mostrado em "Dados Cadastrais". Investigação (2 Explore) confirmou
+  os 2 pontos e um 3º achado incidental: "Nome do Escritório" (aba
+  Escritório) e "Nome no cabeçalho" (Timbrado) são o MESMO conceito
+  duplicado — mas "Nome do Sistema" (aba Aparência, branding do
+  software) é um conceito DIFERENTE, confirmado lendo os labels exatos
+  no código, e não deve ser unificado (corrigindo o que a primeira
+  leitura do Explore agent tinha contado solto como "3 lugares").
+  Usuário confirmou (via perguntas): padrão automático + personalização
+  opcional pro endereço/nome do timbrado, esconder a aba Contatos pra
+  clientes PF, e incluir a unificação de nome do escritório (não do
+  nome do sistema) nesta mesma fase.
+  - **Backend — `backend/app/api/v1/tenant.py`**: mecanismo de
+    "sincronização por escrita + fallback de leitura". Novo
+    `_endereco_para_texto()` formata o endereço estruturado numa linha
+    (mesmo formato já usado em `/mapa`). `LetterheadUpdate` ganha
+    `office_name_custom`/`address_custom` (bool). `update_endereco`
+    (`PUT /tenant/endereco`) e `update_branding` (`PUT /tenant/branding`,
+    quando `office_name` está no body) passam a escrever o valor
+    derivado dentro de `document_templates.letterhead` — mas só quando
+    o campo correspondente não estiver marcado `_custom=True` — mantendo
+    o dict bruto correto pros 7 call sites de PDF existentes
+    (`documents.py`/`portal.py`/`google_integration.py`/
+    `reports_admin.py`/`invoices.py`/`clients.py`/`esign.py`) **sem
+    tocar nenhum deles**. `get_letterhead` (`GET /tenant/letterhead`)
+    ADICIONALMENTE recalcula o valor efetivo na leitura (cobre tenant
+    com dado histórico, sem precisar de backfill). `update_letterhead`
+    grava os 2 flags e recalcula a partir do cadastro de origem quando
+    um flag volta a `False` (nunca confia cegamente no texto antigo que
+    o frontend mandar).
+  - **Frontend — `frontend/src/components/configuracoes/
+    EscritorioZone.tsx`**: os campos "Nome no cabeçalho" e "Endereço"
+    (card Timbrado) ganham o padrão automático/personalizar — modo
+    automático mostra o valor derivado como texto read-only + link
+    "Personalizar..."; modo personalizado mostra o input editável (como
+    antes) + link "Usar...automaticamente" pra reverter. `saveLetterhead()`
+    envia os 2 flags no PUT.
+  - **Frontend — `frontend/src/app/(dashboard)/clientes/[id]/page.tsx`**:
+    a aba "Contatos" (botão + conteúdo + gatilho do modal "Novo
+    Contato") só aparece quando `cliente.tipo === "PJ"` — `ClientContact`
+    é conceitualmente pra representantes de empresa, não pro próprio
+    titular PF. Novo `useEffect` cai de volta pra "interacoes" se o
+    estado ficar em "contatos" com um cliente PF (navegação anterior).
+  - Verificado via HTTP real contra Postgres real (login ADMIN real):
+    `PUT /tenant/endereco` → `GET /tenant/letterhead` reflete o endereço
+    formatado com `address_custom: false`; `PUT /tenant/branding` com
+    `office_name` → nome refletido automaticamente; `PUT
+    /tenant/letterhead` com `address_custom: true` e texto próprio →
+    sobrevive intacto a um `PUT /tenant/endereco` subsequente com CEP
+    diferente; voltar `address_custom: false` → recalcula pro endereço
+    atual, não repete o texto antigo. Playwright real (Chromium do
+    sandbox, `npm run dev` com `API_URL` local): os 2 campos do Timbrado
+    aparecem em modo automático por padrão, "Personalizar" revela o
+    input editável de forma independente por campo; cliente PF criado
+    via API mostra só as abas "Interações"/"Financeiro" (Contatos
+    ausente); cliente PJ criado via API mostra "Contatos (0)" +
+    botão "+ Contato" normalmente. `ruff check`/`py_compile` limpos no
+    backend; `tsc --noEmit`/`eslint` limpos no frontend (1 warning
+    pré-existente de `exhaustive-deps` em `clientes/[id]/page.tsx`,
+    confirmado via `git stash` como não-novo desta fase).
 
 ## Riscos conhecidos / débito técnico
 
