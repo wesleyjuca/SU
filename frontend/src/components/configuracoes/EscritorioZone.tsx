@@ -206,6 +206,12 @@ export function EscritorioZone() {
   const [lh, setLh] = useState({ office_name: "", address: "", contact: "", oab: "", footer: "", use_logo: true });
   const [lhSaving, setLhSaving] = useState(false);
   const [lhSaved, setLhSaved] = useState(false);
+  // Fase 232 — "Nome no cabeçalho"/"Endereço" do timbrado seguem
+  // automaticamente "Nome do Escritório"/"Endereço do Escritório" por
+  // padrão (elimina o cadastro duplicado); só ficam editáveis quando o
+  // usuário opta explicitamente por personalizar.
+  const [officeNameCustom, setOfficeNameCustom] = useState(false);
+  const [addressCustom, setAddressCustom] = useState(false);
   const [modules, setModules] = useState<Record<string, boolean>>({});
   const [modulesLoading, setModulesLoading] = useState(false);
   const [widgets, setWidgets] = useState<string[]>(AVAILABLE_WIDGETS.map((w) => w.key));
@@ -297,6 +303,8 @@ export function EscritorioZone() {
           footer: d.footer || "",
           use_logo: d.use_logo !== false,
         });
+        setOfficeNameCustom(!!d.office_name_custom);
+        setAddressCustom(!!d.address_custom);
       }
     } catch { /* mantém defaults */ }
   }
@@ -308,10 +316,19 @@ export function EscritorioZone() {
       const res = await fetch("/api/v1/tenant/letterhead", {
         method: "PUT",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify(lh),
+        body: JSON.stringify({ ...lh, office_name_custom: officeNameCustom, address_custom: addressCustom }),
       });
-      if (res.ok) { setLhSaved(true); setTimeout(() => setLhSaved(false), 2000); }
-      else toast.error("Erro ao salvar o timbrado.");
+      if (res.ok) {
+        const d = await res.json();
+        // Reflete o valor efetivo devolvido pelo backend (pode ter sido
+        // recalculado automaticamente se algum dos 2 campos voltou a
+        // "automático" nesta mesma chamada).
+        setLh((atual) => ({ ...atual, office_name: d.office_name || "", address: d.address || "" }));
+        setLhSaved(true);
+        setTimeout(() => setLhSaved(false), 2000);
+      } else {
+        toast.error("Erro ao salvar o timbrado.");
+      }
     } catch { toast.error("Erro de conexão."); }
     finally { setLhSaving(false); }
   }
@@ -687,15 +704,51 @@ export function EscritorioZone() {
               <div className="space-y-4">
                 <div>
                   <label className="block text-[10px] font-semibold text-afj-black/55 mb-1.5 uppercase tracking-widest">Nome no cabeçalho</label>
-                  <input type="text" value={lh.office_name} onChange={(e) => setLh({ ...lh, office_name: e.target.value })}
-                    placeholder="Almeida, Freire & Jucá Advogados"
-                    className="w-full bg-afj-cream border border-afj-cream-dark rounded-sm px-4 py-2.5 text-sm focus:outline-none focus:border-afj-gold focus:bg-white transition-colors" />
+                  {officeNameCustom ? (
+                    <>
+                      <input type="text" value={lh.office_name} onChange={(e) => setLh({ ...lh, office_name: e.target.value })}
+                        placeholder="Almeida, Freire & Jucá Advogados"
+                        className="w-full bg-afj-cream border border-afj-cream-dark rounded-sm px-4 py-2.5 text-sm focus:outline-none focus:border-afj-gold focus:bg-white transition-colors" />
+                      <button type="button" onClick={() => setOfficeNameCustom(false)}
+                        className="text-[11px] text-afj-gold hover:underline mt-1">
+                        Usar o nome do escritório automaticamente
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <div className="w-full bg-afj-cream/60 border border-afj-cream-dark rounded-sm px-4 py-2.5 text-sm text-afj-black/70">
+                        {lh.office_name || "Cadastre o nome em \"Informações do Escritório\", acima"}
+                      </div>
+                      <button type="button" onClick={() => setOfficeNameCustom(true)}
+                        className="text-[11px] text-afj-gold hover:underline mt-1">
+                        Personalizar nome no timbrado
+                      </button>
+                    </>
+                  )}
                 </div>
                 <div>
                   <label className="block text-[10px] font-semibold text-afj-black/55 mb-1.5 uppercase tracking-widest">Endereço</label>
-                  <input type="text" value={lh.address} onChange={(e) => setLh({ ...lh, address: e.target.value })}
-                    placeholder="Rua, número — Bairro — Cidade/UF — CEP"
-                    className="w-full bg-afj-cream border border-afj-cream-dark rounded-sm px-4 py-2.5 text-sm focus:outline-none focus:border-afj-gold focus:bg-white transition-colors" />
+                  {addressCustom ? (
+                    <>
+                      <input type="text" value={lh.address} onChange={(e) => setLh({ ...lh, address: e.target.value })}
+                        placeholder="Rua, número — Bairro — Cidade/UF — CEP"
+                        className="w-full bg-afj-cream border border-afj-cream-dark rounded-sm px-4 py-2.5 text-sm focus:outline-none focus:border-afj-gold focus:bg-white transition-colors" />
+                      <button type="button" onClick={() => setAddressCustom(false)}
+                        className="text-[11px] text-afj-gold hover:underline mt-1">
+                        Usar o endereço do escritório automaticamente
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <div className="w-full bg-afj-cream/60 border border-afj-cream-dark rounded-sm px-4 py-2.5 text-sm text-afj-black/70">
+                        {lh.address || "Cadastre o endereço em \"Endereço do Escritório\", acima"}
+                      </div>
+                      <button type="button" onClick={() => setAddressCustom(true)}
+                        className="text-[11px] text-afj-gold hover:underline mt-1">
+                        Personalizar endereço no timbrado
+                      </button>
+                    </>
+                  )}
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>

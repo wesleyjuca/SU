@@ -159,6 +159,15 @@ export default function ClienteDetailPage() {
 
   useEffect(() => { if (id) fetchAll(); }, [id]);
 
+  // Fase 232: aba Contatos só existe pra cliente PJ (representantes da empresa) —
+  // pra PF o telefone/whatsapp do próprio cliente já aparece em Dados Cadastrais.
+  // Se o estado ficou em "contatos" (ex.: navegação anterior) e o cliente é PF, volta pra Interações.
+  useEffect(() => {
+    if (cliente && cliente.tipo !== "PJ" && activeTab === "contatos") {
+      setActiveTab("interacoes");
+    }
+  }, [cliente, activeTab]);
+
   async function fetchAll() {
     const token = localStorage.getItem("afj_access_token");
     const headers = { Authorization: `Bearer ${token}` };
@@ -546,16 +555,18 @@ export default function ClienteDetailPage() {
             >
               Interações ({interactions.length})
             </button>
-            <button
-              onClick={() => setActiveTab("contatos")}
-              className={`px-3 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
-                activeTab === "contatos"
-                  ? "border-afj-gold text-afj-gold"
-                  : "border-transparent text-afj-black/50 hover:text-afj-black"
-              }`}
-            >
-              Contatos ({contatos.length})
-            </button>
+            {cliente?.tipo === "PJ" && (
+              <button
+                onClick={() => setActiveTab("contatos")}
+                className={`px-3 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
+                  activeTab === "contatos"
+                    ? "border-afj-gold text-afj-gold"
+                    : "border-transparent text-afj-black/50 hover:text-afj-black"
+                }`}
+              >
+                Contatos ({contatos.length})
+              </button>
+            )}
             {canFinance && (
               <button
                 onClick={() => { setActiveTab("financeiro"); fetchFinanceiro(); }}
