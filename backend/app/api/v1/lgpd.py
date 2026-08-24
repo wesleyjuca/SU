@@ -150,7 +150,7 @@ async def erase_client_data(
     # tenant_id próprio, escopo por join em LegalProcess (mesmo padrão de
     # _get_parte_do_tenant, processes.py). cpf_cnpj vira None (como
     # Client.cpf/cnpj), nome vira placeholder (como Client.nome_completo).
-    from app.models.process import LegalProcess, ProcessParty
+    from app.models.process import LegalProcess, ProcessParty, client_linked_processes_filter
     parties_result = await db.execute(
         select(ProcessParty)
         .join(LegalProcess, LegalProcess.id == ProcessParty.process_id)
@@ -191,6 +191,83 @@ async def erase_client_data(
                 {**item, "descricao": "[Conteúdo removido — LGPD art. 18 IV]"}
                 for item in invoice.itens
             ]
+
+    # Fase 235 (rodada de teste geral) — auditoria completa de todo model
+    # com `client_id` no backend, respondendo de vez a pergunta repetida
+    # desde a Fase 219/228 ("vale um mecanismo estrutural pra não achar
+    # tabela esquecida pela 5ª vez?"). 4 lacunas reais confirmadas:
+    #
+    # `User.full_name` (Fase 234) — o User técnico oculto por trás do
+    # link de acesso ao portal copia o nome do titular na criação
+    # (`clients.py::gerar_portal_access`) e nunca era tocado aqui — nome
+    # original sobrevivia ao "esquecimento" nesse User.
+    portal_users_result = await db.execute(
+        select(User).where(User.linked_client_id == uuid.UUID(client_id))
+    )
+    for portal_user in portal_users_result.scalars().all():
+        portal_user.full_name = f"[ANONIMIZADO-{client_id[:8]}]"
+
+    # `Document.conteudo_texto`/`.conteudo_html` — corpo inteiro de
+    # petições/contratos gerados, quase certamente contém nome/CPF do
+    # titular. `titulo`/`status`/metadados de arquivo preservados —
+    # servem pro histórico do escritório, não são PII do titular.
+    from app.models.document import Document, Contract
+    documents_result = await db.execute(
+        select(Document).where(
+            Document.client_id == uuid.UUID(client_id),
+            Document.tenant_id == current_user.tenant_id,
+        )
+    )
+    documents = documents_result.scalars().all()
+    for doc in documents:
+        if doc.conteudo_texto:
+            doc.conteudo_texto = "[Conteúdo removido — LGPD art. 18 IV]"
+        if doc.conteudo_html:
+            doc.conteudo_html = "[Conteúdo removido — LGPD art. 18 IV]"
+
+    # `Contract.assinaturas` (JSONB) pode conter nome/CPF do signatário.
+    # Sem tenant_id próprio — escopo pelos Document já filtrados acima.
+    document_ids = [doc.id for doc in documents]
+    if document_ids:
+        contracts_result = await db.execute(
+            select(Contract).where(Contract.document_id.in_(document_ids))
+        )
+        for contract in contracts_result.scalars().all():
+            if contract.assinaturas:
+                contract.assinaturas = None
+
+    # `AgentRun.input_data`/`.output_data`/`.error_message` — prompts e
+    # resultados de agentes de IA disparados pra esse cliente, texto
+    # livre que pode conter dado pessoal. `tokens_used`/`cost_usd`/
+    # `status` preservados — auditoria de custo, não PII.
+    from app.models.agent_run import AgentRun
+    agent_runs_result = await db.execute(
+        select(AgentRun).where(
+            AgentRun.client_id == uuid.UUID(client_id),
+            AgentRun.tenant_id == current_user.tenant_id,
+        )
+    )
+    for run in agent_runs_result.scalars().all():
+        run.input_data = {"removido": "LGPD art. 18 IV"}
+        if run.output_data:
+            run.output_data = {"removido": "LGPD art. 18 IV"}
+        if run.error_message:
+            run.error_message = "[Conteúdo removido — LGPD art. 18 IV]"
+
+    # `LegalProcess.descricao` — só era alcançado indiretamente via
+    # ProcessParty acima; o processo em si nunca. Reaproveita
+    # `client_linked_processes_filter` (Fase 222) pra cobrir os 2
+    # caminhos de vínculo (client_id direto E via ProcessParty), não só
+    # client_id direto.
+    processes_result = await db.execute(
+        select(LegalProcess).where(
+            client_linked_processes_filter(uuid.UUID(client_id)),
+            LegalProcess.tenant_id == current_user.tenant_id,
+        )
+    )
+    for process in processes_result.scalars().all():
+        if process.descricao:
+            process.descricao = "[Conteúdo removido — LGPD art. 18 IV]"
 
     await db.flush()
 
@@ -270,7 +347,7 @@ async def export_client_data(
 
     # Fase 228 — mesmas 3 tabelas alcançadas em erase_client_data acima;
     # export mostra o dado real (roda antes de qualquer esquecimento).
-    from app.models.process import LegalProcess, ProcessParty
+    from app.models.process import LegalProcess, ProcessParty, client_linked_processes_filter
     parties_result = await db.execute(
         select(ProcessParty)
         .join(LegalProcess, LegalProcess.id == ProcessParty.process_id)
@@ -297,6 +374,46 @@ async def export_client_data(
         )
     )
     invoices = invoices_result.scalars().all()
+
+    # Fase 235 — mesmas 4 lacunas fechadas acima em erase_client_data;
+    # export mostra o dado real (roda antes de qualquer esquecimento).
+    portal_users_result = await db.execute(
+        select(User).where(User.linked_client_id == uuid.UUID(client_id))
+    )
+    portal_users = portal_users_result.scalars().all()
+
+    from app.models.document import Document, Contract
+    documents_result = await db.execute(
+        select(Document).where(
+            Document.client_id == uuid.UUID(client_id),
+            Document.tenant_id == current_user.tenant_id,
+        )
+    )
+    documents = documents_result.scalars().all()
+    document_ids = [doc.id for doc in documents]
+    contracts = []
+    if document_ids:
+        contracts_result = await db.execute(
+            select(Contract).where(Contract.document_id.in_(document_ids))
+        )
+        contracts = contracts_result.scalars().all()
+
+    from app.models.agent_run import AgentRun
+    agent_runs_result = await db.execute(
+        select(AgentRun).where(
+            AgentRun.client_id == uuid.UUID(client_id),
+            AgentRun.tenant_id == current_user.tenant_id,
+        )
+    )
+    agent_runs = agent_runs_result.scalars().all()
+
+    processes_result = await db.execute(
+        select(LegalProcess).where(
+            client_linked_processes_filter(uuid.UUID(client_id)),
+            LegalProcess.tenant_id == current_user.tenant_id,
+        )
+    )
+    processes = processes_result.scalars().all()
 
     from app.models.audit_log import AuditLog
     db.add(AuditLog(
@@ -382,6 +499,44 @@ async def export_client_data(
                 "status": inv.status,
             }
             for inv in invoices
+        ],
+        "acessos_portal": [
+            {"user_id": str(u.id), "nome": u.full_name, "email": u.email}
+            for u in portal_users
+        ],
+        "documentos": [
+            {
+                "id": str(d.id),
+                "tipo": d.tipo,
+                "titulo": d.titulo,
+                "conteudo_texto": d.conteudo_texto,
+                "status": d.status,
+                "created_at": d.created_at.isoformat(),
+            }
+            for d in documents
+        ],
+        "contratos": [
+            {
+                "id": str(c.id),
+                "tipo": c.tipo,
+                "assinaturas": c.assinaturas,
+                "status": c.status,
+            }
+            for c in contracts
+        ],
+        "execucoes_agentes_ia": [
+            {
+                "agent_name": r.agent_name,
+                "input_data": r.input_data,
+                "output_data": r.output_data,
+                "status": r.status,
+                "started_at": r.started_at.isoformat(),
+            }
+            for r in agent_runs
+        ],
+        "processos_descricao": [
+            {"processo_id": str(p.id), "numero_cnj": p.numero_cnj, "descricao": p.descricao}
+            for p in processes if p.descricao
         ],
     }
 
