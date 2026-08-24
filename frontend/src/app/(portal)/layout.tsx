@@ -1,23 +1,15 @@
 "use client";
 import { useState, useEffect } from "react";
-import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
-import { LogOut, Scale, LayoutDashboard, FolderOpen, DollarSign, Menu, X, MessageSquare } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { LogOut, Scale } from "lucide-react";
 import { ToastProvider } from "@/components/ui/Toast";
 
-const NAV = [
-  { href: "/portal/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/portal/processos", label: "Meus Processos", icon: Scale },
-  { href: "/portal/documentos", label: "Documentos", icon: FolderOpen },
-  { href: "/portal/financeiro", label: "Financeiro", icon: DollarSign },
-  { href: "/portal/mensagens", label: "Mensagens", icon: MessageSquare },
-];
-
+/** Fase 233 — o portal virou uma única tela (dashboard consolidado),
+ * então a nav de 5 rotas (Dashboard/Meus Processos/Documentos/
+ * Financeiro/Mensagens) deixou de fazer sentido — removida. */
 export default function PortalLayout({ children }: { children: React.ReactNode }) {
-  const pathname = usePathname();
   const router = useRouter();
   const [clientName, setClientName] = useState("");
-  const [mobileOpen, setMobileOpen] = useState(false);
 
   useEffect(() => {
     try {
@@ -55,26 +47,8 @@ export default function PortalLayout({ children }: { children: React.ReactNode }
             </div>
           </div>
 
-          {/* Desktop nav */}
-          <nav className="hidden md:flex items-center gap-1 flex-1 justify-center">
-            {NAV.map(({ href, label, icon: Icon }) => (
-              <Link
-                key={href}
-                href={href}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-sm font-medium transition-colors ${
-                  pathname === href || pathname.startsWith(href + "/")
-                    ? "bg-[#B8954A]/10 text-[#B8954A]"
-                    : "text-gray-500 hover:text-gray-800 hover:bg-gray-100"
-                }`}
-              >
-                <Icon size={14} />
-                {label}
-              </Link>
-            ))}
-          </nav>
-
           <div className="flex items-center gap-2 ml-auto">
-            <span className="hidden sm:block text-sm text-gray-600 truncate max-w-[160px]">{clientName}</span>
+            <span className="text-sm text-gray-600 truncate max-w-[160px]">{clientName}</span>
             <button
               onClick={handleLogout}
               className="flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-800 border border-gray-200 rounded px-2.5 py-1.5 transition-colors"
@@ -82,37 +56,8 @@ export default function PortalLayout({ children }: { children: React.ReactNode }
               <LogOut size={13} />
               <span className="hidden sm:inline">Sair</span>
             </button>
-            <button
-              onClick={() => setMobileOpen((v) => !v)}
-              className="md:hidden p-1.5 text-gray-500 hover:text-gray-800"
-              aria-label="Menu"
-            >
-              {mobileOpen ? <X size={20} /> : <Menu size={20} />}
-            </button>
           </div>
         </header>
-
-        {/* Mobile nav dropdown */}
-        {mobileOpen && (
-          <div className="md:hidden bg-white border-b border-gray-200 px-4 py-3 space-y-1 z-20">
-            <p className="text-xs text-gray-400 mb-2 px-2">{clientName}</p>
-            {NAV.map(({ href, label, icon: Icon }) => (
-              <Link
-                key={href}
-                href={href}
-                onClick={() => setMobileOpen(false)}
-                className={`flex items-center gap-2 px-3 py-2 rounded text-sm font-medium transition-colors ${
-                  pathname === href || pathname.startsWith(href + "/")
-                    ? "bg-[#B8954A]/10 text-[#B8954A]"
-                    : "text-gray-600 hover:bg-gray-100"
-                }`}
-              >
-                <Icon size={15} />
-                {label}
-              </Link>
-            ))}
-          </div>
-        )}
 
         <main className="flex-1 max-w-5xl mx-auto w-full px-4 py-6">
           {children}

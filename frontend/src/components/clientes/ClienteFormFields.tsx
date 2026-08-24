@@ -1,4 +1,5 @@
 "use client";
+import { Check } from "lucide-react";
 
 export interface Endereco {
   cep?: string;
@@ -6,6 +7,8 @@ export interface Endereco {
   bairro?: string;
   cidade?: string;
   uf?: string;
+  latitude?: number | null;
+  longitude?: number | null;
 }
 
 export interface ClienteFormValues {
@@ -31,6 +34,11 @@ interface ClienteFormFieldsProps {
   docSugestao: string | null;
   onDocumentoBlur: (tipo: "cpf" | "cnpj", valor: string) => void;
   onCepBlur: (cep: string) => void;
+  /** Fase 233 — mesma confirmação visual já usada no endereço do
+   * escritório (EscritorioZone.tsx): fica true depois que o backend
+   * geocodifica o CEP com sucesso (populado a partir da resposta do
+   * POST/PUT /clients, não do preview de autofill de CEP). */
+  temCoordenadas: boolean;
 }
 
 const inputCls = "w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold";
@@ -42,7 +50,7 @@ const inputCls = "w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-
  * o status ganha a opção INATIVO só na edição (um cliente não nasce
  * inativo). */
 export function ClienteFormFields({
-  mode, values, onChange, endereco, onEnderecoChange, docSugestao, onDocumentoBlur, onCepBlur,
+  mode, values, onChange, endereco, onEnderecoChange, docSugestao, onDocumentoBlur, onCepBlur, temCoordenadas,
 }: ClienteFormFieldsProps) {
   return (
     <>
@@ -145,6 +153,11 @@ export function ClienteFormFields({
             placeholder="Cidade" className={inputCls}
           />
         </div>
+        {temCoordenadas && (
+          <p className="text-[11px] text-green-700 flex items-center gap-1.5 mt-2">
+            <Check size={12} /> Localização geográfica capturada.
+          </p>
+        )}
       </div>
 
       <label className="flex items-center gap-2 text-sm cursor-pointer">

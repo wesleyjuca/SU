@@ -2749,6 +2749,93 @@ Histórico:
     backend; `tsc --noEmit`/`eslint` limpos no frontend (1 warning
     pré-existente de `exhaustive-deps` em `clientes/[id]/page.tsx`,
     confirmado via `git stash` como não-novo desta fase).
+- **Fase 233** — usuário pediu 2 coisas na mesma mensagem: (1) "todos os
+  cadastros que possuam área CEP devem capturar as coordenadas e o
+  endereço, o cadastro de clientes não está capturando"; (2) "o portal
+  do cliente deve conter somente um dashboard com toda a sua situação
+  processual".
+  - **Geocodificação de clientes — sem bug de backend confirmado**.
+    Auditoria completa (`backend/app/models/`) confirmou que só
+    `Tenant` e `Client` têm campo de endereço/CEP no sistema inteiro —
+    nada mais a estender. Leitura direta de `clients.py` mostrou que
+    `_geocodificar_endereco()` já é chamado em `create_client`/
+    `update_client` (mesmo padrão do `Tenant`, Fase 230). Em vez de
+    presumir que o código estava correto, um script standalone (fora do
+    pytest, mesmo workaround já usado nas Fases 202/209 pra fugir da
+    flakiness de pool asyncpg/pytest-asyncio) rodou `create_client`/
+    `update_client` reais contra Postgres real com `_consultar_cep_
+    externa` monkeypatchada — confirmou que o backend geocodifica
+    corretamente em ambos os fluxos, persiste no Postgres (não só na
+    resposta em memória), e não quebra nem chama a API externa quando o
+    endereço não tem CEP. **Causa real do "não está capturando"**: puramente
+    de UI — `EscritorioZone.tsx` (endereço do escritório) já tinha uma
+    confirmação visual explícita desde a Fase 230 ("✓ Localização
+    geográfica capturada"), mas `ClienteFormFields.tsx` nunca teve
+    equivalente (o tipo `Endereco` nem declarava `latitude`/`longitude`)
+    — o cadastro de cliente podia estar geocodificando certo por trás e
+    mesmo assim parecer quebrado. Corrigido: `ClienteFormFields.tsx`
+    ganha a mesma confirmação visual (mesmo texto/ícone do escritório,
+    condicionada a um novo prop `temCoordenadas`); `clientes/page.tsx`
+    passa a popular esse estado a partir da RESPOSTA do POST/PUT
+    `/clients` (não do preview de autofill de CEP, que nunca teve
+    coordenada — mesma decisão de design já usada no escritório) e
+    exibe um toast diferenciado ("... — localização geográfica
+    capturada.") no save; ao reabrir editar um cliente já geocodificado,
+    a confirmação aparece imediatamente a partir do `endereco_json` já
+    salvo. Decisão de escopo confirmada com o usuário: sem backfill de
+    clientes cadastrados antes desta fase (mesmo padrão já aceito no
+    projeto pra outros dados legados, ex. storage de documentos da Fase
+    141) — só daqui pra frente.
+  - **Portal do Cliente — consolidado numa tela só**. Antes eram 5
+    páginas com nav própria (`/portal/dashboard`, `/portal/processos[/
+    id]`, `/portal/documentos`, `/portal/financeiro`, `/portal/
+    mensagens`). Usuário confirmou (via pergunta) que queria manter as
+    4 funcionalidades, só reorganizadas — não removidas. Novos
+    componentes em `frontend/src/components/portal/`:
+    `ProcessosSection.tsx` (seção principal, sempre visível — lista de
+    processos que expande **inline** ao clicar, sem navegar, buscando
+    `GET /portal/processes/{id}` sob demanda e cacheando no estado;
+    junta o que antes eram 2 rotas separadas — lista + detalhe — numa
+    só), `DocumentosSection.tsx`/`FinanceiroSection.tsx`/
+    `MensagensSection.tsx` (cartões colapsáveis, fechados por padrão,
+    cada um só busca dado na primeira vez que é aberto). `portal/
+    dashboard/page.tsx` reescrita pra montar as 4 seções + os 3 stat
+    cards (agora só resumo visual, sem link — não há mais rota separada
+    pra linkar) + o bloco "Seus Dados" já existente. `(portal)/
+    layout.tsx` perde o array `NAV`/barra de navegação (desktop +
+    dropdown mobile) — só 1 página agora. As 5 rotas antigas foram
+    removidas (`git rm`, confirmado por grep que nada mais no repo
+    referenciava essas URLs — nenhum e-mail/notificação/link externo).
+    Backend `portal.py`: nenhuma mudança — os mesmos endpoints seguem
+    sendo consumidos, só que por componentes na mesma página.
+  - Verificado via HTTP real (login ADMIN real, `POST /clients` com CEP
+    degradando graciosamente sem coordenada neste sandbox — mesma
+    limitação de egress à BrasilAPI já documentada desde a Fase 217,
+    coordenada seedada manualmente no Postgres pra testar a UI de
+    confirmação, mesmo workaround já usado no `/mapa` da Fase 231) e
+    Playwright real (Chromium do sandbox, `npm run dev` com `API_URL`
+    local): confirmação "✓ Localização geográfica capturada." aparece
+    ao reabrir editar um cliente já geocodificado; portal logado como
+    cliente real (`invite-portal` + processo de teste vinculado) mostra
+    a nav antiga ausente do header, a seção "Situação Processual"
+    sempre visível com o processo, expandir o processo mostra
+    "Movimentações" inline sem navegar (URL continua em `/portal/
+    dashboard`), as 3 seções colapsáveis presentes e a de Mensagens
+    abrindo com o campo de envio funcional. `tsc --noEmit` limpo;
+    `eslint` limpo nos arquivos tocados (nos componentes novos do
+    portal, os 2 warnings de `exhaustive-deps` em `useEffect(() => {
+    load...() }, [])` são o MESMO padrão já presente nos arquivos
+    originais antes de serem apagados, confirmado lendo o conteúdo
+    deletado via `git show HEAD:...` — não é regressão). Teste backend
+    novo (`test_client_geocoding_fase233.py`, Postgres real) bate na
+    mesma flakiness de pool asyncpg/pytest-asyncio documentada desde a
+    Fase 199 mesmo isolado — confirmado não-regressão reproduzindo o
+    mesmo erro num teste pré-existente e não tocado
+    (`test_client_document_validation_fase217.py::
+    test_validacao_bem_sucedida_grava_auditoria`, mesmo padrão de
+    fixture `cenario`/`AsyncSessionLocal`); por isso a prova real
+    definitiva desta fase veio do script standalone descrito acima, não
+    do pytest.
 
 ## Riscos conhecidos / débito técnico
 
