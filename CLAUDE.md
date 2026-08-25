@@ -3070,6 +3070,32 @@ Histórico:
     de forma idêntica) — não é regressão desta fase; verificação
     principal foi HTTP real contra Postgres/Redis/Celery reais, como em
     toda fase recente desta sessão.
+- **Fase 236** — usuário reportou: clicar em "Gerenciar acesso ao
+  Portal do Cliente" (botão "Portal" no Cliente 360) não abria o
+  gerenciador — voltava pra tela de Clientes. Reproduzido ao vivo via
+  Playwright logado como SUPERADMIN ANTES de mexer no código (mesma
+  disciplina da sessão inteira — nunca assumir a causa só por leitura):
+  confirmado que clicar no botão navega corretamente pra `/clientes?
+  aba=controle-portal`, mas nem a aba nem o painel aparecem.
+  **Causa raiz**: `frontend/src/app/(dashboard)/clientes/page.tsx`
+  definia `const isAdmin = userRole === "ADMIN"` — comparação estrita,
+  sem incluir `SUPERADMIN`. Essa variável gateia 4 pontos no mesmo
+  arquivo, inclusive um `useEffect` de "defesa" que reverte
+  `aba="controle-portal"` de volta pra `"clientes"` sempre que
+  `!isAdmin` — é exatamente isso que descartava a navegação pro
+  SUPERADMIN. Achado confirmado como inconsistência isolada, não
+  intencional: o BACKEND (`require_role("ADMIN")`, usado pelos 3
+  endpoints de portal-access e por `erase_client_data`) já trata
+  SUPERADMIN como superconjunto de ADMIN (`app/dependencies.py`,
+  comentário explícito: *"SUPERADMIN sempre passa"*), e TODO outro
+  gate "ADMIN" do frontend já inclui SUPERADMIN — inclusive
+  `canSeeLgpd`, 4 linhas acima no MESMO arquivo. `isAdmin` era a única
+  exceção, introduzida na Fase 234 sem seguir o padrão já estabelecido.
+  Fix: `isAdmin = userRole === "ADMIN" || userRole === "SUPERADMIN"`.
+  Reconfirmado via Playwright real que a aba/painel aparecem agora pro
+  SUPERADMIN, e que ADMIN comum continua funcionando sem regressão.
+  `tsc --noEmit`/`eslint` limpos (1 warning pré-existente de
+  `exhaustive-deps`, já documentado desde fases anteriores).
 
 
 ## Riscos conhecidos / débito técnico
