@@ -66,9 +66,18 @@ export default function ClientesPage() {
   const userRole = useUserStore((s) => s.user?.role);
   const canSeeLgpd = ["ADMIN", "SOCIO", "SUPERADMIN"].includes(userRole ?? "");
   // Reformulação — o botão de excluir agora aciona o esquecimento LGPD de
-  // verdade (ver excluirCliente), que no backend exige ADMIN puro
-  // (require_role("ADMIN"), lgpd.py) — antes não tinha gate nenhum aqui.
-  const isAdmin = userRole === "ADMIN";
+  // verdade (ver excluirCliente), que no backend exige ADMIN
+  // (require_role("ADMIN"), lgpd.py — SUPERADMIN passa como superconjunto,
+  // dependencies.py) — antes não tinha gate nenhum aqui.
+  //
+  // Fase 236 — achado real: esta comparação estrita excluía SUPERADMIN,
+  // ao contrário de TODO outro gate "ADMIN" do frontend (inclusive
+  // canSeeLgpd 4 linhas acima, no mesmo arquivo) e do próprio backend
+  // (require_role trata SUPERADMIN como superconjunto de ADMIN). Um
+  // SUPERADMIN clicando "Portal" no Cliente 360 nunca via a aba Controle
+  // de Clientes aparecer — o useEffect de defesa logo abaixo revertia a
+  // navegação, reproduzido ao vivo via Playwright antes deste fix.
+  const isAdmin = userRole === "ADMIN" || userRole === "SUPERADMIN";
   // Defesa: link antigo/query param forçado apontando pra Controle de
   // Clientes sem ser ADMIN nunca deixa a aba restrita "vazar".
   useEffect(() => {
