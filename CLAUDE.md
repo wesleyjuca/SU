@@ -3198,6 +3198,40 @@ Histórico:
     novo); se `notifications.router`/`push.router` ganharem `_STAFF`,
     reconfirmar que CLIENT passa a receber 403 nos dois, sem quebrar o
     fluxo de push/notificação do papel STAFF normal.
+- **Fase 238** — implementação do achado LGPD×`ClientPortalAccess` da
+  Fase 237, escolhido pelo usuário (o outro achado da mesma rodada,
+  `notifications.router`/`push.router` sem `_STAFF`, ficou pra decidir
+  depois). `erase_client_data` (`backend/app/api/v1/lgpd.py`) ganhou um
+  bloco novo logo ao lado do já existente que sobrescrevia `User.
+  full_name` (Fase 235) — reaproveita a MESMA lógica já usada em
+  `revogar_portal_access` (`clients.py`): revoga o `ClientPortalAccess`
+  (`revoked_at`), desativa o `User` técnico oculto (`is_active=False`)
+  e mata toda `Session` de refresh já emitida pra ele. Fecha o canal de
+  acesso por completo, não só o nome exibido — antes, o dado mostrado já
+  vinha anonimizado, mas o link de portal capturado antes do
+  esquecimento continuava resgatável depois. Verificado via HTTP real
+  contra Postgres real, reproduzindo o cenário exato já confirmado pela
+  Fase 237 (gerar link → capturar token bruto → redeem, guardando o
+  refresh token → esquecer → tentar redeem de novo com o MESMO token →
+  agora **401** (antes 200); a sessão já ativa antes do esquecimento
+  também não sobrevive — `POST /auth/refresh` com o refresh token
+  capturado antes → **401**; `GET /clients/portal-access` reflete
+  `REVOGADO` depois do esquecimento (antes ficava `ATIVO` pra sempre).
+  Confirmado sem regressão: cliente sem nenhum acesso ao portal
+  continua sendo esquecido normalmente (bloco novo é no-op quando não
+  há `ClientPortalAccess`), e `export_client_data` continua mostrando
+  `acessos_portal` normalmente quando chamado antes do esquecimento
+  (não tocado por esta fase — o achado era sobre o canal de acesso
+  sobreviver, não sobre o que o export exibe). Teste automatizado novo
+  (`test_lgpd_erasure_revokes_portal_access_fase238.py`, mesmo padrão
+  HTTP real de `test_lgpd_erasure_reaches_crm_fase210.py`) bate na mesma
+  flakiness de pool asyncpg/pytest-asyncio documentada desde a Fase 199
+  — reproduzida de novo mesmo isolado, cross-checada contra o próprio
+  `test_lgpd_erasure_reaches_crm_fase210.py` (arquivo de controle não
+  tocado, falha de forma idêntica) — não é regressão desta fase;
+  verificação principal via HTTP real contra o backend rodando, como em
+  toda fase recente desta sessão. `ruff check`/`py_compile` limpos no
+  único arquivo backend tocado.
 
 
 ## Riscos conhecidos / débito técnico
