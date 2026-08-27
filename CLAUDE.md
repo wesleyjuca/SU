@@ -3096,6 +3096,108 @@ Histórico:
   SUPERADMIN, e que ADMIN comum continua funcionando sem regressão.
   `tsc --noEmit`/`eslint` limpos (1 warning pré-existente de
   `exhaustive-deps`, já documentado desde fases anteriores).
+- **Fase 237** — rodada de teste geral (ambiente real: Postgres+Redis+
+  Celery+uvicorn+frontend `npm run dev` com `API_URL` local, subidos de
+  verdade). A última rodada de teste geral de verdade foi a Fase 235
+  (achou/corrigiu na mesma rodada); a Fase 236 (fix pontual) nunca tinha
+  passado por nenhuma rodada de teste geral. Reconfirmação conjunta,
+  nunca feita numa única passada antes: os 5 fixes de LGPD da Fase 235
+  (`User.full_name`/`Document`/`Contract`/`AgentRun`/
+  `LegalProcess.descricao`, além dos 4 já reconfirmados em rodadas
+  anteriores), `tenant.router`/`system.router` bloqueando CLIENT
+  (`GET /system/analytics/financeiro`/`GET /tenant/theme` → 403),
+  sessão de refresh morta na revogação de portal-access (revoga →
+  `POST /auth/refresh` com o token antigo → 401; regenerar não
+  ressuscita o token antigo), e o fix da Fase 236 (SUPERADMIN abre
+  Controle de Clientes) — todos OK via HTTP real.
+  - **Lacuna 1 fechada — a corrida em `gerar_portal_access` (Fase 235)
+    finalmente provada ao vivo.** A própria Fase 235 nunca conseguiu
+    reproduzir a corrida DEPOIS do fix (~18 tentativas, janela
+    estreita) — a confiança vinha só de leitura de código. Desta vez,
+    uma instrumentação TEMPORÁRIA (`asyncio.sleep(0.5)` logo após o
+    `SELECT` de `ClientPortalAccess`, atrás de uma env var, revertida
+    com `git checkout` antes de qualquer commit — nunca chegou a ficar
+    no histórico do git) alargou a janela de corrida o suficiente pra
+    20 chamadas HTTP verdadeiramente concorrentes (`asyncio.gather`)
+    pro mesmo cliente pela 1ª vez confirmarem o mecanismo exato: como
+    `pool_size=5`+`max_overflow=10` limita a 15 conexões simultâneas, 15
+    requisições entram na corrida real (todas leem `access=None`) — 1
+    vence o `INSERT` (`200`), 14 perdem com **409 limpo** (nunca 500) —
+    e as 5 restantes, que ficaram na fila esperando uma conexão do pool
+    livre, só chegam ao `SELECT` DEPOIS do vencedor já ter commitado,
+    então corretamente veem a linha já existente e seguem pelo caminho
+    de atualização (`200` também). Resultado: `{200: 6, 409: 14}`, zero
+    500 — o fix da Fase 235 se sustenta sob concorrência real, não só
+    por leitura de código.
+  - **Lacuna 2 fechada — achado novo, real, confirmado empiricamente**:
+    `erase_client_data` (LGPD, `lgpd.py`) sobrescreve `User.full_name`
+    do usuário técnico oculto por trás do link de portal (fix da Fase
+    235), mas **nunca toca `ClientPortalAccess` em si** — nem revoga,
+    nem expira antecipadamente. Reproduzido de ponta a ponta: gerar
+    link → capturar o token bruto → `DELETE /lgpd/clients/{id}/data`
+    (esquecimento) → `POST /auth/portal-redeem` com o MESMO token
+    capturado antes → **200, sessão nova emitida**, `GET /portal/me`
+    funcional (mostrando o nome já anonimizado, mas o CANAL de acesso
+    continua 100% vivo). Ou seja: um titular que exerceu o direito ao
+    esquecimento, mas cujo link de portal vazou/foi salvo em algum
+    lugar (e-mail, histórico do navegador, um bookmark), continua
+    conseguindo logar no portal depois de "esquecido" — os dados
+    mostrados já vêm anonimizados, mas a superfície de acesso em si não
+    foi revogada. Já tinha sido registrado como "observação, decisão de
+    escopo deliberada" na própria Fase 234 — nunca reavaliado numa
+    rodada de teste geral desde então; reproduzido agora ao vivo confirma
+    que é um achado real, não só uma decisão de design ainda válida.
+  - **Isolamento cross-tenant do timbrado (Fase 232) — nunca testado
+    explicitamente antes, veio limpo.** 2 tenants reais (`afj`/`demo`):
+    mudar nome/endereço do timbrado de `afj` (incluindo o mecanismo de
+    sincronização automática endereço↔timbrado) nunca vazou pro
+    `GET /tenant/letterhead` do `demo`, e os 2 flags `_custom`
+    (personalização manual) respeitados corretamente por tenant — um
+    `PUT /tenant/endereco` subsequente no `demo` não sobrescreveu um
+    campo do timbrado já marcado como personalizado, como esperado.
+  - **Auditoria paralela adversarial** (2 `Agent`, sem bloqueio de plan
+    mode desta vez):
+    - **Segurança do Portal, 2ª leitura independente** — 2 achados reais
+      confirmados via HTTP real, ambos a MESMA classe de violação do
+      invariante "CLIENT só acessa `/portal/*` e `/auth/*`" já corrigida
+      uma vez pra `tenant.router`/`system.router` na Fase 235, agora
+      achada em mais 2 routers esquecidos:
+      - **MÉDIO — `notifications.router`** montado só com `_BLOCK`
+        (bloqueio de tenant suspenso), sem `_STAFF` — CLIENT recebe
+        `200` em `GET /notifications` (confirmado com um token de
+        portal real, via `portal-redeem`). Sem vazamento de dado ativo
+        hoje (a query já é escopada por `current_user.id`, e nada no
+        sistema cria `Notification` visando o `User` técnico do
+        portal), mas viola o invariante documentado — mesmo padrão de
+        risco que já foi crítico uma vez.
+      - **BAIXO — `push.router`** no mesmo padrão (`_BLOCK` só). CLIENT
+        recebe `201` em `POST /push/subscribe`. Self-scoped por
+        `user_id`, sem exposição cross-tenant/cross-client hoje.
+      - Confirmado limpo: os ~13 routers restantes (`_BLOCK_STAFF`
+        correto), `tenants_admin`/`billing`/`reports_admin` (gate
+        per-endpoint, CLIENT bloqueado), `ws.router`/`ai_oauth.router`/
+        `integrations_hub` callback/webhook (públicos por desenho,
+        motivo documentado), `portal.py` inteiro (isolamento por
+        `client_id`+`tenant_id` em todos os 9 endpoints, testado
+        cross-client dentro do mesmo tenant), e os endpoints novos desde
+        a Fase 228 (`clients.py` portal-access ×3, `auth.py::portal-
+        redeem`, `tenant.py::/endereco`) — isolamento cross-tenant
+        confirmado limpo em todos.
+    - **Walkthrough Playwright conjunto das telas 230-236** (nunca
+      testadas todas juntas na mesma sessão de navegador antes) — as 7
+      telas percorridas (login → `/mapa` → Timbrado auto/personalizado
+      com F5 → criar/editar cliente PF → Controle de Clientes
+      gerar/revogar → Cliente 360 sem aba Contatos → SUPERADMIN
+      revendo Controle de Clientes) vieram **todas limpas, nenhuma
+      regressão de interação** entre as fases.
+  - Nenhuma correção foi feita nesta fase (metodologia padrão) —
+    decisão do usuário sobre quais achados viram fase nova. **Próxima
+    rodada deve**: se o achado 2 (`ClientPortalAccess` sobrevive ao
+    esquecimento) for corrigido, reconfirmar com o mesmo teste de ponta
+    a ponta usado aqui (gerar→capturar token→esquecer→tentar redeem de
+    novo); se `notifications.router`/`push.router` ganharem `_STAFF`,
+    reconfirmar que CLIENT passa a receber 403 nos dois, sem quebrar o
+    fluxo de push/notificação do papel STAFF normal.
 
 
 ## Riscos conhecidos / débito técnico
