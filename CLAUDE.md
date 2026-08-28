@@ -3503,6 +3503,70 @@ Histórico:
     stash` como idênticos antes desta fase.
   - Não implementados nesta fase: os 15 achados restantes — seguem pras
     Fases 243-245.
+- **Fase 243** (batch 4 dos 31 achados do diagnóstico de cadastros —
+  máscaras de input, calculadora de prazo unificada, senha temporária).
+  - **Máscaras de digitação** — `frontend/src/lib/masks.ts` (novo:
+    `maskCpf`/`maskCnpj`/`maskTelefone`/`maskCep`, puramente cosmético,
+    nunca valida dígito verificador — isso já existe no backend desde a
+    Fase 217/220/240) aplicado nos campos que só tinham placeholder
+    estático: `ClienteFormFields.tsx` (CPF/CNPJ/telefone/WhatsApp/CEP),
+    `EscritorioZone.tsx` (CEP do endereço do escritório),
+    `PersonalZone.tsx` (telefone/WhatsApp do próprio usuário), e o
+    modal "Novo Contato" do Cliente 360 (campos `type="tel"`).
+  - **Calculadora de prazo unificada** — novo
+    `frontend/src/components/prazos/PrazoCalculator.tsx` substitui as 2
+    cópias manuais (`processos/[id]/page.tsx` e `agenda/page.tsx`), que
+    tinham campos divergentes: a de Agenda não oferecia nenhum jeito de
+    sugerir `data_fatal` (só a do processo sugeria, desde a Fase 240),
+    então um prazo lançado direto pela Agenda nunca ganhava o destaque
+    visual de prazo fatal. `agenda/page.tsx` ganhou o campo "Data fatal
+    (opcional)" que faltava, fechando a divergência funcional, não só a
+    duplicação de código.
+  - **Senha temporária** — novo `User.must_change_password` (migração
+    idempotente em `events.py`), setado `True` nos 3 pontos que geram
+    senha temporária (`POST /users/invite`, `POST /users/{id}/reset-
+    password`, provisionamento de escritório em `tenants_admin.py`) e
+    zerado em `PATCH /auth/password` quando a troca é bem-sucedida.
+    `POST /auth/login` devolve o flag no objeto `user`; o login do
+    frontend redireciona direto pra `/configuracoes?zona=pessoal&aba=
+    seguranca` (em vez de `/dashboard`) quando `must_change_password`
+    é `true`, e a aba Segurança mostra um aviso persistente até a senha
+    ser trocada — não é enforcement de middleware (nenhuma rota fica
+    bloqueada), é um prompt visível no fluxo, como pedia o achado do
+    diagnóstico. Os 3 endpoints que geram senha temporária agora
+    tentam mandar por e-mail primeiro (mesmo padrão já existente no
+    convite de usuário — `EMAIL_ENABLED`, fail-soft) e só expõem a
+    senha em texto puro no JSON quando o e-mail não está configurado
+    (o caso deste sandbox) — antes, o reset de senha e o provisionamento
+    de escritório sempre expunham em texto puro, mesmo com e-mail
+    disponível. **Achado colateral descoberto e corrigido nesta mesma
+    fase**: `POST /users/invite` nunca tinha esse fallback — sem
+    `EMAIL_ENABLED` (like agora), o convite não expunha a senha em
+    lugar nenhum (nem e-mail, nem JSON) e o modal do frontend
+    (`admin/usuarios/page.tsx`) ficava preso na tela do formulário vazio
+    sem nenhuma confirmação de sucesso, porque `tempPwd` vinha sempre
+    `undefined`. Corrigido com o mesmo padrão de fallback dos outros 2
+    pontos + um estado `invitedByEmail` no frontend pra cobrir os 2
+    casos.
+  - Verificado via HTTP real contra Postgres real: fluxo completo
+    convite→reset→login (confirma `must_change_password: true`)→troca
+    de senha→relogin (confirma `must_change_password: false`);
+    provisionamento de escritório (SUPERADMIN real) também confirma o
+    flag `true` no primeiro login do ADMIN novo. Playwright real
+    (Chromium do sandbox, `npm run dev` com `API_URL` local): máscaras
+    aplicadas em tempo real (CPF "123.456.789-01", telefone "(85)
+    99999-8888", CEP "80030-901"); calculadora presente tanto em
+    Processos quanto em Agenda, com o campo "Data fatal" novo na
+    Agenda; login com senha temporária redireciona pra Segurança com o
+    aviso "Você está com uma senha temporária..." visível; modal de
+    convite mostra "Usuário criado!" corretamente nos 2 casos (e-mail
+    configurado vs. fallback). `ruff check`/`py_compile` limpos nos 5
+    arquivos backend tocados; `tsc --noEmit` limpo; `eslint` nos 11
+    arquivos frontend tocados — só os mesmos warnings pré-existentes de
+    `exhaustive-deps`/`no-img-element`, confirmados via `git stash`
+    como idênticos antes desta fase.
+  - Não implementadas nesta fase: as 11 propostas restantes (Fases
+    244-245).
 
 
 ## Riscos conhecidos / débito técnico

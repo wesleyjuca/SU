@@ -549,6 +549,9 @@ async def lifespan(app: FastAPI):
             # um contato (ClientContact) era gravado sobrepondo `telefone`,
             # perdendo o telefone fixo/comercial quando os dois existiam.
             "ALTER TABLE client_contacts ADD COLUMN IF NOT EXISTS whatsapp VARCHAR(20)",
+            # Fase 243 (achado do diagnóstico de cadastros) — senha temporária
+            # nunca sinalizava exigência de troca no 1º login.
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT false",
         ]:
             try:
                 async with engine.begin() as conn:

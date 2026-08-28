@@ -85,6 +85,7 @@ class TenantPatch(BaseModel):
 
 async def _provision(
     db: AsyncSession, body, *, parent_tenant_id: uuid.UUID | None, unit_label: str | None,
+    provisioned_by_tenant_id: uuid.UUID | None = None,
 ) -> dict:
     """Cria Tenant + TenantConfig + usuário ADMIN inicial. Retorna as credenciais."""
     email = str(body.admin_email).lower().strip()
@@ -114,15 +115,52 @@ async def _provision(
         id=uuid.uuid4(), email=email, full_name=body.admin_name.strip(),
         role="ADMIN", hashed_password=hash_password(temp_password),
         is_active=True, tenant_id=tenant.id,
+        must_change_password=True,
     ))
     await db.commit()
+
+    # Fase 243 (achado do diagnóstico de cadastros) — mesmo padrão de
+    # convite de usuário/reset de senha: manda por e-mail quando disponível
+    # em vez de sempre expor em texto puro na resposta da API. `tenant_id`
+    # aqui é o do SUPERADMIN que provisiona (o tenant novo não tem nenhuma
+    # conta Google conectada ainda) — send_email cai pro SMTP genérico se
+    # não houver Workspace conectado nesse tenant também.
+    from app.config import settings as _cfg
+    if _cfg.EMAIL_ENABLED:
+        try:
+            from app.services.email import send_email
+            await send_email(
+                to=email,
+                subject="Seu escritório foi provisionado — AFJ CORE SYSTEM",
+                html_body=(
+                    f"<p>Olá, {body.admin_name.strip()}!</p>"
+                    f"<p>O escritório <strong>{tenant.name}</strong> foi provisionado no AFJ CORE SYSTEM.</p>"
+                    f"<p>Senha temporária de acesso: <strong>{temp_password}</strong></p>"
+                    "<p>Altere-a no primeiro acesso.</p>"
+                ),
+                text_body=(
+                    f"Olá, {body.admin_name.strip()}!\n\nO escritório {tenant.name} foi provisionado.\n\n"
+                    f"Senha temporária: {temp_password}\n\nAltere-a no primeiro acesso."
+                ),
+                db=db,
+                tenant_id=provisioned_by_tenant_id,
+            )
+            return {
+                "tenant_id": str(tenant.id),
+                "name": tenant.name,
+                "slug": tenant.slug,
+                "admin_email": email,
+                "message": "Escritório provisionado. Senha temporária enviada por e-mail ao administrador.",
+            }
+        except Exception:
+            pass
     return {
         "tenant_id": str(tenant.id),
         "name": tenant.name,
         "slug": tenant.slug,
         "admin_email": email,
         "temp_password": temp_password,
-        "message": "Escritório provisionado. Entregue a senha temporária ao administrador.",
+        "message": "Escritório provisionado. Entregue a senha temporária ao administrador com segurança.",
     }
 
 
@@ -166,7 +204,7 @@ async def create_tenant(
     db: AsyncSession = Depends(get_db),
 ):
     """Cria um novo escritório (cliente SaaS) com seu administrador inicial."""
-    return await _provision(db, body, parent_tenant_id=None, unit_label=None)
+    return await _provision(db, body, parent_tenant_id=None, unit_label=None, provisioned_by_tenant_id=current_user.tenant_id)
 
 
 @router.post("/{tenant_id}/units", status_code=201)
@@ -184,7 +222,7 @@ async def create_unit(
         raise HTTPException(status_code=404, detail="Escritório (banca-mãe) não encontrado.")
     if parent.parent_tenant_id is not None:
         raise HTTPException(status_code=422, detail="Uma unidade não pode ter sub-unidades (apenas 1 nível).")
-    return await _provision(db, body, parent_tenant_id=parent.id, unit_label=body.unit_label.strip())
+    return await _provision(db, body, parent_tenant_id=parent.id, unit_label=body.unit_label.strip(), provisioned_by_tenant_id=current_user.tenant_id)
 
 
 @router.patch("/{tenant_id}")

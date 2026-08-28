@@ -13,7 +13,7 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  async function handleLoginResponse(data: { access_token: string; refresh_token: string; user: unknown }) {
+  async function handleLoginResponse(data: { access_token: string; refresh_token: string; user: { must_change_password?: boolean } }) {
     localStorage.setItem("afj_access_token", data.access_token);
     localStorage.setItem("afj_refresh_token", data.refresh_token);
     localStorage.setItem("afj_user", JSON.stringify(data.user));
@@ -24,7 +24,12 @@ export default function LoginPage() {
       body: JSON.stringify({ action: "set" }),
     });
 
-    window.location.href = "/dashboard";
+    // Fase 243 (achado do diagnóstico de cadastros) — senha temporária
+    // (convite/reset/provisionamento de escritório) agora exige troca
+    // visível logo no 1º login, em vez de cair direto no dashboard.
+    window.location.href = data.user?.must_change_password
+      ? "/configuracoes?zona=pessoal&aba=seguranca"
+      : "/dashboard";
   }
 
   async function doLogin(loginEmail: string, loginSenha: string) {

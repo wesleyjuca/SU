@@ -52,7 +52,7 @@ export default function EscritoriosPage() {
   const [form, setForm] = useState<NovoForm>(EMPTY);
   const [saving, setSaving] = useState(false);
   const [apiError, setApiError] = useState("");
-  const [cred, setCred] = useState<{ email: string; pwd: string } | null>(null);
+  const [cred, setCred] = useState<{ email: string; pwd: string | null } | null>(null);
   const [copied, setCopied] = useState(false);
   const [toggling, setToggling] = useState<string | null>(null);
 
@@ -95,7 +95,7 @@ export default function EscritoriosPage() {
       const res = await fetch(url, { method: "POST", headers: authH(), body: JSON.stringify(payload) });
       const data = await res.json();
       if (res.ok) {
-        setCred({ email: data.admin_email, pwd: data.temp_password });
+        setCred({ email: data.admin_email, pwd: data.temp_password ?? null });
         toast.success(isUnit ? "Unidade criada." : "Escritório criado.");
         fetchTenants();
       } else {
@@ -138,7 +138,7 @@ export default function EscritoriosPage() {
   }
 
   function copyCred() {
-    if (!cred) return;
+    if (!cred || !cred.pwd) return;
     navigator.clipboard.writeText(`${cred.email} / ${cred.pwd}`);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
@@ -256,14 +256,20 @@ export default function EscritoriosPage() {
               <div className="p-5 space-y-4">
                 <div className="bg-green-50 border border-green-200 rounded-sm p-4 text-sm">
                   <p className="font-semibold text-green-800 mb-2">Escritório provisionado ✓</p>
-                  <p className="text-afj-black/60 text-xs mb-3">Entregue estas credenciais ao administrador do escritório. A senha temporária não será exibida novamente.</p>
-                  <div className="bg-white border border-afj-cream-dark rounded-sm p-3 font-mono text-xs break-all">
-                    <div><span className="text-afj-black/40">E-mail: </span>{cred.email}</div>
-                    <div><span className="text-afj-black/40">Senha: </span>{cred.pwd}</div>
-                  </div>
-                  <button onClick={copyCred} className="btn-afj-outline text-xs py-1.5 px-3 rounded-sm flex items-center gap-1.5 mt-3">
-                    {copied ? <Check size={12} /> : <Copy size={12} />} {copied ? "Copiado" : "Copiar credenciais"}
-                  </button>
+                  {cred.pwd ? (
+                    <>
+                      <p className="text-afj-black/60 text-xs mb-3">Entregue estas credenciais ao administrador do escritório com segurança. A senha temporária não será exibida novamente.</p>
+                      <div className="bg-white border border-afj-cream-dark rounded-sm p-3 font-mono text-xs break-all">
+                        <div><span className="text-afj-black/40">E-mail: </span>{cred.email}</div>
+                        <div><span className="text-afj-black/40">Senha: </span>{cred.pwd}</div>
+                      </div>
+                      <button onClick={copyCred} className="btn-afj-outline text-xs py-1.5 px-3 rounded-sm flex items-center gap-1.5 mt-3">
+                        {copied ? <Check size={12} /> : <Copy size={12} />} {copied ? "Copiado" : "Copiar credenciais"}
+                      </button>
+                    </>
+                  ) : (
+                    <p className="text-afj-black/60 text-xs">A senha temporária foi enviada por e-mail a <strong>{cred.email}</strong> — o administrador precisará trocá-la no primeiro acesso.</p>
+                  )}
                 </div>
                 <button onClick={() => setModal(null)} className="btn-afj-primary w-full text-sm py-2 rounded-sm">Concluir</button>
               </div>

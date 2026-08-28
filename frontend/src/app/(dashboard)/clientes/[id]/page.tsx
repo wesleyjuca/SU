@@ -10,6 +10,7 @@ import Link from "next/link";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
 import { useUserStore } from "@/store";
+import { maskTelefone } from "@/lib/masks";
 
 interface Financeiro {
   resumo: { receita_paga: number; receita_pendente: number; despesa: number; saldo: number };
@@ -785,7 +786,7 @@ export default function ClienteDetailPage() {
                     type={type}
                     required={required}
                     value={(contatoForm as any)[key]}
-                    onChange={(e) => setContatoForm({ ...contatoForm, [key]: e.target.value })}
+                    onChange={(e) => setContatoForm({ ...contatoForm, [key]: type === "tel" ? maskTelefone(e.target.value) : e.target.value })}
                     className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold"
                   />
                 </div>

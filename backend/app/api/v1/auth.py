@@ -109,6 +109,7 @@ async def login(body: LoginRequest, request: Request, db: AsyncSession = Depends
             "full_name": user.full_name,
             "role": user.role,
             "oab_number": user.oab_number,
+            "must_change_password": bool(user.must_change_password),
         },
     )
 
@@ -342,5 +343,6 @@ async def change_password(
         from fastapi import HTTPException
         raise HTTPException(status_code=422, detail="Senha deve ter 8+ caracteres com maiúscula, minúscula, número e símbolo (@$!%*?&_-#)")
     current_user.hashed_password = hash_password(body.new_password)
+    current_user.must_change_password = False
     await db.flush()
     return {"message": "Senha alterada com sucesso"}
