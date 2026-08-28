@@ -7,6 +7,7 @@ import { useToast } from "@/components/ui/Toast";
 import { ProcessTimelineCard } from "@/components/processes/ProcessTimeline";
 import type { Processo, Movimentacao, Prazo, Parte } from "@/types";
 import { AREAS_DIREITO } from "@/lib/constants";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 
 const SITUACAO_STYLE: Record<string, string> = {
   ATIVO: "badge-ativo",
@@ -42,6 +43,7 @@ export default function ProcessoDetailPage() {
   const id = params.id as string;
 
   const toast = useToast();
+  const { ask, confirmDialog } = useConfirmDialog();
   const [processo, setProcesso] = useState<Processo | null>(null);
   const [movimentacoes, setMovimentacoes] = useState<Movimentacao[]>([]);
   const [prazos, setPrazos] = useState<Prazo[]>([]);
@@ -299,7 +301,7 @@ export default function ProcessoDetailPage() {
   }
 
   async function excluirParte(parteId: string) {
-    if (!confirm("Excluir esta parte?")) return;
+    if ((await ask({ message: "Excluir esta parte?", danger: true, confirmLabel: "Excluir" })) === null) return;
     setExcluindoParteId(parteId);
     try {
       const token = localStorage.getItem("afj_access_token");
@@ -1314,6 +1316,7 @@ export default function ProcessoDetailPage() {
           </div>
         </div>
       )}
+      {confirmDialog}
     </div>
   );
 }

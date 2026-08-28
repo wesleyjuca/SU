@@ -4,6 +4,7 @@ import { Filter, Plus, X, Loader2, Trash2, TrendingUp, Target, Pencil } from "lu
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
 import { useUserStore } from "@/store";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 
 interface Opp {
   id: string; titulo: string; valor_estimado: number; estagio: string; probabilidade: number;
@@ -41,6 +42,7 @@ const fmtBRL = (v: number) => `R$ ${v.toLocaleString("pt-BR", { minimumFractionD
 
 export default function FunilPage() {
   const toast = useToast();
+  const { ask, confirmDialog } = useConfirmDialog();
   const userRole = useUserStore((s) => s.user?.role);
   const canDefinirMeta = ["ADMIN", "SOCIO", "GESTOR"].includes(userRole ?? "");
   const [funil, setFunil] = useState<Funil | null>(null);
@@ -128,8 +130,11 @@ export default function FunilPage() {
   async function mover(opp: Opp, estagio: string) {
     let body: Record<string, unknown> = { estagio };
     if (estagio === "PERDIDO") {
-      const motivo = window.prompt("Motivo da perda:");
-      if (!motivo) return;
+      const motivo = await ask({
+        title: "Motivo da perda", message: "Por que essa oportunidade foi perdida?",
+        reasonLabel: "Motivo", reasonRequired: true, confirmLabel: "Marcar como perdido",
+      });
+      if (motivo === null) return;
       body.motivo_perda = motivo;
     }
     setBusy(opp.id);
@@ -310,6 +315,7 @@ export default function FunilPage() {
           </form>
         </div>
       )}
+      {confirmDialog}
     </div>
   );
 }

@@ -100,6 +100,10 @@ export default function EticaPage() {
   const [sending, setSending] = useState(false);
   const [protocolo, setProtocolo] = useState<string | null>(null);
   const [reports, setReports] = useState<Report[]>([]);
+  // Fase 241 (achado do diagnóstico de cadastros) — `resolucao` já existia
+  // no backend/model, mas nenhum input do frontend permitia preenchê-la.
+  const [resolucaoDrafts, setResolucaoDrafts] = useState<Record<string, string>>({});
+  const [salvandoResolucaoId, setSalvandoResolucaoId] = useState<string | null>(null);
 
   // Matriz de Riscos (Fase 189.1)
   const [risks, setRisks] = useState<Risk[]>([]);
@@ -118,8 +122,11 @@ export default function EticaPage() {
   // Comitê de Integridade (Fase 189.3)
   const [cases, setCases] = useState<CommitteeCase[]>([]);
   const [showCaseForm, setShowCaseForm] = useState(false);
-  const [caseForm, setCaseForm] = useState({ titulo: "", descricao: "", report_id: "", membros: "" });
+  const [caseForm, setCaseForm] = useState<{ titulo: string; descricao: string; report_id: string; membros: string[] }>({ titulo: "", descricao: "", report_id: "", membros: [] });
   const [savingCase, setSavingCase] = useState(false);
+  // Fase 241 (achado do diagnóstico de cadastros) — membros eram texto
+  // livre separado por vírgula, sem checagem contra colaboradores reais.
+  const [colegas, setColegas] = useState<{ id: string; full_name: string }[]>([]);
 
   const fetchTudo = useCallback(async () => {
     try {
@@ -143,6 +150,8 @@ export default function EticaPage() {
         if (rk.ok) setRisks(await rk.json());
         const cs = await fetch("/api/v1/integrity/committee-cases", { headers: authH() });
         if (cs.ok) setCases(await cs.json());
+        const col = await fetch("/api/v1/users/colegas", { headers: authH() });
+        if (col.ok) setColegas(await col.json());
       }
     } catch { /* página segue com o que carregou */ }
   }, []);
@@ -196,6 +205,19 @@ export default function EticaPage() {
       if (res.ok) fetchTudo();
       else toast.error("Erro ao atualizar o relato.");
     } catch { toast.error("Falha de conexão."); }
+  }
+
+  async function salvarResolucao(id: string) {
+    const resolucao = (resolucaoDrafts[id] ?? "").trim();
+    setSalvandoResolucaoId(id);
+    try {
+      const res = await fetch(`/api/v1/integrity/reports/${id}`, {
+        method: "PUT", headers: authH(), body: JSON.stringify({ resolucao }),
+      });
+      if (res.ok) { toast.success("Resolução salva."); fetchTudo(); }
+      else toast.error("Erro ao salvar a resolução.");
+    } catch { toast.error("Falha de conexão."); }
+    finally { setSalvandoResolucaoId(null); }
   }
 
   // Fase 208.3 — pré-preenche o formulário da Matriz de Riscos a partir de um
@@ -305,14 +327,14 @@ export default function EticaPage() {
         body: JSON.stringify({
           titulo: caseForm.titulo, descricao: caseForm.descricao,
           report_id: caseForm.report_id || null,
-          membros: caseForm.membros.split(",").map((m) => m.trim()).filter(Boolean),
+          membros: caseForm.membros,
         }),
       });
       const d = await res.json().catch(() => ({}));
       if (res.ok) {
         toast.success("Caso registrado no Comitê.");
         setShowCaseForm(false);
-        setCaseForm({ titulo: "", descricao: "", report_id: "", membros: "" });
+        setCaseForm({ titulo: "", descricao: "", report_id: "", membros: [] });
         fetchTudo();
       } else toast.error(d.detail || "Erro ao registrar o caso.");
     } catch { toast.error("Falha de conexão."); }
@@ -483,6 +505,25 @@ export default function EticaPage() {
                   </div>
                 </div>
                 <p className="text-xs text-afj-black/60 leading-relaxed">{r.descricao}</p>
+                <div>
+                  <label className="text-[10px] font-semibold text-afj-black/45 uppercase tracking-wider block mb-1">Resolução / parecer</label>
+                  <textarea
+                    rows={2}
+                    value={resolucaoDrafts[r.id] ?? r.resolucao ?? ""}
+                    onChange={(e) => setResolucaoDrafts((d) => ({ ...d, [r.id]: e.target.value }))}
+                    placeholder="Registre a apuração/decisão sobre este relato..."
+                    className="w-full border border-afj-cream-dark rounded-sm px-2.5 py-1.5 text-xs focus:outline-none focus:border-afj-gold"
+                  />
+                  {(resolucaoDrafts[r.id] ?? "") !== (r.resolucao ?? "") && (
+                    <button
+                      onClick={() => salvarResolucao(r.id)}
+                      disabled={salvandoResolucaoId === r.id}
+                      className="mt-1 text-[10px] font-medium text-afj-gold hover:underline disabled:opacity-50"
+                    >
+                      {salvandoResolucaoId === r.id ? "Salvando..." : "Salvar resolução"}
+                    </button>
+                  )}
+                </div>
                 <div className="flex items-center justify-between gap-2 flex-wrap">
                   <p className="text-[10px] text-afj-black/35">
                     Protocolo {r.id.slice(0, 8).toUpperCase()} · {new Date(r.created_at).toLocaleString("pt-BR")}
@@ -718,9 +759,30 @@ export default function EticaPage() {
               <textarea value={caseForm.descricao} onChange={(e) => setCaseForm((f) => ({ ...f, descricao: e.target.value }))}
                 rows={3} placeholder="Descrição do caso a ser avaliado" required
                 className="w-full bg-afj-cream border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold resize-none" />
-              <input type="text" value={caseForm.membros} onChange={(e) => setCaseForm((f) => ({ ...f, membros: e.target.value }))}
-                placeholder="Membros participantes, separados por vírgula"
-                className="w-full bg-afj-cream border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold" />
+              <div>
+                <label className="text-xs text-afj-black/60 block mb-1">Membros participantes</label>
+                {colegas.length > 0 ? (
+                  <div className="border border-afj-cream-dark rounded-sm px-3 py-2 max-h-32 overflow-y-auto space-y-1 bg-afj-cream">
+                    {colegas.map((c) => (
+                      <label key={c.id} className="flex items-center gap-2 text-sm text-afj-black/70 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={caseForm.membros.includes(c.full_name)}
+                          onChange={(e) => setCaseForm((f) => ({
+                            ...f,
+                            membros: e.target.checked
+                              ? [...f.membros, c.full_name]
+                              : f.membros.filter((m) => m !== c.full_name),
+                          }))}
+                        />
+                        {c.full_name}
+                      </label>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-xs text-afj-black/40">Nenhum colaborador disponível.</p>
+                )}
+              </div>
               <button type="submit" disabled={savingCase} className="btn-afj-primary rounded-sm text-sm flex items-center gap-2 disabled:opacity-50">
                 {savingCase && <Loader2 size={13} className="animate-spin" />} Registrar caso
               </button>

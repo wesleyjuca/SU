@@ -66,7 +66,7 @@ class ContactCreate(BaseModel):
     cargo: str | None = None
     email: str | None = None
     telefone: str | None = None
-    whatsapp: str | None = None  # stored in telefone if no dedicated column
+    whatsapp: str | None = None
     is_primary: bool = False
 
 
@@ -541,7 +541,8 @@ async def create_contact(
         nome=body.nome,
         cargo=body.cargo,
         email=body.email,
-        telefone=body.telefone or body.whatsapp,
+        telefone=body.telefone,
+        whatsapp=body.whatsapp,
         is_primary=body.is_primary,
     )
     db.add(contact)
@@ -579,7 +580,8 @@ async def update_contact(
     contact.nome = body.nome
     contact.cargo = body.cargo
     contact.email = body.email
-    contact.telefone = body.telefone or body.whatsapp
+    contact.telefone = body.telefone
+    contact.whatsapp = body.whatsapp
     contact.is_primary = body.is_primary
     return _contact_to_dict(contact)
 

@@ -3351,6 +3351,62 @@ Histórico:
     check`/`py_compile` limpos no backend.
   - Não implementados nesta fase: os 24 achados restantes do
     diagnóstico — seguem pras Fases 241-245, já planejadas acima.
+- **Fase 241** (batch 2 dos 31 achados do diagnóstico de cadastros —
+  `window.confirm`/`window.prompt` nativos + 3 cadastros incompletos):
+  - **`window.confirm`/`window.prompt` nativos** — o levantamento original
+    citou 4-5 exemplos, mas um grep completo achou **11 pontos** no total
+    (mais que o diagnóstico documentou, mesmo padrão sendo a mesma classe
+    de achado). Novo hook único baseado em Promise
+    (`frontend/src/hooks/useConfirmDialog.tsx`, `ask()` → `Promise<string
+    | null>`, `null` = cancelado) substitui todos os 11: revogar acesso ao
+    portal (`ClientPortalAccessPanel.tsx`), rejeitar agente de IA
+    (`BrainCustomAgents.tsx`), desconectar integração
+    (`integracoes/page.tsx`), restaurar versão/arquivar documento
+    (`documentos/page.tsx` ×2), excluir parte de processo
+    (`processos/[id]/page.tsx`), excluir processo permanentemente
+    (`processos/page.tsx`), ativar modo produção do tenant
+    (`admin/escritorios/page.tsx`), excluir usuário permanentemente
+    (`admin/usuarios/page.tsx`), e motivo de oportunidade perdida
+    (`clientes/funil/page.tsx` — fecha também o achado específico "motivo
+    de perda via `prompt()`, sem estrutura"). Achado colateral corrigido
+    de propósito: o `window.prompt` de rejeição de agente de IA ignorava
+    cancelamento (clicar "Cancelar" no prompt nativo ainda rejeitava o
+    agente, só sem motivo) — o modal novo torna "Cancelar" cancelar a
+    rejeição inteira, mais alinhado com o que um admin esperaria.
+  - **Campo `resolucao` da denúncia sem UI** — já existia no backend
+    (`ReportResolve.resolucao`, endpoint já aceitava), só faltava o
+    input. `etica/page.tsx` ganhou um textarea por relato com botão
+    "Salvar resolução" (só aparece quando o texto diverge do já salvo).
+  - **Membros do Comitê como texto livre** — viravam string separada por
+    vírgula, sem checagem contra colaboradores reais. Agora é uma lista
+    de checkboxes (`GET /users/colegas`, mesmo endpoint já usado em
+    Processos), armazenando os mesmos nomes de sempre (sem migração de
+    schema — `membros` continua `list[str]` no backend), só que
+    escolhidos de uma lista real em vez de digitados.
+  - **`ClientContact` sem WhatsApp próprio** — o comentário do próprio
+    código admitia: "stored in telefone if no dedicated column". Novo
+    campo `ClientContact.whatsapp` (migração idempotente em
+    `events.py`), `create_contact`/`update_contact` gravam os 2 campos
+    separadamente. Achado colateral descoberto ao investigar: `_contact_
+    to_dict()` já devolvia `"whatsapp": c.whatsapp` numa fase anterior,
+    o que teria quebrado com `AttributeError` toda listagem de contato
+    até este fix adicionar a coluna que faltava no model — confirma que
+    a coluna estava mesmo faltando, não só um problema cosmético de UI.
+    Cliente 360 ganhou a exibição do WhatsApp na lista de contatos (link
+    `wa.me`), que já era coletado no formulário mas nunca exibido.
+  - Verificado via HTTP real contra Postgres real: contato criado com
+    telefone E whatsapp preservados como campos distintos (antes um
+    sobrescrevia o outro); resolução de denúncia salva e devolvida
+    corretamente. Playwright real (Chromium do sandbox): modal de
+    confirmação aparece ao revogar acesso (não mais `window.confirm`);
+    campo "Resolução / parecer" presente por relato; "Membros
+    participantes" renderiza como lista de checkboxes com colegas reais
+    (6 no tenant de teste). `tsc --noEmit` limpo; `eslint` nos 16
+    arquivos tocados — só os mesmos warnings pré-existentes de
+    `exhaustive-deps`, confirmados via `git stash`. `ruff check`/
+    `py_compile` limpos no backend.
+  - Não implementados nesta fase: os 21 achados restantes — seguem pras
+    Fases 242-245.
 
 
 ## Riscos conhecidos / débito técnico

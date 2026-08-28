@@ -637,6 +637,12 @@ export default function ClienteDetailPage() {
                               <Phone size={10} />{c.telefone}
                             </a>
                           )}
+                          {c.whatsapp && (
+                            <a href={`https://wa.me/${c.whatsapp.replace(/\D/g, "")}`} target="_blank" rel="noreferrer"
+                              className="flex items-center gap-1.5 text-xs text-afj-black/60 hover:underline">
+                              <MessageSquare size={10} />{c.whatsapp}
+                            </a>
+                          )}
                         </div>
                       </div>
                       <button

@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback } from "react";
 import { Sparkles, RefreshCw, Check, X, ChevronDown, ChevronUp, Pencil, Loader2 } from "lucide-react";
 import { api } from "@/lib/api";
 import { useToast } from "@/components/ui/Toast";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 
 interface CustomAgentRow {
   id: string;
@@ -25,6 +26,7 @@ const STATUS_FILTROS = [
 
 export function BrainCustomAgents() {
   const toast = useToast();
+  const { ask, confirmDialog } = useConfirmDialog();
   const [status, setStatus] = useState("PENDENTE");
   const [agentes, setAgentes] = useState<CustomAgentRow[] | null>(null);
   const [carregando, setCarregando] = useState(false);
@@ -52,9 +54,22 @@ export function BrainCustomAgents() {
   }, [carregar]);
 
   async function resolver(id: string, approved: boolean) {
+    let rejection_reason: string | undefined;
+    if (!approved) {
+      // Fase 241 (achado do diagnóstico de cadastros) — o window.prompt()
+      // original ignorava o cancelamento (clicar "Cancelar" no prompt
+      // nativo ainda rejeitava o agente, só sem motivo). O modal novo
+      // corrige esse comportamento: cancelar aqui cancela a rejeição
+      // inteira, mais alinhado com o que um admin esperaria.
+      const motivo = await ask({
+        title: "Rejeitar agente", message: "Motivo da rejeição (opcional):",
+        reasonLabel: "Motivo", confirmLabel: "Rejeitar",
+      });
+      if (motivo === null) return;
+      rejection_reason = motivo || undefined;
+    }
     setResolvendo(id);
     try {
-      const rejection_reason = approved ? undefined : window.prompt("Motivo da rejeição (opcional):") || undefined;
       await api.post(`/custom-agents/${id}/resolve`, { approved, rejection_reason });
       toast.success(approved ? "Agente aprovado." : "Agente rejeitado.");
       setAgentes((prev) => (prev ?? []).filter((a) => a.id !== id));
@@ -246,6 +261,7 @@ export function BrainCustomAgents() {
           </div>
         )}
       </div>
+      {confirmDialog}
     </div>
   );
 }

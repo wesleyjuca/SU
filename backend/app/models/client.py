@@ -49,6 +49,11 @@ class ClientContact(Base):
     cargo: Mapped[str | None] = mapped_column(String(100))
     email: Mapped[str | None] = mapped_column(String(255))
     telefone: Mapped[str | None] = mapped_column(String(20))
+    # Fase 241 (achado do diagnóstico de cadastros) — antes o WhatsApp de
+    # um contato era gravado sobrepondo `telefone` (comentário do código
+    # antigo admitia: "stored in telefone if no dedicated column"),
+    # perdendo o telefone fixo/comercial quando os dois existiam.
+    whatsapp: Mapped[str | None] = mapped_column(String(20))
     is_primary: Mapped[bool] = mapped_column(Boolean, default=False)
 
     client: Mapped["Client"] = relationship(back_populates="contacts")

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { FolderOpen, Search, FileText, Download, Upload, ScanLine, X, CloudUpload, FilePlus, Eye, Plus, Pencil, Trash2, Save, Loader2, History, RotateCcw, Scale, CheckCircle2, AlertTriangle, HelpCircle, Paperclip } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 
 const TIPOS = ["PETICAO", "CONTRATO", "PROCURACAO", "PARECER", "RECURSO", "OUTROS"];
 const STATUSES = ["RASCUNHO", "REVISAO", "APROVADO", "PROTOCOLADO", "REJEITADO"];
@@ -62,6 +63,7 @@ const PAGE_SIZE = 50;
 
 export default function DocumentosPage() {
   const toast = useToast();
+  const { ask, confirmDialog } = useConfirmDialog();
   const searchParams = useSearchParams();
   const clientIdFiltro = searchParams.get("client_id");
   const [docs, setDocs] = useState<Documento[]>([]);
@@ -187,7 +189,7 @@ export default function DocumentosPage() {
 
   async function restaurarVersao(v: Versao) {
     if (!histDoc) return;
-    if (!confirm(`Restaurar a versão ${v.versao}? O conteúdo atual será guardado como uma nova versão.`)) return;
+    if ((await ask({ message: `Restaurar a versão ${v.versao}? O conteúdo atual será guardado como uma nova versão.` })) === null) return;
     setRestaurando(v.id);
     try {
       const res = await fetch(`/api/v1/documents/${histDoc.id}/versions/${v.id}/restore`, { method: "POST", headers: authH() });
@@ -198,7 +200,7 @@ export default function DocumentosPage() {
   }
 
   async function excluirDoc(d: Documento) {
-    if (!confirm(`Arquivar "${d.titulo}"? Ele sai da lista mas pode ser recuperado filtrando por arquivados.`)) return;
+    if ((await ask({ message: `Arquivar "${d.titulo}"? Ele sai da lista mas pode ser recuperado filtrando por arquivados.` })) === null) return;
     setDeleting(d.id);
     try {
       const res = await fetch(`/api/v1/documents/${d.id}`, { method: "DELETE", headers: authH() });
@@ -822,6 +824,7 @@ export default function DocumentosPage() {
           </div>
         </div>
       )}
+      {confirmDialog}
     </div>
   );
 }

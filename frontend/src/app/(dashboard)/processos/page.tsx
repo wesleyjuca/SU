@@ -7,6 +7,7 @@ import { useToast } from "@/components/ui/Toast";
 import { ViewToggle } from "@/components/ui/ViewToggle";
 import { useUserStore } from "@/store";
 import { AREAS_DIREITO } from "@/lib/constants";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 
 const UF_LIST = ["AC","AL","AM","AP","BA","CE","DF","ES","GO","MA","MG","MS","MT","PA","PB","PE","PI","PR","RJ","RN","RO","RR","RS","SC","SE","SP","TO"];
 
@@ -52,6 +53,7 @@ const PAGE_SIZE = 50;
 
 export default function ProcessosPage() {
   const toast = useToast();
+  const { ask, confirmDialog } = useConfirmDialog();
   const { user: me } = useUserStore();
   const [excluindoPermanenteId, setExcluindoPermanenteId] = useState<string | null>(null);
   const [processos, setProcessos] = useState<Processo[]>([]);
@@ -236,9 +238,12 @@ export default function ProcessosPage() {
   // documentos, financeiro, execuções de agente), restrita ao SUPERADMIN.
   // Diferente de excluirProcesso() acima, que só arquiva.
   async function excluirPermanentemente(id: string) {
-    if (!confirm(
-      "Excluir este processo PERMANENTEMENTE?\n\nDocumentos, lançamentos financeiros/faturas e execuções de agente ligados a ele são apagados junto. Não é reversível."
-    )) return;
+    if ((await ask({
+      title: "Excluir permanentemente",
+      message: "Excluir este processo PERMANENTEMENTE?\n\nDocumentos, lançamentos financeiros/faturas e execuções de agente ligados a ele são apagados junto. Não é reversível.",
+      danger: true,
+      confirmLabel: "Excluir",
+    })) === null) return;
     setExcluindoPermanenteId(id);
     try {
       const token = localStorage.getItem("afj_access_token");
@@ -759,6 +764,7 @@ export default function ProcessosPage() {
           </div>
         </div>
       )}
+      {confirmDialog}
     </div>
   );
 }

@@ -2,6 +2,7 @@
 import { useState, useEffect } from "react";
 import { Loader2, Link2, RefreshCw, Ban, Copy, Check as CheckIcon, ShieldOff } from "lucide-react";
 import { useToast } from "@/components/ui/Toast";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 
 interface PortalAccessRow {
   client_id: string;
@@ -38,6 +39,7 @@ function fmtData(iso: string | null) {
  * `User` técnico por trás do link nunca aparece aqui nem em /Usuários). */
 export function ClientPortalAccessPanel() {
   const toast = useToast();
+  const { ask, confirmDialog } = useConfirmDialog();
   const [rows, setRows] = useState<PortalAccessRow[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [validadeEscolhida, setValidadeEscolhida] = useState<Record<string, number>>({});
@@ -87,7 +89,10 @@ export function ClientPortalAccessPanel() {
   }
 
   async function revogarAcesso(row: PortalAccessRow) {
-    if (!confirm(`Revogar o acesso ao portal de "${row.nome}"? O link atual deixa de funcionar imediatamente.`)) return;
+    if ((await ask({
+      message: `Revogar o acesso ao portal de "${row.nome}"? O link atual deixa de funcionar imediatamente.`,
+      danger: true, confirmLabel: "Revogar",
+    })) === null) return;
     setRevogando(row.client_id);
     try {
       const token = localStorage.getItem("afj_access_token");
@@ -223,6 +228,7 @@ export function ClientPortalAccessPanel() {
           </div>
         </div>
       )}
+      {confirmDialog}
     </div>
   );
 }
