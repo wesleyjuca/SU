@@ -1,7 +1,9 @@
 "use client";
 import { useState, useEffect } from "react";
-import { User, Bell, Shield, Save, CheckCircle, Loader2, Eye, EyeOff } from "lucide-react";
+import { useSearchParams } from "next/navigation";
+import { User, Bell, Shield, Save, CheckCircle, Loader2, Eye, EyeOff, AlertTriangle } from "lucide-react";
 import { usePushSubscription } from "@/hooks/usePushSubscription";
+import { maskTelefone } from "@/lib/masks";
 
 const TABS = [
   { id: "perfil", label: "Perfil", icon: User },
@@ -17,7 +19,12 @@ const TABS = [
  * versão completa e correta dessa configuração já existe na zona
  * "Escritório & Jurídico" (aba Aparência de `EscritorioZone`). */
 export function PersonalZone() {
-  const [activeTab, setActiveTab] = useState("perfil");
+  const searchParams = useSearchParams();
+  const [activeTab, setActiveTab] = useState(() => (searchParams.get("aba") === "seguranca" ? "seguranca" : "perfil"));
+  // Fase 243 (achado do diagnóstico de cadastros) — senha temporária nunca
+  // exigia troca visível no 1º login. Não é bloqueio de middleware (não
+  // trava nenhuma rota) — o login redireciona pra cá com esse aviso.
+  const [mustChangePassword, setMustChangePassword] = useState(false);
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
   const { subscribed, subscribe, unsubscribe, loading: pushLoading } = usePushSubscription();
@@ -42,6 +49,10 @@ export function PersonalZone() {
   useEffect(() => {
     if (!perfilLoaded) loadPerfil();
     loadNotifPrefs();
+    try {
+      const stored = localStorage.getItem("afj_user");
+      if (stored) setMustChangePassword(Boolean(JSON.parse(stored)?.must_change_password));
+    } catch { /* noop */ }
   }, []);
 
   async function loadNotifPrefs() {
@@ -155,6 +166,11 @@ export function PersonalZone() {
         setPwdSuccess(true);
         setPwdForm({ current_password: "", new_password: "", confirm: "" });
         setTimeout(() => setPwdSuccess(false), 4000);
+        setMustChangePassword(false);
+        try {
+          const stored = localStorage.getItem("afj_user");
+          if (stored) localStorage.setItem("afj_user", JSON.stringify({ ...JSON.parse(stored), must_change_password: false }));
+        } catch { /* noop */ }
       } else {
         setPwdError(data.detail || "Erro ao alterar senha.");
       }
@@ -222,7 +238,7 @@ export function PersonalZone() {
                 <input
                   type="tel"
                   value={perfil.telefone}
-                  onChange={(e) => setPerfil({ ...perfil, telefone: e.target.value })}
+                  onChange={(e) => setPerfil({ ...perfil, telefone: maskTelefone(e.target.value) })}
                   className={inputCls}
                   placeholder="(68) 99999-9999"
                 />
@@ -333,6 +349,14 @@ export function PersonalZone() {
           <>
             <h2 className="font-semibold text-afj-black">Segurança da Conta</h2>
             <div className="space-y-5">
+              {mustChangePassword && (
+                <div className="flex items-start gap-2.5 p-3.5 bg-amber-50 border border-amber-200 rounded-sm text-amber-800">
+                  <AlertTriangle size={16} className="flex-shrink-0 mt-0.5" />
+                  <p className="text-sm">
+                    Você está com uma senha temporária. Defina uma senha própria abaixo antes de continuar usando o sistema.
+                  </p>
+                </div>
+              )}
               {/* Alterar senha */}
               <div className="p-5 border border-afj-cream-dark rounded-sm">
                 <h3 className="text-sm font-semibold text-afj-black mb-4">Alterar Senha</h3>

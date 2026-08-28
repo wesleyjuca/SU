@@ -18,6 +18,8 @@ interface Publicacao {
   orgao: string | null;
   link: string | null;
   status: string;
+  prioridade_ia: string | null;
+  resumo_ia: string | null;
 }
 
 const STATUS_BADGE: Record<string, string> = {
@@ -25,6 +27,16 @@ const STATUS_BADGE: Record<string, string> = {
   TRIADA: "bg-green-50 text-green-700 border-green-200",
   IGNORADA: "bg-gray-50 text-gray-500 border-gray-200",
 };
+// Fase 244 (achado do diagnóstico de cadastros, comparação com Astrea) —
+// prioridade pré-computada na captura (dje_monitor.py), exibida direto na
+// listagem — antes a única sugestão de IA ficava escondida dentro do modal
+// de triagem, sob demanda.
+const PRIORIDADE_BADGE: Record<string, string> = {
+  ALTA: "bg-red-50 text-red-700 border-red-200",
+  MEDIA: "bg-amber-50 text-amber-700 border-amber-200",
+  BAIXA: "bg-gray-50 text-gray-500 border-gray-200",
+};
+const PRIORIDADE_LABEL: Record<string, string> = { ALTA: "Alta prioridade", MEDIA: "Média prioridade", BAIXA: "Baixa prioridade" };
 const TIPOS_PRAZO = ["CONTESTACAO", "RECURSO", "MANIFESTACAO", "EMBARGOS", "CONTRARRAZOES", "CUMPRIMENTO", "OUTROS"];
 
 export default function PublicacoesPage() {
@@ -166,6 +178,14 @@ export default function PublicacoesPage() {
               <div className="flex items-start justify-between gap-3 flex-wrap">
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className={`text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-sm border ${STATUS_BADGE[p.status] ?? "badge-arquivado"}`}>{p.status}</span>
+                  {p.prioridade_ia && (
+                    <span
+                      title={p.resumo_ia || undefined}
+                      className={`text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-sm border flex items-center gap-1 ${PRIORIDADE_BADGE[p.prioridade_ia] ?? ""}`}
+                    >
+                      <Sparkles size={10} /> {PRIORIDADE_LABEL[p.prioridade_ia] ?? p.prioridade_ia}
+                    </span>
+                  )}
                   {p.tribunal && <span className="text-xs text-afj-black/50">{p.tribunal}</span>}
                   {p.tipo_comunicacao && <span className="text-xs text-afj-black/40">· {p.tipo_comunicacao}</span>}
                   {p.data_disponibilizacao && <span className="text-xs text-afj-black/40">· {new Date(p.data_disponibilizacao + "T00:00:00").toLocaleDateString("pt-BR")}</span>}
@@ -182,6 +202,11 @@ export default function PublicacoesPage() {
                 </div>
               </div>
               {p.orgao && <p className="text-xs text-afj-black/45 mt-2">{p.orgao}</p>}
+              {p.resumo_ia && (
+                <p className="text-xs text-afj-gold/90 mt-1.5 flex items-start gap-1">
+                  <Sparkles size={11} className="mt-0.5 flex-shrink-0" /> {p.resumo_ia}
+                </p>
+              )}
               <p className="text-sm text-afj-black/70 mt-2 leading-relaxed line-clamp-4 whitespace-pre-wrap">{p.texto}</p>
               {p.status === "NOVA" && (
                 <div className="flex items-center gap-2 mt-3">

@@ -4,6 +4,7 @@ import { Sparkles, RefreshCw, Check, X, ChevronDown, ChevronUp, Pencil, Loader2 
 import { api } from "@/lib/api";
 import { useToast } from "@/components/ui/Toast";
 import { useConfirmDialog } from "@/hooks/useConfirmDialog";
+import { RAG_COLLECTION_LABELS, fetchValidRagCollections } from "@/lib/ragCollections";
 
 interface CustomAgentRow {
   id: string;
@@ -34,8 +35,26 @@ export function BrainCustomAgents() {
   const [resolvendo, setResolvendo] = useState<string | null>(null);
   // Fase 193 — editar um agente já APROVADO (antes só dava pra recriar do zero).
   const [editandoId, setEditandoId] = useState<string | null>(null);
-  const [editForm, setEditForm] = useState({ description: "", system_prompt: "", rag_collections: "", max_cost_usd_per_run: "", requires_human_approval: false });
+  const [editForm, setEditForm] = useState({ description: "", system_prompt: "", rag_collections: [] as string[], max_cost_usd_per_run: "", requires_human_approval: false });
   const [salvandoEdicao, setSalvandoEdicao] = useState(false);
+  // Fase 242 — mesmo conjunto único de GET /rag/collections usado no modal
+  // de propor agente, em vez do texto livre separado por vírgula de antes.
+  const [ragOptions, setRagOptions] = useState<{ value: string; label: string }[]>([]);
+
+  useEffect(() => {
+    fetchValidRagCollections().then((valid) => {
+      setRagOptions(valid.map((v) => ({ value: v, label: RAG_COLLECTION_LABELS[v] || v })));
+    });
+  }, []);
+
+  function toggleEditColecao(value: string) {
+    setEditForm((f) => ({
+      ...f,
+      rag_collections: f.rag_collections.includes(value)
+        ? f.rag_collections.filter((c) => c !== value)
+        : [...f.rag_collections, value],
+    }));
+  }
 
   const carregar = useCallback(async () => {
     setCarregando(true);
@@ -86,7 +105,7 @@ export function BrainCustomAgents() {
     setEditForm({
       description: a.description,
       system_prompt: a.system_prompt,
-      rag_collections: (a.rag_collections || []).join(", "),
+      rag_collections: a.rag_collections || [],
       max_cost_usd_per_run: String(a.max_cost_usd_per_run),
       requires_human_approval: a.requires_human_approval,
     });
@@ -95,13 +114,10 @@ export function BrainCustomAgents() {
   async function salvarEdicao(id: string) {
     setSalvandoEdicao(true);
     try {
-      const rag_collections = editForm.rag_collections.trim()
-        ? editForm.rag_collections.split(",").map((s) => s.trim()).filter(Boolean)
-        : [];
       const atualizado = await api.patch<CustomAgentRow>(`/custom-agents/${id}`, {
         description: editForm.description,
         system_prompt: editForm.system_prompt,
-        rag_collections,
+        rag_collections: editForm.rag_collections,
         max_cost_usd_per_run: Number(editForm.max_cost_usd_per_run) || 0,
         requires_human_approval: editForm.requires_human_approval,
       });
@@ -207,19 +223,26 @@ export function BrainCustomAgents() {
                           onChange={(e) => setEditForm((f) => ({ ...f, system_prompt: e.target.value }))}
                           className="w-full font-mono border border-afj-cream-dark rounded-sm px-2.5 py-1.5 focus:outline-none focus:border-afj-gold resize-none" />
                       </div>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                        <div>
-                          <label className="text-afj-black/40 mb-1 block">Bases de conhecimento (separadas por vírgula)</label>
-                          <input type="text" value={editForm.rag_collections}
-                            onChange={(e) => setEditForm((f) => ({ ...f, rag_collections: e.target.value }))}
-                            className="w-full border border-afj-cream-dark rounded-sm px-2.5 py-1.5 focus:outline-none focus:border-afj-gold" />
+                      <div>
+                        <label className="text-afj-black/40 mb-1 block">Bases de conhecimento</label>
+                        <div className="flex flex-wrap gap-1.5">
+                          {ragOptions.map((c) => (
+                            <button key={c.value} type="button" onClick={() => toggleEditColecao(c.value)}
+                              className={`text-xs px-2.5 py-1 rounded-sm border transition-colors ${
+                                editForm.rag_collections.includes(c.value)
+                                  ? "border-afj-gold bg-afj-gold/5 text-afj-gold font-medium"
+                                  : "border-afj-cream-dark text-afj-black/50 hover:border-afj-gold/50"
+                              }`}>
+                              {c.label}
+                            </button>
+                          ))}
                         </div>
-                        <div>
-                          <label className="text-afj-black/40 mb-1 block">Teto de custo por execução (US$)</label>
-                          <input type="number" step="0.01" min="0" value={editForm.max_cost_usd_per_run}
-                            onChange={(e) => setEditForm((f) => ({ ...f, max_cost_usd_per_run: e.target.value }))}
-                            className="w-full border border-afj-cream-dark rounded-sm px-2.5 py-1.5 focus:outline-none focus:border-afj-gold" />
-                        </div>
+                      </div>
+                      <div>
+                        <label className="text-afj-black/40 mb-1 block">Teto de custo por execução (US$)</label>
+                        <input type="number" step="0.01" min="0" value={editForm.max_cost_usd_per_run}
+                          onChange={(e) => setEditForm((f) => ({ ...f, max_cost_usd_per_run: e.target.value }))}
+                          className="w-full sm:w-1/2 border border-afj-cream-dark rounded-sm px-2.5 py-1.5 focus:outline-none focus:border-afj-gold" />
                       </div>
                       <label className="flex items-center gap-2 cursor-pointer select-none">
                         <input type="checkbox" checked={editForm.requires_human_approval}

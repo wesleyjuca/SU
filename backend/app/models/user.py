@@ -19,6 +19,12 @@ class User(Base):
     telefone: Mapped[str | None] = mapped_column(String(20))  # WhatsApp (Fase 70)
     role: Mapped[str] = mapped_column(String(50), nullable=False, default="ASSISTENTE")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Fase 243 — sinaliza que a senha atual é temporária (convite/reset/
+    # provisionamento de escritório), pra exigir troca visível no 1º login.
+    # Não é enforcement de middleware (bloquearia toda rota) — o frontend
+    # redireciona pra Segurança e mostra um aviso persistente; a troca real
+    # (PATCH /auth/password) já zera este campo.
+    must_change_password: Mapped[bool] = mapped_column(Boolean, default=False)
     mfa_secret: Mapped[str | None] = mapped_column(String(255))
     # ── BYOK: IA própria do usuário (economiza tokens do sistema) ──
     ai_provider: Mapped[str | None] = mapped_column(String(20))       # anthropic | gemini

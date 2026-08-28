@@ -877,10 +877,16 @@ async def invite_user(
         hashed_password=hash_password(temp_password),
         is_active=True,
         tenant_id=current_user.tenant_id,
+        must_change_password=True,
     )
     db.add(user)
     await db.commit()
     # Senha temporária: enviar por email se disponível, nunca expor no JSON
+    # nesse caso. Sem EMAIL_ENABLED (Fase 243, achado do diagnóstico de
+    # cadastros — mesmo padrão já aplicado a reset-password/provisionamento
+    # de escritório logo abaixo/em tenants_admin.py): sem fallback aqui, o
+    # convite silenciosamente não entregava a senha a ninguém — o admin
+    # nunca via o "Senha enviada por email" nem a senha em si.
     from app.config import settings as _cfg
     if _cfg.EMAIL_ENABLED:
         try:
@@ -902,9 +908,14 @@ async def invite_user(
                 db=db,
                 tenant_id=current_user.tenant_id,  # envia pela conta Google do escritório, se conectada
             )
+            return {"id": str(user.id), "message": "Usuário convidado com sucesso. Senha enviada por email."}
         except Exception:
             pass
-    return {"id": str(user.id), "message": "Usuário convidado com sucesso. Senha enviada por email."}
+    return {
+        "id": str(user.id),
+        "temp_password": temp_password,
+        "message": "Usuário convidado com sucesso. Repasse a senha temporária com segurança.",
+    }
 
 
 
@@ -927,6 +938,18 @@ async def update_user(
     updates = body.model_dump(exclude_none=True)
     if "role" in updates:
         _validate_role_assignment(updates["role"], current_user)
+
+    # Fase 244 (achado do diagnóstico de cadastros) — elevar alguém a ADMIN/
+    # SUPERADMIN era 1 clique de um único ADMIN, sem segunda confirmação
+    # (única ação sensível do sistema sem o padrão HITL já usado em
+    # petição/contrato). Elevação real (papel muda PRA ADMIN/SUPERADMIN,
+    # não era isso antes) passa a exigir aprovação de outro
+    # ADVOGADO/SOCIO/ADMIN via /aprovacoes — a mudança de role só acontece
+    # de fato em execute_approved_action, nunca aqui direto. Demoção/
+    # desativação continuam imediatas (não é o risco que este achado mirava).
+    role_pendente = None
+    if "role" in updates and updates["role"] in ("ADMIN", "SUPERADMIN") and user.role != updates["role"]:
+        role_pendente = updates.pop("role")
 
     # Proteção contra lockout: não permitir desativar ou rebaixar o ÚLTIMO
     # ADMIN ativo do escritório (senão ninguém mais administra o sistema).
@@ -951,7 +974,27 @@ async def update_user(
     for field, value in updates.items():
         setattr(user, field, value)
 
+    approval_id = None
+    if role_pendente:
+        from app.models.agent_run import Approval
+        approval = Approval(
+            tipo="USER_ROLE_CHANGE",
+            titulo=f"Promover {user.full_name} a {role_pendente}",
+            descricao=f"{current_user.full_name} solicitou elevar o papel de {user.full_name} ({user.email}) de {user.role} para {role_pendente}.",
+            ai_suggestion={"target_user_id": str(user.id), "novo_role": role_pendente},
+            prioridade="NORMAL",
+            tenant_id=current_user.tenant_id,
+        )
+        db.add(approval)
+        await db.flush()
+        approval_id = str(approval.id)
+
     await db.commit()
+    if approval_id:
+        return {
+            "message": f"Demais alterações aplicadas. Promoção a {role_pendente} enviada para aprovação de outro administrador.",
+            "approval_id": approval_id,
+        }
     return {"message": "Usuário atualizado"}
 
 
@@ -1030,8 +1073,38 @@ async def reset_password(
     alphabet = string.ascii_letters + string.digits + "!@#$"
     new_password = "".join(secrets.choice(alphabet) for _ in range(12))
     user.hashed_password = hash_password(new_password)
+    user.must_change_password = True
     await db.commit()
-    return {"temp_password": new_password, "message": "Senha resetada com sucesso"}
+
+    # Fase 243 (achado do diagnóstico de cadastros) — mesmo padrão do convite
+    # de usuário logo acima: manda por e-mail quando disponível, nunca expõe
+    # no JSON nesse caso. Sem EMAIL_ENABLED, cai no fallback de sempre
+    # (mostrar na UI pro admin repassar) — não dá pra garantir entrega sem
+    # e-mail configurado, então aqui sim é honesto devolver no JSON.
+    from app.config import settings as _cfg
+    if _cfg.EMAIL_ENABLED:
+        try:
+            from app.services.email import send_email
+            await send_email(
+                to=user.email,
+                subject="Sua senha foi redefinida — AFJ CORE SYSTEM",
+                html_body=(
+                    f"<p>Olá, {user.full_name}.</p>"
+                    f"<p>Sua senha de acesso foi redefinida por um administrador. Nova senha temporária: "
+                    f"<strong>{new_password}</strong></p>"
+                    "<p>Altere-a no próximo acesso.</p>"
+                ),
+                text_body=(
+                    f"Olá, {user.full_name}.\n\nSua senha de acesso foi redefinida. "
+                    f"Nova senha temporária: {new_password}\n\nAltere-a no próximo acesso."
+                ),
+                db=db,
+                tenant_id=current_user.tenant_id,
+            )
+            return {"message": "Senha resetada e enviada por e-mail ao usuário."}
+        except Exception:
+            pass
+    return {"temp_password": new_password, "message": "Senha resetada com sucesso. Repasse-a ao usuário com segurança."}
 
 
 # Fase 234 — `POST /{client_id}/invite-portal` (senha temporária, criava

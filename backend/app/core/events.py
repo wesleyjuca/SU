@@ -549,6 +549,21 @@ async def lifespan(app: FastAPI):
             # um contato (ClientContact) era gravado sobrepondo `telefone`,
             # perdendo o telefone fixo/comercial quando os dois existiam.
             "ALTER TABLE client_contacts ADD COLUMN IF NOT EXISTS whatsapp VARCHAR(20)",
+            # Fase 243 (achado do diagnóstico de cadastros) — senha temporária
+            # nunca sinalizava exigência de troca no 1º login.
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT false",
+            # Fase 244 (achado do diagnóstico de cadastros) — sugestão de IA
+            # de publicações/intimações pré-computada na captura, não mais
+            # só sob demanda dentro do modal de triagem.
+            "ALTER TABLE intimacoes ADD COLUMN IF NOT EXISTS prioridade_ia VARCHAR(10)",
+            "ALTER TABLE intimacoes ADD COLUMN IF NOT EXISTS resumo_ia TEXT",
+            "ALTER TABLE intimacoes ADD COLUMN IF NOT EXISTS classificado_em TIMESTAMPTZ",
+            # Fase 244 (achado do diagnóstico de cadastros) — lançamento
+            # financeiro parcelado.
+            "ALTER TABLE financial_entries ADD COLUMN IF NOT EXISTS grupo_recorrencia_id UUID",
+            "ALTER TABLE financial_entries ADD COLUMN IF NOT EXISTS parcela_atual INTEGER",
+            "ALTER TABLE financial_entries ADD COLUMN IF NOT EXISTS parcela_total INTEGER",
+            "CREATE INDEX IF NOT EXISTS ix_financial_entries_grupo_recorrencia ON financial_entries (grupo_recorrencia_id)",
         ]:
             try:
                 async with engine.begin() as conn:

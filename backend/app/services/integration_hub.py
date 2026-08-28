@@ -369,26 +369,77 @@ async def _fonte_credenciada_do_provider(db: AsyncSession, tenant_id, provider: 
     return await para_tenant(db, tenant_id)
 
 
+_PAYMENT_TEST_PROBE = {
+    # Fase 242 — mesma sonda "GET autenticado, 401/403 = credencial ruim"
+    # já usada pras fontes credenciadas, só que direto (sem a abstração
+    # FonteProcessual, que é de acompanhamento processual, não pagamento).
+    # Stripe: /v1/balance é o endpoint padrão de mercado pra validar uma
+    # secret key (read-only, não move dinheiro). Mercado Pago: /users/me
+    # é o equivalente (read-only, confirma o access_token).
+    "stripe": ("https://api.stripe.com/v1/balance", "secret_key"),
+    "mercadopago": ("https://api.mercadopago.com/users/me", "access_token"),
+}
+
+
+async def _testar_payment_gateway(provider: str, creds: dict) -> tuple[bool, str]:
+    url, campo = _PAYMENT_TEST_PROBE[provider]
+    token = creds.get(campo)
+    if not token:
+        return False, f"credencial '{campo}' ausente"
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(url, headers={"Authorization": f"Bearer {token}"})
+        if resp.status_code == 200:
+            return True, "credencial válida"
+        if resp.status_code in (401, 403):
+            return False, "credencial inválida ou revogada"
+        return False, f"resposta inesperada do provedor (HTTP {resp.status_code})"
+    except httpx.HTTPError as exc:
+        return False, f"falha de conexão: {str(exc)[:120]}"
+
+
 async def testar_conexao(db: AsyncSession, tenant_id, provider: str) -> dict:
     """Testa a credencial conectada e atualiza o `status` (CONECTADA/ERRO).
 
-    Para as fontes credenciadas (pdpj/escavador/judit/jusbrasil) e pra WhatsApp
-    (Fase 168) faz uma sonda autenticada que distingue 401/403 (credencial
-    inválida/expirada) de sucesso. Para os demais provedores não há teste
-    automático — retorna o status atual. Não faz commit (o chamador comita).
-    Detecção de expiração = este teste marcando ERRO."""
+    Para as fontes credenciadas (pdpj/escavador/judit/jusbrasil), pra WhatsApp
+    (Fase 168) e pros gateways de pagamento (stripe/mercadopago, Fase 242)
+    faz uma sonda autenticada que distingue 401/403 (credencial inválida/
+    expirada) de sucesso. Para os demais provedores não há teste automático —
+    retorna o status atual. Não faz commit (o chamador comita). Detecção de
+    expiração = este teste marcando ERRO."""
     if provider not in PROVIDERS:
         return {"ok": False, "status": "DESCONHECIDO", "detail": "provedor desconhecido"}
     integ = await get_integration(db, tenant_id, provider)
     if not integ or not integ.credentials_enc:
         return {"ok": False, "status": "DESCONECTADA", "detail": "não conectado"}
 
+    era_erro = integ.status == "ERRO"
+    if provider in _PAYMENT_TEST_PROBE:
+        creds = await get_credentials(db, tenant_id, provider)
+        try:
+            ok, detail = await _testar_payment_gateway(provider, creds or {})
+        except Exception as exc:
+            ok, detail = False, str(exc)[:120]
+        integ.status = "CONECTADA" if ok else "ERRO"
+        agora = datetime.now(timezone.utc)
+        if ok:
+            integ.last_success_at = agora
+        else:
+            integ.last_error_at = agora
+            integ.last_error_detail = (detail or "")[:500]
+            if not era_erro:
+                meta = PROVIDERS.get(provider)
+                if meta:
+                    await _notify_integration_error(db, integ, meta, detail)
+        await db.flush()
+        log.info("integration_test", provider=provider, tenant_id=str(tenant_id), ok=ok)
+        return {"ok": ok, "status": integ.status, "detail": detail}
+
     fonte = await _fonte_credenciada_do_provider(db, tenant_id, provider)
     if fonte is None:
         return {"ok": True, "status": integ.status,
                 "detail": "teste automático não disponível para este provedor"}
 
-    era_erro = integ.status == "ERRO"
     try:
         ok, detail = await fonte.testar()
     except Exception as exc:

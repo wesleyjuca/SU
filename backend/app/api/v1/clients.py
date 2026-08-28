@@ -1,5 +1,5 @@
 """Endpoints CRUD de clientes / CRM."""
-from fastapi import APIRouter, Depends, Query, Response, HTTPException
+from fastapi import APIRouter, Depends, Query, Response, HTTPException, File, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, or_, func, delete
 from sqlalchemy.exc import IntegrityError
@@ -183,6 +183,115 @@ async def create_client(
     db.add(client)
     await db.flush()
     return _to_response(client)
+
+
+_IMPORT_MAX_LINHAS = 1000
+
+
+@router.post("/importar-csv")
+async def importar_clientes_csv(
+    file: UploadFile = File(...),
+    current_user: User = Depends(require_role("ADMIN", "SOCIO", "GESTOR")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Fase 245 (achado do diagnóstico de cadastros) — nenhuma tela de
+    cadastro tinha importação em lote (CSV/planilha); cliente é o
+    candidato mais comum de onboarding em massa (migração de outro
+    sistema). CSV com cabeçalho obrigatório na 1ª linha:
+    `nome_completo,tipo,cpf_cnpj,email,telefone,origem` (só
+    `nome_completo` é obrigatório por linha; `tipo` PF/PJ, default PF;
+    `cpf_cnpj` detecta CPF (11 dígitos) x CNPJ (14) pela quantidade de
+    dígitos). Deliberadamente NÃO geocodifica endereço nem chama SERPRO
+    por linha (custaria N chamadas de API externa numa importação de
+    centenas de linhas) — isso continua disponível editando cada cliente
+    depois, como já funciona hoje. Cada linha é reportada individualmente
+    (criado/duplicado/erro) — nunca falha a importação inteira por causa
+    de 1 linha ruim."""
+    import csv
+    import io
+
+    if not file.filename or not file.filename.lower().endswith(".csv"):
+        raise HTTPException(status_code=422, detail="Envie um arquivo .csv.")
+
+    bruto = await file.read()
+    try:
+        texto = bruto.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        try:
+            texto = bruto.decode("latin-1")
+        except Exception:
+            raise HTTPException(status_code=422, detail="Não foi possível ler o arquivo — salve como CSV UTF-8.")
+
+    reader = csv.DictReader(io.StringIO(texto))
+    colunas = {(c or "").strip().lower(): c for c in (reader.fieldnames or [])}
+    if "nome_completo" not in colunas:
+        raise HTTPException(status_code=422, detail="CSV precisa de uma coluna 'nome_completo' no cabeçalho.")
+
+    linhas = list(reader)
+    if len(linhas) > _IMPORT_MAX_LINHAS:
+        raise HTTPException(status_code=422, detail=f"Máximo de {_IMPORT_MAX_LINHAS} linhas por importação — divida o arquivo.")
+
+    # Pré-carrega documentos já cadastrados no tenant (decifra 1x cada, não
+    # 1x por linha do CSV — mesma lógica de _documento_ja_cadastrado, mas
+    # em lote pra não virar O(linhas × clientes) decifrando repetido).
+    existentes_rows = (await db.execute(
+        select(Client.nome_completo, Client.cpf, Client.cnpj).where(Client.tenant_id == current_user.tenant_id)
+    )).all()
+    docs_vistos: dict[str, str] = {}
+    for nome_existente, cpf_enc, cnpj_enc in existentes_rows:
+        for enc in (cpf_enc, cnpj_enc):
+            dec = re.sub(r"\D", "", decrypt_or_raw(enc) or "") if enc else ""
+            if dec:
+                docs_vistos[dec] = nome_existente
+
+    resultados = []
+    criados = 0
+    for i, linha in enumerate(linhas, start=2):  # linha 1 é o cabeçalho
+        def _col(nome: str) -> str:
+            chave = colunas.get(nome)
+            return (linha.get(chave) or "").strip() if chave else ""
+
+        nome = _col("nome_completo")
+        if not nome:
+            resultados.append({"linha": i, "status": "erro", "detalhe": "nome_completo vazio"})
+            continue
+
+        doc = re.sub(r"\D", "", _col("cpf_cnpj"))
+        if doc and doc in docs_vistos:
+            resultados.append({"linha": i, "nome": nome, "status": "duplicado", "detalhe": f"CPF/CNPJ já usado por \"{docs_vistos[doc]}\""})
+            continue
+
+        tipo = _col("tipo").upper()
+        if tipo not in ("PF", "PJ"):
+            tipo = "PJ" if len(doc) == 14 else "PF"
+
+        client = Client(
+            tenant_id=current_user.tenant_id,
+            responsavel_id=current_user.id,
+            tipo=tipo,
+            nome_completo=nome,
+            email=_col("email") or None,
+            telefone=_col("telefone") or None,
+            origem=_col("origem") or None,
+            status="PROSPECTO",
+        )
+        if doc:
+            campo = "cnpj" if (tipo == "PJ" or len(doc) == 14) else "cpf"
+            setattr(client, campo, encrypt(doc))
+            docs_vistos[doc] = nome  # dedupe também DENTRO do próprio arquivo
+        db.add(client)
+        criados += 1
+        resultados.append({"linha": i, "nome": nome, "status": "criado"})
+
+    await db.flush()
+    log.info("clientes_importados_csv", tenant_id=str(current_user.tenant_id), total=len(linhas), criados=criados)
+    return {
+        "total_linhas": len(linhas),
+        "criados": criados,
+        "duplicados": sum(1 for r in resultados if r["status"] == "duplicado"),
+        "erros": sum(1 for r in resultados if r["status"] == "erro"),
+        "detalhes": resultados,
+    }
 
 
 @router.get("/match")

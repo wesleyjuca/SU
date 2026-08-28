@@ -63,6 +63,10 @@ export default function NovoProcessoPage() {
   const [colegas, setColegas] = useState<{ id: string; full_name: string; oab: string | null }[]>([]);
   const [responsavelId, setResponsavelId] = useState("");
   const [equipe, setEquipe] = useState<string[]>([]);
+  // Fase 242 — vincular o processo a um cliente já no cadastro logo na
+  // criação (antes só dava pra vincular depois, via Parte).
+  const [clientes, setClientes] = useState<{ id: string; nome_completo: string }[]>([]);
+  const [clientId, setClientId] = useState("");
 
   useEffect(() => {
     const token = localStorage.getItem("afj_access_token");
@@ -70,6 +74,10 @@ export default function NovoProcessoPage() {
       .then((r) => (r.ok ? r.json() : []))
       .then(setColegas)
       .catch(() => setColegas([]));
+    fetch("/api/v1/clients?limit=200", { headers: { Authorization: `Bearer ${token}` } })
+      .then((r) => (r.ok ? r.json() : []))
+      .then((d) => setClientes(Array.isArray(d) ? d : d.items ?? []))
+      .catch(() => setClientes([]));
   }, []);
 
   const {
@@ -92,6 +100,7 @@ export default function NovoProcessoPage() {
           ...data,
           vara,
           monitoring_active: monitoringActive,
+          ...(clientId ? { client_id: clientId } : {}),
           ...(responsavelId ? { responsavel_id: responsavelId } : {}),
           ...(equipe.length ? { equipe: equipe.filter((id) => id !== responsavelId) } : {}),
         }),
@@ -190,6 +199,20 @@ export default function NovoProcessoPage() {
                 <p className="text-xs text-red-500 mt-1">{errors.valor_causa.message}</p>
               )}
             </div>
+          </div>
+
+          <div>
+            <label className="text-xs text-afj-black/60 block mb-1">Cliente</label>
+            <select
+              value={clientId}
+              onChange={(e) => setClientId(e.target.value)}
+              className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold bg-white"
+            >
+              <option value="">— nenhum (vincular depois, via Parte) —</option>
+              {clientes.map((c) => (
+                <option key={c.id} value={c.id}>{c.nome_completo}</option>
+              ))}
+            </select>
           </div>
 
           <div>

@@ -75,6 +75,7 @@ export default function DocumentosPage() {
   const [filtroTipo, setFiltroTipo] = useState("");
   const [filtroStatus, setFiltroStatus] = useState("");
   const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<{ done: number; total: number } | null>(null);
   const [ocrRunning, setOcrRunning] = useState<string | null>(null);
   const [googleConnected, setGoogleConnected] = useState(false);
   const [savingDrive, setSavingDrive] = useState<string | null>(null);
@@ -283,8 +284,7 @@ export default function DocumentosPage() {
     !search || d.titulo.toLowerCase().includes(search.toLowerCase())
   );
 
-  async function uploadDoc(file: File) {
-    setUploading(true);
+  async function uploadDoc(file: File): Promise<boolean> {
     try {
       const token = localStorage.getItem("afj_access_token");
       const formData = new FormData();
@@ -296,17 +296,33 @@ export default function DocumentosPage() {
         headers: { Authorization: `Bearer ${token}` },
         body: formData,
       });
-      if (res.ok) {
-        toast.success(`"${file.name}" enviado com sucesso.`);
-        fetchDocs();
-      } else {
-        const d = await res.json().catch(() => ({}));
-        toast.error(d.detail || "Erro ao enviar arquivo.");
-      }
+      if (res.ok) return true;
+      const d = await res.json().catch(() => ({}));
+      toast.error(`"${file.name}": ${d.detail || "erro ao enviar."}`);
+      return false;
     } catch {
-      toast.error("Erro de conexão ao enviar arquivo.");
+      toast.error(`"${file.name}": erro de conexão.`);
+      return false;
+    }
+  }
+
+  // Fase 242 — upload múltiplo: envia um arquivo por vez (mesmo endpoint de
+  // sempre, sem mudança de backend), com progresso "x de N enviados".
+  async function uploadDocs(files: FileList) {
+    setUploading(true);
+    const total = files.length;
+    let ok = 0;
+    try {
+      for (let i = 0; i < total; i++) {
+        setUploadProgress({ done: i, total });
+        if (await uploadDoc(files[i])) ok++;
+      }
+      setUploadProgress({ done: total, total });
+      if (ok > 0) toast.success(total === 1 ? "Arquivo enviado com sucesso." : `${ok} de ${total} arquivos enviados.`);
+      fetchDocs();
     } finally {
       setUploading(false);
+      setUploadProgress(null);
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
   }
@@ -408,9 +424,10 @@ export default function DocumentosPage() {
           <input
             ref={fileInputRef}
             type="file"
+            multiple
             accept=".pdf,.png,.jpg,.jpeg,.doc,.docx"
             className="hidden"
-            onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadDoc(f); }}
+            onChange={(e) => { const files = e.target.files; if (files && files.length) uploadDocs(files); }}
           />
           <button
             onClick={() => fileInputRef.current?.click()}
@@ -418,7 +435,7 @@ export default function DocumentosPage() {
             className="btn-afj-outline rounded-sm flex items-center gap-2 disabled:opacity-50"
           >
             {uploading ? <X size={14} className="animate-spin" /> : <Upload size={14} />}
-            {uploading ? "Enviando..." : "Upload"}
+            {uploading && uploadProgress ? `Enviando ${uploadProgress.done + 1} de ${uploadProgress.total}...` : "Upload"}
           </button>
           <button
             onClick={() => { setShowNew(true); setNewForm(emptyForm); }}

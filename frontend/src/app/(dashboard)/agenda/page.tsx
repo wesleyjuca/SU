@@ -4,6 +4,7 @@ import { CalendarClock, Calendar, AlertTriangle, CheckCircle, Clock, Loader2, Re
 import Link from "next/link";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
+import { PrazoCalculator } from "@/components/prazos/PrazoCalculator";
 
 interface AgendaItem {
   id: string;
@@ -70,10 +71,12 @@ export default function AgendaPage() {
   // Novo prazo (com calculadora)
   const [modal, setModal] = useState(false);
   const [processos, setProcessos] = useState<{ id: string; numero_cnj: string | null; tribunal: string }[]>([]);
-  const [form, setForm] = useState({ process_id: "", descricao: "", tipo: "", data_prazo: "" });
-  const [calc, setCalc] = useState({ data_intimacao: "", dias: "", dias_uteis: true });
-  const [calcResult, setCalcResult] = useState<{ data_prazo: string; feriados_no_periodo: number; dias_uteis: boolean } | null>(null);
-  const [calculando, setCalculando] = useState(false);
+  // Fase 243 — data_fatal ganhou tratamento visual na Agenda (Fase 240),
+  // mas o formulário de "Novo prazo" nunca ofereceu esse campo — só dava
+  // pra sugerir prazo fatal criando/editando pela tela do processo. Fecha
+  // a divergência entre as 2 cópias da calculadora (agora unificada,
+  // ver PrazoCalculator).
+  const [form, setForm] = useState({ process_id: "", descricao: "", tipo: "", data_prazo: "", data_fatal: "" });
   const [salvando, setSalvando] = useState(false);
 
   useEffect(() => { fetchAgenda(); }, [dias, somenteMeus]);
@@ -89,21 +92,6 @@ export default function AgendaPage() {
     }
   }
 
-  async function calcularPrazo() {
-    if (!calc.data_intimacao || !calc.dias || Number(calc.dias) < 1) { toast.error("Informe a data da intimação e o nº de dias."); return; }
-    setCalculando(true);
-    try {
-      const token = localStorage.getItem("afj_access_token");
-      const res = await fetch("/api/v1/processes/deadlines/calcular", {
-        method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ data_intimacao: calc.data_intimacao, dias: Number(calc.dias), dias_uteis: calc.dias_uteis }),
-      });
-      if (res.ok) { const r = await res.json(); setCalcResult(r); setForm((f) => ({ ...f, data_prazo: r.data_prazo })); }
-      else toast.error("Não foi possível calcular o prazo.");
-    } catch { toast.error("Falha de conexão."); }
-    finally { setCalculando(false); }
-  }
-
   async function salvarPrazo(e: React.FormEvent) {
     e.preventDefault();
     if (!form.process_id || !form.descricao.trim() || !form.data_prazo) { toast.error("Selecione o processo, a descrição e a data do prazo."); return; }
@@ -112,13 +100,12 @@ export default function AgendaPage() {
       const token = localStorage.getItem("afj_access_token");
       const res = await fetch(`/api/v1/processes/${form.process_id}/deadlines`, {
         method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ descricao: form.descricao, tipo: form.tipo || undefined, data_prazo: form.data_prazo }),
+        body: JSON.stringify({ descricao: form.descricao, tipo: form.tipo || undefined, data_prazo: form.data_prazo, data_fatal: form.data_fatal || undefined }),
       });
       if (res.ok) {
         toast.success("Prazo lançado.");
         setModal(false);
-        setForm({ process_id: "", descricao: "", tipo: "", data_prazo: "" });
-        setCalc({ data_intimacao: "", dias: "", dias_uteis: true }); setCalcResult(null);
+        setForm({ process_id: "", descricao: "", tipo: "", data_prazo: "", data_fatal: "" });
         fetchAgenda();
       } else toast.error("Erro ao salvar o prazo.");
     } catch { toast.error("Falha de conexão."); }
@@ -378,22 +365,9 @@ export default function AgendaPage() {
               </div>
 
               {/* Calculadora */}
-              <div className="border border-afj-gold/30 bg-afj-gold/5 rounded-sm p-3 space-y-2">
-                <p className="text-xs font-semibold text-afj-black/70 flex items-center gap-1.5"><Calendar size={13} className="text-afj-gold" /> Calcular por intimação</p>
-                <div className="grid grid-cols-3 gap-2">
-                  <div><label className="text-[11px] text-afj-black/50 block mb-0.5">Intimação</label><input type="date" value={calc.data_intimacao} onChange={(e) => setCalc({ ...calc, data_intimacao: e.target.value })} className="w-full border border-afj-cream-dark rounded-sm px-2 py-1.5 text-sm bg-white" /></div>
-                  <div><label className="text-[11px] text-afj-black/50 block mb-0.5">Dias</label><input type="number" min={1} value={calc.dias} onChange={(e) => setCalc({ ...calc, dias: e.target.value })} placeholder="15" className="w-full border border-afj-cream-dark rounded-sm px-2 py-1.5 text-sm bg-white" /></div>
-                  <div className="flex items-end"><label className="flex items-center gap-1.5 text-[11px] text-afj-black/60 pb-1.5 cursor-pointer"><input type="checkbox" checked={calc.dias_uteis} onChange={(e) => setCalc({ ...calc, dias_uteis: e.target.checked })} className="accent-afj-gold" /> Dias úteis</label></div>
-                </div>
-                <button type="button" onClick={calcularPrazo} disabled={calculando} className="btn-afj-outline text-xs py-1.5 px-3 rounded-sm w-full disabled:opacity-50">
-                  {calculando ? "Calculando..." : "Calcular data do prazo"}
-                </button>
-                {calcResult && (
-                  <p className="text-xs text-afj-black/70 bg-white border border-afj-gold/30 rounded-sm px-2 py-1.5">
-                    Vence em <strong>{new Date(calcResult.data_prazo + "T00:00:00").toLocaleDateString("pt-BR")}</strong> ({calc.dias} {calcResult.dias_uteis ? "dias úteis" : "dias corridos"}, considerando feriados/recesso).
-                  </p>
-                )}
-              </div>
+              <PrazoCalculator
+                onCalculado={(dataPrazo) => setForm((f) => ({ ...f, data_prazo: dataPrazo }))}
+              />
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
@@ -406,6 +380,10 @@ export default function AgendaPage() {
                 <div>
                   <label className="text-xs text-afj-black/60">Data do prazo *</label>
                   <input required type="date" value={form.data_prazo} onChange={(e) => setForm({ ...form, data_prazo: e.target.value })} className="w-full mt-1 border border-afj-cream-dark rounded-sm px-3 py-2 text-sm" />
+                </div>
+                <div className="col-span-2">
+                  <label className="text-xs text-afj-black/60">Data fatal (opcional)</label>
+                  <input type="date" value={form.data_fatal} onChange={(e) => setForm({ ...form, data_fatal: e.target.value })} className="w-full mt-1 border border-afj-cream-dark rounded-sm px-3 py-2 text-sm" />
                 </div>
               </div>
 

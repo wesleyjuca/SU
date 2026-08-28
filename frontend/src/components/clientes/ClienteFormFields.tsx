@@ -1,5 +1,6 @@
 "use client";
 import { Check } from "lucide-react";
+import { maskCpf, maskCnpj, maskTelefone, maskCep } from "@/lib/masks";
 
 export interface Endereco {
   cep?: string;
@@ -90,11 +91,11 @@ export function ClienteFormFields({
       </div>
       <div>
         <label className="text-xs text-afj-black/60 block mb-1">Telefone</label>
-        <input type="tel" value={values.telefone} onChange={(e) => onChange({ telefone: e.target.value })} className={inputCls} />
+        <input type="tel" value={values.telefone} onChange={(e) => onChange({ telefone: maskTelefone(e.target.value) })} className={inputCls} />
       </div>
       <div>
         <label className="text-xs text-afj-black/60 block mb-1">WhatsApp</label>
-        <input type="tel" value={values.whatsapp} onChange={(e) => onChange({ whatsapp: e.target.value })} className={inputCls} />
+        <input type="tel" value={values.whatsapp} onChange={(e) => onChange({ whatsapp: maskTelefone(e.target.value) })} className={inputCls} />
       </div>
       <div>
         <label className="text-xs text-afj-black/60 block mb-1">Origem</label>
@@ -110,7 +111,7 @@ export function ClienteFormFields({
           <div>
             <label className="text-xs text-afj-black/60 block mb-1">CNPJ</label>
             <input
-              type="text" value={values.cnpj} onChange={(e) => onChange({ cnpj: e.target.value })}
+              type="text" value={values.cnpj} onChange={(e) => onChange({ cnpj: maskCnpj(e.target.value) })}
               onBlur={(e) => onDocumentoBlur("cnpj", e.target.value)}
               placeholder="00.000.000/0000-00" className={inputCls}
             />
@@ -121,7 +122,7 @@ export function ClienteFormFields({
         <div>
           <label className="text-xs text-afj-black/60 block mb-1">CPF</label>
           <input
-            type="text" value={values.cpf} onChange={(e) => onChange({ cpf: e.target.value })}
+            type="text" value={values.cpf} onChange={(e) => onChange({ cpf: maskCpf(e.target.value) })}
             onBlur={(e) => onDocumentoBlur("cpf", e.target.value)}
             placeholder="000.000.000-00" className={inputCls}
           />
@@ -133,7 +134,7 @@ export function ClienteFormFields({
         <label className="text-xs text-afj-black/60 block mb-2">Endereço</label>
         <div className="grid grid-cols-2 gap-2">
           <input
-            type="text" value={endereco.cep ?? ""} onChange={(e) => onEnderecoChange({ ...endereco, cep: e.target.value })}
+            type="text" value={endereco.cep ?? ""} onChange={(e) => onEnderecoChange({ ...endereco, cep: maskCep(e.target.value) })}
             onBlur={(e) => onCepBlur(e.target.value)}
             placeholder="CEP" className={inputCls}
           />

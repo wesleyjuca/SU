@@ -63,7 +63,9 @@ export default function ContratosPage() {
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [editStatus, setEditStatus] = useState("RASCUNHO");
   const [signingContrato, setSigningContrato] = useState<Contrato | null>(null);
-  const [signForm, setSignForm] = useState({ email: "", nome: "" });
+  // Fase 244 (achado do diagnóstico de cadastros) — antes só 1 signatário
+  // por envio; agora uma lista, sempre com pelo menos 1 linha.
+  const [signatarios, setSignatarios] = useState<{ email: string; nome: string }[]>([{ email: "", nome: "" }]);
   const [sending, setSending] = useState(false);
 
   useEffect(() => {
@@ -92,13 +94,24 @@ export default function ContratosPage() {
 
   function abrirEnvioAssinatura(c: Contrato) {
     const cli = clientes.find((x) => x.id === c.client_id);
-    setSignForm({ email: "", nome: cli?.nome_completo || "" });
+    setSignatarios([{ email: "", nome: cli?.nome_completo || "" }]);
     setSigningContrato(c);
   }
 
+  function atualizarSignatario(i: number, campo: "email" | "nome", valor: string) {
+    setSignatarios((prev) => prev.map((s, idx) => (idx === i ? { ...s, [campo]: valor } : s)));
+  }
+  function adicionarSignatario() {
+    setSignatarios((prev) => [...prev, { email: "", nome: "" }]);
+  }
+  function removerSignatario(i: number) {
+    setSignatarios((prev) => prev.filter((_, idx) => idx !== i));
+  }
+
   async function enviarAssinatura() {
-    if (!signingContrato || !signForm.email.trim() || !signForm.nome.trim()) {
-      toast.error("Informe nome e e-mail do signatário."); return;
+    const validos = signatarios.map((s) => ({ email: s.email.trim(), nome: s.nome.trim() }));
+    if (!signingContrato || validos.some((s) => !s.email || !s.nome)) {
+      toast.error("Informe nome e e-mail de todos os signatários."); return;
     }
     setSending(true);
     try {
@@ -106,7 +119,7 @@ export default function ContratosPage() {
       const res = await fetch(`/api/v1/documents/contracts/${signingContrato.id}/enviar-assinatura`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ email: signForm.email.trim(), nome: signForm.nome.trim() }),
+        body: JSON.stringify({ signatarios: validos }),
       });
       const d = await res.json().catch(() => ({}));
       if (res.ok) {
@@ -559,20 +572,34 @@ export default function ContratosPage() {
               <button onClick={() => setSigningContrato(null)} disabled={sending} className="text-afj-black/40 hover:text-afj-black"><X size={16} /></button>
             </div>
             <p className="text-xs text-afj-black/50 mb-4">
-              “{signingContrato.titulo}” será enviado via <strong>Clicksign</strong> — o signatário recebe um e-mail para assinar;
-              quando concluir, o contrato muda para ASSINADO automaticamente.
+              “{signingContrato.titulo}” será enviado via <strong>Clicksign</strong> — cada signatário recebe um e-mail para assinar;
+              quando todos concluírem, o contrato muda para ASSINADO automaticamente.
             </p>
-            <div className="space-y-3">
-              <div>
-                <label className="block text-xs font-medium text-afj-black/70 mb-1">Nome do signatário *</label>
-                <input value={signForm.nome} onChange={(e) => setSignForm({ ...signForm, nome: e.target.value })}
-                  className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold" />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-afj-black/70 mb-1">E-mail do signatário *</label>
-                <input type="email" value={signForm.email} onChange={(e) => setSignForm({ ...signForm, email: e.target.value })}
-                  className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold" />
-              </div>
+            <div className="space-y-3 max-h-[45vh] overflow-y-auto">
+              {signatarios.map((s, i) => (
+                <div key={i} className="border border-afj-cream-dark rounded-sm p-3 space-y-2 relative">
+                  {signatarios.length > 1 && (
+                    <button onClick={() => removerSignatario(i)} disabled={sending}
+                      className="absolute top-2 right-2 text-afj-black/30 hover:text-red-500" aria-label="Remover signatário">
+                      <Trash2 size={13} />
+                    </button>
+                  )}
+                  <div>
+                    <label className="block text-xs font-medium text-afj-black/70 mb-1">Nome do signatário {i + 1} *</label>
+                    <input value={s.nome} onChange={(e) => atualizarSignatario(i, "nome", e.target.value)}
+                      className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-afj-black/70 mb-1">E-mail do signatário {i + 1} *</label>
+                    <input type="email" value={s.email} onChange={(e) => atualizarSignatario(i, "email", e.target.value)}
+                      className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold" />
+                  </div>
+                </div>
+              ))}
+              <button onClick={adicionarSignatario} disabled={sending}
+                className="text-xs text-afj-gold hover:underline flex items-center gap-1">
+                <Plus size={12} /> Adicionar outro signatário
+              </button>
             </div>
             <div className="flex justify-end gap-2 mt-4">
               <button onClick={() => setSigningContrato(null)} disabled={sending} className="btn-afj-outline text-xs py-1.5 px-3 rounded-sm">Cancelar</button>

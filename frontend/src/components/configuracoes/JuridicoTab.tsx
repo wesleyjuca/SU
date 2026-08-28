@@ -30,8 +30,21 @@ export function JuridicoTab() {
   const [novaOab, setNovaOab] = useState({ numero: "", uf: "SP", nome: "" });
   const [confidencial, setConfidencial] = useState(false);
   const [savingConf, setSavingConf] = useState(false);
+  // Fase 245 (achado do diagnóstico de cadastros) — os feriados nacionais
+  // (fixos + móveis + recesso) já eram usados automaticamente no cálculo de
+  // prazo, mas nunca apareciam em lugar nenhum da UI — só somente leitura,
+  // são fixos por lei federal (o que É configurável é a lista de locais
+  // logo abaixo).
+  const [feriadosNacionais, setFeriadosNacionais] = useState<{ ano: number; feriados: string[]; recesso_forense: { inicio: string; fim: string } } | null>(null);
 
-  useEffect(() => { fetchFeriados(); fetchOabs(); fetchConfidencial(); }, []);
+  useEffect(() => { fetchFeriados(); fetchOabs(); fetchConfidencial(); fetchFeriadosNacionais(); }, []);
+
+  async function fetchFeriadosNacionais() {
+    try {
+      const res = await fetch("/api/v1/tenant/feriados-nacionais", { headers: authH() });
+      if (res.ok) setFeriadosNacionais(await res.json());
+    } catch { /* opcional */ }
+  }
 
   async function fetchConfidencial() {
     try {
@@ -66,6 +79,15 @@ export function JuridicoTab() {
   function adicionarOab() {
     const numero = novaOab.numero.replace(/\D/g, "");
     if (!numero) { toast.error("Informe o número da OAB."); return; }
+    // Fase 242 — OAB não tem dígito verificador público/padronizado como
+    // CPF/CNPJ (confirmado: não existe algoritmo de DV documentado pela
+    // OAB) — esta é só uma checagem de sanidade de formato (faixa de
+    // dígitos plausível pros números emitidos hoje), nunca uma validação
+    // de dígito verificador real. Não finge uma garantia que não existe.
+    if (numero.length < 3 || numero.length > 7) {
+      toast.error("Número de OAB fora da faixa plausível (3 a 7 dígitos). Confira antes de salvar.");
+      return;
+    }
     if (oabs.some((o) => o.numero === numero && o.uf === novaOab.uf)) { toast.error("OAB já cadastrada."); return; }
     setOabs([...oabs, { numero, uf: novaOab.uf, nome: novaOab.nome.trim() || null }]);
     setNovaOab({ numero: "", uf: novaOab.uf, nome: "" });
@@ -179,6 +201,25 @@ export function JuridicoTab() {
         <button onClick={salvar} disabled={saving} className="btn-afj-primary rounded-sm py-2 px-4 text-sm mt-4 flex items-center gap-2 disabled:opacity-50">
           {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Salvar feriados
         </button>
+
+        {feriadosNacionais && (
+          <div className="mt-5 pt-4 border-t border-afj-cream-dark">
+            <p className="text-xs font-semibold text-afj-black/70 mb-1">
+              Feriados nacionais já considerados automaticamente em {feriadosNacionais.ano} (somente leitura — fixos por lei federal)
+            </p>
+            <div className="flex flex-wrap gap-1.5 mb-2">
+              {feriadosNacionais.feriados.map((d) => (
+                <span key={d} className="text-[11px] px-2 py-0.5 rounded-sm bg-afj-cream text-afj-black/60 border border-afj-cream-dark">
+                  {new Date(d + "T00:00:00").toLocaleDateString("pt-BR")}
+                </span>
+              ))}
+            </div>
+            <p className="text-[11px] text-afj-black/40">
+              + recesso forense de {new Date(feriadosNacionais.recesso_forense.inicio + "T00:00:00").toLocaleDateString("pt-BR")} a{" "}
+              {new Date(feriadosNacionais.recesso_forense.fim + "T00:00:00").toLocaleDateString("pt-BR")} (CPC art. 220).
+            </p>
+          </div>
+        )}
       </div>
 
       {/* OABs monitoradas */}
@@ -197,6 +238,7 @@ export function JuridicoTab() {
             <label className="text-[11px] text-afj-black/50 block mb-0.5">Número</label>
             <input value={novaOab.numero} onChange={(e) => setNovaOab({ ...novaOab, numero: e.target.value })}
               placeholder="123456" className="w-28 border border-afj-cream-dark rounded-sm px-2 py-1.5 text-sm" />
+            <p className="text-[10px] text-afj-black/35 mt-0.5">Só checagem de formato — a OAB não tem dígito verificador público.</p>
           </div>
           <div>
             <label className="text-[11px] text-afj-black/50 block mb-0.5">UF</label>

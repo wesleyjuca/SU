@@ -71,8 +71,9 @@ const MODULOS_HUB: Record<string, string> = {
 
 // Provedores com teste de credencial automático (fontes credenciadas +
 // WhatsApp, Fase 168 — antes o botão nem aparecia pra jusbrasil, apesar do
-// backend já testar essa fonte desde a Fase 88, nem pra WhatsApp).
-const TESTAVEIS = new Set(["pdpj", "escavador", "judit", "jusbrasil", "whatsapp"]);
+// backend já testar essa fonte desde a Fase 88, nem pra WhatsApp; stripe/
+// mercadopago entraram na Fase 242, sonda GET read-only contra o provedor).
+const TESTAVEIS = new Set(["pdpj", "escavador", "judit", "jusbrasil", "whatsapp", "stripe", "mercadopago"]);
 
 function HubCards() {
   const toast = useToast();

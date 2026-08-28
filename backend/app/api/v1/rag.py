@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
 from app.db.base import get_db
-from app.dependencies import require_role
+from app.dependencies import get_current_user, require_role
 from app.models.user import User
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -86,6 +86,15 @@ async def rag_search(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"Serviço RAG indisponível: {str(exc)}",
         )
+
+
+@router.get("/collections")
+async def list_valid_collections(current_user: User = Depends(get_current_user)):
+    """Fase 242 — fonte única das coleções RAG válidas (mesma lista que
+    VALID_COLLECTIONS já valida no ingest/custom_agents), pro frontend parar
+    de manter cópias hardcoded que podem divergir (mesma classe de achado já
+    corrigido pra Área do Direito na Fase 240)."""
+    return {"collections": sorted(VALID_COLLECTIONS)}
 
 
 @router.get("/coverage")

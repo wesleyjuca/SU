@@ -6,6 +6,7 @@ import { applyTheme } from "@/lib/theme";
 import { useThemeStore } from "@/store";
 import { useToast } from "@/components/ui/Toast";
 import { JuridicoTab } from "./JuridicoTab";
+import { maskCep } from "@/lib/masks";
 
 const TABS = [
   { id: "escritorio", label: "Escritório", icon: Building2 },
@@ -647,7 +648,7 @@ export function EscritorioZone() {
                 <div className="max-w-[200px]">
                   <label className="block text-[10px] font-semibold text-afj-black/55 mb-1.5 uppercase tracking-widest">CEP</label>
                   <input type="text" value={endereco.cep}
-                    onChange={(e) => setEndereco({ ...endereco, cep: e.target.value })}
+                    onChange={(e) => setEndereco({ ...endereco, cep: maskCep(e.target.value) })}
                     onBlur={(e) => autofillCepEscritorio(e.target.value)}
                     placeholder="00000-000"
                     className="w-full bg-afj-cream border border-afj-cream-dark rounded-sm px-4 py-2.5 text-sm focus:outline-none focus:border-afj-gold focus:bg-white transition-colors" />

@@ -3407,6 +3407,326 @@ Histórico:
     `py_compile` limpos no backend.
   - Não implementados nesta fase: os 21 achados restantes — seguem pras
     Fases 242-245.
+- **Fase 242** (batch 3 dos 31 achados do diagnóstico de cadastros —
+  vínculos e uploads faltando). Antes desta fase, o usuário pediu uma
+  auditoria dos conectores MCP conectados à conta em busca de
+  oportunidades de melhoria pro sistema — investigação (`ListConnectors`
+  + testes reais de Vercel/Sentry/Lawve AI) concluiu que nenhum
+  conector tinha uma integração genuína e executável disponível além do
+  Legal Data Hunter (já integrado nos 2 skills de jurisprudência):
+  Vercel sem acesso ao projeto real do AFJ nesta sessão (mesmo bloqueio
+  já documentado nas Fases 199/230), Sentry/Lawve AI/Canva/Descript sem
+  autorização completada (fora do alcance de sessão não-interativa), e
+  os demais (Gmail/Drive/Calendar/Microsoft 365/etc.) são contas
+  pessoais da sessão, não credenciais do AFJ — usá-las regrediria a
+  arquitetura já correta (OAuth por tenant). Achado técnico relevante:
+  Legal Data Hunter é um servidor MCP exposto só a sessões do Claude
+  Code, não uma API REST com credencial própria que o backend Python em
+  produção (Railway) possa chamar como já faz com CNJ DataJud/SERPRO/
+  BrasilAPI — sem isso, integrá-lo no `jurisprudence_agent` de produção
+  criaria código morto. Usuário optou por seguir direto pra Fase 242.
+  - **242.1 — `FinancialEntry` sem vínculo de cliente/processo na UI**:
+    o model já tinha `client_id`/`process_id` (usados em relatórios como
+    `honorarios-historico`, Fase 215), só o formulário
+    (`financeiro/page.tsx`) não oferecia os campos. Modal "Novo
+    Lançamento" ganha 2 selects (Cliente/Processo, o 2º filtrado pelo
+    cliente escolhido via `GET /processes?client_id=`) — só na criação,
+    já que `PUT /financial/{id}` nunca aceitou esses 2 campos (decisão
+    de escopo: não expandido, edição de vínculo não fazia parte do
+    pedido). **Achado colateral corrigido**: `FinanceiroSchema`
+    (`frontend/src/lib/schemas.ts`) tinha um campo `processo_id` que
+    nunca batia com o `process_id` que o backend sempre esperou —
+    inofensivo até agora porque nunca era enviado, mas teria quebrado o
+    vínculo silenciosamente se alguém tentasse usá-lo antes deste fix.
+  - **242.2 — Sem seleção de cliente na criação de processo**:
+    `POST /processes` já aceitava `client_id` desde sempre
+    (`ProcessCreate.client_id`), só a tela `processos/novo/page.tsx` não
+    oferecia — só dava pra vincular depois, via Parte. Novo select
+    "Cliente" (mesmo padrão de fetch de `GET /clients?limit=200` já
+    usado em `faturas/page.tsx`/`clientes/funil/page.tsx`).
+  - **242.3 — Upload de documento single-file**: `documentos/page.tsx`
+    ganha `multiple` no input e `uploadDocs()` (upload sequencial, um
+    POST por arquivo no mesmo endpoint de sempre — sem mudança de
+    backend), com progresso "Enviando X de N..." no próprio botão e
+    toast final resumindo quantos de quantos tiveram sucesso.
+  - **242.4 — Bases de conhecimento do agente de IA hardcoded 2×**:
+    `ProposeCustomAgentModal.tsx` e `BrainCustomAgents.tsx` mantinham
+    cópias manuais de `VALID_COLLECTIONS` (`backend/app/api/v1/rag.py`)
+    — mesma classe de risco já corrigida pra Área do Direito na Fase
+    240. Novo `GET /rag/collections` (`get_current_user`, lista não é
+    sensível) devolve a lista real; novo
+    `frontend/src/lib/ragCollections.ts` centraliza só os RÓTULOS de
+    exibição (nunca o conjunto de valores, que sempre vem do backend).
+    `BrainCustomAgents.tsx` também trocou o campo de texto livre
+    separado por vírgula (editar um agente já aprovado) pelo mesmo
+    padrão de botões-toggle do modal de propor — evita o mesmo tipo de
+    divergência silenciosa de nome de collection na edição.
+  - **242.5 — OAB sem validação de formato**: `JuridicoTab.tsx`
+    (OABs monitoradas do escritório) ganhou uma checagem de sanidade
+    (3-7 dígitos) antes de aceitar uma OAB nova — a OAB não tem
+    dígito verificador público/padronizado como CPF/CNPJ (confirmado:
+    não existe algoritmo de DV documentado pela entidade), então o
+    código e a UI deixam explícito que é só checagem de formato, nunca
+    fingindo uma garantia de dígito verificador que não existe.
+  - **242.6 — Stripe/Mercado Pago sem teste de credencial**:
+    `integracoes/page.tsx` tinha `TESTAVEIS` sem os 2 gateways de
+    pagamento, mesmo o botão "Testar" já existindo pra outras fontes.
+    `integration_hub.py::testar_conexao` ganhou um caminho novo
+    (`_testar_payment_gateway`) — sonda GET read-only autenticada
+    (Stripe `/v1/balance`, Mercado Pago `/users/me`, mesmo padrão
+    "401/403 = credencial ruim" já usado pras fontes credenciadas),
+    sem reaproveitar a abstração `FonteProcessual` (que é de
+    acompanhamento processual, não pagamento — não fazia sentido
+    encaixar ali). Verificado real via HTTP: sem credencial → 
+    `DESCONECTADA`; com uma chave forjada → o próprio egress deste
+    sandbox bloqueia a chamada a `api.stripe.com` (mesma restrição já
+    documentada desde a Fase 217/230/231 pra domínios externos) — o
+    código captura a exceção corretamente e marca `ERRO` sem crashar,
+    mas a distinção real "credencial inválida vs. sandbox sem egress"
+    só pode ser confirmada depois do deploy (Railway tem egress
+    irrestrito).
+  - Verificado via HTTP real contra Postgres real: `/rag/collections`
+    devolve as 7 collections certas; processo criado com `client_id` já
+    vinculado na criação; lançamento financeiro criado com
+    `client_id`/`process_id` persistidos; `GET /processes?client_id=`
+    filtra corretamente. Playwright real (Chromium do sandbox, `npm run
+    dev` com `API_URL` local): selects de Cliente/Processo presentes no
+    modal financeiro e em Processos/novo; upload real de 2 arquivos PDF
+    simultâneos confirma "2 de 2 arquivos enviados."; aviso "sem dígito
+    verificador" presente na tela de OABs; card Stripe com botão testar
+    visível em Integrações — zero console error atribuível a esta fase
+    (só o warning de key duplicada pré-existente em `/dashboard`, já
+    documentado em fases anteriores, não relacionado). `ruff check`/
+    `py_compile` limpos nos 2 arquivos backend tocados; `tsc --noEmit`
+    limpo; `eslint` nos 9 arquivos frontend tocados — só os mesmos 3
+    warnings pré-existentes de `exhaustive-deps`, confirmados via `git
+    stash` como idênticos antes desta fase.
+  - Não implementados nesta fase: os 15 achados restantes — seguem pras
+    Fases 243-245.
+- **Fase 243** (batch 4 dos 31 achados do diagnóstico de cadastros —
+  máscaras de input, calculadora de prazo unificada, senha temporária).
+  - **Máscaras de digitação** — `frontend/src/lib/masks.ts` (novo:
+    `maskCpf`/`maskCnpj`/`maskTelefone`/`maskCep`, puramente cosmético,
+    nunca valida dígito verificador — isso já existe no backend desde a
+    Fase 217/220/240) aplicado nos campos que só tinham placeholder
+    estático: `ClienteFormFields.tsx` (CPF/CNPJ/telefone/WhatsApp/CEP),
+    `EscritorioZone.tsx` (CEP do endereço do escritório),
+    `PersonalZone.tsx` (telefone/WhatsApp do próprio usuário), e o
+    modal "Novo Contato" do Cliente 360 (campos `type="tel"`).
+  - **Calculadora de prazo unificada** — novo
+    `frontend/src/components/prazos/PrazoCalculator.tsx` substitui as 2
+    cópias manuais (`processos/[id]/page.tsx` e `agenda/page.tsx`), que
+    tinham campos divergentes: a de Agenda não oferecia nenhum jeito de
+    sugerir `data_fatal` (só a do processo sugeria, desde a Fase 240),
+    então um prazo lançado direto pela Agenda nunca ganhava o destaque
+    visual de prazo fatal. `agenda/page.tsx` ganhou o campo "Data fatal
+    (opcional)" que faltava, fechando a divergência funcional, não só a
+    duplicação de código.
+  - **Senha temporária** — novo `User.must_change_password` (migração
+    idempotente em `events.py`), setado `True` nos 3 pontos que geram
+    senha temporária (`POST /users/invite`, `POST /users/{id}/reset-
+    password`, provisionamento de escritório em `tenants_admin.py`) e
+    zerado em `PATCH /auth/password` quando a troca é bem-sucedida.
+    `POST /auth/login` devolve o flag no objeto `user`; o login do
+    frontend redireciona direto pra `/configuracoes?zona=pessoal&aba=
+    seguranca` (em vez de `/dashboard`) quando `must_change_password`
+    é `true`, e a aba Segurança mostra um aviso persistente até a senha
+    ser trocada — não é enforcement de middleware (nenhuma rota fica
+    bloqueada), é um prompt visível no fluxo, como pedia o achado do
+    diagnóstico. Os 3 endpoints que geram senha temporária agora
+    tentam mandar por e-mail primeiro (mesmo padrão já existente no
+    convite de usuário — `EMAIL_ENABLED`, fail-soft) e só expõem a
+    senha em texto puro no JSON quando o e-mail não está configurado
+    (o caso deste sandbox) — antes, o reset de senha e o provisionamento
+    de escritório sempre expunham em texto puro, mesmo com e-mail
+    disponível. **Achado colateral descoberto e corrigido nesta mesma
+    fase**: `POST /users/invite` nunca tinha esse fallback — sem
+    `EMAIL_ENABLED` (like agora), o convite não expunha a senha em
+    lugar nenhum (nem e-mail, nem JSON) e o modal do frontend
+    (`admin/usuarios/page.tsx`) ficava preso na tela do formulário vazio
+    sem nenhuma confirmação de sucesso, porque `tempPwd` vinha sempre
+    `undefined`. Corrigido com o mesmo padrão de fallback dos outros 2
+    pontos + um estado `invitedByEmail` no frontend pra cobrir os 2
+    casos.
+  - Verificado via HTTP real contra Postgres real: fluxo completo
+    convite→reset→login (confirma `must_change_password: true`)→troca
+    de senha→relogin (confirma `must_change_password: false`);
+    provisionamento de escritório (SUPERADMIN real) também confirma o
+    flag `true` no primeiro login do ADMIN novo. Playwright real
+    (Chromium do sandbox, `npm run dev` com `API_URL` local): máscaras
+    aplicadas em tempo real (CPF "123.456.789-01", telefone "(85)
+    99999-8888", CEP "80030-901"); calculadora presente tanto em
+    Processos quanto em Agenda, com o campo "Data fatal" novo na
+    Agenda; login com senha temporária redireciona pra Segurança com o
+    aviso "Você está com uma senha temporária..." visível; modal de
+    convite mostra "Usuário criado!" corretamente nos 2 casos (e-mail
+    configurado vs. fallback). `ruff check`/`py_compile` limpos nos 5
+    arquivos backend tocados; `tsc --noEmit` limpo; `eslint` nos 11
+    arquivos frontend tocados — só os mesmos warnings pré-existentes de
+    `exhaustive-deps`/`no-img-element`, confirmados via `git stash`
+    como idênticos antes desta fase.
+  - Não implementadas nesta fase: as 11 propostas restantes (Fases
+    244-245).
+- **Fase 244** (batch 5 dos 31 achados do diagnóstico de cadastros —
+  features maiores, design próprio). Investigação prévia (1 Explore
+  agent, 5 frentes) confirmou que cada uma tinha um esforço bem
+  diferente do que a leitura inicial do diagnóstico sugeria — escopo
+  ajustado por item, documentado abaixo, sem tentar a versão maximal de
+  nenhuma.
+  - **244.1 — sugestão de IA em Publicações, agora pré-computada**: antes
+    a única sugestão de IA (tipo/dias de prazo) só existia sob demanda,
+    dentro do modal de triagem, nunca persistida. Novo
+    `Intimacao.prioridade_ia`/`resumo_ia`/`classificado_em` (migração
+    idempotente) + `app/services/publicacao_prioridade.py` (novo,
+    classificação ALTA/MEDIA/BAIXA + resumo curto via LLM, mesmo padrão
+    de `jurisprudencia_sync.py::classificar_acordao` — chave central do
+    servidor, sem `user_ai_creds()`, já que é job periódico sem usuário
+    específico) chamado dentro de `scan_publicacoes`
+    (`app/services/dje_monitor.py`) uma vez por intimação capturada,
+    fail-soft (falha na classificação de 1 intimação não derruba a
+    varredura inteira). Frontend: badge de prioridade + resumo já na
+    listagem (`publicacoes/page.tsx`), sem precisar abrir o modal —
+    mesmo padrão citado no diagnóstico como diferencial do Astrea.
+  - **244.2 — assinatura eletrônica multi-signatário**: `esign.py::
+    enviar_para_assinatura` aceitava só 1 e-mail/nome fixo; agora recebe
+    `signatarios: list[{email, nome}]` e cria N signatários no MESMO
+    documento/envelope Clicksign (a API já suporta isso nativamente,
+    não precisou de N documentos). `POST /contracts/{id}/enviar-
+    assinatura` aceita a lista nova, mantendo `email`/`nome` soltos como
+    fallback de compatibilidade (nunca chamado pelo frontend novo, mas
+    evita quebrar uma integração externa que ainda mande no formato
+    antigo). Disparo automático na aprovação de contrato (Fase 192)
+    também migrado (1 signatário — o cliente vinculado — dentro de uma
+    lista de 1). Frontend (`contratos/page.tsx`): formulário vira lista
+    de linhas com adicionar/remover, mínimo 1.
+  - **244.3 — lançamento financeiro parcelado**: `FinancialEntry` ganha
+    `grupo_recorrencia_id`/`parcela_atual`/`parcela_total` (migração +
+    índice idempotentes). Decisão de design: todas as parcelas nascem
+    JUNTAS na criação (`POST /financial` com `parcelas: int`), cada uma
+    um `FinancialEntry` independente (editável/cancelável isolada) —
+    nunca um job periódico "gerando a próxima depois", mais simples e
+    mais previsível. `valor` informado é o de CADA parcela; vencimentos
+    espaçados de 1 mês via `dateutil.relativedelta` (já era dependência
+    do projeto). Frontend: campo "Parcelas" no modal de lançamento, só
+    na criação (PUT continua sem esse campo, como já era).
+  - **244.4 — meta de captação por mês futuro**: o backend (`POST/GET
+    /crm/metas`, Fase 213) já aceitava qualquer período sem trava — só
+    a UI do funil estava presa no mês atual. Navegação de mês (◀ ▶) no
+    widget de meta (`clientes/funil/page.tsx`), sem mudança de schema.
+    Decisão de escopo deliberada: meta "por equipe/responsável"
+    (exigiria `CrmMeta` ganhar `responsavel_id` + mudar a
+    `UniqueConstraint`) fica de fora — mudança de schema maior, não
+    pedida com a mesma urgência no diagnóstico original.
+  - **244.5 — dupla aprovação (HITL) na promoção a ADMIN/SUPERADMIN**:
+    único achado do diagnóstico envolvendo a trilha HITL — promover
+    alguém a ADMIN/SUPERADMIN era 1 clique de um único ADMIN, a única
+    ação sensível do sistema sem o padrão de aprovação em 2 etapas já
+    usado em petição/contrato/agente customizado. `PUT /users/{id}`
+    agora cria um `Approval(tipo="USER_ROLE_CHANGE")` PENDENTE em vez de
+    aplicar a mudança direto quando o papel muda PRA ADMIN/SUPERADMIN
+    (demoção/desativação continuam imediatas — não é o risco que este
+    achado mirava); a mudança de role real só acontece em
+    `execute_approved_action` (novo branch), após aprovação de outro
+    ADVOGADO/SOCIO/ADMIN via `/aprovacoes` — reaproveita a infra de
+    `Approval` sem nenhuma mudança na tela de Aprovações (`tipo` já é
+    renderizado genericamente). Limitação conhecida, não corrigida
+    (documentada, não é regressão desta fase): nada impede o mesmo
+    ADMIN que solicitou de resolver a própria aprovação — mesma
+    limitação já presente no HITL de petição/contrato, não introduzida
+    aqui.
+  - Verificado via HTTP real contra Postgres real: fluxo completo de
+    troca de role (role NÃO muda antes da aprovação, muda só depois);
+    meta de período futuro (2027-03) criada e lida corretamente;
+    `/publicacoes` devolve `prioridade_ia` no schema; lançamento com
+    `parcelas=3` gera exatamente 3 `FinancialEntry` com descrições
+    "(1/3)"/"(2/3)"/"(3/3)" e vencimentos 1 mês espaçados; envio de
+    contrato pra 2 signatários chega até o guard de Clicksign não
+    configurado (mesma limitação de sandbox sem credencial real já
+    documentada pra Stripe/Mercado Pago na Fase 242 — comportamento só
+    confirmável 100% pós-deploy). Verificação adicional com mocks reais
+    (Postgres real, `call_llm` e `buscar_comunicacoes` monkeypatchados):
+    `scan_publicacoes` persiste `prioridade_ia`/`resumo_ia`/
+    `classificado_em` de ponta a ponta a partir de uma intimação
+    simulada. Playwright real (Chromium do sandbox, `npm run dev` com
+    `API_URL` local): badge "⚡ ALTA PRIORIDADE" + resumo renderizados
+    na listagem de Publicações (screenshot confirma visualmente);
+    campo Parcelas presente no modal financeiro; navegação de mês no
+    funil avança corretamente (agosto → setembro); botão de assinatura
+    presente em Contratos; aprovação `USER_ROLE_CHANGE` aparece
+    normalmente na aba Resolvidas — zero console error novo. `ruff
+    check`/`py_compile` limpos nos 11 arquivos backend tocados (+ 2
+    arquivos de teste ajustados pra nova assinatura de
+    `enviar_para_assinatura`); `tsc --noEmit` limpo; `eslint` nos 6
+    arquivos frontend tocados — só warnings pré-existentes de
+    `exhaustive-deps` (incluindo 1 novo do mesmo tipo, esperado por ter
+    dividido 1 `useEffect` em 2 no funil), confirmados via `git stash`.
+  - Não implementadas nesta fase: as 3 propostas do batch 6 (Fase 245 —
+    importação em lote, faturamento do escritório, feriados forenses
+    nacionais), últimas do diagnóstico de cadastros original.
+- **Fase 245** (batch 6 — último dos 6 batches do diagnóstico de
+  cadastros, fecha os 31 achados originais da Fase 203/237).
+  - **245.1 — importação em lote (CSV)**: nenhuma tela de cadastro tinha
+    isso; Cliente é o candidato mais comum de onboarding em massa
+    (migração de outro sistema). Novo `POST /clients/importar-csv`
+    (`ADMIN/SOCIO/GESTOR`, teto de 1000 linhas) — CSV com cabeçalho
+    (`nome_completo` obrigatório; `tipo`/`cpf_cnpj`/`email`/`telefone`/
+    `origem` opcionais, `tipo` inferido pela quantidade de dígitos do
+    documento quando ausente). Decisão de escopo deliberada: não
+    geocodifica endereço nem chama SERPRO por linha (custaria N chamadas
+    de API externa numa importação de centenas de linhas) — isso
+    continua disponível editando cada cliente depois, como já
+    funcionava. Dedup reaproveita a mesma lógica decifra-e-compara de
+    `_documento_ja_cadastrado` (Fase 240), mas pré-carregada 1x (não 1x
+    por linha, senão seria O(linhas × clientes já cadastrados)) e cobre
+    tanto duplicata contra o banco quanto duplicata DENTRO do próprio
+    arquivo. Nenhuma linha ruim derruba a importação inteira — cada uma
+    é reportada individualmente (criado/duplicado/erro). Frontend
+    (`clientes/page.tsx`): botão "Importar CSV" + modal de resultado com
+    contagem e detalhe por linha.
+  - **245.2 — faturamento do escritório**: `GET /tenant/billing`
+    (existia) só mostra o status ATUAL da assinatura; o histórico de
+    pagamentos (`TenantPayment`, já existia) só era visível numa tela
+    SUPERADMIN-only de gestão de TODOS os escritórios
+    (`GET /billing/{tenant_id}/payments`). Novo `GET /tenant/billing/
+    historico` (`ADMIN/SOCIO` do próprio tenant) — mesmo dado, mesma
+    tabela, escopado ao próprio tenant. Frontend (`admin/plano/
+    page.tsx`): tabela de histórico logo abaixo do card "Assinatura &
+    Cobrança" já existente, só aparece quando há pagamentos registrados.
+  - **245.3 — feriados forenses nacionais visíveis**: `app/utils/
+    prazo.py::feriados_nacionais()` (fixos + móveis + recesso) já era
+    usado automaticamente no cálculo de todo prazo do sistema desde
+    sempre, mas nunca aparecia em lugar nenhum da UI — o escritório não
+    tinha como conferir o que já é considerado antes de cadastrar um
+    feriado local (`/feriados`, que já existia). Novo `GET /tenant/
+    feriados-nacionais?ano=` (somente leitura — são fixos por lei
+    federal, nada aqui é configurável pelo escritório) devolve a lista
+    computada + o intervalo do recesso. Frontend (`JuridicoTab.tsx`):
+    lista read-only logo abaixo do form de feriados locais, no mesmo
+    card, deixando claro a distinção entre o que é fixo e o que é
+    configurável.
+  - Verificado via HTTP real contra Postgres real: CSV de 4 linhas (1
+    nome vazio, 1 duplicata de CPF entre linhas do próprio arquivo) →
+    2 criados, 1 duplicado, 1 erro, exatamente como esperado; `GET
+    /tenant/billing/historico` responde vazio sem erro pro tenant de
+    teste (sem `TenantPayment` cadastrado); `GET /tenant/feriados-
+    nacionais?ano=2026` devolve os 12 feriados nacionais brasileiros de
+    2026 + recesso 20/12/2026–20/01/2027, batendo com o calendário real.
+    Playwright real (Chromium do sandbox, `npm run dev` com `API_URL`
+    local, screenshots capturados): botão "Importar CSV" funcional
+    (upload real de arquivo, modal de resultado renderiza "1 Criados"
+    corretamente); card "Assinatura & Cobrança" intacto em Plano & Uso;
+    feriados nacionais de 2026 visíveis e bem integrados visualmente na
+    aba Jurídico de Configurações — zero console error novo (só o
+    warning de key duplicada pré-existente em `/dashboard`, não tocado
+    nesta fase, já documentado desde a Fase 219). `ruff check`/
+    `py_compile` limpos nos 2 arquivos backend tocados; `tsc --noEmit`
+    limpo; `eslint` nos 3 arquivos frontend tocados — só os mesmos
+    warnings pré-existentes de `exhaustive-deps`, confirmados via `git
+    stash`.
+  - **Fecha os 31 achados do diagnóstico de cadastros** (Fase 203/237 →
+    Artifact "Diagnóstico de Cadastros AFJ" → 6 batches, Fases 240-245)
+    — todos implementados e verificados empiricamente, nenhum adiado sem
+    registro explícito de decisão de escopo.
 
 
 ## Riscos conhecidos / débito técnico

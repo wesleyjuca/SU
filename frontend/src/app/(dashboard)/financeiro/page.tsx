@@ -22,6 +22,8 @@ interface Entry {
   client_id: string | null;
   process_id: string | null;
   created_at: string;
+  parcela_atual: number | null;
+  parcela_total: number | null;
 }
 
 interface Summary {
@@ -44,6 +46,9 @@ interface Overdue {
   valor_total: number;
   registros: { id: string; descricao: string; valor: number; vencimento: string | null; dias_atraso: number | null }[];
 }
+
+interface Cliente { id: string; nome_completo: string }
+interface ProcessoOpcao { id: string; numero_cnj: string; tribunal: string | null }
 
 const STATUS_STYLE: Record<string, string> = {
   PENDENTE: "badge-pendente",
@@ -68,6 +73,16 @@ export default function FinanceiroPage() {
   const [showModal, setShowModal] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  // Fase 242 — vínculo opcional a cliente/processo (o backend já suportava,
+  // só faltava o formulário oferecer). PUT não aceita esses 2 campos —
+  // por isso os selects só aparecem na criação, nunca na edição.
+  const [clientes, setClientes] = useState<Cliente[]>([]);
+  const [processos, setProcessos] = useState<ProcessoOpcao[]>([]);
+  const [novoClientId, setNovoClientId] = useState("");
+  const [novoProcessId, setNovoProcessId] = useState("");
+  // Fase 244 — só pra UI (label/aviso condicional); o valor real vai pelo
+  // form (react-hook-form) no campo "parcelas".
+  const [parcelasValor, setParcelasValor] = useState(1);
   // Fase 182 — "Exportar pro Sheets" só aparece pra quem já conectou o
   // Google Workspace do escritório (mesmo padrão de documentos/page.tsx).
   const [googleConnected, setGoogleConnected] = useState(false);
@@ -93,6 +108,27 @@ export default function FinanceiroPage() {
       .then((d) => setGoogleConnected(Boolean(d?.connected)))
       .catch(() => {});
   }, []);
+
+  useEffect(() => { fetchClientes(); }, []);
+  useEffect(() => { fetchProcessos(novoClientId); }, [novoClientId]);
+
+  async function fetchClientes() {
+    try {
+      const token = localStorage.getItem("afj_access_token");
+      const res = await fetch("/api/v1/clients?limit=200", { headers: { Authorization: `Bearer ${token}` } });
+      if (res.ok) { const d = await res.json(); setClientes(Array.isArray(d) ? d : d.items ?? []); }
+    } catch {}
+  }
+
+  async function fetchProcessos(clientId: string) {
+    try {
+      const token = localStorage.getItem("afj_access_token");
+      const params = new URLSearchParams({ limit: "200" });
+      if (clientId) params.set("client_id", clientId);
+      const res = await fetch(`/api/v1/processes?${params}`, { headers: { Authorization: `Bearer ${token}` } });
+      if (res.ok) setProcessos(await res.json());
+    } catch {}
+  }
 
   async function exportarSheets() {
     setExportingSheets(true);
@@ -176,7 +212,10 @@ export default function FinanceiroPage() {
 
   function abrirNovo() {
     setEditingId(null);
-    resetFin({ tipo: "RECEITA", status: "PENDENTE", descricao: "", categoria: "", valor: undefined as unknown as number, vencimento: "" });
+    setNovoClientId("");
+    setNovoProcessId("");
+    setParcelasValor(1);
+    resetFin({ tipo: "RECEITA", status: "PENDENTE", descricao: "", categoria: "", valor: undefined as unknown as number, vencimento: "", parcelas: 1 });
     setShowModal(true);
   }
 
@@ -196,6 +235,9 @@ export default function FinanceiroPage() {
   function fecharModal() {
     setShowModal(false);
     setEditingId(null);
+    setNovoClientId("");
+    setNovoProcessId("");
+    setParcelasValor(1);
     resetFin();
   }
 
@@ -205,6 +247,7 @@ export default function FinanceiroPage() {
       const url = editingId ? `/api/v1/financial/${editingId}` : "/api/v1/financial";
       const method = editingId ? "PUT" : "POST";
       // No PUT o backend aceita descricao/valor/categoria/status/data_vencimento
+      // — client_id/process_id só existem na criação (POST).
       const payload = editingId
         ? {
             descricao: data.descricao,
@@ -213,13 +256,19 @@ export default function FinanceiroPage() {
             status: data.status || null,
             data_vencimento: data.vencimento || null,
           }
-        : { ...data, data_vencimento: data.vencimento || null };
+        : {
+            ...data,
+            data_vencimento: data.vencimento || null,
+            client_id: novoClientId || null,
+            process_id: novoProcessId || null,
+          };
       const res = await fetch(url, {
         method,
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify(payload),
       });
       if (res.ok) {
+        if (!editingId && parcelasValor > 1) toast.success(`${parcelasValor} parcelas lançadas.`);
         fecharModal();
         fetchEntries();
         fetchSummary();
@@ -569,24 +618,79 @@ export default function FinanceiroPage() {
                   className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold"
                 />
               </div>
-              <div>
-                <label className="text-xs text-afj-black/60 block mb-1">Valor (R$) *</label>
-                <input
-                  {...registerFin("valor")}
-                  type="number"
-                  step="0.01"
-                  placeholder="0,00"
-                  className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold"
-                />
-                {finErrors.valor && <p className="text-xs text-red-500 mt-1">{finErrors.valor.message}</p>}
+              {!editingId && (
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs text-afj-black/60 block mb-1">Cliente</label>
+                    <select
+                      value={novoClientId}
+                      onChange={(e) => { setNovoClientId(e.target.value); setNovoProcessId(""); }}
+                      className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold"
+                    >
+                      <option value="">— nenhum —</option>
+                      {clientes.map((c) => (
+                        <option key={c.id} value={c.id}>{c.nome_completo}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-xs text-afj-black/60 block mb-1">Processo</label>
+                    <select
+                      value={novoProcessId}
+                      onChange={(e) => setNovoProcessId(e.target.value)}
+                      className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold"
+                    >
+                      <option value="">— nenhum —</option>
+                      {processos.map((p) => (
+                        <option key={p.id} value={p.id}>{p.numero_cnj || p.id.slice(0, 8)}{p.tribunal ? ` — ${p.tribunal}` : ""}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              )}
+              <div className={editingId ? "" : "grid grid-cols-2 gap-3"}>
+                <div>
+                  <label className="text-xs text-afj-black/60 block mb-1">
+                    {!editingId && parcelasValor > 1 ? "Valor de cada parcela (R$) *" : "Valor (R$) *"}
+                  </label>
+                  <input
+                    {...registerFin("valor")}
+                    type="number"
+                    step="0.01"
+                    placeholder="0,00"
+                    className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold"
+                  />
+                  {finErrors.valor && <p className="text-xs text-red-500 mt-1">{finErrors.valor.message}</p>}
+                </div>
+                {!editingId && (
+                  <div>
+                    <label className="text-xs text-afj-black/60 block mb-1">Parcelas</label>
+                    <input
+                      {...registerFin("parcelas", { valueAsNumber: true })}
+                      type="number"
+                      min={1}
+                      max={60}
+                      placeholder="1"
+                      onChange={(e) => setParcelasValor(Number(e.target.value) || 1)}
+                      className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold"
+                    />
+                  </div>
+                )}
               </div>
               <div>
-                <label className="text-xs text-afj-black/60 block mb-1">Vencimento</label>
+                <label className="text-xs text-afj-black/60 block mb-1">
+                  {!editingId && parcelasValor > 1 ? "Vencimento da 1ª parcela" : "Vencimento"}
+                </label>
                 <input
                   {...registerFin("vencimento")}
                   type="date"
                   className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold"
                 />
+                {!editingId && parcelasValor > 1 && (
+                  <p className="text-[11px] text-afj-black/40 mt-1">
+                    As demais {parcelasValor - 1} parcelas vencem 1 mês depois, cada.
+                  </p>
+                )}
               </div>
               <div className="flex gap-3 pt-2">
                 <button type="button" onClick={fecharModal} className="flex-1 btn-afj-outline rounded-sm">
