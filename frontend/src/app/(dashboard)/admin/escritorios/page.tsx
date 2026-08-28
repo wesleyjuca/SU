@@ -5,6 +5,7 @@ import {
 } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 
 const PLANOS = ["STANDARD", "PRO", "ENTERPRISE"];
 
@@ -42,6 +43,7 @@ function authH(): HeadersInit {
 
 export default function EscritoriosPage() {
   const toast = useToast();
+  const { ask, confirmDialog } = useConfirmDialog();
   const [tenants, setTenants] = useState<TenantItem[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -120,9 +122,10 @@ export default function EscritoriosPage() {
   // permanente (processo/usuário) recusam e orientam usar arquivar/desativar.
   async function toggleProducao(t: TenantItem) {
     const ligando = !t.em_producao;
-    if (ligando && !confirm(
-      `Marcar "${t.name}" como em produção?\n\nDepois disso, o SUPERADMIN não consegue mais excluir processos/usuários de verdade deste escritório — só arquivar/desativar.`
-    )) return;
+    if (ligando && (await ask({
+      title: "Marcar como em produção",
+      message: `Marcar "${t.name}" como em produção?\n\nDepois disso, o SUPERADMIN não consegue mais excluir processos/usuários de verdade deste escritório — só arquivar/desativar.`,
+    })) === null) return;
     setToggling(t.id);
     try {
       const res = await fetch(`/api/v1/tenants/${t.id}`, {
@@ -308,6 +311,7 @@ export default function EscritoriosPage() {
           </div>
         </div>
       )}
+      {confirmDialog}
     </div>
   );
 }

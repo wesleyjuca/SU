@@ -27,6 +27,7 @@ interface Cliente {
   telefone: string | null;
   whatsapp: string | null;
   status: string;
+  segmento: string | null;
   origem: string | null;
   lgpd_consent: boolean;
   lgpd_consent_at: string | null;
@@ -366,6 +367,11 @@ export default function ClienteDetailPage() {
               )}
               {[
                 { label: "Origem", value: cliente.origem },
+                // Fase 240 (achado do diagnóstico de cadastros) — `segmento`
+                // (PLATINUM/GOLD/SILVER/REGULAR) já era classificado por um
+                // agente de IA (crm_agent, Fase 151) e persistido no banco,
+                // mas nunca aparecia em nenhuma tela — write-only até aqui.
+                { label: "Segmento", value: cliente.segmento },
                 {
                   label: "LGPD",
                   value: cliente.lgpd_consent
@@ -629,6 +635,12 @@ export default function ClienteDetailPage() {
                           {c.telefone && (
                             <a href={`tel:${c.telefone}`} className="flex items-center gap-1.5 text-xs text-afj-black/60 hover:underline">
                               <Phone size={10} />{c.telefone}
+                            </a>
+                          )}
+                          {c.whatsapp && (
+                            <a href={`https://wa.me/${c.whatsapp.replace(/\D/g, "")}`} target="_blank" rel="noreferrer"
+                              className="flex items-center gap-1.5 text-xs text-afj-black/60 hover:underline">
+                              <MessageSquare size={10} />{c.whatsapp}
                             </a>
                           )}
                         </div>

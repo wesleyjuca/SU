@@ -66,7 +66,7 @@ class ContactCreate(BaseModel):
     cargo: str | None = None
     email: str | None = None
     telefone: str | None = None
-    whatsapp: str | None = None  # stored in telefone if no dedicated column
+    whatsapp: str | None = None
     is_primary: bool = False
 
 
@@ -125,12 +125,48 @@ async def _geocodificar_endereco(endereco: dict | None) -> dict | None:
     return endereco
 
 
+async def _documento_ja_cadastrado(
+    db: AsyncSession, tenant_id, cpf: str | None, cnpj: str | None, excluir_client_id: uuid.UUID | None = None,
+) -> str | None:
+    """Fase 240 (achado do diagnóstico de cadastros) — nada impedia cadastrar
+    o mesmo CPF/CNPJ duas vezes: sem constraint única no banco (os campos
+    são cifrados com IV aleatório a cada `encrypt()`, Fase 149, então uma
+    `UNIQUE` sobre o texto cifrado nunca pegaria a duplicata) e sem
+    checagem alguma no endpoint. Reaproveita o mesmo caminho decifra-e-
+    compara já usado em `GET /clients/match` (Fase 181). Devolve o nome do
+    cliente já cadastrado com esse documento, ou `None` se estiver livre."""
+    import re
+
+    cpf_norm = re.sub(r"\D", "", cpf) if cpf else ""
+    cnpj_norm = re.sub(r"\D", "", cnpj) if cnpj else ""
+    if not cpf_norm and not cnpj_norm:
+        return None
+
+    query = select(Client.id, Client.nome_completo, Client.cpf, Client.cnpj).where(
+        Client.tenant_id == tenant_id,
+        or_(Client.cpf.isnot(None), Client.cnpj.isnot(None)),
+    )
+    if excluir_client_id:
+        query = query.where(Client.id != excluir_client_id)
+    rows = (await db.execute(query)).all()
+    for cid, nome_completo, cpf_enc, cnpj_enc in rows:
+        cpf_dec = re.sub(r"\D", "", decrypt_or_raw(cpf_enc) or "")
+        cnpj_dec = re.sub(r"\D", "", decrypt_or_raw(cnpj_enc) or "")
+        if (cpf_norm and cpf_norm == cpf_dec) or (cnpj_norm and cnpj_norm == cnpj_dec):
+            return nome_completo
+    return None
+
+
 @router.post("", response_model=ClientResponse, status_code=201)
 async def create_client(
     body: ClientCreate,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    duplicado = await _documento_ja_cadastrado(db, current_user.tenant_id, body.cpf, body.cnpj)
+    if duplicado:
+        raise HTTPException(status_code=409, detail=f"CPF/CNPJ já cadastrado para o cliente \"{duplicado}\".")
+
     data = body.model_dump(exclude_none=True)
     if body.lgpd_consent:
         data["lgpd_consent_at"] = datetime.now(timezone.utc)
@@ -364,6 +400,13 @@ async def update_client(
     if not client:
         raise NotFoundError("Cliente", client_id)
 
+    if body.cpf or body.cnpj:
+        duplicado = await _documento_ja_cadastrado(
+            db, current_user.tenant_id, body.cpf, body.cnpj, excluir_client_id=client.id,
+        )
+        if duplicado:
+            raise HTTPException(status_code=409, detail=f"CPF/CNPJ já cadastrado para o cliente \"{duplicado}\".")
+
     for field, value in body.model_dump(exclude_none=True).items():
         if field in ("cpf", "cnpj"):
             value = encrypt(value)
@@ -498,7 +541,8 @@ async def create_contact(
         nome=body.nome,
         cargo=body.cargo,
         email=body.email,
-        telefone=body.telefone or body.whatsapp,
+        telefone=body.telefone,
+        whatsapp=body.whatsapp,
         is_primary=body.is_primary,
     )
     db.add(contact)
@@ -536,7 +580,8 @@ async def update_contact(
     contact.nome = body.nome
     contact.cargo = body.cargo
     contact.email = body.email
-    contact.telefone = body.telefone or body.whatsapp
+    contact.telefone = body.telefone
+    contact.whatsapp = body.whatsapp
     contact.is_primary = body.is_primary
     return _contact_to_dict(contact)
 

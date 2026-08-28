@@ -3,6 +3,7 @@ import { useState, useEffect } from "react";
 import { Plug, MessageCircle, PenTool, Clock, CheckCircle2, Smartphone, Loader2, LogOut, Link2, CreditCard, Wallet, X, RefreshCw, AlertTriangle, Scale, Search, ScrollText, FolderOpen } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 
 // Cards estáticos (recursos que não são "conectar conta" — hoje só o PWA).
 const INTEGRACOES = [
@@ -75,6 +76,7 @@ const TESTAVEIS = new Set(["pdpj", "escavador", "judit", "jusbrasil", "whatsapp"
 
 function HubCards() {
   const toast = useToast();
+  const { ask, confirmDialog } = useConfirmDialog();
   const [itens, setItens] = useState<HubIntegracao[]>([]);
   const [isAdmin, setIsAdmin] = useState(false);
   const [conectando, setConectando] = useState<HubIntegracao | null>(null);
@@ -234,7 +236,7 @@ function HubCards() {
   }
 
   async function desconectar(it: HubIntegracao) {
-    if (!confirm(`Desconectar ${it.nome}? As credenciais salvas serão removidas.`)) return;
+    if ((await ask({ message: `Desconectar ${it.nome}? As credenciais salvas serão removidas.` })) === null) return;
     setWorking(true);
     try {
       const res = await fetch(`/api/v1/integrations/hub/${it.provider}`, { method: "DELETE", headers: authH() });
@@ -489,6 +491,7 @@ function HubCards() {
           </div>
         </div>
       )}
+      {confirmDialog}
     </>
   );
 }

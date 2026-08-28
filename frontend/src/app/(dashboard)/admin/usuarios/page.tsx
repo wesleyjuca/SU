@@ -8,6 +8,7 @@ import {
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useUserStore } from "@/store";
 import { useToast } from "@/components/ui/Toast";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 
 const ROLES = ["ADMIN", "SOCIO", "ADVOGADO", "PARALEGAL", "ASSISTENTE", "GESTOR"];
 
@@ -73,6 +74,7 @@ const PAGE_SIZE = 50;
 export default function UsuariosPage() {
   const { user: me } = useUserStore();
   const toast = useToast();
+  const { ask, confirmDialog } = useConfirmDialog();
   const [users, setUsers] = useState<UserItem[]>([]);
   const [excluindoId, setExcluindoId] = useState<string | null>(null);
   const [showRevisao, setShowRevisao] = useState(false);
@@ -221,9 +223,12 @@ export default function UsuariosPage() {
   // ao SUPERADMIN. Bloqueada pelo backend se o escritório do usuário estiver
   // marcado "em produção" (ver admin/escritorios).
   async function excluirPermanente(u: UserItem) {
-    if (!confirm(
-      `Excluir "${u.full_name}" PERMANENTEMENTE?\n\nIsso apaga a conta de verdade (não é reversível). Documentos/processos onde ele aparece como autor/responsável continuam existindo, só perdem essa referência.`
-    )) return;
+    if ((await ask({
+      title: "Excluir permanentemente",
+      message: `Excluir "${u.full_name}" PERMANENTEMENTE?\n\nIsso apaga a conta de verdade (não é reversível). Documentos/processos onde ele aparece como autor/responsável continuam existindo, só perdem essa referência.`,
+      danger: true,
+      confirmLabel: "Excluir",
+    })) === null) return;
     setExcluindoId(u.id);
     try {
       const token = localStorage.getItem("afj_access_token");
@@ -789,6 +794,7 @@ export default function UsuariosPage() {
           </div>
         </div>
       )}
+      {confirmDialog}
     </div>
   );
 }

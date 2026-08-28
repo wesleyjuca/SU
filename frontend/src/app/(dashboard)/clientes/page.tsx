@@ -33,7 +33,7 @@ interface Cliente {
 const ENDERECO_VAZIO: Endereco = { cep: "", logradouro: "", bairro: "", cidade: "", uf: "" };
 const FORM_VAZIO: ClienteFormValues = {
   tipo: "PF", nome_completo: "", razao_social: "", email: "", telefone: "", whatsapp: "",
-  origem: "", cpf: "", cnpj: "", status: "PROSPECTO", lgpd_consent: false,
+  origem: "", cpf: "", cnpj: "", status: "PROSPECTO", lgpd_consent: false, observacoes: "",
 };
 
 const STATUS_STYLE: Record<string, string> = {
@@ -182,7 +182,8 @@ export default function ClientesPage() {
         setEditingId(null);
         fetchClientes(0, false);
       } else {
-        toast.error("Erro ao salvar cliente. Tente novamente.");
+        const err = await res.json().catch(() => null);
+        toast.error(err?.detail || "Erro ao salvar cliente. Tente novamente.");
       }
     } catch {
       toast.error("Erro de conexão. Tente novamente.");
@@ -285,7 +286,8 @@ export default function ClientesPage() {
         setEnderecoTemCoordenadas(false);
         fetchClientes(0, false);
       } else {
-        toast.error("Erro ao criar cliente. Tente novamente.");
+        const err = await res.json().catch(() => null);
+        toast.error(err?.detail || "Erro ao criar cliente. Tente novamente.");
       }
     } catch {
       toast.error("Erro de conexão. Tente novamente.");
@@ -310,6 +312,7 @@ export default function ClientesPage() {
     cnpj: editForm.cnpj ?? "",
     status: editForm.status ?? "PROSPECTO",
     lgpd_consent: editForm.lgpd_consent ?? false,
+    observacoes: editForm.observacoes ?? "",
   };
 
   return (

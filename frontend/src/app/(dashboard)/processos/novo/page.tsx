@@ -7,8 +7,9 @@ import { useForm } from "react-hook-form";
 import type { Resolver } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { ProcessoSchema, type ProcessoInput } from "@/lib/schemas";
+import { AREAS_DIREITO } from "@/lib/constants";
 
-const AREAS = ["CIVIL", "TRABALHISTA", "TRIBUTARIO", "PENAL", "PREVIDENCIARIO", "CONSUMIDOR"];
+const AREAS = AREAS_DIREITO;
 
 const TRIBUNAIS = [
   { value: "TJAC", label: "TJAC — Tribunal de Justiça do Acre" },

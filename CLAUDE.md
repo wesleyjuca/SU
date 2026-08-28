@@ -3254,6 +3254,159 @@ Histórico:
   teste dedicado na época; verificação HTTP real é a prova principal,
   como em toda fase recente. `ruff check`/`py_compile` limpos no único
   arquivo tocado.
+- **Diagnóstico de cadastros** — usuário pediu avaliação completa do
+  sistema comparando com o Astrea (concorrente jurídico), buscando
+  inovações/correções/aprimoramentos, com foco em revisar todas as
+  telas de cadastro. Bloqueio técnico confirmado: este sandbox bloqueia
+  egress pra `astrea.net.br` (CONNECT 403 "policy denial", mesma
+  restrição já documentada nesta sessão pra gov.br/BrasilAPI/
+  OpenStreetMap/www.afjadvogados.com) — sem acesso ao vivo ao
+  concorrente. Usuário escolheu (via pergunta) seguir com avaliação por
+  conhecimento geral de mercado (Astrea, Projuris, Legal One, SAJADV) +
+  auditoria completa do próprio AFJ. 4 Explore agents levantaram
+  factualmente as ~18 telas de cadastro do sistema (CRM/Cliente,
+  Administrativo/Governança, Processos/Documentos/Financeiro,
+  Publicações — esta última comparada ponto a ponto com um screenshot
+  real do Astrea que o usuário enviou). 31 achados publicados como
+  Artifact ("Diagnóstico de Cadastros AFJ") — cada um rotulado "achado
+  de código" (fato, com arquivo:linha) ou "sugestão de mercado" (opinião
+  informada, sem verificação ao vivo). Nenhuma correção nesta fase — só
+  o relatório. Nota de segurança registrada: usuário colou a senha do
+  Astrea em texto puro no chat; nunca foi usada (bloqueio de rede), mas
+  registrado o aviso de trocá-la. Usuário pediu, na sequência, pra
+  transformar TODOS os 31 achados em fase de correção — dividido em 6
+  sub-fases (240-245) pelo mesmo padrão já usado nesta sessão pra lotes
+  grandes (Fase 205-208): 240 (achados ALTA + quick wins), 241
+  (window.confirm/prompt + cadastros incompletos), 242 (vínculos e
+  uploads faltando), 243 (máscaras + calculadora de prazo unificada +
+  senha temporária), 244 (features maiores com design próprio), 245
+  (importação em lote + faturamento do escritório + feriados
+  nacionais).
+- **Fase 240** (batch 1 dos 31 achados do diagnóstico de cadastros —
+  achados ALTA + quick wins de baixo risco):
+  - **Área do Direito incompleta** — a lista de Área do Direito estava
+    duplicada e divergente em 5 lugares do frontend (`processos/novo`,
+    `processos/page.tsx` ×2 — um deles com "EMPRESARIAL", que nem
+    existe no backend e quebraria o save com 422 —, `agentes/page.tsx`,
+    `FinanceiroCharts.tsx`), a maioria com só 6 das 10 áreas que o
+    backend aceita. Nova fonte única
+    (`frontend/src/lib/constants.ts::AREAS_DIREITO`), os 5 lugares
+    passaram a importar dela. `processos/[id]/page.tsx`: "Área do
+    Direito" no modal de edição virou `<select>` controlado (era
+    `<input>` de texto livre, permitindo dado sujo tipo "Cível" vs.
+    "CIVIL"). Decisão deliberada: "Tribunal" NÃO virou select nesse
+    mesmo modal — a lista de tribunais do frontend é comprovadamente
+    incompleta (só 41 dos ~92 tribunais brasileiros) e, ao contrário de
+    Área do Direito, não é um enum fechado no backend; forçar um select
+    ali quebraria a edição de qualquer processo com tribunal fora da
+    lista.
+  - **CPF/CNPJ duplicado** — `create_client`/`update_client`
+    (`backend/app/api/v1/clients.py`) ganharam
+    `_documento_ja_cadastrado()` (mesmo caminho decifra-e-compara já
+    usado em `GET /clients/match`, Fase 181 — os campos são cifrados
+    com IV aleatório, `UNIQUE` no banco nunca pegaria a duplicata) —
+    bloqueia com 409 antes de criar/editar um cliente com CPF/CNPJ já
+    cadastrado no tenant, exceto o próprio registro sendo editado.
+    Frontend: `salvarCliente`/`salvarEdicao` passam a mostrar o
+    `detail` real do erro em vez da mensagem genérica.
+  - **`Client.observacoes` sem UI** — campo já existia no banco/schema
+    e até era carregado no estado de edição, mas nenhum input o
+    exibia. `ClienteFormFields.tsx` ganhou o textarea; `FORM_VAZIO`/
+    `editValues` (`clientes/page.tsx`) passam o campo adiante.
+  - **`Client.segmento` write-only** — classificado por um agente de IA
+    (crm_agent, Fase 151) mas nunca aparecia em tela nenhuma. Cliente
+    360 ganhou uma linha "Segmento" nos Dados Cadastrais (já vinha na
+    resposta da API, só faltava exibir).
+  - **Prazo fatal sem destaque visual** — `data_fatal` era gravada mas
+    a Agenda calculava cor/urgência só por `data_prazo`; um prazo fatal
+    amanhã e um prazo comum amanhã apareciam idênticos. Agora a Agenda
+    usa a data mais urgente entre as duas pra colorir o card
+    (`diasGovernante`) e mostra um selo "FATAL · DD/MM/AAAA" quando
+    `data_fatal` existe.
+  - **Ações em lote: reatribuir responsável** — o backend
+    (`POST /processes/bulk-update`) já aceitava `responsavel_id` desde
+    a Fase 207.3 ("fica pra quando fizer sentido adicionar"), só nunca
+    tinha sido ligado na UI. `processos/page.tsx` ganhou um select de
+    colega (`GET /users/colegas`, mesmo endpoint já usado em
+    `processos/novo`) na barra de ações em lote, ao lado do já
+    existente select de situação — qualquer um dos dois (ou os dois
+    juntos) habilita o botão "Aplicar".
+  - Verificado via HTTP real contra Postgres real: CPF duplicado (com
+    formatação diferente, "529.982.247-25" vs "52998224725") bloqueado
+    com 409 e mensagem certa; editar o próprio registro com o mesmo CPF
+    continua funcionando (exclusão do próprio id da checagem);
+    `AMBIENTAL` aceito na criação de processo (já era aceito pelo
+    backend, confirma que o fix é puramente de UI); bulk-update sem
+    regressão. Playwright real (Chromium do sandbox, `npm run dev` com
+    `API_URL` local): select de Área do Direito com as 10 opções
+    corretas; campo Observações presente no modal Novo Cliente; select
+    "Reatribuir responsável" aparece na barra de lote ao selecionar
+    processos; um prazo de teste com `data_fatal` amanhã e `data_prazo`
+    daqui a 20 dias renderizou com borda vermelha (urgência do fatal, não
+    do prazo comum) e o selo "FATAL · 29/08/2026" — confirma que
+    `diasGovernante` funciona como projetado, não só por leitura de
+    código. `tsc --noEmit` limpo; `eslint` nos 10 arquivos tocados — 4
+    warnings pré-existentes de `exhaustive-deps`, confirmados via `git
+    stash` como idênticos antes desta fase (só linha deslocada). `ruff
+    check`/`py_compile` limpos no backend.
+  - Não implementados nesta fase: os 24 achados restantes do
+    diagnóstico — seguem pras Fases 241-245, já planejadas acima.
+- **Fase 241** (batch 2 dos 31 achados do diagnóstico de cadastros —
+  `window.confirm`/`window.prompt` nativos + 3 cadastros incompletos):
+  - **`window.confirm`/`window.prompt` nativos** — o levantamento original
+    citou 4-5 exemplos, mas um grep completo achou **11 pontos** no total
+    (mais que o diagnóstico documentou, mesmo padrão sendo a mesma classe
+    de achado). Novo hook único baseado em Promise
+    (`frontend/src/hooks/useConfirmDialog.tsx`, `ask()` → `Promise<string
+    | null>`, `null` = cancelado) substitui todos os 11: revogar acesso ao
+    portal (`ClientPortalAccessPanel.tsx`), rejeitar agente de IA
+    (`BrainCustomAgents.tsx`), desconectar integração
+    (`integracoes/page.tsx`), restaurar versão/arquivar documento
+    (`documentos/page.tsx` ×2), excluir parte de processo
+    (`processos/[id]/page.tsx`), excluir processo permanentemente
+    (`processos/page.tsx`), ativar modo produção do tenant
+    (`admin/escritorios/page.tsx`), excluir usuário permanentemente
+    (`admin/usuarios/page.tsx`), e motivo de oportunidade perdida
+    (`clientes/funil/page.tsx` — fecha também o achado específico "motivo
+    de perda via `prompt()`, sem estrutura"). Achado colateral corrigido
+    de propósito: o `window.prompt` de rejeição de agente de IA ignorava
+    cancelamento (clicar "Cancelar" no prompt nativo ainda rejeitava o
+    agente, só sem motivo) — o modal novo torna "Cancelar" cancelar a
+    rejeição inteira, mais alinhado com o que um admin esperaria.
+  - **Campo `resolucao` da denúncia sem UI** — já existia no backend
+    (`ReportResolve.resolucao`, endpoint já aceitava), só faltava o
+    input. `etica/page.tsx` ganhou um textarea por relato com botão
+    "Salvar resolução" (só aparece quando o texto diverge do já salvo).
+  - **Membros do Comitê como texto livre** — viravam string separada por
+    vírgula, sem checagem contra colaboradores reais. Agora é uma lista
+    de checkboxes (`GET /users/colegas`, mesmo endpoint já usado em
+    Processos), armazenando os mesmos nomes de sempre (sem migração de
+    schema — `membros` continua `list[str]` no backend), só que
+    escolhidos de uma lista real em vez de digitados.
+  - **`ClientContact` sem WhatsApp próprio** — o comentário do próprio
+    código admitia: "stored in telefone if no dedicated column". Novo
+    campo `ClientContact.whatsapp` (migração idempotente em
+    `events.py`), `create_contact`/`update_contact` gravam os 2 campos
+    separadamente. Achado colateral descoberto ao investigar: `_contact_
+    to_dict()` já devolvia `"whatsapp": c.whatsapp` numa fase anterior,
+    o que teria quebrado com `AttributeError` toda listagem de contato
+    até este fix adicionar a coluna que faltava no model — confirma que
+    a coluna estava mesmo faltando, não só um problema cosmético de UI.
+    Cliente 360 ganhou a exibição do WhatsApp na lista de contatos (link
+    `wa.me`), que já era coletado no formulário mas nunca exibido.
+  - Verificado via HTTP real contra Postgres real: contato criado com
+    telefone E whatsapp preservados como campos distintos (antes um
+    sobrescrevia o outro); resolução de denúncia salva e devolvida
+    corretamente. Playwright real (Chromium do sandbox): modal de
+    confirmação aparece ao revogar acesso (não mais `window.confirm`);
+    campo "Resolução / parecer" presente por relato; "Membros
+    participantes" renderiza como lista de checkboxes com colegas reais
+    (6 no tenant de teste). `tsc --noEmit` limpo; `eslint` nos 16
+    arquivos tocados — só os mesmos warnings pré-existentes de
+    `exhaustive-deps`, confirmados via `git stash`. `ruff check`/
+    `py_compile` limpos no backend.
+  - Não implementados nesta fase: os 21 achados restantes — seguem pras
+    Fases 242-245.
 
 
 ## Riscos conhecidos / débito técnico

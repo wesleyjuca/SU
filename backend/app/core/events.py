@@ -545,6 +545,10 @@ async def lifespan(app: FastAPI):
             # de Client.endereco_json), groundwork pro mapa com marcadores de
             # escritório+clientes planejado pra uma fase futura.
             "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS endereco_json JSONB",
+            # Fase 241 (achado do diagnóstico de cadastros) — WhatsApp de
+            # um contato (ClientContact) era gravado sobrepondo `telefone`,
+            # perdendo o telefone fixo/comercial quando os dois existiam.
+            "ALTER TABLE client_contacts ADD COLUMN IF NOT EXISTS whatsapp VARCHAR(20)",
         ]:
             try:
                 async with engine.begin() as conn:

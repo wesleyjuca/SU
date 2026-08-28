@@ -4,6 +4,7 @@ import {
   Bot, KeyRound, CheckCircle2, XCircle, Loader2, Sparkles, Eye, EyeOff,
   SlidersHorizontal, ChevronDown, ChevronUp, Plus, Star, FlaskConical, Copy, Pencil, Trash2, X, Scale, Shuffle,
 } from "lucide-react";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 
 type ProviderInfo = {
   nome: string;
@@ -70,6 +71,7 @@ function authH(): HeadersInit {
 }
 
 export default function MinhaIAPage() {
+  const { ask, confirmDialog } = useConfirmDialog();
   const [configs, setConfigs] = useState<AIConfig[]>([]);
   const [stats, setStats] = useState<Record<string, AIConfigStats>>({});
   const [providers, setProviders] = useState<Record<string, ProviderInfo>>({});
@@ -192,7 +194,7 @@ export default function MinhaIAPage() {
   }
 
   async function remover(id: string) {
-    if (!confirm("Remover esta IA? Essa ação não pode ser desfeita.")) return;
+    if ((await ask({ message: "Remover esta IA? Essa ação não pode ser desfeita.", danger: true, confirmLabel: "Remover" })) === null) return;
     setBusyId(id); setMsg(null);
     try {
       const res = await fetch(`/api/v1/users/me/ai-configs/${id}`, { method: "DELETE", headers: authH() });
@@ -509,6 +511,7 @@ export default function MinhaIAPage() {
           onError={(text) => setMsg({ ok: false, text })}
         />
       )}
+      {confirmDialog}
     </div>
   );
 }

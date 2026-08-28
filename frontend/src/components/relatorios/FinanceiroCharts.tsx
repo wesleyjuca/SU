@@ -5,6 +5,7 @@ import {
   PieChart, Pie, Cell, AreaChart, Area,
 } from "recharts";
 import { TrendingUp, TrendingDown, DollarSign, BarChart2, Calculator } from "lucide-react";
+import { AREAS_DIREITO } from "@/lib/constants";
 
 const GOLD = "#B8954A";
 const GOLD_LIGHT = "#D4AC64";
@@ -39,8 +40,6 @@ export interface FinancialData {
   por_categoria: { categoria: string; tipo: string; total: number }[];
   summary: { receitas_pagas: number; receitas_pendentes: number; despesas_pagas: number; despesas_pendentes: number };
 }
-
-const AREAS_DIREITO = ["CIVIL", "TRABALHISTA", "TRIBUTARIO", "PENAL", "PREVIDENCIARIO", "CONSUMIDOR"];
 
 interface HonorariosHistorico {
   area_direito: string;

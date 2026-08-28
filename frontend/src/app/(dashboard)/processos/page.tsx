@@ -6,6 +6,8 @@ import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
 import { ViewToggle } from "@/components/ui/ViewToggle";
 import { useUserStore } from "@/store";
+import { AREAS_DIREITO } from "@/lib/constants";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 
 const UF_LIST = ["AC","AL","AM","AP","BA","CE","DF","ES","GO","MA","MG","MS","MT","PA","PB","PE","PI","PR","RJ","RN","RO","RR","RS","SC","SE","SP","TO"];
 
@@ -51,6 +53,7 @@ const PAGE_SIZE = 50;
 
 export default function ProcessosPage() {
   const toast = useToast();
+  const { ask, confirmDialog } = useConfirmDialog();
   const { user: me } = useUserStore();
   const [excluindoPermanenteId, setExcluindoPermanenteId] = useState<string | null>(null);
   const [processos, setProcessos] = useState<Processo[]>([]);
@@ -72,6 +75,11 @@ export default function ProcessosPage() {
   const canBulk = ["ADMIN", "SOCIO", "GESTOR", "SUPERADMIN"].includes(me?.role ?? "");
   const [selecionados, setSelecionados] = useState<Set<string>>(new Set());
   const [bulkSituacao, setBulkSituacao] = useState("");
+  // Fase 240 (achado do diagnóstico de cadastros) — o backend de
+  // bulk-update já aceitava responsavel_id desde a Fase 207.3 ("fica pra
+  // quando fizer sentido adicionar"), só nunca tinha sido ligado na UI.
+  const [bulkResponsavelId, setBulkResponsavelId] = useState("");
+  const [colegas, setColegas] = useState<{ id: string; full_name: string }[]>([]);
   const [bulkApplying, setBulkApplying] = useState(false);
   const [view, setView] = useState<"table" | "grid">(() => {
     if (typeof window !== "undefined") {
@@ -83,6 +91,16 @@ export default function ProcessosPage() {
   useEffect(() => {
     localStorage.setItem("processos_view", view);
   }, [view]);
+
+  useEffect(() => {
+    if (!canBulk) return;
+    const token = localStorage.getItem("afj_access_token");
+    fetch("/api/v1/users/colegas", { headers: { Authorization: `Bearer ${token}` } })
+      .then((r) => (r.ok ? r.json() : []))
+      .then(setColegas)
+      .catch(() => setColegas([]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canBulk]);
 
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -220,9 +238,12 @@ export default function ProcessosPage() {
   // documentos, financeiro, execuções de agente), restrita ao SUPERADMIN.
   // Diferente de excluirProcesso() acima, que só arquiva.
   async function excluirPermanentemente(id: string) {
-    if (!confirm(
-      "Excluir este processo PERMANENTEMENTE?\n\nDocumentos, lançamentos financeiros/faturas e execuções de agente ligados a ele são apagados junto. Não é reversível."
-    )) return;
+    if ((await ask({
+      title: "Excluir permanentemente",
+      message: "Excluir este processo PERMANENTEMENTE?\n\nDocumentos, lançamentos financeiros/faturas e execuções de agente ligados a ele são apagados junto. Não é reversível.",
+      danger: true,
+      confirmLabel: "Excluir",
+    })) === null) return;
     setExcluindoPermanenteId(id);
     try {
       const token = localStorage.getItem("afj_access_token");
@@ -265,20 +286,25 @@ export default function ProcessosPage() {
   }
 
   async function aplicarBulkSituacao() {
-    if (!bulkSituacao || selecionados.size === 0) return;
+    if ((!bulkSituacao && !bulkResponsavelId) || selecionados.size === 0) return;
     setBulkApplying(true);
     try {
       const token = localStorage.getItem("afj_access_token");
       const res = await fetch("/api/v1/processes/bulk-update", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ process_ids: Array.from(selecionados), situacao: bulkSituacao }),
+        body: JSON.stringify({
+          process_ids: Array.from(selecionados),
+          ...(bulkSituacao ? { situacao: bulkSituacao } : {}),
+          ...(bulkResponsavelId ? { responsavel_id: bulkResponsavelId } : {}),
+        }),
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok) {
         toast.success(`${data.atualizados} processo(s) atualizado(s).`);
         setSelecionados(new Set());
         setBulkSituacao("");
+        setBulkResponsavelId("");
         fetchProcessos(0, false);
       } else {
         toast.error(data.detail || "Erro ao atualizar em lote.");
@@ -357,7 +383,7 @@ export default function ProcessosPage() {
           className="border border-afj-cream-dark rounded-sm px-3 py-2 text-sm text-afj-black bg-white focus:outline-none focus:border-afj-gold"
         >
           <option value="">Todas as áreas</option>
-          {["CIVIL", "TRABALHISTA", "TRIBUTARIO", "PENAL", "PREVIDENCIARIO", "CONSUMIDOR"].map((a) => (
+          {AREAS_DIREITO.map((a) => (
             <option key={a} value={a}>{a}</option>
           ))}
         </select>
@@ -378,9 +404,21 @@ export default function ProcessosPage() {
             <option value="ARQUIVADO">Arquivado</option>
             <option value="ENCERRADO">Encerrado</option>
           </select>
+          {colegas.length > 0 && (
+            <select
+              value={bulkResponsavelId}
+              onChange={(e) => setBulkResponsavelId(e.target.value)}
+              className="border border-afj-cream-dark rounded-sm px-3 py-1.5 text-sm bg-white focus:outline-none focus:border-afj-gold"
+            >
+              <option value="">Reatribuir responsável para...</option>
+              {colegas.map((c) => (
+                <option key={c.id} value={c.id}>{c.full_name}</option>
+              ))}
+            </select>
+          )}
           <button
             onClick={aplicarBulkSituacao}
-            disabled={!bulkSituacao || bulkApplying}
+            disabled={(!bulkSituacao && !bulkResponsavelId) || bulkApplying}
             className="btn-afj-primary rounded-sm text-sm disabled:opacity-50"
           >
             {bulkApplying ? "Aplicando..." : "Aplicar"}
@@ -389,7 +427,7 @@ export default function ProcessosPage() {
             <Download size={13} /> Exportar CSV
           </button>
           <button
-            onClick={() => setSelecionados(new Set())}
+            onClick={() => { setSelecionados(new Set()); setBulkSituacao(""); setBulkResponsavelId(""); }}
             className="text-xs text-afj-black/40 hover:text-afj-black underline ml-auto"
           >
             Limpar seleção
@@ -643,7 +681,7 @@ export default function ProcessosPage() {
                 <select value={editForm.area_direito ?? ""} onChange={(e) => setEditForm({ ...editForm, area_direito: e.target.value })}
                   className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold">
                   <option value="">Sem área definida</option>
-                  {["CIVIL", "TRABALHISTA", "TRIBUTARIO", "PENAL", "PREVIDENCIARIO", "CONSUMIDOR", "EMPRESARIAL"].map((a) => (
+                  {AREAS_DIREITO.map((a) => (
                     <option key={a} value={a}>{a}</option>
                   ))}
                 </select>
@@ -726,6 +764,7 @@ export default function ProcessosPage() {
           </div>
         </div>
       )}
+      {confirmDialog}
     </div>
   );
 }

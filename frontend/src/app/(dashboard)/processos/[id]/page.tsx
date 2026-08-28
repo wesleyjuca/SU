@@ -6,6 +6,8 @@ import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
 import { ProcessTimelineCard } from "@/components/processes/ProcessTimeline";
 import type { Processo, Movimentacao, Prazo, Parte } from "@/types";
+import { AREAS_DIREITO } from "@/lib/constants";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 
 const SITUACAO_STYLE: Record<string, string> = {
   ATIVO: "badge-ativo",
@@ -41,6 +43,7 @@ export default function ProcessoDetailPage() {
   const id = params.id as string;
 
   const toast = useToast();
+  const { ask, confirmDialog } = useConfirmDialog();
   const [processo, setProcesso] = useState<Processo | null>(null);
   const [movimentacoes, setMovimentacoes] = useState<Movimentacao[]>([]);
   const [prazos, setPrazos] = useState<Prazo[]>([]);
@@ -298,7 +301,7 @@ export default function ProcessoDetailPage() {
   }
 
   async function excluirParte(parteId: string) {
-    if (!confirm("Excluir esta parte?")) return;
+    if ((await ask({ message: "Excluir esta parte?", danger: true, confirmLabel: "Excluir" })) === null) return;
     setExcluindoParteId(parteId);
     try {
       const token = localStorage.getItem("afj_access_token");
@@ -1081,8 +1084,11 @@ export default function ProcessoDetailPage() {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-xs text-afj-black/60 block mb-1">Área do Direito</label>
-                  <input value={processoForm.area_direito} onChange={(e) => setProcessoForm({ ...processoForm, area_direito: e.target.value })}
-                    className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold" />
+                  <select value={processoForm.area_direito} onChange={(e) => setProcessoForm({ ...processoForm, area_direito: e.target.value })}
+                    className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm bg-white focus:outline-none focus:border-afj-gold">
+                    <option value="">Sem área definida</option>
+                    {AREAS_DIREITO.map((a) => <option key={a} value={a}>{a}</option>)}
+                  </select>
                 </div>
                 <div>
                   <label className="text-xs text-afj-black/60 block mb-1">Tipo de Ação</label>
@@ -1310,6 +1316,7 @@ export default function ProcessoDetailPage() {
           </div>
         </div>
       )}
+      {confirmDialog}
     </div>
   );
 }
