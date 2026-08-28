@@ -10,6 +10,7 @@ import { useUserStore } from "@/store";
 import { api } from "@/lib/api";
 import { useAgentStatus } from "@/hooks/useAgentStatus";
 import type { AgentCardData } from "@/components/agents/AgentStatusCard";
+import { AREAS_DIREITO } from "@/lib/constants";
 
 interface CustomAgent {
   id: string;
@@ -515,7 +516,7 @@ export default function AgentesPage() {
             onChange={(e) => setAreaSelecionada(e.target.value)}
             className="border border-afj-cream-dark rounded-md px-3 py-2 text-sm text-afj-black bg-white focus:outline-none focus:border-afj-gold"
           >
-            {["CIVIL", "TRABALHISTA", "TRIBUTARIO", "PENAL", "PREVIDENCIARIO", "CONSUMIDOR"].map((a) => (
+            {AREAS_DIREITO.map((a) => (
               <option key={a} value={a}>{a}</option>
             ))}
           </select>

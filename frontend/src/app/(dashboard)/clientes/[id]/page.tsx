@@ -27,6 +27,7 @@ interface Cliente {
   telefone: string | null;
   whatsapp: string | null;
   status: string;
+  segmento: string | null;
   origem: string | null;
   lgpd_consent: boolean;
   lgpd_consent_at: string | null;
@@ -366,6 +367,11 @@ export default function ClienteDetailPage() {
               )}
               {[
                 { label: "Origem", value: cliente.origem },
+                // Fase 240 (achado do diagnóstico de cadastros) — `segmento`
+                // (PLATINUM/GOLD/SILVER/REGULAR) já era classificado por um
+                // agente de IA (crm_agent, Fase 151) e persistido no banco,
+                // mas nunca aparecia em nenhuma tela — write-only até aqui.
+                { label: "Segmento", value: cliente.segmento },
                 {
                   label: "LGPD",
                   value: cliente.lgpd_consent

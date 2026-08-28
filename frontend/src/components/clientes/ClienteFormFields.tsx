@@ -23,6 +23,7 @@ export interface ClienteFormValues {
   cnpj: string;
   status: string;
   lgpd_consent: boolean;
+  observacoes: string;
 }
 
 interface ClienteFormFieldsProps {
@@ -158,6 +159,14 @@ export function ClienteFormFields({
             <Check size={12} /> Localização geográfica capturada.
           </p>
         )}
+      </div>
+
+      <div>
+        <label className="text-xs text-afj-black/60 block mb-1">Observações</label>
+        <textarea
+          rows={3} value={values.observacoes} onChange={(e) => onChange({ observacoes: e.target.value })}
+          className={inputCls}
+        />
       </div>
 
       <label className="flex items-center gap-2 text-sm cursor-pointer">

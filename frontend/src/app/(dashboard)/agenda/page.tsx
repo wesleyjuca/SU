@@ -189,11 +189,19 @@ export default function AgendaPage() {
       <div className="space-y-2">
         {list.map((item) => {
           const dias = diasPara(item.data_prazo);
-          const urgency = urgencyLabel(dias);
+          const diasFatal = diasPara(item.data_fatal);
+          // Fase 240 (achado do diagnóstico de cadastros) — data_fatal era
+          // gravada mas nunca influenciava a cor/urgência, nem tinha
+          // qualquer distinção visual: um prazo fatal amanhã e um prazo
+          // comum amanhã apareciam exatamente iguais. Usa a data mais
+          // urgente entre as duas pra colorir o card, e mostra um selo
+          // "FATAL" com a data quando ela existir.
+          const diasGovernante = diasFatal !== null && (dias === null || diasFatal < dias) ? diasFatal : dias;
+          const urgency = urgencyLabel(diasGovernante);
           return (
             <div
               key={item.id}
-              className={`afj-card p-4 border-l-4 ${urgencyClass(dias)} hover:shadow-md transition-shadow animate-fade-in`}
+              className={`afj-card p-4 border-l-4 ${urgencyClass(diasGovernante)} hover:shadow-md transition-shadow animate-fade-in`}
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="flex-1 min-w-0">
@@ -211,6 +219,14 @@ export default function AgendaPage() {
                     )}
                     {item.tipo && (
                       <span className="text-xs bg-afj-cream px-1.5 py-0.5 rounded">{item.tipo}</span>
+                    )}
+                    {item.data_fatal && (
+                      <span
+                        className="text-xs bg-red-50 text-red-700 border border-red-200 px-1.5 py-0.5 rounded font-semibold"
+                        title="Data fatal — prazo processual improrrogável"
+                      >
+                        FATAL · {new Date(item.data_fatal).toLocaleDateString("pt-BR")}
+                      </span>
                     )}
                   </div>
                 </div>

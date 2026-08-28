@@ -6,6 +6,7 @@ import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
 import { ProcessTimelineCard } from "@/components/processes/ProcessTimeline";
 import type { Processo, Movimentacao, Prazo, Parte } from "@/types";
+import { AREAS_DIREITO } from "@/lib/constants";
 
 const SITUACAO_STYLE: Record<string, string> = {
   ATIVO: "badge-ativo",
@@ -1081,8 +1082,11 @@ export default function ProcessoDetailPage() {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-xs text-afj-black/60 block mb-1">Área do Direito</label>
-                  <input value={processoForm.area_direito} onChange={(e) => setProcessoForm({ ...processoForm, area_direito: e.target.value })}
-                    className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold" />
+                  <select value={processoForm.area_direito} onChange={(e) => setProcessoForm({ ...processoForm, area_direito: e.target.value })}
+                    className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm bg-white focus:outline-none focus:border-afj-gold">
+                    <option value="">Sem área definida</option>
+                    {AREAS_DIREITO.map((a) => <option key={a} value={a}>{a}</option>)}
+                  </select>
                 </div>
                 <div>
                   <label className="text-xs text-afj-black/60 block mb-1">Tipo de Ação</label>
