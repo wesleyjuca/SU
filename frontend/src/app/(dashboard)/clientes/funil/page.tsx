@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect } from "react";
-import { Filter, Plus, X, Loader2, Trash2, TrendingUp, Target, Pencil } from "lucide-react";
+import { Filter, Plus, X, Loader2, Trash2, TrendingUp, Target, Pencil, ChevronLeft, ChevronRight } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
 import { useUserStore } from "@/store";
@@ -20,10 +20,19 @@ interface Funil {
 interface Cliente { id: string; nome_completo: string }
 interface Meta { id: string; periodo: string; tipo: string; valor_meta: number; realizado: number; percentual: number | null }
 
-const PERIODO_ATUAL = (() => {
-  const hoje = new Date();
-  return `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, "0")}`;
-})();
+function periodoDe(data: Date): string {
+  return `${data.getFullYear()}-${String(data.getMonth() + 1).padStart(2, "0")}`;
+}
+const PERIODO_ATUAL = periodoDe(new Date());
+
+function periodoLabel(periodo: string): string {
+  const [ano, mes] = periodo.split("-").map(Number);
+  return new Date(ano, mes - 1, 1).toLocaleDateString("pt-BR", { month: "long", year: "numeric" });
+}
+function periodoDeslocado(periodo: string, deslocamento: number): string {
+  const [ano, mes] = periodo.split("-").map(Number);
+  return periodoDe(new Date(ano, mes - 1 + deslocamento, 1));
+}
 
 const LABEL: Record<string, string> = {
   LEAD: "Lead", QUALIFICACAO: "Qualificação", PROPOSTA: "Proposta",
@@ -57,12 +66,17 @@ export default function FunilPage() {
   const [editingMeta, setEditingMeta] = useState(false);
   const [metaValor, setMetaValor] = useState("");
   const [savingMeta, setSavingMeta] = useState(false);
+  // Fase 244 (achado do diagnóstico de cadastros) — o backend já aceitava
+  // qualquer período (passado ou futuro) desde a Fase 213, só a UI estava
+  // travada no mês atual. Navegação simples de mês, sem mudança de schema.
+  const [periodoSelecionado, setPeriodoSelecionado] = useState(PERIODO_ATUAL);
 
-  useEffect(() => { fetchFunil(); fetchClientes(); fetchMeta(); }, []);
+  useEffect(() => { fetchFunil(); fetchClientes(); }, []);
+  useEffect(() => { fetchMeta(); setEditingMeta(false); }, [periodoSelecionado]);
 
   async function fetchMeta() {
     try {
-      const res = await fetch(`/api/v1/crm/metas?periodo=${PERIODO_ATUAL}`, { headers: authH() });
+      const res = await fetch(`/api/v1/crm/metas?periodo=${periodoSelecionado}`, { headers: authH() });
       if (res.ok) {
         const metas: Meta[] = await res.json();
         setMeta(metas.find((m) => m.tipo === "RECEITA") ?? null);
@@ -78,7 +92,7 @@ export default function FunilPage() {
     try {
       const res = await fetch("/api/v1/crm/metas", {
         method: "POST", headers: authH(),
-        body: JSON.stringify({ periodo: PERIODO_ATUAL, tipo: "RECEITA", valor_meta: valor }),
+        body: JSON.stringify({ periodo: periodoSelecionado, tipo: "RECEITA", valor_meta: valor }),
       });
       if (res.ok) { setEditingMeta(false); setMetaValor(""); fetchMeta(); }
       else toast.error("Erro ao salvar meta.");
@@ -175,14 +189,25 @@ export default function FunilPage() {
         <div className="flex items-center justify-between gap-3 mb-2">
           <span className="flex items-center gap-2 text-sm font-medium text-afj-black">
             <Target size={14} className="text-afj-gold" />
-            Meta de receita — {PERIODO_ATUAL}
+            Meta de receita
           </span>
-          {canDefinirMeta && !editingMeta && (
-            <button onClick={() => { setMetaValor(meta ? String(meta.valor_meta) : ""); setEditingMeta(true); }}
-              className="text-afj-black/40 hover:text-afj-gold">
-              <Pencil size={13} />
+          <div className="flex items-center gap-1">
+            <button onClick={() => setPeriodoSelecionado((p) => periodoDeslocado(p, -1))}
+              className="text-afj-black/40 hover:text-afj-black p-0.5" aria-label="Mês anterior">
+              <ChevronLeft size={15} />
             </button>
-          )}
+            <span className="text-xs text-afj-black/60 capitalize w-28 text-center">{periodoLabel(periodoSelecionado)}</span>
+            <button onClick={() => setPeriodoSelecionado((p) => periodoDeslocado(p, 1))}
+              className="text-afj-black/40 hover:text-afj-black p-0.5" aria-label="Próximo mês">
+              <ChevronRight size={15} />
+            </button>
+            {canDefinirMeta && !editingMeta && (
+              <button onClick={() => { setMetaValor(meta ? String(meta.valor_meta) : ""); setEditingMeta(true); }}
+                className="text-afj-black/40 hover:text-afj-gold ml-1">
+                <Pencil size={13} />
+              </button>
+            )}
+          </div>
         </div>
         {editingMeta ? (
           <form onSubmit={salvarMeta} className="flex items-center gap-2">

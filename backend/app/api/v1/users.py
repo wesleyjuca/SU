@@ -939,6 +939,18 @@ async def update_user(
     if "role" in updates:
         _validate_role_assignment(updates["role"], current_user)
 
+    # Fase 244 (achado do diagnóstico de cadastros) — elevar alguém a ADMIN/
+    # SUPERADMIN era 1 clique de um único ADMIN, sem segunda confirmação
+    # (única ação sensível do sistema sem o padrão HITL já usado em
+    # petição/contrato). Elevação real (papel muda PRA ADMIN/SUPERADMIN,
+    # não era isso antes) passa a exigir aprovação de outro
+    # ADVOGADO/SOCIO/ADMIN via /aprovacoes — a mudança de role só acontece
+    # de fato em execute_approved_action, nunca aqui direto. Demoção/
+    # desativação continuam imediatas (não é o risco que este achado mirava).
+    role_pendente = None
+    if "role" in updates and updates["role"] in ("ADMIN", "SUPERADMIN") and user.role != updates["role"]:
+        role_pendente = updates.pop("role")
+
     # Proteção contra lockout: não permitir desativar ou rebaixar o ÚLTIMO
     # ADMIN ativo do escritório (senão ninguém mais administra o sistema).
     vai_desativar = updates.get("is_active") is False
@@ -962,7 +974,27 @@ async def update_user(
     for field, value in updates.items():
         setattr(user, field, value)
 
+    approval_id = None
+    if role_pendente:
+        from app.models.agent_run import Approval
+        approval = Approval(
+            tipo="USER_ROLE_CHANGE",
+            titulo=f"Promover {user.full_name} a {role_pendente}",
+            descricao=f"{current_user.full_name} solicitou elevar o papel de {user.full_name} ({user.email}) de {user.role} para {role_pendente}.",
+            ai_suggestion={"target_user_id": str(user.id), "novo_role": role_pendente},
+            prioridade="NORMAL",
+            tenant_id=current_user.tenant_id,
+        )
+        db.add(approval)
+        await db.flush()
+        approval_id = str(approval.id)
+
     await db.commit()
+    if approval_id:
+        return {
+            "message": f"Demais alterações aplicadas. Promoção a {role_pendente} enviada para aprovação de outro administrador.",
+            "approval_id": approval_id,
+        }
     return {"message": "Usuário atualizado"}
 
 

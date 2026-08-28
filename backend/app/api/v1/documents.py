@@ -677,9 +677,19 @@ async def create_contract(
     return {"id": str(doc.id), "titulo": doc.titulo, "status": doc.status, "tipo": doc.tipo}
 
 
-class ContractSendSignature(BaseModel):
+class Signatario(BaseModel):
     email: str
     nome: str
+
+
+class ContractSendSignature(BaseModel):
+    # Fase 244 (achado do diagnóstico de cadastros) — multi-signatário. Os
+    # campos email/nome antigos continuam aceitos (contrato com 1 único
+    # signatário, caso mais comum) — quando `signatarios` vem preenchido,
+    # ele é a fonte de verdade e os campos soltos são ignorados.
+    email: str | None = None
+    nome: str | None = None
+    signatarios: list[Signatario] | None = None
 
 
 @router.post("/contracts/{doc_id}/enviar-assinatura")
@@ -715,9 +725,17 @@ async def enviar_contrato_assinatura(
     if contract.status == "ASSINADO":
         raise HTTPException(status_code=422, detail="Contrato já assinado.")
 
-    result = await enviar_para_assinatura(db, current_user.tenant_id, doc, contract, body.email.strip(), body.nome.strip())
+    if body.signatarios:
+        signatarios = [{"email": s.email.strip(), "nome": s.nome.strip()} for s in body.signatarios]
+    elif body.email and body.nome:
+        signatarios = [{"email": body.email.strip(), "nome": body.nome.strip()}]
+    else:
+        raise HTTPException(status_code=422, detail="Informe ao menos 1 signatário (email/nome).")
+
+    result = await enviar_para_assinatura(db, current_user.tenant_id, doc, contract, signatarios)
+    nomes = ", ".join(s["email"] for s in signatarios)
     return {
-        "message": f"Contrato enviado para assinatura de {body.email.strip()} via Clicksign.",
+        "message": f"Contrato enviado para assinatura de {nomes} via Clicksign.",
         **result,
         "status": contract.status,
     }

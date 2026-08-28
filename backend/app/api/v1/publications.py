@@ -42,6 +42,10 @@ def _to_dict(i: Intimacao) -> dict:
         "status": i.status,
         "deadline_id": str(i.deadline_id) if i.deadline_id else None,
         "created_at": i.created_at.isoformat(),
+        # Fase 244 — classificação de prioridade pré-computada na captura
+        # (dje_monitor.py), pra aparecer já na listagem sem abrir o modal.
+        "prioridade_ia": i.prioridade_ia,
+        "resumo_ia": i.resumo_ia,
     }
 
 

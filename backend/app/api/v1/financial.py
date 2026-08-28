@@ -5,6 +5,7 @@ from sqlalchemy import select, desc
 from pydantic import BaseModel
 from decimal import Decimal
 from datetime import date
+from dateutil.relativedelta import relativedelta
 import statistics
 import uuid
 
@@ -73,6 +74,11 @@ class FinancialEntryCreate(BaseModel):
     valor: float
     data_vencimento: date | None = None
     status: str = "PENDENTE"
+    # Fase 244 (achado do diagnóstico de cadastros) — lançamento parcelado.
+    # Quando > 1, o `valor` informado é o de CADA parcela (não o total —
+    # mais direto pra digitar, evita conta de cabeça), e `data_vencimento`
+    # (se dada) é a da 1ª parcela; as demais vencem 1 mês depois cada.
+    parcelas: int = 1
 
 
 class FinancialEntryResponse(BaseModel):
@@ -87,6 +93,8 @@ class FinancialEntryResponse(BaseModel):
     client_id: str | None
     process_id: str | None
     created_at: str
+    parcela_atual: int | None = None
+    parcela_total: int | None = None
 
 
 @router.get("", response_model=list[FinancialEntryResponse])
@@ -129,21 +137,42 @@ async def create_entry(
     current_user: User = Depends(require_role("ADMIN", "SOCIO", "GESTOR")),
     db: AsyncSession = Depends(get_db),
 ):
-    entry = FinancialEntry(
-        tipo=body.tipo,
-        categoria=body.categoria,
-        client_id=await _validar_client_id(db, body.client_id, current_user.tenant_id),
-        process_id=await _validar_process_id(db, body.process_id, current_user.tenant_id),
-        descricao=body.descricao,
-        valor=Decimal(str(body.valor)),
-        data_vencimento=body.data_vencimento,
-        status=body.status,
-        created_by=current_user.id,
-        tenant_id=current_user.tenant_id,
-    )
-    db.add(entry)
+    if body.parcelas < 1 or body.parcelas > 60:
+        raise HTTPException(status_code=422, detail="Número de parcelas deve estar entre 1 e 60.")
+
+    client_id = await _validar_client_id(db, body.client_id, current_user.tenant_id)
+    process_id = await _validar_process_id(db, body.process_id, current_user.tenant_id)
+
+    # Fase 244 (achado do diagnóstico de cadastros) — lançamento parcelado.
+    # Todas as parcelas nascem juntas, cada uma um FinancialEntry
+    # independente (editável/cancelável isolada), agrupadas só por
+    # `grupo_recorrencia_id` pra exibição — sem job periódico, sem "gerar
+    # a próxima" mais tarde.
+    grupo_id = uuid.uuid4() if body.parcelas > 1 else None
+    primeira = None
+    for n in range(1, body.parcelas + 1):
+        venc = (body.data_vencimento + relativedelta(months=n - 1)) if body.data_vencimento else None
+        descricao = body.descricao if body.parcelas == 1 else f"{body.descricao} ({n}/{body.parcelas})"
+        entry = FinancialEntry(
+            tipo=body.tipo,
+            categoria=body.categoria,
+            client_id=client_id,
+            process_id=process_id,
+            descricao=descricao,
+            valor=Decimal(str(body.valor)),
+            data_vencimento=venc,
+            status=body.status,
+            created_by=current_user.id,
+            tenant_id=current_user.tenant_id,
+            grupo_recorrencia_id=grupo_id,
+            parcela_atual=n if body.parcelas > 1 else None,
+            parcela_total=body.parcelas if body.parcelas > 1 else None,
+        )
+        db.add(entry)
+        if primeira is None:
+            primeira = entry
     await db.flush()
-    return _to_response(entry)
+    return _to_response(primeira)
 
 
 class FinancialEntryUpdate(BaseModel):
@@ -491,6 +520,8 @@ def _to_response(e: FinancialEntry) -> FinancialEntryResponse:
         client_id=str(e.client_id) if e.client_id else None,
         process_id=str(e.process_id) if e.process_id else None,
         created_at=e.created_at.isoformat(),
+        parcela_atual=e.parcela_atual,
+        parcela_total=e.parcela_total,
     )
 
 

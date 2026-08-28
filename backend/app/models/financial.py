@@ -1,4 +1,4 @@
-from sqlalchemy import String, ForeignKey, Text, Numeric, Date
+from sqlalchemy import String, ForeignKey, Text, Numeric, Date, Integer
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import UUID as PGUUID, JSONB
 from sqlalchemy import DateTime, func
@@ -25,6 +25,16 @@ class FinancialEntry(Base):
     created_by: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"))
     tenant_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("tenants.id"), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # Fase 244 (achado do diagnóstico de cadastros) — lançamento parcelado.
+    # Todas as parcelas nascem juntas na criação (nunca via job periódico —
+    # mais simples, mais previsível, e cada parcela já é um FinancialEntry
+    # independente desde o início, editável/cancelável isoladamente sem
+    # afetar as demais). grupo_recorrencia_id agrupa as parcelas da mesma
+    # série pra exibição; parcela_atual/parcela_total só são exibição
+    # (ex. "3/12"), não controlam nenhuma lógica.
+    grupo_recorrencia_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), index=True)
+    parcela_atual: Mapped[int | None] = mapped_column(Integer)
+    parcela_total: Mapped[int | None] = mapped_column(Integer)
 
 
 class BillingInvoice(Base):

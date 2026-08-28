@@ -219,6 +219,27 @@ async def execute_approved_action(db, approval, modifications: dict | None = Non
         return {"executed": "contract_approved", "document_id": doc_id,
                 "note": nota, "auto_enviado_assinatura": auto_enviado}
 
+    if tipo == "USER_ROLE_CHANGE":
+        # Fase 244 (achado do diagnóstico de cadastros) — promover alguém a
+        # ADMIN/SUPERADMIN antes exigia só 1 clique de outro ADMIN, sem
+        # segunda confirmação. `PUT /users/{id}` (app/api/v1/users.py) agora
+        # cria este Approval em vez de aplicar direto — a mudança de role
+        # real só acontece aqui, após aprovação humana explícita (mesmo
+        # invariante HITL do CLAUDE.md).
+        from app.models.user import User as _User
+
+        target_user_id = sug.get("target_user_id")
+        novo_role = sug.get("novo_role")
+        if not target_user_id or not novo_role:
+            return {"executed": "erro", "note": "Dados da solicitação incompletos."}
+        target = await db.get(_User, uuid.UUID(target_user_id))
+        if not target or target.tenant_id != approval.tenant_id:
+            return {"executed": "erro", "note": "Usuário alvo não encontrado."}
+        target.role = novo_role
+        await db.flush()
+        return {"executed": "role_changed", "target_user_id": target_user_id, "novo_role": novo_role,
+                "note": f"Papel de {target.full_name} alterado para {novo_role}."}
+
     # Tipos sem execução automática (ex.: CLIENT_EMAIL): registrar aprovação sem simular envio.
     return {"executed": "approved", "note": "Aprovado. Ação externa deve ser realizada manualmente."}
 
@@ -244,7 +265,7 @@ async def _tentar_envio_automatico_assinatura(db, tenant_id, doc, con) -> dict:
 
     try:
         from app.services.esign import enviar_para_assinatura
-        resultado = await enviar_para_assinatura(db, tenant_id, doc, con, client.email, client.nome_completo)
+        resultado = await enviar_para_assinatura(db, tenant_id, doc, con, [{"email": client.email, "nome": client.nome_completo}])
         return {"ok": True, "email": client.email, **resultado}
     except HTTPException as exc:
         # Fase 199: distingue o motivo real (ex. "ambiente de demonstração")

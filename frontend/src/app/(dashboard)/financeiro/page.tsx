@@ -22,6 +22,8 @@ interface Entry {
   client_id: string | null;
   process_id: string | null;
   created_at: string;
+  parcela_atual: number | null;
+  parcela_total: number | null;
 }
 
 interface Summary {
@@ -78,6 +80,9 @@ export default function FinanceiroPage() {
   const [processos, setProcessos] = useState<ProcessoOpcao[]>([]);
   const [novoClientId, setNovoClientId] = useState("");
   const [novoProcessId, setNovoProcessId] = useState("");
+  // Fase 244 — só pra UI (label/aviso condicional); o valor real vai pelo
+  // form (react-hook-form) no campo "parcelas".
+  const [parcelasValor, setParcelasValor] = useState(1);
   // Fase 182 — "Exportar pro Sheets" só aparece pra quem já conectou o
   // Google Workspace do escritório (mesmo padrão de documentos/page.tsx).
   const [googleConnected, setGoogleConnected] = useState(false);
@@ -209,7 +214,8 @@ export default function FinanceiroPage() {
     setEditingId(null);
     setNovoClientId("");
     setNovoProcessId("");
-    resetFin({ tipo: "RECEITA", status: "PENDENTE", descricao: "", categoria: "", valor: undefined as unknown as number, vencimento: "" });
+    setParcelasValor(1);
+    resetFin({ tipo: "RECEITA", status: "PENDENTE", descricao: "", categoria: "", valor: undefined as unknown as number, vencimento: "", parcelas: 1 });
     setShowModal(true);
   }
 
@@ -231,6 +237,7 @@ export default function FinanceiroPage() {
     setEditingId(null);
     setNovoClientId("");
     setNovoProcessId("");
+    setParcelasValor(1);
     resetFin();
   }
 
@@ -261,6 +268,7 @@ export default function FinanceiroPage() {
         body: JSON.stringify(payload),
       });
       if (res.ok) {
+        if (!editingId && parcelasValor > 1) toast.success(`${parcelasValor} parcelas lançadas.`);
         fecharModal();
         fetchEntries();
         fetchSummary();
@@ -640,24 +648,49 @@ export default function FinanceiroPage() {
                   </div>
                 </div>
               )}
-              <div>
-                <label className="text-xs text-afj-black/60 block mb-1">Valor (R$) *</label>
-                <input
-                  {...registerFin("valor")}
-                  type="number"
-                  step="0.01"
-                  placeholder="0,00"
-                  className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold"
-                />
-                {finErrors.valor && <p className="text-xs text-red-500 mt-1">{finErrors.valor.message}</p>}
+              <div className={editingId ? "" : "grid grid-cols-2 gap-3"}>
+                <div>
+                  <label className="text-xs text-afj-black/60 block mb-1">
+                    {!editingId && parcelasValor > 1 ? "Valor de cada parcela (R$) *" : "Valor (R$) *"}
+                  </label>
+                  <input
+                    {...registerFin("valor")}
+                    type="number"
+                    step="0.01"
+                    placeholder="0,00"
+                    className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold"
+                  />
+                  {finErrors.valor && <p className="text-xs text-red-500 mt-1">{finErrors.valor.message}</p>}
+                </div>
+                {!editingId && (
+                  <div>
+                    <label className="text-xs text-afj-black/60 block mb-1">Parcelas</label>
+                    <input
+                      {...registerFin("parcelas", { valueAsNumber: true })}
+                      type="number"
+                      min={1}
+                      max={60}
+                      placeholder="1"
+                      onChange={(e) => setParcelasValor(Number(e.target.value) || 1)}
+                      className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold"
+                    />
+                  </div>
+                )}
               </div>
               <div>
-                <label className="text-xs text-afj-black/60 block mb-1">Vencimento</label>
+                <label className="text-xs text-afj-black/60 block mb-1">
+                  {!editingId && parcelasValor > 1 ? "Vencimento da 1ª parcela" : "Vencimento"}
+                </label>
                 <input
                   {...registerFin("vencimento")}
                   type="date"
                   className="w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold"
                 />
+                {!editingId && parcelasValor > 1 && (
+                  <p className="text-[11px] text-afj-black/40 mt-1">
+                    As demais {parcelasValor - 1} parcelas vencem 1 mês depois, cada.
+                  </p>
+                )}
               </div>
               <div className="flex gap-3 pt-2">
                 <button type="button" onClick={fecharModal} className="flex-1 btn-afj-outline rounded-sm">

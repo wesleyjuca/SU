@@ -53,6 +53,7 @@ export const FinanceiroSchema = z.object({
   data_pagamento: z.string().optional(),
   process_id: z.string().optional(),
   client_id: z.string().optional(),
+  parcelas: z.coerce.number().int().min(1).max(60).optional(),
 });
 
 export const PrazoSchema = z.object({

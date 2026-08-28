@@ -3567,6 +3567,102 @@ Histórico:
     como idênticos antes desta fase.
   - Não implementadas nesta fase: as 11 propostas restantes (Fases
     244-245).
+- **Fase 244** (batch 5 dos 31 achados do diagnóstico de cadastros —
+  features maiores, design próprio). Investigação prévia (1 Explore
+  agent, 5 frentes) confirmou que cada uma tinha um esforço bem
+  diferente do que a leitura inicial do diagnóstico sugeria — escopo
+  ajustado por item, documentado abaixo, sem tentar a versão maximal de
+  nenhuma.
+  - **244.1 — sugestão de IA em Publicações, agora pré-computada**: antes
+    a única sugestão de IA (tipo/dias de prazo) só existia sob demanda,
+    dentro do modal de triagem, nunca persistida. Novo
+    `Intimacao.prioridade_ia`/`resumo_ia`/`classificado_em` (migração
+    idempotente) + `app/services/publicacao_prioridade.py` (novo,
+    classificação ALTA/MEDIA/BAIXA + resumo curto via LLM, mesmo padrão
+    de `jurisprudencia_sync.py::classificar_acordao` — chave central do
+    servidor, sem `user_ai_creds()`, já que é job periódico sem usuário
+    específico) chamado dentro de `scan_publicacoes`
+    (`app/services/dje_monitor.py`) uma vez por intimação capturada,
+    fail-soft (falha na classificação de 1 intimação não derruba a
+    varredura inteira). Frontend: badge de prioridade + resumo já na
+    listagem (`publicacoes/page.tsx`), sem precisar abrir o modal —
+    mesmo padrão citado no diagnóstico como diferencial do Astrea.
+  - **244.2 — assinatura eletrônica multi-signatário**: `esign.py::
+    enviar_para_assinatura` aceitava só 1 e-mail/nome fixo; agora recebe
+    `signatarios: list[{email, nome}]` e cria N signatários no MESMO
+    documento/envelope Clicksign (a API já suporta isso nativamente,
+    não precisou de N documentos). `POST /contracts/{id}/enviar-
+    assinatura` aceita a lista nova, mantendo `email`/`nome` soltos como
+    fallback de compatibilidade (nunca chamado pelo frontend novo, mas
+    evita quebrar uma integração externa que ainda mande no formato
+    antigo). Disparo automático na aprovação de contrato (Fase 192)
+    também migrado (1 signatário — o cliente vinculado — dentro de uma
+    lista de 1). Frontend (`contratos/page.tsx`): formulário vira lista
+    de linhas com adicionar/remover, mínimo 1.
+  - **244.3 — lançamento financeiro parcelado**: `FinancialEntry` ganha
+    `grupo_recorrencia_id`/`parcela_atual`/`parcela_total` (migração +
+    índice idempotentes). Decisão de design: todas as parcelas nascem
+    JUNTAS na criação (`POST /financial` com `parcelas: int`), cada uma
+    um `FinancialEntry` independente (editável/cancelável isolada) —
+    nunca um job periódico "gerando a próxima depois", mais simples e
+    mais previsível. `valor` informado é o de CADA parcela; vencimentos
+    espaçados de 1 mês via `dateutil.relativedelta` (já era dependência
+    do projeto). Frontend: campo "Parcelas" no modal de lançamento, só
+    na criação (PUT continua sem esse campo, como já era).
+  - **244.4 — meta de captação por mês futuro**: o backend (`POST/GET
+    /crm/metas`, Fase 213) já aceitava qualquer período sem trava — só
+    a UI do funil estava presa no mês atual. Navegação de mês (◀ ▶) no
+    widget de meta (`clientes/funil/page.tsx`), sem mudança de schema.
+    Decisão de escopo deliberada: meta "por equipe/responsável"
+    (exigiria `CrmMeta` ganhar `responsavel_id` + mudar a
+    `UniqueConstraint`) fica de fora — mudança de schema maior, não
+    pedida com a mesma urgência no diagnóstico original.
+  - **244.5 — dupla aprovação (HITL) na promoção a ADMIN/SUPERADMIN**:
+    único achado do diagnóstico envolvendo a trilha HITL — promover
+    alguém a ADMIN/SUPERADMIN era 1 clique de um único ADMIN, a única
+    ação sensível do sistema sem o padrão de aprovação em 2 etapas já
+    usado em petição/contrato/agente customizado. `PUT /users/{id}`
+    agora cria um `Approval(tipo="USER_ROLE_CHANGE")` PENDENTE em vez de
+    aplicar a mudança direto quando o papel muda PRA ADMIN/SUPERADMIN
+    (demoção/desativação continuam imediatas — não é o risco que este
+    achado mirava); a mudança de role real só acontece em
+    `execute_approved_action` (novo branch), após aprovação de outro
+    ADVOGADO/SOCIO/ADMIN via `/aprovacoes` — reaproveita a infra de
+    `Approval` sem nenhuma mudança na tela de Aprovações (`tipo` já é
+    renderizado genericamente). Limitação conhecida, não corrigida
+    (documentada, não é regressão desta fase): nada impede o mesmo
+    ADMIN que solicitou de resolver a própria aprovação — mesma
+    limitação já presente no HITL de petição/contrato, não introduzida
+    aqui.
+  - Verificado via HTTP real contra Postgres real: fluxo completo de
+    troca de role (role NÃO muda antes da aprovação, muda só depois);
+    meta de período futuro (2027-03) criada e lida corretamente;
+    `/publicacoes` devolve `prioridade_ia` no schema; lançamento com
+    `parcelas=3` gera exatamente 3 `FinancialEntry` com descrições
+    "(1/3)"/"(2/3)"/"(3/3)" e vencimentos 1 mês espaçados; envio de
+    contrato pra 2 signatários chega até o guard de Clicksign não
+    configurado (mesma limitação de sandbox sem credencial real já
+    documentada pra Stripe/Mercado Pago na Fase 242 — comportamento só
+    confirmável 100% pós-deploy). Verificação adicional com mocks reais
+    (Postgres real, `call_llm` e `buscar_comunicacoes` monkeypatchados):
+    `scan_publicacoes` persiste `prioridade_ia`/`resumo_ia`/
+    `classificado_em` de ponta a ponta a partir de uma intimação
+    simulada. Playwright real (Chromium do sandbox, `npm run dev` com
+    `API_URL` local): badge "⚡ ALTA PRIORIDADE" + resumo renderizados
+    na listagem de Publicações (screenshot confirma visualmente);
+    campo Parcelas presente no modal financeiro; navegação de mês no
+    funil avança corretamente (agosto → setembro); botão de assinatura
+    presente em Contratos; aprovação `USER_ROLE_CHANGE` aparece
+    normalmente na aba Resolvidas — zero console error novo. `ruff
+    check`/`py_compile` limpos nos 11 arquivos backend tocados (+ 2
+    arquivos de teste ajustados pra nova assinatura de
+    `enviar_para_assinatura`); `tsc --noEmit` limpo; `eslint` nos 6
+    arquivos frontend tocados — só warnings pré-existentes de
+    `exhaustive-deps` (incluindo 1 novo do mesmo tipo, esperado por ter
+    dividido 1 `useEffect` em 2 no funil), confirmados via `git stash`.
+  - Não implementadas nesta fase: as 3 propostas do batch 6 (Fase 245 —
+    importação em lote, faturamento do escritório, feriados forenses
+    nacionais), últimas do diagnóstico de cadastros original.
 
 
 ## Riscos conhecidos / débito técnico

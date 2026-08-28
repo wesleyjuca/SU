@@ -78,9 +78,9 @@ def _patch_integration(monkeypatch, conectado: bool):
 def _patch_esign_sucesso(monkeypatch):
     import app.services.esign as esign_mod
 
-    async def _fake_enviar(db, tenant_id, doc, con, email, nome):
+    async def _fake_enviar(db, tenant_id, doc, con, signatarios):
         con.status = "AGUARDANDO_ASSINATURA"
-        return {"document_key": "dk_123", "signer_key": "sk_123"}
+        return {"document_key": "dk_123", "signatarios": [{**s, "signer_key": "sk_123"} for s in signatarios]}
 
     monkeypatch.setattr(esign_mod, "enviar_para_assinatura", _fake_enviar)
 
@@ -88,7 +88,7 @@ def _patch_esign_sucesso(monkeypatch):
 def _patch_esign_falha(monkeypatch):
     import app.services.esign as esign_mod
 
-    async def _fake_enviar_falha(db, tenant_id, doc, con, email, nome):
+    async def _fake_enviar_falha(db, tenant_id, doc, con, signatarios):
         raise RuntimeError("Clicksign inalcançável")
 
     monkeypatch.setattr(esign_mod, "enviar_para_assinatura", _fake_enviar_falha)

@@ -220,11 +220,25 @@ export default function UsuariosPage() {
 
   async function handleUpdate(id: string, changes: Partial<UserItem>) {
     const token = localStorage.getItem("afj_access_token");
-    await fetch(`/api/v1/users/${id}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify(changes),
-    });
+    try {
+      const res = await fetch(`/api/v1/users/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify(changes),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        // Fase 244 — promover a ADMIN/SUPERADMIN agora fica pendente de
+        // aprovação de outro administrador (approval_id no retorno) em vez
+        // de aplicar na hora — avisa explicitamente pra não parecer que
+        // travou.
+        if (data.approval_id) toast.success(data.message || "Promoção enviada para aprovação.");
+      } else {
+        toast.error(data.detail || "Erro ao atualizar usuário.");
+      }
+    } catch {
+      toast.error("Falha de conexão.");
+    }
     setEditUser(null);
     fetchUsers(0, false);
   }

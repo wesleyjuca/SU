@@ -33,7 +33,7 @@ async def test_enviar_para_assinatura_bloqueia_sem_tocar_clicksign(monkeypatch):
     with pytest.raises(HTTPException) as exc_info:
         await esign.enviar_para_assinatura(
             db=None, tenant_id=uuid.uuid4(), doc=None, contract=None,
-            signatario_email="cliente@exemplo.com", signatario_nome="Cliente Teste",
+            signatarios=[{"email": "cliente@exemplo.com", "nome": "Cliente Teste"}],
         )
     assert exc_info.value.status_code == 422
     assert "demonstração" in exc_info.value.detail.lower()

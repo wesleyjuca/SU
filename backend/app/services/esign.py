@@ -26,15 +26,23 @@ _BASE = "https://app.clicksign.com"
 
 async def enviar_para_assinatura(
     db: AsyncSession, tenant_id, doc: Document, contract: Contract,
-    signatario_email: str, signatario_nome: str,
+    signatarios: list[dict],
 ) -> dict:
-    """Sobe o PDF no Clicksign e cria o signatário + lista de assinatura."""
+    """Sobe o PDF no Clicksign e cria N signatários + lista de assinatura
+    no MESMO documento (envelope único — Clicksign já suporta múltiplos
+    signatários por documento nativamente, sem precisar de N documentos).
+
+    Fase 244 (achado do diagnóstico de cadastros) — antes só aceitava 1
+    signatário (`signatario_email`/`signatario_nome`); `signatarios` é uma
+    lista de `{email, nome}`, sempre com pelo menos 1 item."""
     from app.services.demo_guard import tenant_is_demo
     if await tenant_is_demo(db, tenant_id):
         raise HTTPException(
             status_code=422,
             detail="Ambiente de demonstração: assinatura eletrônica real está desativada.",
         )
+    if not signatarios:
+        raise HTTPException(status_code=422, detail="Informe ao menos 1 signatário.")
     creds = await integration_hub.get_credentials(db, tenant_id, "clicksign")
     if not creds:
         raise HTTPException(
@@ -54,7 +62,7 @@ async def enviar_para_assinatura(
 
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-            # 1. Documento
+            # 1. Documento (1 único envelope pra todos os signatários)
             resp = await client.post(
                 f"{_BASE}/api/v1/documents",
                 params={"access_token": token},
@@ -68,36 +76,39 @@ async def enviar_para_assinatura(
                 raise HTTPException(status_code=502, detail="Clicksign recusou o documento — confira o token em Integrações.")
             document_key = resp.json()["document"]["key"]
 
-            # 2. Signatário (autenticação por e-mail)
-            resp = await client.post(
-                f"{_BASE}/api/v1/signers",
-                params={"access_token": token},
-                json={"signer": {
-                    "email": signatario_email,
-                    "name": signatario_nome,
-                    "auths": ["email"],
-                    "delivery": "email",
-                }},
-            )
-            if resp.status_code >= 400:
-                log.warning("clicksign_signer_error", status=resp.status_code, body=resp.text[:300])
-                raise HTTPException(status_code=502, detail="Clicksign recusou o signatário — confira o e-mail informado.")
-            signer_key = resp.json()["signer"]["key"]
+            # 2-3. Cada signatário: cria + vincula ao mesmo documento (dispara
+            # o e-mail de assinatura pra cada um).
+            enviados = []
+            for sig in signatarios:
+                resp = await client.post(
+                    f"{_BASE}/api/v1/signers",
+                    params={"access_token": token},
+                    json={"signer": {
+                        "email": sig["email"],
+                        "name": sig["nome"],
+                        "auths": ["email"],
+                        "delivery": "email",
+                    }},
+                )
+                if resp.status_code >= 400:
+                    log.warning("clicksign_signer_error", status=resp.status_code, body=resp.text[:300])
+                    raise HTTPException(status_code=502, detail=f"Clicksign recusou o signatário {sig['email']} — confira o e-mail informado.")
+                signer_key = resp.json()["signer"]["key"]
 
-            # 3. Vincula signatário ao documento (dispara o e-mail de assinatura)
-            resp = await client.post(
-                f"{_BASE}/api/v1/lists",
-                params={"access_token": token},
-                json={"list": {
-                    "document_key": document_key,
-                    "signer_key": signer_key,
-                    "sign_as": "contractee",
-                    "message": f"Contrato \"{doc.titulo}\" para assinatura.",
-                }},
-            )
-            if resp.status_code >= 400:
-                log.warning("clicksign_list_error", status=resp.status_code, body=resp.text[:300])
-                raise HTTPException(status_code=502, detail="Clicksign não vinculou o signatário ao documento.")
+                resp = await client.post(
+                    f"{_BASE}/api/v1/lists",
+                    params={"access_token": token},
+                    json={"list": {
+                        "document_key": document_key,
+                        "signer_key": signer_key,
+                        "sign_as": "contractee",
+                        "message": f"Contrato \"{doc.titulo}\" para assinatura.",
+                    }},
+                )
+                if resp.status_code >= 400:
+                    log.warning("clicksign_list_error", status=resp.status_code, body=resp.text[:300])
+                    raise HTTPException(status_code=502, detail=f"Clicksign não vinculou {sig['email']} ao documento.")
+                enviados.append({"email": sig["email"], "nome": sig["nome"], "signer_key": signer_key})
     except HTTPException:
         raise
     except Exception as exc:
@@ -108,16 +119,14 @@ async def enviar_para_assinatura(
         **(contract.assinaturas or {}),
         "provider": "clicksign",
         "document_key": document_key,
-        "signer_key": signer_key,
-        "signer_email": signatario_email,
-        "signer_nome": signatario_nome,
+        "signatarios": enviados,
         "sent_at": datetime.now(timezone.utc).isoformat(),
         "signed_at": None,
     }
     contract.status = "AGUARDANDO_ASSINATURA"
     await db.flush()
-    log.info("contrato_enviado_assinatura", doc=str(doc.id), document_key=document_key)
-    return {"document_key": document_key, "signer_email": signatario_email}
+    log.info("contrato_enviado_assinatura", doc=str(doc.id), document_key=document_key, n_signatarios=len(enviados))
+    return {"document_key": document_key, "signatarios": enviados}
 
 
 # Eventos do Clicksign que indicam documento finalizado (todos assinaram)

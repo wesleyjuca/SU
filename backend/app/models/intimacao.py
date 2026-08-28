@@ -33,3 +33,12 @@ class Intimacao(Base):
     status: Mapped[str] = mapped_column(String(20), default="NOVA", index=True)
     deadline_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # Fase 244 (achado do diagnóstico de cadastros, comparação com Astrea) —
+    # antes a sugestão de IA só existia sob demanda, dentro do modal de
+    # triagem (prazo_sugestao.py), nunca persistida. Estes 3 campos são
+    # preenchidos uma vez, no momento da captura (scan_daily_publications),
+    # pra aparecer JÁ NA LISTAGEM — sem o usuário precisar abrir o modal
+    # pra saber se é urgente. PRIORIDADES_VALIDAS: ALTA, MEDIA, BAIXA.
+    prioridade_ia: Mapped[str | None] = mapped_column(String(10))
+    resumo_ia: Mapped[str | None] = mapped_column(Text)
+    classificado_em: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

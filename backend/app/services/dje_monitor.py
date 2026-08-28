@@ -133,6 +133,22 @@ async def scan_publicacoes(db, tenant_id: uuid.UUID | None = None, dias_retro: i
                 match = pmap.get(c.numero_cnj or "")
                 process_id, responsavel_id = (match if match else (None, None))
 
+                # Fase 244 — classificação de prioridade pré-computada aqui,
+                # na captura, pra já aparecer na listagem sem o usuário
+                # precisar abrir o modal de triagem. Fail-soft: uma falha na
+                # classificação de UMA intimação não derruba a varredura
+                # inteira (os 3 campos ficam NULL, mesmo efeito de antes).
+                from app.services.publicacao_prioridade import classificar_intimacao
+                prioridade_ia = resumo_ia = classificado_em = None
+                try:
+                    classificacao = await classificar_intimacao(c.texto)
+                    if classificacao:
+                        prioridade_ia = classificacao["prioridade"]
+                        resumo_ia = classificacao["resumo"]
+                        classificado_em = datetime.now(timezone.utc)
+                except Exception as exc:
+                    log.warning("intimacao_classificacao_falhou", error=str(exc))
+
                 intim = Intimacao(
                     tenant_id=t_id,
                     process_id=process_id,
@@ -147,6 +163,9 @@ async def scan_publicacoes(db, tenant_id: uuid.UUID | None = None, dias_retro: i
                     link=c.link,
                     hash=h,
                     status="NOVA",
+                    prioridade_ia=prioridade_ia,
+                    resumo_ia=resumo_ia,
+                    classificado_em=classificado_em,
                 )
                 db.add(intim)
                 novas += 1
