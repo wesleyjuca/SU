@@ -3232,6 +3232,28 @@ Histórico:
   verificação principal via HTTP real contra o backend rodando, como em
   toda fase recente desta sessão. `ruff check`/`py_compile` limpos no
   único arquivo backend tocado.
+- **Fase 239** — fecha o 2º achado da Fase 237, deixado em aberto na
+  Fase 238 ("fica pra decidir depois"): `notifications.router`/
+  `push.router` (`backend/app/api/v1/router.py`) eram os últimos 2
+  routers de negócio ainda montados sem `_STAFF`, mesma classe do
+  achado crítico já corrigido pra `tenant.router`/`system.router` na
+  Fase 235 — CLIENT recebia `200`/`201` em `GET /notifications`/`POST
+  /push/subscribe` em vez de ser bloqueado pelo invariante já
+  documentado no topo do arquivo ("CLIENT só acessa `/portal/*` e
+  `/auth/*`"). Fix de 2 linhas: os 2 routers passam de `dependencies=
+  _BLOCK` pra `dependencies=_BLOCK_STAFF`. Verificado via HTTP real
+  reproduzindo exatamente o cenário confirmado na Fase 237: CLIENT
+  (gerado via link de portal real) agora recebe `403` nos dois; ADMIN
+  continua acessando ambos normalmente (`GET /notifications` → `200`;
+  `POST /push/subscribe` chega até a validação do corpo — `422` num
+  payload de teste propositalmente malformado, confirmando que o
+  bloqueio de papel não é mais o obstáculo); `/portal/me` do mesmo
+  CLIENT continua `200` (sem bloqueio em excesso). Sem teste
+  automatizado novo — mesmo precedente já usado pelo fix idêntico da
+  Fase 235 (`tenant.router`/`system.router`), que também não ganhou um
+  teste dedicado na época; verificação HTTP real é a prova principal,
+  como em toda fase recente. `ruff check`/`py_compile` limpos no único
+  arquivo tocado.
 
 
 ## Riscos conhecidos / débito técnico
