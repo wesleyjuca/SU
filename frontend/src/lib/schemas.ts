@@ -51,7 +51,7 @@ export const FinanceiroSchema = z.object({
   status: z.string().optional(),
   vencimento: z.string().optional(),
   data_pagamento: z.string().optional(),
-  processo_id: z.string().optional(),
+  process_id: z.string().optional(),
   client_id: z.string().optional(),
 });
 

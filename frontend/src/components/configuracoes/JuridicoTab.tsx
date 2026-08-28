@@ -66,6 +66,15 @@ export function JuridicoTab() {
   function adicionarOab() {
     const numero = novaOab.numero.replace(/\D/g, "");
     if (!numero) { toast.error("Informe o número da OAB."); return; }
+    // Fase 242 — OAB não tem dígito verificador público/padronizado como
+    // CPF/CNPJ (confirmado: não existe algoritmo de DV documentado pela
+    // OAB) — esta é só uma checagem de sanidade de formato (faixa de
+    // dígitos plausível pros números emitidos hoje), nunca uma validação
+    // de dígito verificador real. Não finge uma garantia que não existe.
+    if (numero.length < 3 || numero.length > 7) {
+      toast.error("Número de OAB fora da faixa plausível (3 a 7 dígitos). Confira antes de salvar.");
+      return;
+    }
     if (oabs.some((o) => o.numero === numero && o.uf === novaOab.uf)) { toast.error("OAB já cadastrada."); return; }
     setOabs([...oabs, { numero, uf: novaOab.uf, nome: novaOab.nome.trim() || null }]);
     setNovaOab({ numero: "", uf: novaOab.uf, nome: "" });
@@ -197,6 +206,7 @@ export function JuridicoTab() {
             <label className="text-[11px] text-afj-black/50 block mb-0.5">Número</label>
             <input value={novaOab.numero} onChange={(e) => setNovaOab({ ...novaOab, numero: e.target.value })}
               placeholder="123456" className="w-28 border border-afj-cream-dark rounded-sm px-2 py-1.5 text-sm" />
+            <p className="text-[10px] text-afj-black/35 mt-0.5">Só checagem de formato — a OAB não tem dígito verificador público.</p>
           </div>
           <div>
             <label className="text-[11px] text-afj-black/50 block mb-0.5">UF</label>

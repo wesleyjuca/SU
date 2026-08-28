@@ -3407,6 +3407,102 @@ Histórico:
     `py_compile` limpos no backend.
   - Não implementados nesta fase: os 21 achados restantes — seguem pras
     Fases 242-245.
+- **Fase 242** (batch 3 dos 31 achados do diagnóstico de cadastros —
+  vínculos e uploads faltando). Antes desta fase, o usuário pediu uma
+  auditoria dos conectores MCP conectados à conta em busca de
+  oportunidades de melhoria pro sistema — investigação (`ListConnectors`
+  + testes reais de Vercel/Sentry/Lawve AI) concluiu que nenhum
+  conector tinha uma integração genuína e executável disponível além do
+  Legal Data Hunter (já integrado nos 2 skills de jurisprudência):
+  Vercel sem acesso ao projeto real do AFJ nesta sessão (mesmo bloqueio
+  já documentado nas Fases 199/230), Sentry/Lawve AI/Canva/Descript sem
+  autorização completada (fora do alcance de sessão não-interativa), e
+  os demais (Gmail/Drive/Calendar/Microsoft 365/etc.) são contas
+  pessoais da sessão, não credenciais do AFJ — usá-las regrediria a
+  arquitetura já correta (OAuth por tenant). Achado técnico relevante:
+  Legal Data Hunter é um servidor MCP exposto só a sessões do Claude
+  Code, não uma API REST com credencial própria que o backend Python em
+  produção (Railway) possa chamar como já faz com CNJ DataJud/SERPRO/
+  BrasilAPI — sem isso, integrá-lo no `jurisprudence_agent` de produção
+  criaria código morto. Usuário optou por seguir direto pra Fase 242.
+  - **242.1 — `FinancialEntry` sem vínculo de cliente/processo na UI**:
+    o model já tinha `client_id`/`process_id` (usados em relatórios como
+    `honorarios-historico`, Fase 215), só o formulário
+    (`financeiro/page.tsx`) não oferecia os campos. Modal "Novo
+    Lançamento" ganha 2 selects (Cliente/Processo, o 2º filtrado pelo
+    cliente escolhido via `GET /processes?client_id=`) — só na criação,
+    já que `PUT /financial/{id}` nunca aceitou esses 2 campos (decisão
+    de escopo: não expandido, edição de vínculo não fazia parte do
+    pedido). **Achado colateral corrigido**: `FinanceiroSchema`
+    (`frontend/src/lib/schemas.ts`) tinha um campo `processo_id` que
+    nunca batia com o `process_id` que o backend sempre esperou —
+    inofensivo até agora porque nunca era enviado, mas teria quebrado o
+    vínculo silenciosamente se alguém tentasse usá-lo antes deste fix.
+  - **242.2 — Sem seleção de cliente na criação de processo**:
+    `POST /processes` já aceitava `client_id` desde sempre
+    (`ProcessCreate.client_id`), só a tela `processos/novo/page.tsx` não
+    oferecia — só dava pra vincular depois, via Parte. Novo select
+    "Cliente" (mesmo padrão de fetch de `GET /clients?limit=200` já
+    usado em `faturas/page.tsx`/`clientes/funil/page.tsx`).
+  - **242.3 — Upload de documento single-file**: `documentos/page.tsx`
+    ganha `multiple` no input e `uploadDocs()` (upload sequencial, um
+    POST por arquivo no mesmo endpoint de sempre — sem mudança de
+    backend), com progresso "Enviando X de N..." no próprio botão e
+    toast final resumindo quantos de quantos tiveram sucesso.
+  - **242.4 — Bases de conhecimento do agente de IA hardcoded 2×**:
+    `ProposeCustomAgentModal.tsx` e `BrainCustomAgents.tsx` mantinham
+    cópias manuais de `VALID_COLLECTIONS` (`backend/app/api/v1/rag.py`)
+    — mesma classe de risco já corrigida pra Área do Direito na Fase
+    240. Novo `GET /rag/collections` (`get_current_user`, lista não é
+    sensível) devolve a lista real; novo
+    `frontend/src/lib/ragCollections.ts` centraliza só os RÓTULOS de
+    exibição (nunca o conjunto de valores, que sempre vem do backend).
+    `BrainCustomAgents.tsx` também trocou o campo de texto livre
+    separado por vírgula (editar um agente já aprovado) pelo mesmo
+    padrão de botões-toggle do modal de propor — evita o mesmo tipo de
+    divergência silenciosa de nome de collection na edição.
+  - **242.5 — OAB sem validação de formato**: `JuridicoTab.tsx`
+    (OABs monitoradas do escritório) ganhou uma checagem de sanidade
+    (3-7 dígitos) antes de aceitar uma OAB nova — a OAB não tem
+    dígito verificador público/padronizado como CPF/CNPJ (confirmado:
+    não existe algoritmo de DV documentado pela entidade), então o
+    código e a UI deixam explícito que é só checagem de formato, nunca
+    fingindo uma garantia de dígito verificador que não existe.
+  - **242.6 — Stripe/Mercado Pago sem teste de credencial**:
+    `integracoes/page.tsx` tinha `TESTAVEIS` sem os 2 gateways de
+    pagamento, mesmo o botão "Testar" já existindo pra outras fontes.
+    `integration_hub.py::testar_conexao` ganhou um caminho novo
+    (`_testar_payment_gateway`) — sonda GET read-only autenticada
+    (Stripe `/v1/balance`, Mercado Pago `/users/me`, mesmo padrão
+    "401/403 = credencial ruim" já usado pras fontes credenciadas),
+    sem reaproveitar a abstração `FonteProcessual` (que é de
+    acompanhamento processual, não pagamento — não fazia sentido
+    encaixar ali). Verificado real via HTTP: sem credencial → 
+    `DESCONECTADA`; com uma chave forjada → o próprio egress deste
+    sandbox bloqueia a chamada a `api.stripe.com` (mesma restrição já
+    documentada desde a Fase 217/230/231 pra domínios externos) — o
+    código captura a exceção corretamente e marca `ERRO` sem crashar,
+    mas a distinção real "credencial inválida vs. sandbox sem egress"
+    só pode ser confirmada depois do deploy (Railway tem egress
+    irrestrito).
+  - Verificado via HTTP real contra Postgres real: `/rag/collections`
+    devolve as 7 collections certas; processo criado com `client_id` já
+    vinculado na criação; lançamento financeiro criado com
+    `client_id`/`process_id` persistidos; `GET /processes?client_id=`
+    filtra corretamente. Playwright real (Chromium do sandbox, `npm run
+    dev` com `API_URL` local): selects de Cliente/Processo presentes no
+    modal financeiro e em Processos/novo; upload real de 2 arquivos PDF
+    simultâneos confirma "2 de 2 arquivos enviados."; aviso "sem dígito
+    verificador" presente na tela de OABs; card Stripe com botão testar
+    visível em Integrações — zero console error atribuível a esta fase
+    (só o warning de key duplicada pré-existente em `/dashboard`, já
+    documentado em fases anteriores, não relacionado). `ruff check`/
+    `py_compile` limpos nos 2 arquivos backend tocados; `tsc --noEmit`
+    limpo; `eslint` nos 9 arquivos frontend tocados — só os mesmos 3
+    warnings pré-existentes de `exhaustive-deps`, confirmados via `git
+    stash` como idênticos antes desta fase.
+  - Não implementados nesta fase: os 15 achados restantes — seguem pras
+    Fases 243-245.
 
 
 ## Riscos conhecidos / débito técnico

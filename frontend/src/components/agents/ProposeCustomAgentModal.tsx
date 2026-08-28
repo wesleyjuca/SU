@@ -1,25 +1,14 @@
 "use client";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { X, Loader2, Send } from "lucide-react";
 import { api } from "@/lib/api";
 import { useToast } from "@/components/ui/Toast";
+import { RAG_COLLECTION_LABELS, fetchValidRagCollections } from "@/lib/ragCollections";
 
 interface ProposeCustomAgentModalProps {
   onClose: () => void;
   onProposed: () => void;
 }
-
-// Mesma lista de VALID_COLLECTIONS do backend (app/api/v1/rag.py) — hardcoded
-// aqui como já é o padrão do array AGENTS nesta mesma página.
-const RAG_COLLECTIONS = [
-  { value: "jurisprudencia", label: "Jurisprudência" },
-  { value: "legislacao", label: "Legislação" },
-  { value: "doutrina", label: "Doutrina" },
-  { value: "doutrina_privada", label: "Doutrina (privada)" },
-  { value: "peticoes_afj", label: "Petições AFJ" },
-  { value: "memorias_afj", label: "Memórias AFJ" },
-  { value: "documentos_clientes", label: "Docs. Clientes" },
-];
 
 export function ProposeCustomAgentModal({ onClose, onProposed }: ProposeCustomAgentModalProps) {
   const toast = useToast();
@@ -28,6 +17,15 @@ export function ProposeCustomAgentModal({ onClose, onProposed }: ProposeCustomAg
   const [systemPrompt, setSystemPrompt] = useState("");
   const [colecoes, setColecoes] = useState<string[]>([]);
   const [enviando, setEnviando] = useState(false);
+  // Fase 242 — o conjunto válido vem de GET /rag/collections (fonte única,
+  // não mais uma cópia hardcoded que podia divergir do backend).
+  const [ragOptions, setRagOptions] = useState<{ value: string; label: string }[]>([]);
+
+  useEffect(() => {
+    fetchValidRagCollections().then((valid) => {
+      setRagOptions(valid.map((v) => ({ value: v, label: RAG_COLLECTION_LABELS[v] || v })));
+    });
+  }, []);
 
   function toggleColecao(value: string) {
     setColecoes((prev) => (prev.includes(value) ? prev.filter((c) => c !== value) : [...prev, value]));
@@ -104,7 +102,7 @@ export function ProposeCustomAgentModal({ onClose, onProposed }: ProposeCustomAg
               Bases de conhecimento (opcional — o agente busca contexto nelas antes de responder)
             </label>
             <div className="flex flex-wrap gap-2">
-              {RAG_COLLECTIONS.map((c) => (
+              {ragOptions.map((c) => (
                 <button
                   key={c.value}
                   type="button"
