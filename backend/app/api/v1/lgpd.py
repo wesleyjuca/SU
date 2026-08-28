@@ -1,7 +1,7 @@
 """Endpoints LGPD — Lei Geral de Proteção de Dados (Lei 13.709/2018)."""
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc, or_
+from sqlalchemy import select, desc, or_, delete
 from pydantic import BaseModel
 from datetime import datetime, timezone
 import re
@@ -9,8 +9,8 @@ import uuid
 
 from app.db.base import get_db
 from app.dependencies import get_current_user, require_role
-from app.models.user import User
-from app.models.client import Client, ClientContact, ClientInteraction
+from app.models.user import User, Session
+from app.models.client import Client, ClientContact, ClientInteraction, ClientPortalAccess
 from app.models.gov_registry_lookup import GovRegistryLookup
 from app.core.exceptions import NotFoundError
 from app.core.crypto import decrypt_or_raw
@@ -206,6 +206,32 @@ async def erase_client_data(
     )
     for portal_user in portal_users_result.scalars().all():
         portal_user.full_name = f"[ANONIMIZADO-{client_id[:8]}]"
+
+    # Fase 238 (achado da Fase 237) — sobrescrever `User.full_name`
+    # acima nunca revogava o acesso EM SI: o `ClientPortalAccess`
+    # (Fase 234) sobrevivia com `revoked_at=None`/`expires_at` intacto,
+    # o `User` técnico continuava `is_active=True`, e qualquer `Session`
+    # de refresh já emitida antes do esquecimento seguia válida —
+    # reproduzido ao vivo que um token de portal capturado ANTES do
+    # esquecimento ainda conseguia um `POST /auth/portal-redeem` NOVO
+    # depois dele. Mesma lógica de `revogar_portal_access`
+    # (`clients.py`) aplicada aqui: revoga o acesso, desativa o User
+    # técnico e mata toda Session já emitida — fecha o canal de acesso
+    # por completo, não só o nome exibido.
+    access = (await db.execute(
+        select(ClientPortalAccess).where(
+            ClientPortalAccess.client_id == uuid.UUID(client_id),
+            ClientPortalAccess.tenant_id == current_user.tenant_id,
+        )
+    )).scalar_one_or_none()
+    if access and access.revoked_at is None:
+        access.revoked_at = datetime.now(timezone.utc)
+        portal_user_access = (await db.execute(
+            select(User).where(User.id == access.portal_user_id)
+        )).scalar_one_or_none()
+        if portal_user_access:
+            portal_user_access.is_active = False
+            await db.execute(delete(Session).where(Session.user_id == portal_user_access.id))
 
     # `Document.conteudo_texto`/`.conteudo_html` — corpo inteiro de
     # petições/contratos gerados, quase certamente contém nome/CPF do
