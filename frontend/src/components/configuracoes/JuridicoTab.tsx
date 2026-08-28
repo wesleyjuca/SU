@@ -30,8 +30,21 @@ export function JuridicoTab() {
   const [novaOab, setNovaOab] = useState({ numero: "", uf: "SP", nome: "" });
   const [confidencial, setConfidencial] = useState(false);
   const [savingConf, setSavingConf] = useState(false);
+  // Fase 245 (achado do diagnóstico de cadastros) — os feriados nacionais
+  // (fixos + móveis + recesso) já eram usados automaticamente no cálculo de
+  // prazo, mas nunca apareciam em lugar nenhum da UI — só somente leitura,
+  // são fixos por lei federal (o que É configurável é a lista de locais
+  // logo abaixo).
+  const [feriadosNacionais, setFeriadosNacionais] = useState<{ ano: number; feriados: string[]; recesso_forense: { inicio: string; fim: string } } | null>(null);
 
-  useEffect(() => { fetchFeriados(); fetchOabs(); fetchConfidencial(); }, []);
+  useEffect(() => { fetchFeriados(); fetchOabs(); fetchConfidencial(); fetchFeriadosNacionais(); }, []);
+
+  async function fetchFeriadosNacionais() {
+    try {
+      const res = await fetch("/api/v1/tenant/feriados-nacionais", { headers: authH() });
+      if (res.ok) setFeriadosNacionais(await res.json());
+    } catch { /* opcional */ }
+  }
 
   async function fetchConfidencial() {
     try {
@@ -188,6 +201,25 @@ export function JuridicoTab() {
         <button onClick={salvar} disabled={saving} className="btn-afj-primary rounded-sm py-2 px-4 text-sm mt-4 flex items-center gap-2 disabled:opacity-50">
           {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Salvar feriados
         </button>
+
+        {feriadosNacionais && (
+          <div className="mt-5 pt-4 border-t border-afj-cream-dark">
+            <p className="text-xs font-semibold text-afj-black/70 mb-1">
+              Feriados nacionais já considerados automaticamente em {feriadosNacionais.ano} (somente leitura — fixos por lei federal)
+            </p>
+            <div className="flex flex-wrap gap-1.5 mb-2">
+              {feriadosNacionais.feriados.map((d) => (
+                <span key={d} className="text-[11px] px-2 py-0.5 rounded-sm bg-afj-cream text-afj-black/60 border border-afj-cream-dark">
+                  {new Date(d + "T00:00:00").toLocaleDateString("pt-BR")}
+                </span>
+              ))}
+            </div>
+            <p className="text-[11px] text-afj-black/40">
+              + recesso forense de {new Date(feriadosNacionais.recesso_forense.inicio + "T00:00:00").toLocaleDateString("pt-BR")} a{" "}
+              {new Date(feriadosNacionais.recesso_forense.fim + "T00:00:00").toLocaleDateString("pt-BR")} (CPC art. 220).
+            </p>
+          </div>
+        )}
       </div>
 
       {/* OABs monitoradas */}

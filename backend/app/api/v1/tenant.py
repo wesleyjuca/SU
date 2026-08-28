@@ -1,5 +1,5 @@
 """Endpoints de configuração de tenant/escritório."""
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel, EmailStr, field_validator
@@ -470,6 +470,32 @@ async def get_feriados(
     return {"feriados": fer if isinstance(fer, list) else []}
 
 
+@router.get("/feriados-nacionais")
+async def get_feriados_nacionais(
+    ano: int = Query(default=None),
+    current_user: User = Depends(get_current_user),
+):
+    """Fase 245 (achado do diagnóstico de cadastros) — os feriados nacionais
+    (fixos + móveis + recesso forense) já eram usados no cálculo de prazo
+    (app/utils/prazo.py) desde sempre, mas nunca eram visíveis em lugar
+    nenhum da UI — o escritório não tinha como conferir o que o sistema já
+    considera automaticamente antes de cadastrar um feriado local
+    (`/feriados` acima). Somente leitura — são fixos por lei federal, não
+    tem o que o escritório configurar aqui."""
+    from datetime import date as _date
+    from app.utils.prazo import feriados_nacionais
+
+    ano_alvo = ano or _date.today().year
+    if ano_alvo < 2000 or ano_alvo > 2100:
+        raise HTTPException(status_code=422, detail="Ano fora da faixa válida.")
+    datas = sorted(feriados_nacionais(ano_alvo))
+    return {
+        "ano": ano_alvo,
+        "feriados": [d.isoformat() for d in datas],
+        "recesso_forense": {"inicio": f"{ano_alvo}-12-20", "fim": f"{ano_alvo + 1}-01-20"},
+    }
+
+
 @router.put("/feriados")
 async def update_feriados(
     body: FeriadosUpdate,
@@ -876,3 +902,35 @@ async def get_my_billing(
     if not tenant:
         return {"status": "NAO_CONFIGURADO", "valor_mensal": None, "proximo_vencimento": None, "dias_para_vencimento": None}
     return await _billing_summary(db, tenant)
+
+
+@router.get("/billing/historico")
+async def get_my_billing_historico(
+    current_user: User = Depends(require_role("ADMIN", "SOCIO")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Fase 245 (achado do diagnóstico de cadastros) — histórico de
+    pagamentos da assinatura do próprio escritório. Antes só existia
+    `GET /billing/{tenant_id}/payments` (SUPERADMIN, tela de gestão de
+    todos os escritórios) — o próprio escritório não tinha como ver seu
+    faturamento passado, só o status atual (`GET /tenant/billing`
+    acima). Mesmo dado, mesma tabela, escopado ao próprio tenant."""
+    from app.models.billing import TenantPayment
+
+    if not current_user.tenant_id:
+        return []
+    rows = (await db.execute(
+        select(TenantPayment).where(TenantPayment.tenant_id == current_user.tenant_id)
+        .order_by(TenantPayment.pago_em.desc())
+    )).scalars().all()
+    return [
+        {
+            "id": str(p.id),
+            "valor": float(p.valor),
+            "competencia": p.competencia,
+            "pago_em": p.pago_em.isoformat() if p.pago_em else None,
+            "metodo": p.metodo,
+            "observacao": p.observacao,
+        }
+        for p in rows
+    ]

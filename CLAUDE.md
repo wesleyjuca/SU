@@ -3663,6 +3663,70 @@ Histórico:
   - Não implementadas nesta fase: as 3 propostas do batch 6 (Fase 245 —
     importação em lote, faturamento do escritório, feriados forenses
     nacionais), últimas do diagnóstico de cadastros original.
+- **Fase 245** (batch 6 — último dos 6 batches do diagnóstico de
+  cadastros, fecha os 31 achados originais da Fase 203/237).
+  - **245.1 — importação em lote (CSV)**: nenhuma tela de cadastro tinha
+    isso; Cliente é o candidato mais comum de onboarding em massa
+    (migração de outro sistema). Novo `POST /clients/importar-csv`
+    (`ADMIN/SOCIO/GESTOR`, teto de 1000 linhas) — CSV com cabeçalho
+    (`nome_completo` obrigatório; `tipo`/`cpf_cnpj`/`email`/`telefone`/
+    `origem` opcionais, `tipo` inferido pela quantidade de dígitos do
+    documento quando ausente). Decisão de escopo deliberada: não
+    geocodifica endereço nem chama SERPRO por linha (custaria N chamadas
+    de API externa numa importação de centenas de linhas) — isso
+    continua disponível editando cada cliente depois, como já
+    funcionava. Dedup reaproveita a mesma lógica decifra-e-compara de
+    `_documento_ja_cadastrado` (Fase 240), mas pré-carregada 1x (não 1x
+    por linha, senão seria O(linhas × clientes já cadastrados)) e cobre
+    tanto duplicata contra o banco quanto duplicata DENTRO do próprio
+    arquivo. Nenhuma linha ruim derruba a importação inteira — cada uma
+    é reportada individualmente (criado/duplicado/erro). Frontend
+    (`clientes/page.tsx`): botão "Importar CSV" + modal de resultado com
+    contagem e detalhe por linha.
+  - **245.2 — faturamento do escritório**: `GET /tenant/billing`
+    (existia) só mostra o status ATUAL da assinatura; o histórico de
+    pagamentos (`TenantPayment`, já existia) só era visível numa tela
+    SUPERADMIN-only de gestão de TODOS os escritórios
+    (`GET /billing/{tenant_id}/payments`). Novo `GET /tenant/billing/
+    historico` (`ADMIN/SOCIO` do próprio tenant) — mesmo dado, mesma
+    tabela, escopado ao próprio tenant. Frontend (`admin/plano/
+    page.tsx`): tabela de histórico logo abaixo do card "Assinatura &
+    Cobrança" já existente, só aparece quando há pagamentos registrados.
+  - **245.3 — feriados forenses nacionais visíveis**: `app/utils/
+    prazo.py::feriados_nacionais()` (fixos + móveis + recesso) já era
+    usado automaticamente no cálculo de todo prazo do sistema desde
+    sempre, mas nunca aparecia em lugar nenhum da UI — o escritório não
+    tinha como conferir o que já é considerado antes de cadastrar um
+    feriado local (`/feriados`, que já existia). Novo `GET /tenant/
+    feriados-nacionais?ano=` (somente leitura — são fixos por lei
+    federal, nada aqui é configurável pelo escritório) devolve a lista
+    computada + o intervalo do recesso. Frontend (`JuridicoTab.tsx`):
+    lista read-only logo abaixo do form de feriados locais, no mesmo
+    card, deixando claro a distinção entre o que é fixo e o que é
+    configurável.
+  - Verificado via HTTP real contra Postgres real: CSV de 4 linhas (1
+    nome vazio, 1 duplicata de CPF entre linhas do próprio arquivo) →
+    2 criados, 1 duplicado, 1 erro, exatamente como esperado; `GET
+    /tenant/billing/historico` responde vazio sem erro pro tenant de
+    teste (sem `TenantPayment` cadastrado); `GET /tenant/feriados-
+    nacionais?ano=2026` devolve os 12 feriados nacionais brasileiros de
+    2026 + recesso 20/12/2026–20/01/2027, batendo com o calendário real.
+    Playwright real (Chromium do sandbox, `npm run dev` com `API_URL`
+    local, screenshots capturados): botão "Importar CSV" funcional
+    (upload real de arquivo, modal de resultado renderiza "1 Criados"
+    corretamente); card "Assinatura & Cobrança" intacto em Plano & Uso;
+    feriados nacionais de 2026 visíveis e bem integrados visualmente na
+    aba Jurídico de Configurações — zero console error novo (só o
+    warning de key duplicada pré-existente em `/dashboard`, não tocado
+    nesta fase, já documentado desde a Fase 219). `ruff check`/
+    `py_compile` limpos nos 2 arquivos backend tocados; `tsc --noEmit`
+    limpo; `eslint` nos 3 arquivos frontend tocados — só os mesmos
+    warnings pré-existentes de `exhaustive-deps`, confirmados via `git
+    stash`.
+  - **Fecha os 31 achados do diagnóstico de cadastros** (Fase 203/237 →
+    Artifact "Diagnóstico de Cadastros AFJ" → 6 batches, Fases 240-245)
+    — todos implementados e verificados empiricamente, nenhum adiado sem
+    registro explícito de decisão de escopo.
 
 
 ## Riscos conhecidos / débito técnico

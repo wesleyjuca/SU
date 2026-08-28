@@ -1,7 +1,7 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useSearchParams } from "next/navigation";
-import { Users, Plus, Search, Phone, Mail, Pencil, Trash2, ExternalLink, Filter, ShieldAlert, ChevronDown, ChevronUp, ShieldCheck } from "lucide-react";
+import { Users, Plus, Search, Phone, Mail, Pencil, Trash2, ExternalLink, Filter, ShieldAlert, ChevronDown, ChevronUp, ShieldCheck, Upload, X, CheckCircle } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
 import { ViewToggle } from "@/components/ui/ViewToggle";
@@ -78,6 +78,15 @@ export default function ClientesPage() {
   // de Clientes aparecer — o useEffect de defesa logo abaixo revertia a
   // navegação, reproduzido ao vivo via Playwright antes deste fix.
   const isAdmin = userRole === "ADMIN" || userRole === "SUPERADMIN";
+  // Fase 245 (achado do diagnóstico de cadastros) — mesmo gate do backend
+  // pra POST /clients/importar-csv (ADMIN/SOCIO/GESTOR).
+  const canImportar = ["ADMIN", "SOCIO", "GESTOR", "SUPERADMIN"].includes(userRole ?? "");
+  const importInputRef = useRef<HTMLInputElement>(null);
+  const [importando, setImportando] = useState(false);
+  const [importResultado, setImportResultado] = useState<{
+    total_linhas: number; criados: number; duplicados: number; erros: number;
+    detalhes: { linha: number; nome?: string; status: string; detalhe?: string }[];
+  } | null>(null);
   // Defesa: link antigo/query param forçado apontando pra Controle de
   // Clientes sem ser ADMIN nunca deixa a aba restrita "vazar".
   useEffect(() => {
@@ -148,6 +157,32 @@ export default function ClientesPage() {
     } finally {
       if (append) setLoadingMore(false);
       else setLoading(false);
+    }
+  }
+
+  async function importarCsv(f: File) {
+    setImportando(true);
+    try {
+      const token = localStorage.getItem("afj_access_token");
+      const formData = new FormData();
+      formData.append("file", f);
+      const res = await fetch("/api/v1/clients/importar-csv", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body: formData,
+      });
+      const d = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setImportResultado(d);
+        fetchClientes();
+      } else {
+        toast.error(d.detail || "Erro ao importar CSV.");
+      }
+    } catch {
+      toast.error("Erro de conexão ao importar CSV.");
+    } finally {
+      setImportando(false);
+      if (importInputRef.current) importInputRef.current.value = "";
     }
   }
 
@@ -331,6 +366,25 @@ export default function ClientesPage() {
               <Filter size={15} />Funil
             </Link>
             <ViewToggle view={view} onChange={setView} />
+            {canImportar && (
+              <>
+                <input
+                  ref={importInputRef}
+                  type="file"
+                  accept=".csv"
+                  className="hidden"
+                  onChange={(e) => { const f = e.target.files?.[0]; if (f) importarCsv(f); }}
+                />
+                <button
+                  onClick={() => importInputRef.current?.click()}
+                  disabled={importando}
+                  className="btn-afj-outline rounded-sm flex items-center gap-2 disabled:opacity-50"
+                  title="Importar clientes de um arquivo CSV"
+                >
+                  <Upload size={15} />{importando ? "Importando..." : "Importar CSV"}
+                </button>
+              </>
+            )}
             <button onClick={() => { setShowModal(true); setDocSugestao(null); }} className="btn-afj-primary rounded-sm flex items-center gap-2">
               <Plus size={15} />Novo Cliente
             </button>
@@ -593,6 +647,36 @@ export default function ClientesPage() {
                 <button type="submit" disabled={salvando} className="flex-1 btn-afj-primary rounded-sm disabled:opacity-50">{salvando ? "Salvando..." : "Salvar"}</button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal resultado da importação CSV — Fase 245 */}
+      {importResultado && (
+        <div className="fixed inset-0 bg-afj-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-sm p-6 w-full max-w-lg shadow-2xl max-h-[85vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="font-display text-xl font-semibold text-afj-black flex items-center gap-2">
+                <CheckCircle size={20} className="text-green-600" /> Importação concluída
+              </h2>
+              <button onClick={() => setImportResultado(null)} className="text-afj-black/40 hover:text-afj-black"><X size={18} /></button>
+            </div>
+            <div className="grid grid-cols-3 gap-3 mb-4 text-center">
+              <div className="afj-stat-card"><p className="text-xl font-bold text-green-600">{importResultado.criados}</p><p className="text-xs text-afj-black/50 mt-0.5">Criados</p></div>
+              <div className="afj-stat-card"><p className="text-xl font-bold text-amber-600">{importResultado.duplicados}</p><p className="text-xs text-afj-black/50 mt-0.5">Duplicados</p></div>
+              <div className="afj-stat-card"><p className="text-xl font-bold text-red-500">{importResultado.erros}</p><p className="text-xs text-afj-black/50 mt-0.5">Erros</p></div>
+            </div>
+            {importResultado.detalhes.some((d) => d.status !== "criado") && (
+              <div className="divide-y divide-afj-cream-dark border border-afj-cream-dark rounded-sm max-h-60 overflow-y-auto">
+                {importResultado.detalhes.filter((d) => d.status !== "criado").map((d) => (
+                  <div key={d.linha} className="flex items-center justify-between px-3 py-2 text-xs">
+                    <span className="text-afj-black/60">Linha {d.linha}{d.nome ? ` — ${d.nome}` : ""}</span>
+                    <span className={d.status === "erro" ? "text-red-500" : "text-amber-600"}>{d.detalhe}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            <button onClick={() => setImportResultado(null)} className="w-full btn-afj-primary rounded-sm mt-4">Fechar</button>
           </div>
         </div>
       )}

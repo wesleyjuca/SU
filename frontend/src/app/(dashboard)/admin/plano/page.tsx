@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import { Gauge, Users2, HardDrive, Coins, Bot, RefreshCw, Crown, Receipt, Building2, Plus, Loader2, KeyRound } from "lucide-react";
+import { Gauge, Users2, HardDrive, Coins, Bot, RefreshCw, Crown, Receipt, Building2, Plus, Loader2, KeyRound, History } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 
 interface BillingInfo {
@@ -65,6 +65,11 @@ function UsageBar({ label, icon: Icon, atual, limite, unidade }: {
 
 interface Unit { id: string; name: string; unit_label: string | null; is_active: boolean; users: number }
 interface UnitsData { plano_permite_filiais: boolean; units: Unit[] }
+// Fase 245 (achado do diagnóstico de cadastros) — antes o escritório só via
+// o status ATUAL da assinatura ("Assinatura & Cobrança" acima), sem nenhum
+// histórico do que já foi pago (isso só existia numa tela SUPERADMIN-only,
+// de gestão de TODOS os escritórios).
+interface Pagamento { id: string; valor: number; competencia: string; pago_em: string | null; metodo: string; observacao: string | null }
 
 export default function PlanoUsoPage() {
   const [data, setData] = useState<Usage | null>(null);
@@ -75,6 +80,15 @@ export default function PlanoUsoPage() {
   const [unitForm, setUnitForm] = useState({ name: "", unit_label: "", admin_email: "", admin_name: "" });
   const [criandoUnidade, setCriandoUnidade] = useState(false);
   const [credenciais, setCredenciais] = useState<{ admin_email: string; temp_password: string; name: string } | null>(null);
+  const [pagamentos, setPagamentos] = useState<Pagamento[] | null>(null);
+
+  async function fetchPagamentos() {
+    try {
+      const token = localStorage.getItem("afj_access_token");
+      const res = await fetch("/api/v1/tenant/billing/historico", { headers: { Authorization: `Bearer ${token}` } });
+      if (res.ok) setPagamentos(await res.json());
+    } catch { /* seção opcional — silencioso, ADVOGADO/GESTOR recebem 403 aqui */ }
+  }
 
   async function fetchUnits() {
     try {
@@ -122,7 +136,7 @@ export default function PlanoUsoPage() {
     finally { setLoading(false); }
   }
 
-  useEffect(() => { fetchUsage(); fetchUnits(); }, []);
+  useEffect(() => { fetchUsage(); fetchUnits(); fetchPagamentos(); }, []);
 
   return (
     <div className="max-w-4xl mx-auto space-y-5">
@@ -196,6 +210,32 @@ export default function PlanoUsoPage() {
               </div>
             );
           })()}
+
+          {/* Histórico de faturamento — Fase 245 */}
+          {pagamentos && pagamentos.length > 0 && (
+            <div className="afj-card p-5">
+              <p className="text-sm font-semibold text-afj-black flex items-center gap-2 mb-3">
+                <History size={15} className="text-afj-gold" /> Histórico de faturamento
+              </p>
+              <div className="overflow-x-auto">
+                <table className="afj-table">
+                  <thead>
+                    <tr><th>Competência</th><th>Valor</th><th>Pago em</th><th>Método</th></tr>
+                  </thead>
+                  <tbody>
+                    {pagamentos.map((p) => (
+                      <tr key={p.id}>
+                        <td>{p.competencia}</td>
+                        <td>R$ {p.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</td>
+                        <td>{p.pago_em ? new Date(p.pago_em).toLocaleDateString("pt-BR") : "—"}</td>
+                        <td className="text-afj-black/60 text-xs">{p.metodo}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
 
           {/* Barras de uso */}
           <div className="grid grid-cols-1 gap-4">
