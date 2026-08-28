@@ -39,7 +39,15 @@ api_router.include_router(publications.router, dependencies=_BLOCK_STAFF)
 api_router.include_router(ws.router)
 api_router.include_router(audit.router, dependencies=_STAFF)
 api_router.include_router(rag.router, dependencies=_BLOCK_STAFF)
-api_router.include_router(notifications.router, dependencies=_BLOCK)
+# Fase 239 (achado da Fase 237, rodada de teste geral) — mesma classe do
+# achado abaixo (Fase 235): este router era o único de negócio, fora
+# tenant/system já corrigidos ali, ainda montado sem `_STAFF` — CLIENT
+# recebia 200 em `GET /notifications`. A query já é escopada por
+# `current_user.id` (`app/services/notification.py`) e nada no sistema
+# cria `Notification` visando o `User` técnico do portal, então não
+# havia vazamento de dado ativo — mas violava o mesmo invariante
+# ("CLIENT só acessa /portal/* e /auth/*") documentado abaixo.
+api_router.include_router(notifications.router, dependencies=_BLOCK_STAFF)
 # Fase 235 (rodada de teste geral) — achado real: estes 2 routers eram os
 # ÚNICOS de negócio montados sem nenhuma dependência de role, ao contrário
 # de TODOS os outros acima — contrariando o próprio comentário deste
@@ -52,7 +60,11 @@ api_router.include_router(notifications.router, dependencies=_BLOCK)
 api_router.include_router(tenant.router, dependencies=_BLOCK_STAFF)
 api_router.include_router(system.router, dependencies=_BLOCK_STAFF)
 api_router.include_router(lgpd.router, dependencies=_STAFF)
-api_router.include_router(push.router, dependencies=_BLOCK)
+# Fase 239 (achado da Fase 237) — mesmo achado do `notifications.router`
+# acima: sem `_STAFF`, CLIENT recebia `201` em `POST /push/subscribe`.
+# Self-scoped por `user_id` (`app/api/v1/push.py`), sem exposição
+# cross-tenant/cross-client hoje — mesma classe de violação de fronteira.
+api_router.include_router(push.router, dependencies=_BLOCK_STAFF)
 api_router.include_router(users.router, dependencies=_STAFF)
 api_router.include_router(portal.router, dependencies=_BLOCK)
 api_router.include_router(petition_templates.router, dependencies=_BLOCK_STAFF)
