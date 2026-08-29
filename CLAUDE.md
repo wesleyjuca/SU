@@ -3862,6 +3862,59 @@ Histórico:
     cobrir) em vez de continuar corrigindo caso a caso pela 7ª vez no
     futuro — pergunta já repetida sem resposta definitiva desde a Fase
     219/228.
+- **Fase 247** — implementação dos 2 achados de LGPD confirmados na Fase
+  246, a pedido do usuário ("Continue" após o relatório).
+  - **`Intimacao.texto`/`.resumo_ia`** (`backend/app/api/v1/lgpd.py`) —
+    novo bloco em `erase_client_data`/`export_client_data` que junta
+    `Intimacao` com `LegalProcess` via `process_id` e reaproveita
+    `client_linked_processes_filter` (Fase 222, já usado pra
+    `LegalProcess.descricao` — cobre `client_id` direto E via
+    `ProcessParty`). `numero_cnj`/`tribunal`/`orgao`/`link` NÃO são
+    tocados — identificam o processo em si, mesmo espírito de preservar
+    `numero_processo`/`tribunal` do `LegalProcess`, só o texto livre
+    (`texto`/`resumo_ia`) é PII. Export ganha a seção `intimacoes`.
+  - **`Contract.assinaturas` via `POST /contracts/create`** (caminho
+    manual, `backend/app/api/v1/documents.py`) — 2 frentes. Raiz do
+    problema: esse endpoint criava o `Document` com `client_id=NULL` e só
+    setava `Contract.client_id` diretamente (o único dos 2 caminhos de
+    criação de contrato com essa divergência — o gerado por IA já setava
+    `Document.client_id` corretamente), quebrando a cadeia
+    `Document.client_id → Contract.document_id` que `lgpd.py` usa pra
+    achar o contrato. Corrigido a propagar `client_id` (já validado por
+    `_validar_client_id`) pro `Document` também — fecha a causa raiz pra
+    contratos novos. Mas como este projeto nunca faz backfill de dado
+    legado (mesma decisão já tomada pra outros dados históricos, ex.
+    geocodificação de clientes na Fase 233), contratos manuais já
+    existentes continuariam com `Document.client_id=NULL` pra sempre —
+    por isso `lgpd.py` (`erase_client_data`/`export_client_data`) também
+    ganhou alcance por OR: `Document.client_id` direto OU o `Document` de
+    um `Contract` cujo `client_id` bate — cobre os 2 caminhos de vínculo,
+    sem depender do fix de criação sozinho.
+  - Testes novos
+    (`test_lgpd_erasure_reaches_intimacao_contract_fase247.py`, mesmo
+    padrão HTTP real de `test_lgpd_erasure_reaches_crm_fase210.py`) batem
+    na mesma flakiness de pool asyncpg/pytest-asyncio documentada desde a
+    Fase 199 — reproduzida de novo mesmo isolada, cross-checada contra o
+    próprio `test_lgpd_erasure_reaches_crm_fase210.py` (arquivo de
+    controle não tocado, falha de forma idêntica) — não é regressão desta
+    fase. Verificação principal via HTTP real contra Postgres real
+    (uvicorn reiniciado nesta sessão pra carregar o código novo),
+    reproduzindo os 2 cenários exatos que a Fase 246 usou pra confirmar
+    cada achado (criar→embutir PII→esquecer→conferir), **mais um 3º
+    cenário só pra provar o fallback por OR**: um contrato criado pelo
+    endpoint já corrigido, com `Document.client_id` forçado de volta a
+    `NULL` direto no Postgres (simulando uma linha legada de antes deste
+    fix) — confirmado que o esquecimento ainda alcança tanto o corpo do
+    `Document` quanto `Contract.assinaturas` nesse cenário, sem depender
+    do fix de criação sozinho. `ruff check`/`py_compile` limpos nos 3
+    arquivos tocados (2 backend + 1 teste novo).
+  - **Mecanismo estrutural não implementado nesta fase** (pergunta
+    repetida desde a Fase 219/228, reaberta pela Fase 246) — decisão
+    deliberada de não construir um teste/lint genérico agora; ficou só
+    registrado, não resolvido, pra não expandir o escopo do pedido do
+    usuário ("Continue" após o relatório, não um pedido de tooling novo).
+    Continua valendo a pena considerar numa fase futura dedicada, já que
+    esta é a 6ª ocorrência confirmada da mesma classe de lacuna.
 
 
 ## Riscos conhecidos / débito técnico
