@@ -55,6 +55,23 @@ if ! alembic upgrade head; then
 fi
 
 CELERY_PID=""
+CELERY_START_TS=0
+CELERY_FAST_DEATH_COUNT=0
+
+# Fase 249 — achado real: o watchdog abaixo religava o Celery a cada morte
+# sem NUNCA distinguir um blip transitório (reconexão de Redis, OOM
+# passageiro — se recupera na religada) de uma config permanentemente
+# quebrada (ex.: REDIS_URL/CELERY_RESULT_BACKEND com um `${{...}}` do
+# Railway não resolvido) que crasha em bem menos de 1s, toda vez, pra
+# sempre — e sem soar alarme nenhum. Como só o uvicorn é observado pelo
+# healthcheck do Railway, o deploy inteiro aparecia "successful" enquanto
+# TODA a beat_schedule (alertas de prazo, agentes de IA, sync de
+# jurisprudência, capturas periódicas) ficava morta em silêncio — passou
+# 16h despercebido em produção até alguém olhar o log bruto.
+CELERY_MIN_HEALTHY_SECONDS="${CELERY_MIN_HEALTHY_SECONDS:-45}"
+CELERY_CRASHLOOP_THRESHOLD="${CELERY_CRASHLOOP_THRESHOLD:-3}"
+CELERY_ALERT_COOLDOWN_SECONDS="${CELERY_ALERT_COOLDOWN_SECONDS:-3600}"
+ALERT_MARKER_FILE="${ALERT_MARKER_FILE:-/tmp/afj_celery_crashloop_alert.ts}"
 
 start_celery() {
   celery -A app.workers.worker worker \
@@ -63,6 +80,36 @@ start_celery() {
     --concurrency="${CELERY_CONCURRENCY:-2}" \
     --max-tasks-per-child=50 &
   CELERY_PID=$!
+  CELERY_START_TS=$(date +%s)
+}
+
+# Dispara o alerta de crash-loop (Fase 249) — nunca deve derrubar o
+# watchdog. `start.sh` tem `set -e` na 1ª linha, valendo pro script
+# inteiro incluindo o loop abaixo: por isso todo passo aqui dentro é
+# protegido (if/condicional, nunca um comando solto que pode falhar) e a
+# função sempre termina com `return 0`, e é chamada com `|| echo ...` por
+# precaução extra no call site.
+maybe_alert_crashloop() {
+  death_count="$1"
+  now=$(date +%s)
+  last=0
+  if [ -f "$ALERT_MARKER_FILE" ]; then
+    last=$(cat "$ALERT_MARKER_FILE" 2>/dev/null) || last=0
+    case "$last" in ''|*[!0-9]*) last=0 ;; esac
+  fi
+  elapsed=$((now - last))
+  if [ "$elapsed" -lt "$CELERY_ALERT_COOLDOWN_SECONDS" ]; then
+    echo "[AFJ] Crash-loop já alertado há ${elapsed}s (cooldown ${CELERY_ALERT_COOLDOWN_SECONDS}s) — não reenviando."
+    return 0
+  fi
+  echo "[AFJ][CRITICAL] Enviando alerta de crash-loop do Celery (mortes rápidas seguidas: ${death_count})…"
+  if timeout 20 python3 -m app.scripts.alert_celery_crashloop "$death_count"; then
+    echo "[AFJ] Alerta de crash-loop enviado."
+  else
+    echo "[AFJ][WARN] Falha ao enviar alerta de crash-loop — seguindo o watchdog (não é fatal)."
+  fi
+  date +%s > "$ALERT_MARKER_FILE" 2>/dev/null || true
+  return 0
 }
 
 if [ -n "$REDIS_URL" ] || [ -n "$CELERY_BROKER_URL" ]; then
@@ -90,8 +137,19 @@ trap 'echo "[AFJ] Sinal de encerramento recebido — propagando…"; kill -TERM 
 while true; do
   sleep 10
   if [ -n "$CELERY_PID" ] && ! kill -0 "$CELERY_PID" 2>/dev/null; then
-    echo "[AFJ][WARN] Processo Celery (pid $CELERY_PID) morreu — religando…"
+    NOW=$(date +%s)
+    RAN_FOR=$((NOW - CELERY_START_TS))
+    echo "[AFJ][WARN] Processo Celery (pid $CELERY_PID) morreu depois de ${RAN_FOR}s — religando…"
+    if [ "$RAN_FOR" -lt "$CELERY_MIN_HEALTHY_SECONDS" ]; then
+      CELERY_FAST_DEATH_COUNT=$((CELERY_FAST_DEATH_COUNT + 1))
+    else
+      CELERY_FAST_DEATH_COUNT=0
+    fi
     start_celery
+    if [ "$CELERY_FAST_DEATH_COUNT" -ge "$CELERY_CRASHLOOP_THRESHOLD" ]; then
+      echo "[AFJ][CRITICAL] Celery crash-loop detectado (${CELERY_FAST_DEATH_COUNT}x mortes rápidas seguidas) — avaliando alerta…"
+      maybe_alert_crashloop "$CELERY_FAST_DEATH_COUNT" || echo "[AFJ][WARN] maybe_alert_crashloop falhou — watchdog continua."
+    fi
   fi
   if ! kill -0 "$UVICORN_PID" 2>/dev/null; then
     echo "[AFJ][FATAL] Processo uvicorn (pid $UVICORN_PID) morreu — encerrando pra forçar restart do container."
