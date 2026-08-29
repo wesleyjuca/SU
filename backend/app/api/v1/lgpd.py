@@ -237,11 +237,29 @@ async def erase_client_data(
     # petições/contratos gerados, quase certamente contém nome/CPF do
     # titular. `titulo`/`status`/metadados de arquivo preservados —
     # servem pro histórico do escritório, não são PII do titular.
+    #
+    # Fase 247 (achado da Fase 246, auditoria adversarial de LGPD) —
+    # `POST /contracts/create` (caminho manual, diferente do gerado por
+    # IA) criava o Document com client_id NULL e só setava
+    # Contract.client_id — filtrar só por Document.client_id deixava de
+    # fora o corpo do contrato E o Contract.assinaturas (abaixo) pra
+    # todo contrato criado por esse caminho, mesmo depois do fix na
+    # criação (Fase 247), já que não há backfill de dado legado neste
+    # projeto (mesma decisão já tomada pra outros dados históricos,
+    # ex. geocodificação de clientes, Fase 233). Por isso o alcance
+    # aqui é por OR: Document.client_id direto OU o Document de um
+    # Contract cujo client_id bate — cobre os 2 caminhos de criação.
     from app.models.document import Document, Contract
+    document_ids_via_contract = select(Contract.document_id).where(
+        Contract.client_id == uuid.UUID(client_id)
+    )
     documents_result = await db.execute(
         select(Document).where(
-            Document.client_id == uuid.UUID(client_id),
             Document.tenant_id == current_user.tenant_id,
+            or_(
+                Document.client_id == uuid.UUID(client_id),
+                Document.id.in_(document_ids_via_contract),
+            ),
         )
     )
     documents = documents_result.scalars().all()
@@ -252,7 +270,8 @@ async def erase_client_data(
             doc.conteudo_html = "[Conteúdo removido — LGPD art. 18 IV]"
 
     # `Contract.assinaturas` (JSONB) pode conter nome/CPF do signatário.
-    # Sem tenant_id próprio — escopo pelos Document já filtrados acima.
+    # Sem tenant_id próprio — escopo pelos Document já filtrados acima
+    # (que já cobrem os 2 caminhos de vínculo, ver comentário acima).
     document_ids = [doc.id for doc in documents]
     if document_ids:
         contracts_result = await db.execute(
@@ -261,6 +280,29 @@ async def erase_client_data(
         for contract in contracts_result.scalars().all():
             if contract.assinaturas:
                 contract.assinaturas = None
+
+    # Fase 247 (achado da Fase 246) — `Intimacao.texto`/`.resumo_ia`
+    # (Fase 244, publicação/intimação capturada + resumo por IA) podem
+    # conter nome/CPF do titular em texto livre. Sem client_id próprio
+    # — vínculo indireto via process_id → LegalProcess, mesmo filtro
+    # (`client_linked_processes_filter`) já usado pra `LegalProcess.
+    # descricao` acima. `numero_cnj`/`tribunal`/`orgao`/`link` NÃO são
+    # tocados — identificam o processo em si, não o titular (mesmo
+    # espírito de preservar `numero_processo`/`tribunal` do
+    # LegalProcess, só a descrição em texto livre é PII).
+    from app.models.intimacao import Intimacao
+    intimacoes_result = await db.execute(
+        select(Intimacao)
+        .join(LegalProcess, LegalProcess.id == Intimacao.process_id)
+        .where(
+            client_linked_processes_filter(uuid.UUID(client_id)),
+            Intimacao.tenant_id == current_user.tenant_id,
+        )
+    )
+    for intimacao in intimacoes_result.scalars().all():
+        intimacao.texto = "[Conteúdo removido — LGPD art. 18 IV]"
+        if intimacao.resumo_ia:
+            intimacao.resumo_ia = "[Conteúdo removido — LGPD art. 18 IV]"
 
     # `AgentRun.input_data`/`.output_data`/`.error_message` — prompts e
     # resultados de agentes de IA disparados pra esse cliente, texto
@@ -408,11 +450,21 @@ async def export_client_data(
     )
     portal_users = portal_users_result.scalars().all()
 
+    # Fase 247 (achado da Fase 246) — mesmo alcance por OR de
+    # erase_client_data acima: Document.client_id direto OU o Document
+    # de um Contract cujo client_id bate (caminho manual de criação de
+    # contrato, `POST /contracts/create`, não seta Document.client_id).
     from app.models.document import Document, Contract
+    document_ids_via_contract = select(Contract.document_id).where(
+        Contract.client_id == uuid.UUID(client_id)
+    )
     documents_result = await db.execute(
         select(Document).where(
-            Document.client_id == uuid.UUID(client_id),
             Document.tenant_id == current_user.tenant_id,
+            or_(
+                Document.client_id == uuid.UUID(client_id),
+                Document.id.in_(document_ids_via_contract),
+            ),
         )
     )
     documents = documents_result.scalars().all()
@@ -423,6 +475,20 @@ async def export_client_data(
             select(Contract).where(Contract.document_id.in_(document_ids))
         )
         contracts = contracts_result.scalars().all()
+
+    # Fase 247 (achado da Fase 246) — Intimacao.texto/resumo_ia, mesmo
+    # alcance de erase_client_data acima (via process_id →
+    # LegalProcess, client_linked_processes_filter).
+    from app.models.intimacao import Intimacao
+    intimacoes_result = await db.execute(
+        select(Intimacao)
+        .join(LegalProcess, LegalProcess.id == Intimacao.process_id)
+        .where(
+            client_linked_processes_filter(uuid.UUID(client_id)),
+            Intimacao.tenant_id == current_user.tenant_id,
+        )
+    )
+    intimacoes = intimacoes_result.scalars().all()
 
     from app.models.agent_run import AgentRun
     agent_runs_result = await db.execute(
@@ -563,6 +629,16 @@ async def export_client_data(
         "processos_descricao": [
             {"processo_id": str(p.id), "numero_cnj": p.numero_cnj, "descricao": p.descricao}
             for p in processes if p.descricao
+        ],
+        "intimacoes": [
+            {
+                "id": str(i.id),
+                "numero_cnj": i.numero_cnj_fmt,
+                "texto": i.texto,
+                "resumo_ia": i.resumo_ia,
+                "data_disponibilizacao": i.data_disponibilizacao.isoformat() if i.data_disponibilizacao else None,
+            }
+            for i in intimacoes
         ],
     }
 

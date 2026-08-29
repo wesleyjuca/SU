@@ -291,20 +291,54 @@ async def receive_webhook(
     Segurança: o payload é tratado como DICA. Para pagamento (stripe/
     mercadopago), a confirmação real é feita consultando a API do provedor
     com as credenciais do escritório — nunca se marca uma fatura como PAGA
-    só porque o POST chegou. Sempre responde 200 (evita re-tentativas)."""
+    só porque o POST chegou. Sempre responde 200 (evita re-tentativas).
+
+    Fase 248.1 — camada ADICIONAL de assinatura HMAC (`app/services/
+    webhook_signature.py`) antes de despachar, quando o segredo da
+    plataforma estiver configurado (`STRIPE_WEBHOOK_SECRET`/
+    `MERCADOPAGO_WEBHOOK_SECRET`) — filtra um payload que nem veio do
+    provedor antes de gastar a chamada de re-verificação. Nunca substitui
+    essa re-verificação, que continua sendo a fonte de verdade."""
     if provider not in integration_hub.PROVIDERS:
         return {"received": False, "error": "provedor desconhecido"}
+    corpo_bruto = await request.body()
     try:
-        payload = await request.json()
+        import json as _json
+        payload = _json.loads(corpo_bruto) if corpo_bruto else {}
     except Exception:
         payload = {}
+    # Fase 248.1 (achado colateral) — `event=` colide com a chave interna
+    # que o structlog já usa pro nome do evento de log (o 1º argumento
+    # posicional, "webhook_received"), estourando TypeError em toda
+    # chamada. Bug pré-existente nunca pego porque nenhum teste/tráfego
+    # real tinha batido nesta rota até agora — renomeado pra `tipo_evento`.
     log.info(
         "webhook_received",
         provider=provider,
-        event=payload.get("type") or payload.get("event") or payload.get("action"),
+        tipo_evento=payload.get("type") or payload.get("event") or payload.get("action"),
         keys=sorted(payload.keys())[:10] if isinstance(payload, dict) else None,
     )
     if provider in ("stripe", "mercadopago"):
+        from app.services.webhook_signature import verify_mercadopago_signature, verify_stripe_signature
+        if provider == "stripe" and settings.STRIPE_WEBHOOK_SECRET:
+            assinatura_ok = verify_stripe_signature(
+                corpo_bruto, request.headers.get("stripe-signature"), settings.STRIPE_WEBHOOK_SECRET,
+            )
+            if not assinatura_ok:
+                log.warning("webhook_assinatura_invalida", provider=provider)
+                return {"received": True, "processed": False, "reason": "assinatura inválida"}
+        if provider == "mercadopago" and settings.MERCADOPAGO_WEBHOOK_SECRET:
+            data_id = (payload.get("data") or {}).get("id") if isinstance(payload, dict) else None
+            data_id = data_id or request.query_params.get("data.id") or request.query_params.get("id")
+            assinatura_ok = verify_mercadopago_signature(
+                request.headers.get("x-request-id"),
+                str(data_id) if data_id else None,
+                request.headers.get("x-signature"),
+                settings.MERCADOPAGO_WEBHOOK_SECRET,
+            )
+            if not assinatura_ok:
+                log.warning("webhook_assinatura_invalida", provider=provider)
+                return {"received": True, "processed": False, "reason": "assinatura inválida"}
         from app.services.payment_gateway import processar_webhook_pagamento
         result = await processar_webhook_pagamento(
             db, provider, payload if isinstance(payload, dict) else {}, dict(request.query_params),

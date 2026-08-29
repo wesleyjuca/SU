@@ -652,6 +652,14 @@ async def create_contract(
     from datetime import datetime
     # Persiste o conteúdo informado (ou a descrição) para o contrato não nascer vazio
     conteudo = (body.conteudo or body.descricao or "").strip() or None
+    # Fase 247 (achado da Fase 246) — este endpoint criava o Document sem
+    # client_id (só o Contract tinha), diferente do caminho gerado por IA
+    # (contract_agent.py, que já seta Document.client_id). Isso quebrava
+    # erase_client_data/export_client_data: qualquer busca por
+    # Document.client_id nunca alcançava o corpo do contrato nem a linha
+    # do Contract em si pra um contrato criado manualmente. Validar aqui
+    # (não confiar no client_id bruto do body) e propagar pro Document.
+    client_id_validado = await _validar_client_id(db, body.client_id, current_user.tenant_id)
     doc = Document(
         tipo="CONTRATO",
         titulo=body.titulo,
@@ -660,12 +668,13 @@ async def create_contract(
         gerado_por_ia=False,
         created_by=current_user.id,
         tenant_id=current_user.tenant_id,
+        client_id=client_id_validado,
     )
     db.add(doc)
     await db.flush()
     contract = Contract(
         document_id=doc.id,
-        client_id=await _validar_client_id(db, body.client_id, current_user.tenant_id),
+        client_id=client_id_validado,
         tipo=body.tipo,
         valor_total=body.valor_total,
         data_inicio=datetime.fromisoformat(body.data_inicio) if body.data_inicio else None,

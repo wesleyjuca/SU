@@ -85,6 +85,19 @@ class Settings(BaseSettings):
     MERCADOPAGO_OAUTH_CLIENT_ID: str = ""
     MERCADOPAGO_OAUTH_CLIENT_SECRET: str = ""
     MERCADOPAGO_OAUTH_REDIRECT_URI: str = ""
+    # Fase 248.1 — assinatura HMAC do webhook (camada extra sobre a
+    # re-verificação real já existente em payment_gateway.py, que sempre
+    # confirma via GET autenticado antes de marcar qualquer fatura como
+    # paga). Um segredo só por plataforma (não por tenant): a URL do
+    # webhook é única (`/integrations/webhooks/{provider}`) e recebe
+    # eventos de todos os escritórios conectados — mesmo modelo do
+    # Stripe Connect/Mercado Pago marketplace. Opcional: sem o secret
+    # configurado, a verificação é pulada silenciosamente (mesmo padrão
+    # de opcionalidade de `is_oauth_configured`) — senão o deploy
+    # quebraria o webhook de todo tenant já conectado no instante em que
+    # o código sobe, antes de alguém configurar o secret na plataforma.
+    STRIPE_WEBHOOK_SECRET: str = ""
+    MERCADOPAGO_WEBHOOK_SECRET: str = ""
     # Fase 138.2 — OAuth do Google Drive em nível de TENANT (pasta de doutrina
     # do escritório), distinto do OAuth pessoal (GOOGLE_REDIRECT_URI acima).
     # Reaproveita GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET (mesmo client do Google
