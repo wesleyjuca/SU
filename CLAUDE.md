@@ -4037,6 +4037,123 @@ Histórico:
     contra Postgres+Redis+Celery+uvicorn reais (stack subida do zero
     nesta sessão, container tinha sido reiniciado) + Playwright real
     (Chromium do sandbox) após cada sub-fase, nunca só leitura de código.
+- **Fase 249** — usuário colou um log de produção mostrando o Celery em
+  crash-loop havia ~16h (desde o deploy do PR #236):
+  `[AFJ][WARN] Processo Celery morreu — religando…` repetindo a cada
+  ~10s, sempre com `ModuleNotFoundError: No module named
+  '${{a61c37ce-...'`. Investigação (1 Explore agent, read-only)
+  confirmou que **não havia bug de código**: `worker.py`/`config.py`
+  passam `CELERY_RESULT_BACKEND`/`CELERY_BROKER_URL` direto de
+  `Settings` pro `Celery(...)`, com fallback simples pra `REDIS_URL`
+  quando vazio — nenhuma interpolação/templating em lugar nenhum do
+  repo. O `${{...}}` cru só podia ter vindo de uma variável do painel
+  do Railway contendo uma referência `${{ServiceName.VAR}}` que não
+  resolveu — essas 3 variáveis são secrets de runtime configurados só
+  na plataforma (já documentado acima), fora do alcance desta sessão.
+  **Usuário corrigiu a variável quebrada no painel do Railway por conta
+  própria** — não fez parte desta fase.
+  - **Nota de correção**: uma investigação inicial (Plan agent) alegou
+    que `backend/railway.toml`/`backend/Dockerfile` não invocavam
+    `start.sh` (procurando em caminhos que não existem) — **verificado
+    diretamente e descartado**: `railway.toml`/`Dockerfile` (raiz do
+    repo, não dentro de `backend/`) já tinham `startCommand`/`CMD`
+    apontando pra `sh start.sh` corretamente, exatamente como este
+    próprio CLAUDE.md já documentava. Fica registrado como lembrete de
+    sempre verificar diretamente uma alegação de subagente antes de
+    confiar nela, mesmo quando soa plausível.
+  - **O que esta fase resolveu**: por que o crash-loop passou
+    despercebido por 16h. O watchdog do Fase 227 (`backend/start.sh`)
+    religava o Celery a cada morte sem NUNCA distinguir um blip
+    transitório (se recupera na religada) de uma config permanentemente
+    quebrada (crasha em bem menos de 1s, sempre) — e sem soar alarme
+    nenhum. Como só o `uvicorn` é observado pelo healthcheck do
+    Railway, o deploy inteiro aparecia "successful" enquanto toda a
+    `beat_schedule` (alertas de prazo, agentes de IA, sync de
+    jurisprudência, capturas periódicas) ficava morta em silêncio.
+    Achado adicional: `backend/app/workers/tasks/infra_check.py`
+    (Fase 164) já faz esse tipo de alerta pra SUPERADMIN — mas É UMA
+    TASK DO PRÓPRIO CELERY BEAT, então nunca dispara exatamente quando
+    o Celery/beat é o que está quebrado. Por isso a checagem nova entra
+    no watchdog do shell (fora do Celery), não em Python/Celery-land.
+  - **`start.sh`** ganhou detecção de crash-loop: `CELERY_START_TS`
+    grava quando o Celery sobe; se morrer antes de
+    `CELERY_MIN_HEALTHY_SECONDS` (default 45s — folga confortável acima
+    do boot legítimo do Celery, que importa 14 módulos de `include=
+    [...]` antes de conectar), incrementa `CELERY_FAST_DEATH_COUNT`
+    (zera se sobreviver além disso); ao atingir
+    `CELERY_CRASHLOOP_THRESHOLD` (default 3) mortes rápidas seguidas,
+    chama `maybe_alert_crashloop()`. Todos os thresholds são
+    configuráveis por env var (mesmo padrão de opcionalidade de
+    `CELERY_CONCURRENCY`). **Cuidado de implementação**: `start.sh` tem
+    `set -e` na 1ª linha valendo pro script inteiro — `maybe_alert_
+    crashloop()` sempre termina com `return 0` e é chamada com `||
+    echo ...` por precaução extra, senão uma falha no envio do alerta
+    derrubaria o watchdog inteiro (regressão bem pior que o bug sendo
+    corrigido).
+  - **Anti-spam**: marcador de timestamp em `/tmp/afj_celery_crashloop_
+    alert.ts` (mesmo diretório gravável já usado pelo bloco
+    `MIGRATE_FROM_URL`) — só reenvia depois de
+    `CELERY_ALERT_COOLDOWN_SECONDS` (default 1h) desde o último alerta
+    real, tratando arquivo ausente/valor não-numérico como "nunca
+    alertou".
+  - **`backend/app/scripts/alert_celery_crashloop.py`** (novo, +
+    `__init__.py`) — invocado via `timeout 20 python3 -m app.scripts.
+    alert_celery_crashloop "$N"`. Reaproveita só primitivas já
+    existentes: `AsyncSessionLocal` (já falha rápido, `connect_
+    args={"timeout": 5}`), `notification.create_batch(..., tipo=
+    "INFRA_ALERTA", ...)` — `"INFRA_ALERTA"` já era um tipo válido em
+    `TIPOS_VALIDOS` e já estava fora do mapa de opt-out por preferência
+    (sempre notifica, sem toggle pro usuário desativar), e
+    `email.send_email(..., db=db, tenant_id=None)` — `tenant_id=None`
+    pula deliberadamente os branches de Gmail-Workspace/tenant-demo
+    (ambos condicionados a `tenant_id is not None`), caindo direto no
+    SMTP genérico, certo pra um alerta de plataforma inteira. Público:
+    `User.role == "SUPERADMIN", is_active=True` — mesmo padrão já usado
+    por `infra_check.py` pra esse tipo de alerta infra-wide (não o
+    padrão per-tenant de `_notify_integration_error`, que é sobre
+    credencial de 1 tenant, problema diferente). Ambos os canais
+    (in-app + e-mail) — notificação in-app sozinha tem o mesmo ponto
+    cego que causou as 16h sem ninguém notar (ninguém logado no
+    painel); e-mail é o canal que escapa desse ponto cego. Cada etapa
+    isolada em try/except própria — nunca deixa uma exceção virar
+    traceback que trava o watchdog.
+  - **Fora de escopo, deliberado**: Sentry como canal adicional (já
+    integrado no projeto, `SENTRY_DSN`, ganho bônus barato — mas não
+    substitui o e-mail, já que é outro dashboard que alguém precisa
+    estar observando, o mesmo ponto cego do incidente original);
+    framework de alerta genérico; retry/backoff no envio (se falhar,
+    loga e a próxima tentativa, ainda protegida pelo cooldown, tenta de
+    novo); diagnosticar qual variável específica está quebrada a partir
+    do shell (o traceback do próprio Celery já mostra isso nos logs);
+    monitoramento de recursos genérico (memória/CPU/disco).
+  - **Verificado ao vivo, ponta a ponta, contra Postgres+Redis reais**
+    (não só leitura de código): rodou `start.sh` de verdade localmente
+    com `CELERY_RESULT_BACKEND='${{broken-service-id-reference}}'`
+    (reproduzindo o exato padrão do incidente real) e thresholds
+    reduzidos pra teste (`CELERY_MIN_HEALTHY_SECONDS=20`,
+    `CELERY_CRASHLOOP_THRESHOLD=3`) — confirmado que o alerta NÃO
+    dispara na 1ª nem na 2ª morte rápida, dispara exatamente na 3ª
+    ("Celery crash-loop detectado (3x mortes rápidas seguidas)"), e
+    que a 4ª/5ª/6ª mortes subsequentes corretamente logam "já alertado"
+    sem reenviar (cooldown funcionando); confirmado via consulta direta
+    no Postgres que exatamente 1 `Notification` nova foi criada por
+    essa rodada (não duplicada pelas tentativas suprimidas pelo
+    cooldown); confirmado que o watchdog sobrevive tanto a um envio de
+    alerta bem-sucedido quanto a uma falha forçada do script (testado
+    separadamente com `DATABASE_URL` também quebrada — o script loga em
+    stderr e sai limpo, `set -e` nunca derruba o loop); confirmado que
+    o `trap`/shutdown gracioso (Fase 227) continua funcionando sem
+    regressão. **Achado de teste, não de produto**: o watchdog só faz
+    polling a cada 10s (`sleep 10` no loop), então `RAN_FOR` nunca é
+    medido abaixo de ~10s mesmo pra uma morte instantânea — thresholds
+    de teste abaixo dessa granularidade (a 1ª tentativa usou 5s) dão
+    falso-negativo silencioso (todas as mortes leem `RAN_FOR≈10s`,
+    nunca contam como rápidas); o default de produção (45s) já tem
+    folga suficiente acima dessa granularidade, não precisa de ajuste.
+  - `ruff check`/`py_compile` limpos nos 2 arquivos novos; revisão
+    manual cuidadosa do `start.sh` (`sh -n`/`dash -n` confirmam sintaxe
+    válida no shell exato de produção — sem `shellcheck` disponível
+    neste sandbox, mesma limitação já documentada desde a Fase 227).
 
 
 ## Riscos conhecidos / débito técnico
