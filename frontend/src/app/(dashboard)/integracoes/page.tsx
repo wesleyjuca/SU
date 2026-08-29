@@ -4,6 +4,7 @@ import { Plug, MessageCircle, PenTool, Clock, CheckCircle2, Smartphone, Loader2,
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
 import { useConfirmDialog } from "@/hooks/useConfirmDialog";
+import { StatusBadge, type StatusTone } from "@/components/integrations/StatusBadge";
 
 // Cards estáticos (recursos que não são "conectar conta" — hoje só o PWA).
 const INTEGRACOES = [
@@ -38,6 +39,9 @@ interface HubIntegracao {
   // Fase 165 — antes só o clique manual em "Testar conexão" atualizava o
   // status; estes campos refletem o último uso REAL da credencial.
   last_success_at: string | null; last_error_at: string | null; last_error_detail: string | null;
+  // Fase 248.3 — tradução curada de last_error_detail, sempre presente
+  // (pode ser null quando não há erro ou quando a mensagem já é amigável).
+  last_error_friendly: string | null;
   oauth_disponivel: boolean;
   extra_data: Record<string, string>;
 }
@@ -72,8 +76,13 @@ const MODULOS_HUB: Record<string, string> = {
 // Provedores com teste de credencial automático (fontes credenciadas +
 // WhatsApp, Fase 168 — antes o botão nem aparecia pra jusbrasil, apesar do
 // backend já testar essa fonte desde a Fase 88, nem pra WhatsApp; stripe/
-// mercadopago entraram na Fase 242, sonda GET read-only contra o provedor).
-const TESTAVEIS = new Set(["pdpj", "escavador", "judit", "jusbrasil", "whatsapp", "stripe", "mercadopago"]);
+// mercadopago entraram na Fase 242; clicksign/google_drive_doutrina/
+// google_workspace entraram na Fase 248.1 — todos com sonda GET
+// read-only contra o provedor real, `_GET_TEST_PROBE` no backend).
+const TESTAVEIS = new Set([
+  "pdpj", "escavador", "judit", "jusbrasil", "whatsapp", "stripe", "mercadopago",
+  "clicksign", "google_drive_doutrina", "google_workspace",
+]);
 
 function HubCards() {
   const toast = useToast();
@@ -199,8 +208,10 @@ function HubCards() {
     try {
       const res = await fetch(`/api/v1/integrations/hub/${it.provider}/test`, { method: "POST", headers: authH() });
       const d = await res.json().catch(() => ({}));
+      // Fase 248.3 — `detail_friendly` (quando existe) é a mensagem curada;
+      // `detail` cru fica só como fallback pros poucos casos sem tradução.
       if (res.ok && d.ok) toast.success(`Conexão OK — ${d.detail || "credencial válida"}.`);
-      else if (res.ok) toast.error(`Falha na credencial: ${d.detail || "verifique o token"}.`);
+      else if (res.ok) toast.error(d.detail_friendly || `Falha na credencial: ${d.detail || "verifique o token"}.`);
       else toast.error(d.detail || "Erro ao testar a conexão.");
       fetchHub();
     } catch { toast.error("Falha de conexão."); }
@@ -266,14 +277,11 @@ function HubCards() {
                   <p className="text-xs text-afj-black/55 mt-0.5">{it.desc}</p>
                 </div>
               </div>
-              <span className={`inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-sm border flex-shrink-0 ${
-                comErro ? "bg-red-50 text-red-700 border-red-200"
-                : conectada ? "bg-green-50 text-green-700 border-green-200"
-                : "bg-gray-50 text-gray-500 border-gray-200"
-              }`}>
-                {comErro ? <AlertTriangle size={11} /> : conectada ? <CheckCircle2 size={11} /> : <Clock size={11} />}
-                {comErro ? "Com erro" : conectada ? "Conectada" : "Desconectada"}
-              </span>
+              <StatusBadge
+                tone={(comErro ? "red" : conectada ? "green" : "gray") as StatusTone}
+                icon={comErro ? AlertTriangle : conectada ? CheckCircle2 : Clock}
+                label={comErro ? "Com erro" : conectada ? "Conectada" : "Desconectada"}
+              />
             </div>
 
             <div className="mt-4">
@@ -291,9 +299,24 @@ function HubCards() {
               </ul>
             </div>
 
+            {/* Fase 248.4 — disclosure de dado acessado, distinto do checklist
+                de FEATURES acima ("O que a conexão habilita"). Só o Workspace
+                agrupa 3 escopos (Gmail+Agenda+Drive) numa única autorização —
+                vale deixar explícito antes de conectar o que isso realmente
+                significa em termos de acesso, não só de funcionalidade. */}
+            {it.provider === "google_workspace" && !temCredencial && (
+              <p className="mt-2 text-[11px] text-afj-black/45 leading-relaxed">
+                A conexão concede ao AFJ CORE permissão para: enviar e-mails em nome dessa conta
+                (Gmail), criar/editar eventos na Agenda do Google, e salvar arquivos no Drive dessa
+                conta. Nenhum e-mail ou arquivo existente é lido — só o necessário pra essas 3 ações.
+              </p>
+            )}
+
             {comErro && (
               <p className="mt-3 text-[11px] text-red-600 bg-red-50 border border-red-200 rounded-sm px-2.5 py-1.5">
-                {it.last_error_detail || "A última verificação falhou (credencial inválida/expirada)."} Teste a conexão ou reconecte.
+                {/* Fase 248.3 — mensagem curada (last_error_friendly) em vez do
+                    detail cru (exceção httpx truncada) que estava aqui antes. */}
+                {it.last_error_friendly || "A última verificação falhou (credencial inválida/expirada)."} Teste a conexão ou reconecte.
                 {it.last_error_at && ` (${new Date(it.last_error_at).toLocaleString("pt-BR")})`}
               </p>
             )}

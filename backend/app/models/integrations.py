@@ -31,7 +31,7 @@ class TenantIntegration(Base):
     id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
     provider: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
-    status: Mapped[str] = mapped_column(String(20), nullable=False, default="CONECTADA")  # CONECTADA | ERRO
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="CONECTADA")  # CONECTADA | ERRO | DESCONECTADA (Fase 248.1 — disconnect() preserva a linha)
     credentials_enc: Mapped[str | None] = mapped_column(Text)   # JSON cifrado (Fernet)
     extra_data: Mapped[dict] = mapped_column(JSONB, default=dict)
     connected_by: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)

@@ -2,11 +2,12 @@
 import { useState, useEffect, useCallback } from "react";
 import {
   Activity, Database, Zap, Search, Bot, Globe, Mail, Shield, Lock,
-  FileSearch, Bell, HardDrive, Archive, RefreshCw, CheckCircle, XCircle,
+  FileSearch, Bell, Archive, RefreshCw, CheckCircle, XCircle,
   AlertTriangle, Clock, Wrench, ChevronDown, ChevronRight, Newspaper,
   Cpu, Layers, ListChecks, Boxes, DollarSign, Link2,
 } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
+import { StatusBadge, type StatusTone } from "@/components/integrations/StatusBadge";
 
 type ModuleStatus = "funcionando" | "atencao" | "erro" | "nao_configurado" | "em_desenvolvimento" | "planejado";
 
@@ -198,14 +199,6 @@ const MODULES: Module[] = [
     getLatency: () => null,
   },
   {
-    key: "backup",
-    label: "Backup Automático",
-    desc: "Backup incremental diário",
-    icon: HardDrive,
-    getStatus: () => "planejado",
-    getLatency: () => null,
-  },
-  {
     key: "storage",
     label: "Armazenamento",
     desc: "Documentos e arquivos do escritório",
@@ -215,13 +208,18 @@ const MODULES: Module[] = [
   },
 ];
 
-const STATUS_CONFIG: Record<ModuleStatus, { label: string; bg: string; text: string; border: string; icon: React.ElementType }> = {
-  funcionando:       { label: "Funcionando",       bg: "bg-green-50",   text: "text-green-700",  border: "border-green-200", icon: CheckCircle },
-  atencao:           { label: "Atenção",            bg: "bg-amber-50",   text: "text-amber-700",  border: "border-amber-200", icon: AlertTriangle },
-  erro:              { label: "Erro",               bg: "bg-red-50",     text: "text-red-700",    border: "border-red-200",   icon: XCircle },
-  nao_configurado:   { label: "Não Configurado",    bg: "bg-gray-50",    text: "text-gray-500",   border: "border-gray-200",  icon: Clock },
-  em_desenvolvimento:{ label: "Em Desenvolvimento", bg: "bg-blue-50",    text: "text-blue-700",   border: "border-blue-200",  icon: Wrench },
-  planejado:         { label: "Planejado",          bg: "bg-gray-50",    text: "text-gray-500",   border: "border-gray-200",  icon: Clock },
+// Fase 248.3 — `tone` reaproveita o mesmo mapeamento cor de
+// `StatusBadge` (mesma fonte que `integracoes/page.tsx` usa) em vez de
+// manter uma paleta verde/vermelho/âmbar/cinza própria e independente
+// desta página. `bg`/`border` continuam aqui porque estilizam o CARD
+// inteiro (não só o badge de status) — não é a peça duplicada.
+const STATUS_CONFIG: Record<ModuleStatus, { label: string; bg: string; text: string; border: string; icon: React.ElementType; tone: StatusTone }> = {
+  funcionando:       { label: "Funcionando",       bg: "bg-green-50",   text: "text-green-700",  border: "border-green-200", icon: CheckCircle,   tone: "green" },
+  atencao:           { label: "Atenção",            bg: "bg-amber-50",   text: "text-amber-700",  border: "border-amber-200", icon: AlertTriangle, tone: "amber" },
+  erro:              { label: "Erro",               bg: "bg-red-50",     text: "text-red-700",    border: "border-red-200",   icon: XCircle,       tone: "red" },
+  nao_configurado:   { label: "Não Configurado",    bg: "bg-gray-50",    text: "text-gray-500",   border: "border-gray-200",  icon: Clock,         tone: "gray" },
+  em_desenvolvimento:{ label: "Em Desenvolvimento", bg: "bg-blue-50",    text: "text-blue-700",   border: "border-blue-200",  icon: Wrench,        tone: "blue" },
+  planejado:         { label: "Planejado",          bg: "bg-gray-50",    text: "text-gray-500",   border: "border-gray-200",  icon: Clock,         tone: "gray" },
 };
 
 const PHASES: { name: string; items: string; done: boolean; active?: boolean }[] = [
@@ -305,9 +303,7 @@ function ModuleCard({ module, data }: { module: Module; data: HealthData }) {
         </div>
       </div>
       <p className="text-[11px] text-afj-black/50 leading-relaxed">{module.desc}</p>
-      <span className={`text-[10px] font-semibold uppercase tracking-wider ${cfg.text}`}>
-        {cfg.label}
-      </span>
+      <StatusBadge tone={cfg.tone} label={cfg.label} variant="label" />
     </div>
   );
 }
@@ -322,6 +318,13 @@ export default function HealthPage() {
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [infra, setInfra] = useState<BrainInfra | null>(null);
   const [tenantInfra, setTenantInfra] = useState<TenantInfra | null>(null);
+  // Fase 248.1 — reaproveita o sinal que a página já tem (200 vs. qualquer
+  // outra coisa no endpoint SUPERADMIN-only abaixo) pra decidir se o modal
+  // de diagnóstico pode citar nome de variável de ambiente cru: essa página
+  // é reachable por ADMIN/SOCIO também, não só SUPERADMIN, então mensagens
+  // técnicas ("configure REDIS_URL") não deviam vazar pra um admin de
+  // escritório sem conhecimento técnico. Fail-closed por padrão (false).
+  const [isSuperadmin, setIsSuperadmin] = useState(false);
 
   // Infra profunda (Celery/Redis/Qdrant/pool/jobs) — só o SUPERADMIN é autorizado
   // pelo endpoint; para os demais admins o 403 é silencioso (painel some, mas o
@@ -332,9 +335,9 @@ export default function HealthPage() {
       const res = await fetch("/api/v1/system/brain/infra", {
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (res.ok) setInfra(await res.json());
-      else setInfra(null);
-    } catch { setInfra(null); }
+      if (res.ok) { setInfra(await res.json()); setIsSuperadmin(true); }
+      else { setInfra(null); setIsSuperadmin(false); }
+    } catch { setInfra(null); setIsSuperadmin(false); }
   }, []);
 
   // Saúde do próprio escritório — ADMIN/SOCIO/SUPERADMIN.
@@ -394,19 +397,32 @@ export default function HealthPage() {
       })
     : [];
 
+  // Fase 248.1 — 2 versões lado a lado, mesma ordem/condições, só o texto
+  // muda: técnica (cita variável de ambiente) pra SUPERADMIN, genérica em
+  // português (sem nome de variável nenhuma) pros demais.
   const diagnosticMessages: string[] = data
-    ? [
-        !data.services.postgresql.ok ? "PostgreSQL offline — verifique a URL do banco de dados." : null,
-        !data.services.redis.ok ? "Redis offline — verifique REDIS_URL nas variáveis de ambiente." : null,
-        // IA central: só alerta se configurada e falhando. Sem chave central o
-        // sistema opera em BYOK (cada usuário usa a própria chave) — não é erro.
-        (data.services.anthropic.configured !== false && !data.services.anthropic.ok)
-          ? `IA central (${data.services.anthropic.provider ?? "provider"}) inacessível — verifique a chave de API do sistema.` : null,
-        data.services.postgresql.ok && data.services.postgresql.latency_ms > 200
-          ? "Latência alta no banco de dados (>200ms) — considere otimizar queries ou verificar carga." : null,
-        !data.email_enabled ? "E-mail não configurado — configure SMTP_HOST, SMTP_USER e SMTP_PASSWORD." : null,
-        !data.sentry_enabled ? "Monitoramento de erros inativo — configure SENTRY_DSN para rastreamento." : null,
-      ].filter(Boolean) as string[]
+    ? (isSuperadmin
+        ? [
+            !data.services.postgresql.ok ? "PostgreSQL offline — verifique a URL do banco de dados." : null,
+            !data.services.redis.ok ? "Redis offline — verifique REDIS_URL nas variáveis de ambiente." : null,
+            (data.services.anthropic.configured !== false && !data.services.anthropic.ok)
+              ? `IA central (${data.services.anthropic.provider ?? "provider"}) inacessível — verifique a chave de API do sistema.` : null,
+            data.services.postgresql.ok && data.services.postgresql.latency_ms > 200
+              ? "Latência alta no banco de dados (>200ms) — considere otimizar queries ou verificar carga." : null,
+            !data.email_enabled ? "E-mail não configurado — configure SMTP_HOST, SMTP_USER e SMTP_PASSWORD." : null,
+            !data.sentry_enabled ? "Monitoramento de erros inativo — configure SENTRY_DSN para rastreamento." : null,
+          ]
+        : [
+            !data.services.postgresql.ok ? "O banco de dados está fora do ar. Contate o suporte técnico." : null,
+            !data.services.redis.ok ? "O serviço de cache está fora do ar. Contate o suporte técnico." : null,
+            (data.services.anthropic.configured !== false && !data.services.anthropic.ok)
+              ? "A IA do sistema está indisponível no momento. Contate o suporte técnico." : null,
+            data.services.postgresql.ok && data.services.postgresql.latency_ms > 200
+              ? "O banco de dados está respondendo mais devagar que o normal." : null,
+            !data.email_enabled ? "O envio automático de e-mails não está configurado. Contate o suporte técnico." : null,
+            !data.sentry_enabled ? "O monitoramento de erros do sistema não está ativo." : null,
+          ]
+      ).filter(Boolean) as string[]
     : [];
 
   return (
@@ -735,6 +751,13 @@ export default function HealthPage() {
                 style={{ width: `${COMPLETION_PERCENT}%` }}
               />
             </div>
+            {/* Fase 248.4 — este roadmap é um marco estático (atualizado
+                manualmente a cada fase entregue), não um dado ao vivo como
+                os cards de "Módulos do Sistema" acima; sem essa legenda,
+                fica fácil confundir os dois. */}
+            <p className="text-[10px] text-afj-black/35 mt-1.5">
+              Marco estático do roadmap — não é um indicador de saúde ao vivo.
+            </p>
           </div>
 
           {showRoadmap && (

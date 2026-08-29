@@ -3915,6 +3915,128 @@ Histórico:
     usuário ("Continue" após o relatório, não um pedido de tooling novo).
     Continua valendo a pena considerar numa fase futura dedicada, já que
     esta é a 6ª ocorrência confirmada da mesma classe de lacuna.
+- **Fase 248** — usuário pediu uma missão ampla (25 seções): analisar,
+  corrigir, evoluir e simplificar a área de "Integrações", com foco em
+  UX pra um administrador não-técnico, segurança de credenciais,
+  arquitetura, e avaliação de novas APIs. Investigação completa (3
+  Explore agents em paralelo — backend `integration_hub.py`, frontend
+  `integracoes/page.tsx`+`admin/health/page.tsx`, e segurança/webhooks/
+  sync/testes — mais 1 Plan agent pra desenhar a implementação) mapeou
+  os 10 provedores já registrados no hub (stripe, mercadopago,
+  clicksign, whatsapp, pdpj, escavador, judit, jusbrasil,
+  google_drive_doutrina, google_workspace) — credenciais sempre
+  cifradas (Fernet) e escopadas por tenant, exposição de credencial
+  confirmada segura (nenhum endpoint devolve segredo cru/mascarado).
+  Usuário confirmou (via 2 perguntas): (1) focar em corrigir/evoluir os
+  10 provedores já existentes nesta fase, sem pesquisar/adicionar
+  provedor novo — os mais valiosos pro mercado jurídico brasileiro já
+  estão cobertos (mesma conclusão já documentada desde a Fase 217/242);
+  (2) as 4 sub-fases completas do plano abaixo numa única sessão.
+  - **248.1 — segurança & correção**:
+    - **Assinatura HMAC nos webhooks de stripe/mercadopago**
+      (`backend/app/services/webhook_signature.py`, novo) — camada
+      ADICIONAL sobre a re-verificação real já existente (nunca a
+      substitui); settings opcionais `STRIPE_WEBHOOK_SECRET`/
+      `MERCADOPAGO_WEBHOOK_SECRET`, skip silencioso se não configurado
+      (senão quebraria o webhook de todo tenant já conectado no
+      instante do deploy). Verificado via HTTP real: assinatura
+      válida/inválida/header ausente pros 2 provedores, os 5 cenários
+      se comportando exatamente como esperado.
+    - **Achado colateral crítico, corrigido na hora**: `receive_webhook`
+      (`backend/app/api/v1/integrations_hub.py`) tinha um bug
+      pré-existente — `log.info(..., event=...)` colide com a chave
+      interna que o structlog já usa pro nome do evento de log,
+      estourando `TypeError` em **toda** chamada. Bug nunca pego antes
+      porque nenhum teste/tráfego real tinha batido nessa rota até
+      agora (confirma exatamente o que a Fase 246 já tinha achado:
+      "zero teste exercita o webhook receiver"). Corrigido renomeando
+      pra `tipo_evento`.
+    - **Fecha o gap do `testar_conexao`** pra clicksign/
+      google_drive_doutrina/google_workspace — generaliza
+      `_PAYMENT_TEST_PROBE`/`_testar_payment_gateway` (Fase 242) num
+      `_GET_TEST_PROBE`/`_testar_via_get` reutilizável cobrindo os 3
+      (Clicksign: query param, mesmo esquema de `esign.py`; Google
+      Drive: `drive/v3/about`; Google Workspace: `oauth2/tokeninfo`).
+      **Achado ao vivo durante a verificação**: `tokeninfo` do Google
+      devolve HTTP 400 — não 401/403 — pra token inválido (confirmado
+      contra a API real do Google); `_GET_TEST_PROBE` ganhou um
+      `invalid_status` por provedor pra cobrir isso sem generalizar o
+      400 pros outros (onde 400 pode significar outra coisa).
+    - **`disconnect()` preserva `extra_data`** — trocou
+      `db.delete(integ)` por limpar só `credentials_enc`/`status`/
+      `connected_at`/`connected_by`/timestamps, mantendo a linha e
+      `extra_data` (ex.: `folder_id` do Drive) intactos; reconectar
+      reaproveita a config anterior. `list_status()` passou a derivar
+      `DESCONECTADA` por `credentials_enc` vazio (não só por
+      `integ.status`), já que a linha agora sobrevive ao disconnect.
+    - **Gate SUPERADMIN no modal de diagnóstico**
+      (`admin/health/page.tsx`) — reaproveita o sinal que a página já
+      tem (200 vs. qualquer outra coisa em `/system/brain/infra`,
+      já `SUPERADMIN`-only) pra decidir se pode citar nome de variável
+      de ambiente cru (`REDIS_URL`, `SMTP_HOST`, `SENTRY_DSN`) — página
+      é reachable por ADMIN/SOCIO também, que agora recebem mensagem
+      genérica em português. Verificado via Playwright real com os 2
+      papéis.
+  - **248.2 — testes reais do caminho financeiro**: novo
+    `backend/tests/test_api/test_integrations_webhooks.py` — ciclo
+    completo stripe/mercadopago (connect→fatura→emitir→payment-link→
+    webhook→PAGA→FinancialEntry, replay idempotente, session mismatch
+    rejeitado) + lifecycle clicksign (connect→status→test→disconnect),
+    mesmo padrão de mock só do HTTP de saída já usado no projeto
+    (`monkeypatch.setattr(<módulo>.httpx, "AsyncClient", ...)`). Suíte
+    bate na mesma flakiness de pool asyncpg/pytest-asyncio documentada
+    desde a Fase 199 (cross-checada contra `test_invoices.py`, arquivo
+    de controle não tocado, falha de forma idêntica) — verificação
+    principal via script standalone no mesmo processo (mesmo workaround
+    já usado nas Fases 202/209), confirmando os 3 cenários (confirmação
+    + FinancialEntry único mesmo após replay + session mismatch
+    rejeitado, fatura não vira PAGA) diretamente contra Postgres real.
+  - **248.3 — UX compartilhada & mensagens amigáveis**:
+    - **`friendly_detail()`** (`integration_hub.py`) — tradução por
+      padrão regex (credencial inválida/timeout/OAuth expirado/escopo
+      insuficiente/resposta inesperada) pra mensagem curada em
+      português + fallback honesto que nunca inventa causa. `detail`
+      cru continua sendo salvo/logado (auditoria/suporte) — a tradução
+      é aditiva. Novos campos `detail_friendly` (`testar_conexao()`) e
+      `last_error_friendly` (`list_status()`), consumidos no toast/
+      banner de `integracoes/page.tsx` no lugar do texto técnico cru.
+    - **`<StatusBadge>` compartilhado**
+      (`frontend/src/components/integrations/StatusBadge.tsx`, novo) —
+      só extrai o mapeamento tom→cor (a peça genuinamente idêntica
+      entre os 2 usos); **não** virou um `<IntegrationCard>` genérico,
+      já que o card do hub inteiro (connect/test/disconnect/toggle) não
+      tem equivalente no `ModuleCard` de 6 linhas do health — forçar um
+      componente único exigiria 10+ props opcionais de comportamento, a
+      abstração não-usada que este projeto evita. 2 variantes visuais
+      (`pill` no hub, `label` no health) preservam o visual já existente
+      de cada página — confirmado sem regressão via Playwright
+      (screenshot antes/depois nas 2 páginas).
+  - **248.4 — polish & honestidade de UI**: removido o card "Backup
+    Automático" (`admin/health/page.tsx`, sempre `"planejado"` por
+    construção, nunca refletia dado real, ao lado de tiles de fato
+    monitorados); "Progresso do Projeto" ganhou uma legenda
+    ("Marco estático do roadmap — não é um indicador de saúde ao vivo");
+    Google Workspace ganhou uma disclosure curta de "quais dados serão
+    acessados" (Gmail send-only, Calendar events, Drive file-scope —
+    grounded nos escopos OAuth reais registrados, não uma alegação
+    genérica) no pré-consentimento, distinta do checklist de features já
+    existente.
+  - **Explicitamente fora desta fase** (decisão deliberada, documentada
+    no plano): abstração `Provider` genérica (duplicação é de forma, não
+    de lógica compartilhável real entre os 4 módulos vendor — revisitar
+    só se um 3º/4º provedor do mesmo formato de pagamento/esign surgir);
+    HMAC do Clicksign (aposta financeira menor, mecanismo de assinatura
+    não confirmado com certeza, re-verificação já fecha o gap sozinha);
+    `DROP TABLE google_integrations` (tabela órfã da Fase 139, inerte,
+    zero risco); qualquer mudança em `AIProviderConfig.tenant_id`
+    (subsistema BYOK-IA separado, fora do hub); pesquisa de provedor
+    novo (confirmado com o usuário).
+  - `ruff check`/`py_compile` limpos nos 6 arquivos backend tocados
+    (incluindo o teste novo); `tsc --noEmit`/`eslint` limpos nos 3
+    arquivos frontend tocados. Verificação principal via HTTP real
+    contra Postgres+Redis+Celery+uvicorn reais (stack subida do zero
+    nesta sessão, container tinha sido reiniciado) + Playwright real
+    (Chromium do sandbox) após cada sub-fase, nunca só leitura de código.
 
 
 ## Riscos conhecidos / débito técnico

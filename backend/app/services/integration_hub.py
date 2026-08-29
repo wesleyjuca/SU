@@ -6,6 +6,7 @@ As fases seguintes (pagamento/assinatura/WhatsApp) usam estas credenciais
 para as chamadas reais aos provedores.
 """
 import json
+import re
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -19,6 +20,44 @@ from app.core.crypto import encrypt, decrypt
 from app.models.integrations import TenantIntegration
 
 log = structlog.get_logger()
+
+# Fase 248.3 — camada de tradução de erro amigável. `last_error_detail`
+# (exceção httpx/mensagem técnica truncada) chega até o admin não-técnico
+# em 2 lugares hoje (toast de conectar/testar/desconectar, banner de erro
+# do card, `frontend/.../integracoes/page.tsx`) sem nenhuma curadoria —
+# aqui central pra ficar consistente em todo lugar que a string aparece,
+# sem precisar tocar frontend algum de novo se um padrão novo surgir. O
+# texto cru continua sendo salvo/logado como está (auditoria/suporte) —
+# isso é só uma tradução ADITIVA pra exibição, nunca substitui o dado
+# técnico original. Primeiro padrão que casa vence; fallback nunca
+# inventa uma causa que não foi confirmada.
+_FRIENDLY_ERROR_PATTERNS: list[tuple[re.Pattern, str]] = [
+    (re.compile(r"credencial inv[aá]lida|revogad|\b401\b|\b403\b", re.I),
+     "A credencial não é válida ou foi revogada. Reconecte a integração em Integrações."),
+    (re.compile(r"timeout|inalcan[çc][aá]vel|connecterror|connecttimeout", re.I),
+     "Não foi possível contatar o provedor agora. Tente novamente em instantes."),
+    (re.compile(r"oauth.*expirad|refresh_token", re.I),
+     "A sessão conectada expirou e não pôde ser renovada automaticamente. Reconecte a integração."),
+    (re.compile(r"escopo|permiss[aã]o insuficiente|insufficient.?scope", re.I),
+     "A conta conectada não concedeu as permissões necessárias. Reconecte autorizando todos os acessos solicitados."),
+    (re.compile(r"resposta inesperada|http 5\d\d", re.I),
+     "O provedor respondeu de forma inesperada — pode ser instabilidade temporária."),
+    (re.compile(r"ausente$", re.I),
+     "A credencial não foi encontrada. Reconecte a integração em Integrações."),
+]
+
+
+def friendly_detail(raw: str | None) -> str | None:
+    """Traduz `last_error_detail`/`detail` cru pra uma mensagem em português
+    que um administrador não-técnico consegue agir sobre — nunca afirma uma
+    causa que não foi de fato identificada (fallback honesto abaixo)."""
+    if not raw:
+        return None
+    for pattern, friendly in _FRIENDLY_ERROR_PATTERNS:
+        if pattern.search(raw):
+            return friendly
+    truncado = raw[:140]
+    return f"Não foi possível identificar a causa exata do erro ({truncado}). Se persistir, contate o suporte técnico."
 
 # ─── Registro de provedores ───────────────────────────────────────────────────
 # tipo "api_key": conectar = colar credenciais do painel do provedor (o fluxo
@@ -369,29 +408,64 @@ async def _fonte_credenciada_do_provider(db: AsyncSession, tenant_id, provider: 
     return await para_tenant(db, tenant_id)
 
 
-_PAYMENT_TEST_PROBE = {
-    # Fase 242 — mesma sonda "GET autenticado, 401/403 = credencial ruim"
-    # já usada pras fontes credenciadas, só que direto (sem a abstração
-    # FonteProcessual, que é de acompanhamento processual, não pagamento).
+# Fase 242 (pagamento) + Fase 248.1 (clicksign/google_drive_doutrina/
+# google_workspace) — mesma sonda "GET autenticado, 401/403 = credencial
+# ruim" já usada pras fontes credenciadas, só que direto (sem a
+# abstração FonteProcessual, que é de acompanhamento processual, não
+# esses provedores). Cada entrada descreve como montar a chamada:
+# `campo` é a chave do dict de credenciais decifradas; `auth` é "bearer"
+# (header Authorization) ou "query" (token vai num query param, mesmo
+# esquema que a Clicksign já usa em esign.py); `query_param`/`params`
+# só valem pra auth="query"/parâmetros extras read-only.
+_GET_TEST_PROBE: dict[str, dict] = {
     # Stripe: /v1/balance é o endpoint padrão de mercado pra validar uma
-    # secret key (read-only, não move dinheiro). Mercado Pago: /users/me
-    # é o equivalente (read-only, confirma o access_token).
-    "stripe": ("https://api.stripe.com/v1/balance", "secret_key"),
-    "mercadopago": ("https://api.mercadopago.com/users/me", "access_token"),
+    # secret key (read-only, não move dinheiro).
+    "stripe": {"url": "https://api.stripe.com/v1/balance", "campo": "secret_key", "auth": "bearer"},
+    # Mercado Pago: /users/me é o equivalente (read-only, confirma o access_token).
+    "mercadopago": {"url": "https://api.mercadopago.com/users/me", "campo": "access_token", "auth": "bearer"},
+    # Clicksign autentica por query param (mesmo esquema já usado em
+    # esign.py, não Bearer) — listagem paginada mínima, read-only.
+    "clicksign": {
+        "url": "https://app.clicksign.com/api/v1/documents", "campo": "api_token",
+        "auth": "query", "query_param": "access_token", "params": {"limit": 1},
+    },
+    # Google Drive doutrina: `about?fields=user` é read-only e cabe no
+    # escopo já concedido (drive.readonly).
+    "google_drive_doutrina": {
+        "url": "https://www.googleapis.com/drive/v3/about", "campo": "access_token",
+        "auth": "bearer", "params": {"fields": "user"},
+    },
+    # Google Workspace: tokeninfo não depende de nenhum dos 4 escopos
+    # concedidos (Gmail/Agenda/Drive/userinfo) — só confirma que o token
+    # está vivo, mais robusto que escolher 1 das APIs concedidas.
+    # `invalid_status`: confirmado empiricamente (Fase 248.1, contra a API
+    # real do Google) que esse endpoint devolve 400 — não 401/403 — pra
+    # token inválido/expirado; só aqui esse status extra conta como
+    # "credencial inválida" em vez de "resposta inesperada".
+    "google_workspace": {
+        "url": "https://oauth2.googleapis.com/tokeninfo", "campo": "access_token", "auth": "query",
+        "query_param": "access_token", "invalid_status": {400, 401, 403},
+    },
 }
 
 
-async def _testar_payment_gateway(provider: str, creds: dict) -> tuple[bool, str]:
-    url, campo = _PAYMENT_TEST_PROBE[provider]
-    token = creds.get(campo)
+async def _testar_via_get(provider: str, creds: dict) -> tuple[bool, str]:
+    cfg = _GET_TEST_PROBE[provider]
+    token = creds.get(cfg["campo"])
     if not token:
-        return False, f"credencial '{campo}' ausente"
+        return False, f"credencial '{cfg['campo']}' ausente"
+    headers = {}
+    params = dict(cfg.get("params") or {})
+    if cfg["auth"] == "bearer":
+        headers["Authorization"] = f"Bearer {token}"
+    else:
+        params[cfg["query_param"]] = token
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(url, headers={"Authorization": f"Bearer {token}"})
+            resp = await client.get(cfg["url"], headers=headers, params=params)
         if resp.status_code == 200:
             return True, "credencial válida"
-        if resp.status_code in (401, 403):
+        if resp.status_code in cfg.get("invalid_status", (401, 403)):
             return False, "credencial inválida ou revogada"
         return False, f"resposta inesperada do provedor (HTTP {resp.status_code})"
     except httpx.HTTPError as exc:
@@ -402,22 +476,24 @@ async def testar_conexao(db: AsyncSession, tenant_id, provider: str) -> dict:
     """Testa a credencial conectada e atualiza o `status` (CONECTADA/ERRO).
 
     Para as fontes credenciadas (pdpj/escavador/judit/jusbrasil), pra WhatsApp
-    (Fase 168) e pros gateways de pagamento (stripe/mercadopago, Fase 242)
-    faz uma sonda autenticada que distingue 401/403 (credencial inválida/
-    expirada) de sucesso. Para os demais provedores não há teste automático —
-    retorna o status atual. Não faz commit (o chamador comita). Detecção de
+    (Fase 168) e pros gateways/serviços com sonda GET registrada em
+    `_GET_TEST_PROBE` (stripe/mercadopago — Fase 242; clicksign/
+    google_drive_doutrina/google_workspace — Fase 248.1) faz uma sonda
+    autenticada que distingue 401/403 (credencial inválida/expirada) de
+    sucesso. Para os demais provedores não há teste automático — retorna
+    o status atual. Não faz commit (o chamador comita). Detecção de
     expiração = este teste marcando ERRO."""
     if provider not in PROVIDERS:
-        return {"ok": False, "status": "DESCONHECIDO", "detail": "provedor desconhecido"}
+        return {"ok": False, "status": "DESCONHECIDO", "detail": "provedor desconhecido", "detail_friendly": None}
     integ = await get_integration(db, tenant_id, provider)
     if not integ or not integ.credentials_enc:
-        return {"ok": False, "status": "DESCONECTADA", "detail": "não conectado"}
+        return {"ok": False, "status": "DESCONECTADA", "detail": "não conectado", "detail_friendly": None}
 
     era_erro = integ.status == "ERRO"
-    if provider in _PAYMENT_TEST_PROBE:
+    if provider in _GET_TEST_PROBE:
         creds = await get_credentials(db, tenant_id, provider)
         try:
-            ok, detail = await _testar_payment_gateway(provider, creds or {})
+            ok, detail = await _testar_via_get(provider, creds or {})
         except Exception as exc:
             ok, detail = False, str(exc)[:120]
         integ.status = "CONECTADA" if ok else "ERRO"
@@ -433,12 +509,12 @@ async def testar_conexao(db: AsyncSession, tenant_id, provider: str) -> dict:
                     await _notify_integration_error(db, integ, meta, detail)
         await db.flush()
         log.info("integration_test", provider=provider, tenant_id=str(tenant_id), ok=ok)
-        return {"ok": ok, "status": integ.status, "detail": detail}
+        return {"ok": ok, "status": integ.status, "detail": detail, "detail_friendly": friendly_detail(detail) if not ok else None}
 
     fonte = await _fonte_credenciada_do_provider(db, tenant_id, provider)
     if fonte is None:
         return {"ok": True, "status": integ.status,
-                "detail": "teste automático não disponível para este provedor"}
+                "detail": "teste automático não disponível para este provedor", "detail_friendly": None}
 
     try:
         ok, detail = await fonte.testar()
@@ -458,14 +534,27 @@ async def testar_conexao(db: AsyncSession, tenant_id, provider: str) -> dict:
                 await _notify_integration_error(db, integ, meta, detail)
     await db.flush()
     log.info("integration_test", provider=provider, tenant_id=str(tenant_id), ok=ok)
-    return {"ok": ok, "status": integ.status, "detail": detail}
+    return {"ok": ok, "status": integ.status, "detail": detail, "detail_friendly": friendly_detail(detail) if not ok else None}
 
 
 async def disconnect(db: AsyncSession, tenant_id, provider: str) -> bool:
+    """Desconecta o provedor — apaga só a CREDENCIAL, não a linha inteira.
+
+    Fase 248.1 (achado do diagnóstico de UX): antes fazia `db.delete(integ)`,
+    apagando `extra_data` junto (ex.: `folder_id` do Drive) — reconectar
+    perdia a config e exigia reconfigurar do zero. Agora só limpa o que é
+    de fato "credencial"/estado de conexão; `extra_data` sobrevive, e
+    `save_credentials()` (upsert) reaproveita a mesma linha ao reconectar."""
     integ = await get_integration(db, tenant_id, provider)
     if not integ:
         return False
-    await db.delete(integ)
+    integ.credentials_enc = None
+    integ.status = "DESCONECTADA"
+    integ.connected_by = None
+    integ.connected_at = None
+    integ.last_success_at = None
+    integ.last_error_at = None
+    integ.last_error_detail = None
     await db.flush()
     log.info("integration_disconnected", provider=provider, tenant_id=str(tenant_id))
     return True
@@ -489,11 +578,23 @@ async def list_status(db: AsyncSession, tenant_id) -> list[dict]:
             "ativa": meta["ativa"],
             "obter": meta["obter"],
             "oauth_disponivel": bool(meta.get("oauth_disponivel")) and is_oauth_configured(key),
-            "status": integ.status if integ else "DESCONECTADA",
+            # Fase 248.1 — deriva por `credentials_enc`, não só por
+            # `integ.status`: desde que `disconnect()` passou a preservar a
+            # linha (pra manter `extra_data`), uma linha sem credencial
+            # precisa continuar aparecendo como DESCONECTADA mesmo que
+            # `status` tenha ficado com um valor antigo por algum caminho
+            # que não passe por `disconnect()`.
+            "status": (integ.status if integ and integ.credentials_enc else "DESCONECTADA"),
             "connected_at": integ.connected_at.isoformat() if integ and integ.connected_at else None,
             "last_success_at": integ.last_success_at.isoformat() if integ and integ.last_success_at else None,
             "last_error_at": integ.last_error_at.isoformat() if integ and integ.last_error_at else None,
             "last_error_detail": (integ.last_error_detail if integ else None),
+            # Fase 248.3 — tradução amigável do detail cru acima. Cobre os
+            # 2 caminhos que escrevem `last_error_detail` (registrar_uso, uso
+            # real da credencial, e testar_conexao, teste manual) num só
+            # lugar, na leitura, em vez de duplicar a lógica nos dois pontos
+            # de escrita.
+            "last_error_friendly": friendly_detail(integ.last_error_detail if integ else None),
             # Metadados não-sensíveis (ex.: folder_id do Drive, Fase 138.2) —
             # nunca contém credencial, sempre seguro expor.
             "extra_data": (integ.extra_data or {}) if integ else {},
