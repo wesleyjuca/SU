@@ -3727,6 +3727,141 @@ Histórico:
     Artifact "Diagnóstico de Cadastros AFJ" → 6 batches, Fases 240-245)
     — todos implementados e verificados empiricamente, nenhum adiado sem
     registro explícito de decisão de escopo.
+- **Fase 246** — rodada de teste geral (audit-only, usuário escolheu via
+  pergunta "Nova rodada de teste geral" após o merge do PR #236, sem
+  pedir correção nesta mesma rodada). Primeira rodada conjunta desde a
+  Fase 237 — as Fases 238-245 (LGPD×portal, bloqueio de CLIENT em
+  notifications/push, e os 6 batches do diagnóstico de cadastros) nunca
+  tinham sido reconfirmadas juntas nem auditadas de fora, cada uma só
+  verificada isoladamente no momento da própria implementação.
+  - **Reconfirmação conjunta via HTTP real (nunca feita numa única
+    passada)**: Fase 238 (esquecimento LGPD revoga `ClientPortalAccess`
+    + mata `Session` — redeem e refresh falham depois de esquecer),
+    Fase 239 (CLIENT bloqueado em `/notifications`/`/push`, STAFF e o
+    portal em si intactos), Fase 240 (CPF/CNPJ duplicado bloqueado com
+    409, área AMBIENTAL aceita), Fase 241 (`Report.resolucao` grava,
+    `ClientContact.whatsapp` separado de `telefone`), Fase 242
+    (`GET /rag/collections` com as 7 collections certas, `client_id`
+    vinculado na criação de processo/lançamento, teste de credencial
+    Stripe não crasha), Fase 243 (ciclo completo de
+    `must_change_password`: convite→reset→login força o flag→troca→
+    relogin limpa), Fase 244 (lançamento com `parcelas=3` gera 3 linhas,
+    `PUT /users/{id}` promovendo a ADMIN cria `Approval` e só aplica
+    após `POST /approvals/{id}/resolve`), Fase 245 (CSV de 4 linhas →
+    2 criados/1 duplicado/1 erro exatamente como esperado,
+    `GET /tenant/billing/historico` e `GET /tenant/feriados-nacionais`
+    respondendo certo) — todas OK, sem achado.
+  - **Lacuna fechada — interação entre features do mesmo lote** (nunca
+    testada antes, cada fase só validou suas próprias mudanças
+    isoladas): (1) cliente criado via `POST /clients/importar-csv`
+    (Fase 245) recebe um lançamento financeiro parcelado (Fase 244,
+    `parcelas=2`) vinculado por `client_id`, e o esquecimento LGPD
+    (Fase 238) funciona nele normalmente — sem achado; (2) um usuário
+    convidado com `must_change_password=True` (Fase 243) pode ser alvo
+    de uma promoção de role via HITL (Fase 244) mesmo antes de trocar a
+    senha — a promoção aplica normalmente (`ADMIN` confirmado após
+    `resolve`), os 2 flags são independentes (`must_change_password`
+    continua `True` até o usuário efetivamente trocar a senha, mesmo já
+    promovido), e o ciclo de troca de senha segue funcionando sem
+    interferência do HITL — sem achado; (3) contrato multi-signatário
+    (Fase 244, `POST /documents/contracts/{id}/enviar-assinatura`) e o
+    disparo automático de assinatura no branch de aprovação de contrato
+    (`execute_approved_action`, Fase 192) são caminhos de código
+    **estruturalmente independentes**, confirmado por leitura direta:
+    o branch automático (`_tentar_envio_automatico_assinatura`,
+    `app/services/approval.py`) sempre monta sua própria lista de
+    1 signatário a partir do `Client` vinculado, nunca lê nem depende de
+    qualquer lista de signatários que o endpoint manual da Fase 244
+    tenha recebido — não há estado compartilhado entre os 2 caminhos
+    pra uma interação de verdade acontecer; `enviar-assinatura` também
+    não passa por nenhum gate HITL (ação direta do ADMIN).
+  - **3 lacunas de verificação explicitamente sinalizadas, todas
+    fechadas**: `GET /publicacoes` filtra por tenant corretamente
+    (confirmado com 2 tenants reais, zero cruzamento, inclusive nos
+    campos novos `prioridade_ia`/`resumo_ia`); `POST /users/{id}/
+    reset-password` cross-tenant devolve `404` (não vaza senha
+    temporária de usuário de outro tenant); `notifications`/`push`
+    escopados por `current_user.id` confirmados sem vazamento — usuário
+    do tenant demo não vê nenhuma notificação semeada no tenant afj.
+  - **Auditoria paralela adversarial** (3 `Agent`, sem bloqueio de plan
+    mode desta vez):
+    - **Frente A — isolamento cross-tenant, 14 alvos** (4 rotas
+      genuinamente novas + 10 pontos de lógica nova das Fases 238-245,
+      testados com HTTP real e 2 tenants reais) — **14/14 PASS, zero
+      vazamento**. Cobriu, entre outros: `importar-csv`,
+      `billing/historico`, esquecimento LGPD cross-tenant (404, não
+      500/200), `client_id`/`process_id` forjados de outro tenant no
+      `POST /financial` (422, rejeitado — não aceito silenciosamente),
+      `enviar-assinatura` em contrato de outro tenant (404), promoção
+      de role HITL cross-tenant (404, `Approval` não vaza pra fora do
+      tenant certo), `reset-password` cross-tenant (404, sem senha
+      vazada), teste de credencial de integração isolado por tenant.
+    - **Frente B — LGPD, alcance das superfícies novas das Fases
+      244-245** — **2 achados novos confirmados empiricamente (não
+      hipótese de leitura de código), 6ª ocorrência da mesma classe de
+      bug já fechada 5x antes (176.3→210→220→228→235→238)**:
+      - **`Intimacao.texto`/`resumo_ia`/`prioridade_ia` (Fase 244)
+        sobrevivem ao esquecimento.** `Intimacao` não tem `client_id`
+        próprio, mas carrega PII em texto livre (a publicação em si +
+        o resumo gerado por IA) e tem vínculo indireto via
+        `process_id → LegalProcess.client_id`. `lgpd.py` nunca
+        referencia `Intimacao` (confirmado por grep, zero hits).
+        Reproduzido de ponta a ponta: processo com `client_id` do
+        titular → intimação com nome/CPF tagueados no `texto`/
+        `resumo_ia` → `DELETE /lgpd/clients/{id}/data` →
+        `GET /publicacoes` continua devolvendo o texto/resumo
+        ORIGINAIS, intocados.
+      - **`Contract.assinaturas` criado via `POST /contracts/create`
+        (caminho manual) sobrevive ao esquecimento E some do export.**
+        `lgpd.py` já sabe scrubar `Contract.assinaturas` (JSONB com
+        nome/e-mail de signatário) — mas só alcança o contrato via
+        `Document.client_id → Contract.document_id`. O endpoint manual
+        de criação de contrato (`POST /contracts/create`, base da tela
+        de Contratos e do fluxo de assinatura multi-signatário da Fase
+        244) cria o `Document` com `client_id=NULL` e seta
+        `Contract.client_id` diretamente — as 2 FKs divergem.
+        Reproduzido: contrato criado por esse caminho, PII de
+        signatário plantada diretamente no Postgres (simulando o que
+        `esign.py::enviar_para_assinatura` grava — sem credencial
+        Clicksign real neste sandbox, mesma limitação documentada desde
+        a Fase 217/242) → esquecimento roda sem erro, mas
+        `contracts.assinaturas` permanece com o nome/e-mail original
+        intacto, e `GET /lgpd/clients/{id}/export` devolve
+        `"contratos": []` pra esse contrato (invisível também na
+        portabilidade, não só na anonimização). **Nuance confirmada**:
+        o caminho de contrato gerado por IA (`contract_agent.py`) já
+        seta `Document.client_id` corretamente — o gap é específico do
+        endpoint manual.
+    - **Frente C — walkthrough real via Playwright, sessão contínua**
+      cobrindo as 11 telas tocadas nas Fases 240-245 numa única sessão
+      de navegador (nunca feito — cada fase só testou suas próprias
+      telas isoladas) — **todas as verificações PASS, zero regressão de
+      interação**. Confirmou ao vivo, entre outros: badge "FATAL" com
+      destaque visual na Agenda, barra de ações em lote com
+      "Reatribuir responsável", os 11 pontos de `window.confirm`/
+      `prompt` nativos da Fase 241 permanecem 100% substituídos pelo
+      modal customizado (`page.on('dialog')` monitorado a sessão
+      inteira — **zero diálogo nativo disparado**, incluindo em telas
+      fora da lista original de exemplos), lista de bases de
+      conhecimento do agente de IA vindo de `GET /rag/collections`
+      (não mais hardcoded), aviso da OAB corretamente rotulado como
+      "só checagem de formato" (sem prometer dígito verificador que não
+      existe). Console limpo — só o warning de key duplicada
+      pré-existente em `/dashboard` (documentado desde a Fase 219, não
+      relacionado) e o log esperado do próprio 409 de CPF duplicado
+      (tratado corretamente pela UI com um toast, não um crash).
+  - Nenhuma correção de código foi feita nesta fase (metodologia
+    padrão audit-only) — decisão do usuário sobre quais dos 2 achados
+    de LGPD (ou ambos) viram fase de correção. **Próxima rodada deve**:
+    se os 2 achados forem corrigidos, reconfirmar com o mesmo padrão
+    criar→embutir PII→esquecer→conferir usado aqui; considerar, dado que
+    esta é a 6ª ocorrência da mesma classe de bug, se vale a pena um
+    mecanismo estrutural (ex.: um teste/lint que force toda tabela nova
+    com qualquer vínculo a `client_id` — direto ou indireto via FK
+    encadeado — a aparecer numa lista central que `lgpd.py` precisa
+    cobrir) em vez de continuar corrigindo caso a caso pela 7ª vez no
+    futuro — pergunta já repetida sem resposta definitiva desde a Fase
+    219/228.
 
 
 ## Riscos conhecidos / débito técnico
