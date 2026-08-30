@@ -4205,6 +4205,96 @@ Histórico:
   reportado, sem evidência de que essas fontes estejam com o mesmo
   problema); se alguma delas apresentar 403 similar em produção, é
   candidato ao mesmo fix.
+- **Fase 251** — usuário reportou (sem screenshot desta vez) que "captura
+  de processos" e "captura de publicações" aparentemente não estavam
+  funcionando, pedindo um plano de análise e correção até o funcionamento
+  pleno. Investigação (leitura direta de código) traçou as duas features
+  até a raiz: **compartilham 100% do mesmo cliente HTTP de descoberta**
+  (`buscar_comunicacoes`, `backend/app/integrations/dje/comunica.py`) —
+  "captura de publicações" (`scan_publicacoes`, `dje_monitor.py`) chama
+  essa função diretamente; "captura de processos"
+  (`capturar_por_oab`, `oab_capture.py`) chama a mesma função por baixo
+  de `ComunicaFonte.descobrir_por_oab()`. Ou seja, o fix da Fase 250 (headers
+  de navegador contra o 403 do WAF do Comunica/DJEN, já mergeado minutos
+  antes desta mensagem) já deveria ter corrigido as DUAS ao mesmo tempo —
+  esta fase não encontrou nenhuma causa independente de 403 pra nenhuma
+  das duas.
+  - **Achado novo, real, corrigido nesta fase**: `ComunicaFonte.
+    descobrir_por_oab()` (`backend/app/integrations/fontes/
+    comunica_fonte.py`) era o **único** lugar em todo o código que
+    implementava o circuit breaker manualmente (`allow()`/
+    `record_success()`/`record_failure()` direto), em vez de usar
+    `self._breaker.run(...)` como as outras 9 fontes do projeto
+    (confirmado por grep completo de todo `_breaker\.` do repositório).
+    `run()` é o que hidrata/persiste o estado no Redis (mecanismo da Fase
+    166, para o painel Cérebro — processo web — enxergar falhas
+    registradas pelo worker Celery). Como `ComunicaFonte` é um singleton
+    por processo (`fontes/registry.py`), esse breaker específico nunca
+    sincronizava com o Redis — o painel "Fontes da Captura" nunca
+    refletia falhas reais de Comunica vistas pelo worker (não é a causa
+    do 403 relatado, mas comprometia a única forma de o usuário confirmar
+    "está funcionando" sem depender de tentativa manual). Fix:
+    `circuit_breaker.py` ganha 2 métodos públicos finos
+    (`sincronizar_de_redis()`/`sincronizar_para_redis()`, só chamando os
+    já existentes `_hidratar()`/`_persistir()`); `comunica_fonte.py`
+    passa a chamá-los antes do `allow()` e depois de
+    `record_success()`/`record_failure()` — sem mudar o sinal de sucesso/
+    falha em si (que continua vindo de `stats`, já que
+    `buscar_comunicacoes` nunca lança, então não dava pra usar `run()`
+    direto).
+  - **Investigado e descartado como causa adicional**: o enriquecimento
+    de processos via DataJud (`_enriquecer_via_datajud`, dentro de
+    `capturar_por_oab`) usa `tribunais/cnj.py` — Elasticsearch REST
+    autenticado por API key (`CNJ_API_KEY`, com valor público padrão já
+    embutido em `config.py`, não depende de credencial por tenant),
+    `api-publica.datajud.cnj.jus.br`, superfície tecnicamente diferente
+    do Comunica (API de máquina, não portal de consulta pública com WAF
+    anti-bot). `tribunais/base.py` (usado por essa e mais 4 fontes
+    credenciadas) segue com o UA antigo — decisão da própria Fase 250 de
+    não mexer sem evidência concreta continua valendo; revisitar se o
+    usuário trouxer evidência real de 403 numa dessas fontes
+    especificamente.
+  - **Verificado ao vivo** (Postgres+Redis reais deste sandbox — egress
+    real pra `comunicaapi.pje.jus.br`/`api-publica.datajud.cnj.jus.br`
+    continua bloqueado no nível do proxy da sessão, mesma limitação da
+    Fase 250, então `buscar_comunicacoes` foi monkeypatchada; o teste
+    exercita o PIPELINE inteiro, não a rede em si): cenário de sucesso —
+    `capturar_por_oab()` cria `LegalProcess` novo, `scan_publicacoes()`
+    cria `Intimacao` nova, os dois com `SyncRun` fechando `OK`, e a chave
+    `circuit_breaker:comunica` aparece no Redis como `closed` logo após
+    (prova direta de que o achado foi corrigido, não só leitura de
+    código); cenário de falha — 3 chamadas simuladas com HTTP 403
+    seguidas abrem o disjuntor exatamente na 3ª (`circuit_open` logado),
+    a 4ª tentativa é bloqueada SEM sequer tentar a rede de novo
+    (`fonte_detalhe=None`, 0 chamadas reais a mais), e o Redis reflete
+    `open` com contagem/timestamp corretos. Confirmado como ruído
+    esperado de sandbox (não achado novo): a tentativa real de
+    enriquecimento via DataJud dentro do próprio teste também bateu 403
+    — mesma classe de bloqueio de proxy já documentada, não evidência de
+    problema em produção (Railway tem egress irrestrito).
+  - Suíte relacionada rodada (`test_oab_capture_syncrun_erro.py`,
+    `test_oab_discovery.py`, `test_process_fonte.py`,
+    `test_dje_monitor_circuit_breaker.py`,
+    `test_dje_monitor_syncrun_erro.py`, `test_comunica_diagnostico.py`,
+    `test_publication_monitor_real_scan.py`): 1 falha pré-existente e
+    **confirmada não relacionada** (`test_process_fonte.py::
+    test_process_response_expoe_fonte`, reproduz idêntica isolando
+    `git stash` das mudanças desta fase — mesma classe de bug já
+    documentada váras vezes nesta sessão, `_FakeDB`/objeto ORM construído
+    em memória sem passar por um flush real, então `created_at` nunca é
+    populado pelo `default` do SQLAlchemy; não é usado no cenário desta
+    fase, fora de escopo, não corrigido). Os demais 22 testes passam
+    limpos. `ruff check`/`py_compile` limpos nos 2 arquivos tocados.
+  - **O que fica pra decisão do usuário, não verificável desta sessão**:
+    se o tenant real não tiver NENHUMA OAB cadastrada (nem em usuário com
+    login, nem em "OABs monitoradas" do escritório em `Configurações →
+    Jurídico`), as duas capturas respondem corretamente "0 encontrado(s)"
+    — não é bug, mas pode "parecer" quebrado; vale conferir essa tela
+    antes de qualquer outra investigação. Nenhum mecanismo de reset
+    manual do circuit breaker foi adicionado — o estado em memória já
+    reseta em qualquer redeploy (novo processo), e mesmo sem redeploy o
+    `reset_timeout` de 30min já limita o tempo de um breaker aberto por
+    engano.
 
 
 ## Riscos conhecidos / débito técnico

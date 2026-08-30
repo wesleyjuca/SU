@@ -34,6 +34,18 @@ class ComunicaFonte(FonteProcessual):
         stats: dict | None = None,
         **kwargs: Any,
     ) -> list[ProcessoDescoberto]:
+        # Fase 251 — achado: este era o único breaker do projeto que nunca
+        # sincronizava com o Redis (todo outro `FonteProcessual` usa
+        # `self._breaker.run(...)`, que hidrata/persiste sozinho). Como
+        # `ComunicaFonte` é um singleton por processo (registry.py), o
+        # painel Cérebro (processo web) nunca via as falhas registradas
+        # pelo worker Celery — mesma lacuna que a Fase 166 já tinha
+        # resolvido para as outras fontes. `buscar_comunicacoes` nunca
+        # lança (é fail-soft por design), então o sinal de sucesso/falha
+        # vem de `stats`, não de uma exceção — por isso não dá pra usar
+        # `run()` diretamente; hidrata/persiste manualmente com os mesmos
+        # métodos que `run()` usa por baixo.
+        await self._breaker.sincronizar_de_redis()
         if not self._breaker.allow():
             return []
 
@@ -52,6 +64,7 @@ class ComunicaFonte(FonteProcessual):
             self._breaker.record_failure()
         else:
             self._breaker.record_success()
+        await self._breaker.sincronizar_para_redis()
 
         vistos: set[str] = set()
         out: list[ProcessoDescoberto] = []
