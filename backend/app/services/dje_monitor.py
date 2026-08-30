@@ -92,6 +92,16 @@ async def scan_publicacoes(db, tenant_id: uuid.UUID | None = None, dias_retro: i
 
     novas = 0
     casadas = 0
+    # Fase 252 — achado: ao contrário de `capturar_por_oab` (oab_capture.py),
+    # esta função descartava o `stats` de cada OAB assim que o loop seguia
+    # (recriado do zero a cada iteração), então nunca sabia dizer POR QUE
+    # não achou nada — "0 intimações" por não ter novidade no dia e "0
+    # intimações" porque a Comunica devolveu 403 pareciam idênticos pro
+    # chamador. Rastreamos aqui o mesmo par `fonte_respondeu`/`fonte_detalhe`
+    # que `capturar_por_oab` já expõe, pro endpoint `/publicacoes/varrer`
+    # poder distinguir os dois casos na mensagem ao usuário.
+    fonte_respondeu = False
+    ultimo_erro: str | None = None
     # Fase 167 — sem este try/except em volta do loop inteiro, uma exceção
     # não tratada no meio da lista de OABs (o circuit breaker da Fase 142
     # só evita chamadas REPETIDAS após falhas consecutivas, não intercepta
@@ -108,8 +118,12 @@ async def scan_publicacoes(db, tenant_id: uuid.UUID | None = None, dias_retro: i
             comunicacoes = await buscar_comunicacoes(oab_numero, oab_uf, data_inicio, hoje, stats=st)
             if st.get("requests") and not st.get("ok"):
                 breaker.record_failure()
+                if st.get("error"):
+                    ultimo_erro = st["error"]
             else:
                 breaker.record_success()
+                if st.get("ok"):
+                    fonte_respondeu = True
             await asyncio.sleep(_INTERVALO_ENTRE_OABS_S)
 
             pmap = await _proc_map(t_id) if comunicacoes else {}
@@ -237,6 +251,7 @@ async def scan_publicacoes(db, tenant_id: uuid.UUID | None = None, dias_retro: i
             "oabs_monitoradas": len(oabs), "intimacoes_novas": novas, "casadas_com_processo": casadas,
             "comunica_bloqueada": breaker.state != "closed", "oabs_puladas_circuito": puladas_circuito,
             "erro": str(exc)[:300],
+            "fonte_respondeu": fonte_respondeu, "fonte_detalhe": ultimo_erro,
         }
         await finalizar_sync(db, sync, "ERRO", resultado)
         await db.commit()
@@ -252,6 +267,8 @@ async def scan_publicacoes(db, tenant_id: uuid.UUID | None = None, dias_retro: i
         # restantes em vez de martelar o portal até o fim da lista.
         "comunica_bloqueada": breaker.state != "closed",
         "oabs_puladas_circuito": puladas_circuito,
+        "fonte_respondeu": fonte_respondeu,
+        "fonte_detalhe": ultimo_erro,
     }
     await finalizar_sync(db, sync, "OK", resultado)
     await db.commit()
