@@ -150,6 +150,20 @@ class CircuitBreaker:
         if dados:
             self._aplicar_snapshot(dados)
 
+    async def sincronizar_de_redis(self) -> None:
+        """Hidrata o estado deste breaker a partir do Redis — mesma hidratação
+        que `run()` já faz internamente, exposta para chamadores que decidem
+        sucesso/falha por um critério próprio (não uma exceção) e por isso
+        não usam `run()` (ex.: `ComunicaFonte.descobrir_por_oab`, cujo sinal
+        de falha vem de `stats` preenchido por `buscar_comunicacoes`, que
+        nunca lança)."""
+        await self._hidratar()
+
+    async def sincronizar_para_redis(self) -> None:
+        """Espelha o estado atual no Redis — companheiro de
+        `sincronizar_de_redis()` para o mesmo caso de uso."""
+        await self._persistir()
+
     async def estado_atual(self) -> str:
         """Estado mais fresco possível, incluindo o que outros processos
         gravaram — usado pelo painel Cérebro (Fase 166). Sempre busca no
