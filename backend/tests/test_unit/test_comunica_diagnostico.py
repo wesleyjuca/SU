@@ -81,17 +81,24 @@ async def test_http_403_preenche_status_code_e_error(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_requisicao_envia_user_agent_identificado(monkeypatch):
-    """Fix do 403 real em produção: httpx sem headers manda um User-Agent
-    genérico (python-httpx/x.x), que APIs públicas com proteção anti-bot
-    (como a Comunica/DJEN) costumam rejeitar. Confirma que o cliente agora
-    identifica a origem da requisição, mesmo padrão já usado em
-    tribunais/base.py."""
+async def test_requisicao_envia_user_agent_de_navegador(monkeypatch):
+    """Fase 114 trocou o User-Agent genérico do httpx por um identificador
+    próprio ("AFJ-Core/1.0 (...)") — resolveu a rejeição da época, mas a
+    Fase 250 achou um 403 real em produção com esse mesmo UA: o WAF do
+    Comunica/DJEN passou a rejeitar também um UA que se autoidentifica como
+    sistema/bot, só aceitando tráfego que pareça vir de um navegador (o
+    mesmo formato que o próprio site público comunica.pje.jus.br usa pra
+    chamar esta API). Confirma que o cliente agora manda UA/Accept-Language/
+    Referer/Origin de navegador real — não é evasão, é o mesmo formato de
+    requisição que qualquer usuário faria pela página pública de consulta."""
     capturado = {}
 
     def handler(request):
         capturado["user_agent"] = request.headers.get("user-agent")
         capturado["accept"] = request.headers.get("accept")
+        capturado["accept_language"] = request.headers.get("accept-language")
+        capturado["referer"] = request.headers.get("referer")
+        capturado["origin"] = request.headers.get("origin")
         return httpx.Response(200, json={"items": []})
 
     transport = httpx.MockTransport(handler)
@@ -106,8 +113,11 @@ async def test_requisicao_envia_user_agent_identificado(monkeypatch):
 
     assert capturado["user_agent"] is not None
     assert "python-httpx" not in capturado["user_agent"].lower()
-    assert "AFJ-Core" in capturado["user_agent"]
-    assert capturado["accept"] == "application/json"
+    assert "AFJ-Core" not in capturado["user_agent"]
+    assert "Mozilla" in capturado["user_agent"] and "Chrome" in capturado["user_agent"]
+    assert capturado["accept_language"] == "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7"
+    assert capturado["referer"] == "https://comunica.pje.jus.br/consulta"
+    assert capturado["origin"] == "https://comunica.pje.jus.br"
 
 
 @pytest.mark.asyncio

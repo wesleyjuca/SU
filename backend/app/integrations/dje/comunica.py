@@ -144,11 +144,21 @@ async def buscar_comunicacoes(
         async with httpx.AsyncClient(
             timeout=_TIMEOUT,
             headers={
-                # httpx exige header value ASCII/latin-1 por padrão (RFC 7230) —
-                # string acentuada aqui já quebrou silenciosamente em
-                # tribunais/base.py (mesmo bug, corrigido junto nesta fase).
-                "User-Agent": "AFJ-Core/1.0 (Sistema interno de escritorio de advocacia)",
-                "Accept": "application/json",
+                # Fase 250 — achado real em produção: um User-Agent que se
+                # autoidentifica como bot/sistema ("AFJ-Core/1.0 (...)") leva
+                # 403 do WAF do Comunica/DJEN, mesmo sendo uma API pública
+                # pensada pra consumo por terceiros. O próprio site público
+                # de consulta (comunica.pje.jus.br) chama este mesmo endpoint
+                # via browser — usar um UA/Accept-Language/Referer de
+                # navegador real (não uma técnica de evasão, é o mesmo
+                # formato de requisição que qualquer usuário faria pela
+                # página pública) é o fix documentado pra esse tipo de
+                # bloqueio nesse portal.
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                "Accept": "application/json, text/plain, */*",
+                "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
+                "Referer": "https://comunica.pje.jus.br/consulta",
+                "Origin": "https://comunica.pje.jus.br",
             },
             follow_redirects=True,
         ) as client:

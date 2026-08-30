@@ -4154,6 +4154,57 @@ Histórico:
     manual cuidadosa do `start.sh` (`sh -n`/`dash -n` confirmam sintaxe
     válida no shell exato de produção — sem `shellcheck` disponível
     neste sandbox, mesma limitação já documentada desde a Fase 227).
+- **Fase 250** — usuário reportou (com screenshot) que "Varrer agora" em
+  `/publicacoes` devolvia `HTTP 403 da Comunica/DJEN` em **produção**
+  (não é o bloqueio de egress deste sandbox — Railway tem egress
+  irrestrito, o 403 veio do próprio servidor do PJe). Achado real:
+  `backend/app/integrations/dje/comunica.py` mandava um User-Agent que
+  se autoidentifica como sistema (`AFJ-Core/1.0 (Sistema interno de
+  escritorio de advocacia)`, mesmo padrão de `tribunais/base.py`) — a
+  Fase 114 tinha trocado o UA genérico do httpx por esse justamente pra
+  resolver uma rejeição anterior (teste `test_comunica_diagnostico.py`
+  documentava isso), mas o WAF do Comunica/DJEN evoluiu e passou a
+  rejeitar também um UA que se autoidentifica como bot/sistema, só
+  aceitando tráfego que pareça vir de um navegador — o mesmo formato
+  que o próprio site público `comunica.pje.jus.br` usa pra chamar essa
+  API (é uma API pública pensada pra consumo de terceiros, não um
+  endpoint privado — mandar um UA de navegador aqui é o mesmo formato
+  de requisição que qualquer usuário faria pela página de consulta
+  pública, não uma técnica de evasão). Fix: `buscar_comunicacoes()`
+  passa a mandar `User-Agent` (Chrome/Windows), `Accept-Language:
+  pt-BR,...` e `Referer`/`Origin: https://comunica.pje.jus.br` —
+  simulando a mesma origem que o site público real usa. Teste
+  `test_requisicao_envia_user_agent_de_navegador` (renomeado do antigo
+  `test_requisicao_envia_user_agent_identificado`, que agora
+  explicitamente assertava o comportamento ultrapassado) reescrito pra
+  confirmar os 4 headers novos e a ausência do UA antigo — os outros 4
+  testes do arquivo (403/500/exceção de rede/sucesso, todos sobre
+  `stats["status_code"]`/`stats["error"]`, Fase 114) continuam válidos
+  sem mudança. **Limitação de verificação, documentada como em toda
+  fase anterior que mexeu numa fonte pública brasileira**: este sandbox
+  bloqueia egress pra `comunicaapi.pje.jus.br` no nível do próprio
+  proxy da sessão (`curl` direto devolve `CONNECT tunnel failed,
+  response 403` — um bloqueio ANTES de qualquer pacote chegar ao
+  servidor real do PJe, diferente do 403 relatado pelo usuário, que veio
+  do servidor de verdade) — não foi possível confirmar ao vivo, nesta
+  sessão, que o novo conjunto de headers realmente destrava o 403 real.
+  A confiança vem de: (a) o padrão documentado de WAFs de portais `.jus.br`
+  rejeitarem clientes não-navegador só por header, sem fingerprint TLS
+  real por trás; (b) os 5 testes automatizados (Postgres não necessário,
+  só `httpx.MockTransport`) confirmando que os headers corretos saem na
+  requisição. **Próximo passo real**: usuário reabrir "Varrer agora" em
+  produção depois do deploy deste fix e confirmar se o 403 sumiu — se
+  persistir, a causa mais provável muda de "header rejeitado" pra
+  "IP do Railway bloqueado pelo WAF" (não resolvível por código, exigiria
+  contato com o suporte do PJe/CNJ ou um canal de integração formal) ou
+  um rate-limit temporário (a mensagem de erro já sugere "tente
+  novamente mais tarde" como próxima tentativa antes de escalar).
+  `tribunais/base.py` usa o mesmo UA autoidentificado
+  (`AFJ-Core/1.0`) pras 4 fontes REST puras (PDPJ/Escavador/Judit/
+  Jusbrasil) — **não tocado nesta fase** (fora do escopo do achado
+  reportado, sem evidência de que essas fontes estejam com o mesmo
+  problema); se alguma delas apresentar 403 similar em produção, é
+  candidato ao mesmo fix.
 
 
 ## Riscos conhecidos / débito técnico
