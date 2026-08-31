@@ -1,10 +1,11 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
-import { MapPin, RefreshCw, Loader2, Search, MousePointer2 } from "lucide-react";
+import { MapPin, RefreshCw, Loader2, Search, MousePointer2, ClipboardList, ChevronDown, ChevronUp } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
 import { useUserStore } from "@/store";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 import type { PontoEscritorio, PontoCliente } from "@/components/mapa/EscritorioClientesMap";
 
 // Leaflet acessa window/document no import — precisa ser client-only
@@ -25,6 +26,17 @@ type EnderecoResponse = {
 // carrega esses 2 campos separados — só o enderecoTexto já formatado).
 type ClienteRaw = PontoCliente & { cidade: string; uf: string };
 
+// Fase 255 — shape de GET /clients/geolocalizacao/auditoria.
+type ItemAuditoria = {
+  id: string; nome: string; cidade: string | null; uf: string | null; cep: string | null;
+  status: "NAO_GEOCODIFICADO" | "REQUER_REVISAO" | "VALIDADA";
+};
+type Auditoria = {
+  total: number;
+  contagem: { NAO_GEOCODIFICADO: number; REQUER_REVISAO: number; VALIDADA: number };
+  clientes: ItemAuditoria[];
+};
+
 function enderecoTexto(e: EnderecoResponse): string {
   return [e.logradouro, e.bairro, [e.cidade, e.uf].filter(Boolean).join("/")].filter(Boolean).join(" — ") || "Endereço não informado";
 }
@@ -40,6 +52,7 @@ export default function MapaPage() {
   const toast = useToast();
   const userRole = useUserStore((s) => s.user?.role);
   const podeAjustar = PODE_AJUSTAR.includes(userRole ?? "");
+  const { ask, confirmDialog } = useConfirmDialog();
 
   const [escritorio, setEscritorio] = useState<PontoEscritorio | null>(null);
   const [clientesRaw, setClientesRaw] = useState<ClienteRaw[]>([]);
@@ -49,6 +62,13 @@ export default function MapaPage() {
   const [filtroCidade, setFiltroCidade] = useState("");
   const [filtroUf, setFiltroUf] = useState("");
   const [ajusteAtivo, setAjusteAtivo] = useState(false);
+
+  // Fase 255 — painel de auditoria de geolocalização + correção em lote.
+  const [auditoriaAberta, setAuditoriaAberta] = useState(false);
+  const [auditoria, setAuditoria] = useState<Auditoria | null>(null);
+  const [carregandoAuditoria, setCarregandoAuditoria] = useState(false);
+  const [selecionados, setSelecionados] = useState<Set<string>>(new Set());
+  const [corrigindo, setCorrigindo] = useState(false);
 
   useEffect(() => {
     carregar();
@@ -122,6 +142,82 @@ export default function MapaPage() {
     }
   }
 
+  // Fase 255 — só relatório inicialmente (GET /clients/geolocalizacao/
+  // auditoria já é read-only); a correção em lote pede seleção explícita
+  // + confirmação, nunca "corrige tudo" sozinho.
+  async function carregarAuditoria() {
+    setCarregandoAuditoria(true);
+    try {
+      const res = await fetch("/api/v1/clients/geolocalizacao/auditoria", { headers: headers() });
+      if (res.ok) {
+        const d: Auditoria = await res.json();
+        setAuditoria(d);
+        setSelecionados(new Set());
+      } else {
+        toast.error("Não foi possível carregar a auditoria de geolocalização.");
+      }
+    } catch {
+      toast.error("Erro de conexão.");
+    } finally {
+      setCarregandoAuditoria(false);
+    }
+  }
+
+  function toggleAuditoria() {
+    const abrir = !auditoriaAberta;
+    setAuditoriaAberta(abrir);
+    if (abrir && !auditoria) carregarAuditoria();
+  }
+
+  const pendentes = useMemo(
+    () => (auditoria?.clientes ?? []).filter((c) => c.status !== "VALIDADA"),
+    [auditoria]
+  );
+
+  function toggleSelecionado(id: string) {
+    setSelecionados((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  function selecionarTodosPendentes() {
+    setSelecionados(new Set(pendentes.map((c) => c.id)));
+  }
+
+  async function corrigirSelecionados() {
+    if (selecionados.size === 0) return;
+    const confirmado = await ask({
+      title: "Corrigir localização em lote",
+      message: `Recalcular a localização de ${selecionados.size} cliente(s) selecionado(s)? Cada um será reconsultado na BrasilAPI — clientes sem CEP cadastrado são ignorados.`,
+      confirmLabel: "Corrigir selecionados",
+    });
+    if (confirmado === null) return;
+
+    setCorrigindo(true);
+    try {
+      const res = await fetch("/api/v1/clients/geolocalizacao/recalcular-lote", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...headers() },
+        body: JSON.stringify({ client_ids: Array.from(selecionados) }),
+      });
+      if (res.ok) {
+        const d = await res.json();
+        const ok = (d.processados || []).filter((p: any) => p.status === "ok").length;
+        toast.success(`${ok} de ${d.solicitados} cliente(s) corrigido(s).`);
+        await Promise.all([carregar(), carregarAuditoria()]);
+      } else {
+        const d = await res.json().catch(() => ({}));
+        toast.error(d.detail || "Erro ao corrigir em lote.");
+      }
+    } catch {
+      toast.error("Erro de conexão.");
+    } finally {
+      setCorrigindo(false);
+    }
+  }
+
   const cidadesDisponiveis = useMemo(
     () => Array.from(new Set(clientesRaw.map((c) => c.cidade).filter(Boolean))).sort(),
     [clientesRaw]
@@ -157,6 +253,19 @@ export default function MapaPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {podeAjustar && (
+            <button
+              onClick={toggleAuditoria}
+              className={`rounded-sm flex items-center gap-2 px-3 py-2 text-sm border ${
+                auditoriaAberta ? "bg-afj-gold text-white border-afj-gold" : "btn-afj-outline"
+              }`}
+              title="Ver relatório de geolocalização e corrigir clientes pendentes em lote"
+            >
+              <ClipboardList size={14} />
+              Auditoria de Geolocalização
+              {auditoriaAberta ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+            </button>
+          )}
           {podeAjustar && !semMarcadores && (
             <button
               onClick={() => setAjusteAtivo((v) => !v)}
@@ -186,6 +295,76 @@ export default function MapaPage() {
         <div className="afj-card p-3 text-xs text-afj-black/60 bg-afj-cream/40 border-l-2 border-afj-gold">
           Modo de ajuste manual ativo — arraste um marcador de cliente pra corrigir a localização e confirme
           no popup que abre. A alteração fica marcada como ajuste manual e não é sobrescrita automaticamente depois.
+        </div>
+      )}
+
+      {auditoriaAberta && podeAjustar && (
+        <div className="afj-card p-4 space-y-3">
+          <h2 className="text-sm font-semibold text-afj-black">Auditoria de Geolocalização</h2>
+          {carregandoAuditoria ? (
+            <div className="flex items-center gap-2 text-sm text-afj-black/50">
+              <Loader2 size={14} className="animate-spin" /> Carregando...
+            </div>
+          ) : !auditoria ? (
+            <p className="text-sm text-afj-black/40">Nenhum dado carregado.</p>
+          ) : (
+            <>
+              <div className="flex flex-wrap gap-4 text-sm">
+                <span className="text-emerald-700">✓ Validada: {auditoria.contagem.VALIDADA}</span>
+                <span className="text-amber-700">⚠ Requer revisão: {auditoria.contagem.REQUER_REVISAO}</span>
+                <span className="text-afj-black/50">○ Não geocodificado: {auditoria.contagem.NAO_GEOCODIFICADO}</span>
+              </div>
+              {pendentes.length === 0 ? (
+                <p className="text-sm text-afj-black/40">Nenhum cliente pendente — tudo validado.</p>
+              ) : (
+                <>
+                  <div className="flex items-center gap-3 text-xs">
+                    <button onClick={selecionarTodosPendentes} className="text-afj-gold hover:underline">
+                      Selecionar todos os pendentes ({pendentes.length})
+                    </button>
+                    {selecionados.size > 0 && (
+                      <button onClick={() => setSelecionados(new Set())} className="text-afj-black/50 hover:underline">
+                        Limpar seleção
+                      </button>
+                    )}
+                    <button
+                      onClick={corrigirSelecionados}
+                      disabled={selecionados.size === 0 || corrigindo}
+                      className="btn-afj-primary text-xs py-1.5 px-3 rounded-sm disabled:opacity-50 ml-auto"
+                    >
+                      {corrigindo ? "Corrigindo..." : `Corrigir selecionados (${selecionados.size})`}
+                    </button>
+                  </div>
+                  <div className="max-h-64 overflow-y-auto border border-afj-cream-dark rounded-sm">
+                    <table className="w-full text-xs">
+                      <tbody>
+                        {pendentes.map((c) => (
+                          <tr key={c.id} className="border-b border-afj-cream-dark last:border-0">
+                            <td className="w-8 px-2 py-1.5">
+                              <input
+                                type="checkbox"
+                                checked={selecionados.has(c.id)}
+                                onChange={() => toggleSelecionado(c.id)}
+                              />
+                            </td>
+                            <td className="px-2 py-1.5">{c.nome}</td>
+                            <td className="px-2 py-1.5 text-afj-black/50">{[c.cidade, c.uf].filter(Boolean).join("/") || "—"}</td>
+                            <td className="px-2 py-1.5">
+                              {c.status === "REQUER_REVISAO" ? (
+                                <span className="text-amber-700">⚠ Requer revisão</span>
+                              ) : (
+                                <span className="text-afj-black/50">○ Não geocodificado</span>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
+            </>
+          )}
         </div>
       )}
 
@@ -257,6 +436,7 @@ export default function MapaPage() {
           <Legenda temEscritorio={!!escritorio} temRequerRevisao={clientesFiltrados.some((c) => c.statusGeo === "requer_revisao")} />
         </div>
       )}
+      {confirmDialog}
     </div>
   );
 }

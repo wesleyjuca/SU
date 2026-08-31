@@ -446,3 +446,77 @@ async def test_ajustar_localizacao_manual_cliente_de_outro_tenant_404(cenario):
         await db.execute(Client.__table__.delete().where(Client.tenant_id == outro_tenant_id))
         await db.execute(Tenant.__table__.delete().where(Tenant.id == outro_tenant_id))
         await db.commit()
+
+
+# --- Fase 255: correção em massa de geolocalização (POST
+# /clients/geolocalizacao/recalcular-lote), único item que sobrou do
+# backlog de mapa das Fases 253/254 ("correção em massa com confirmação
+# explícita"). ---
+
+async def test_recalcular_lote_processa_ok_sem_cep_e_exclui_outro_tenant(cenario, monkeypatch):
+    monkeypatch.setattr(clients_mod, "_consultar_cep_externa", _fake_consultar_cep_por_cep())
+
+    async with AsyncSessionLocal() as db:
+        cliente_ok = Client(
+            tenant_id=cenario["tenant"], responsavel_id=cenario["user"], tipo="PF",
+            nome_completo="Lote OK", endereco_json={"cep": "01310-100"},
+        )
+        cliente_sem_cep = Client(
+            tenant_id=cenario["tenant"], responsavel_id=cenario["user"], tipo="PF",
+            nome_completo="Lote Sem CEP", endereco_json={"cidade": "SP"},
+        )
+        outro_tenant = Tenant(name="Outro Tenant 255", slug=f"outro-255-{uuid.uuid4().hex[:8]}")
+        db.add_all([cliente_ok, cliente_sem_cep, outro_tenant])
+        await db.flush()
+        cliente_outro = Client(
+            tenant_id=outro_tenant.id, tipo="PF", nome_completo="Cliente de Outro Tenant",
+            endereco_json={"cep": "01310-200"},
+        )
+        db.add(cliente_outro)
+        await db.commit()
+        id_ok, id_sem_cep, id_outro = cliente_ok.id, cliente_sem_cep.id, cliente_outro.id
+        outro_tenant_id = outro_tenant.id
+
+    async with AsyncSessionLocal() as db:
+        resp = await clients_mod.recalcular_localizacao_lote(
+            clients_mod.RecalcularLoteBody(client_ids=[str(id_ok), str(id_sem_cep), str(id_outro)]),
+            current_user=_CurrentUser(cenario["tenant"], cenario["user"]), db=db,
+        )
+        await db.commit()
+
+    assert resp["solicitados"] == 3
+    por_id = {p["id"]: p["status"] for p in resp["processados"]}
+    assert por_id[str(id_ok)] == "ok"
+    assert por_id[str(id_sem_cep)] == "sem_cep"
+    assert por_id[str(id_outro)] == "nao_encontrado"
+
+    from sqlalchemy import select
+    async with AsyncSessionLocal() as db:
+        row = (await db.execute(select(Client).where(Client.id == id_ok))).scalar_one()
+    assert row.endereco_json["latitude"] is not None
+    assert row.endereco_json["geocode_source"] == "brasilapi"
+
+    async with AsyncSessionLocal() as db:
+        await db.execute(Client.__table__.delete().where(Client.tenant_id == outro_tenant_id))
+        await db.execute(Tenant.__table__.delete().where(Tenant.id == outro_tenant_id))
+        await db.commit()
+
+
+async def test_recalcular_lote_rejeita_vazio_e_acima_do_teto(cenario):
+    from fastapi import HTTPException
+
+    async with AsyncSessionLocal() as db:
+        with pytest.raises(HTTPException) as exc:
+            await clients_mod.recalcular_localizacao_lote(
+                clients_mod.RecalcularLoteBody(client_ids=[]),
+                current_user=_CurrentUser(cenario["tenant"], cenario["user"]), db=db,
+            )
+    assert exc.value.status_code == 422
+
+    async with AsyncSessionLocal() as db:
+        with pytest.raises(HTTPException) as exc:
+            await clients_mod.recalcular_localizacao_lote(
+                clients_mod.RecalcularLoteBody(client_ids=[str(uuid.uuid4()) for _ in range(201)]),
+                current_user=_CurrentUser(cenario["tenant"], cenario["user"]), db=db,
+            )
+    assert exc.value.status_code == 422

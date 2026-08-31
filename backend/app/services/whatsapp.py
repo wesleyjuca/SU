@@ -20,7 +20,7 @@ from app.services import integration_hub
 log = structlog.get_logger()
 
 _TIMEOUT = 15
-_GRAPH = "https://graph.facebook.com/v20.0"
+_GRAPH = "https://graph.facebook.com/v23.0"
 TEMPLATE_NAME = "afj_notificacao"
 
 

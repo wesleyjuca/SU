@@ -171,3 +171,29 @@ async def test_testar_conexao_whatsapp_marca_erro_com_token_invalido(monkeypatch
     assert resultado["ok"] is False
     assert integ.status == "ERRO"
     assert integ.last_error_detail == "token inválido ou expirado"
+
+
+@pytest.mark.asyncio
+async def test_testar_credenciais_usa_graph_api_v23(monkeypatch):
+    """Fase 255 — usuário colou a doc oficial da Meta (v23.0); `_GRAPH`
+    estava travado em v20.0. Confirma a URL real construída, não só a
+    constante isolada."""
+    from app.services import whatsapp
+
+    urls_chamadas = []
+
+    class _CapturaAsyncClient(_FakeAsyncClient):
+        async def get(self, url, params=None, headers=None):
+            urls_chamadas.append(url)
+            return _FakeResponse(200)
+
+    assert whatsapp._GRAPH == "https://graph.facebook.com/v23.0"
+
+    original = whatsapp.httpx.AsyncClient
+    whatsapp.httpx.AsyncClient = _CapturaAsyncClient
+    try:
+        await whatsapp.testar_credenciais("tok", "123")
+    finally:
+        whatsapp.httpx.AsyncClient = original
+
+    assert urls_chamadas and "v23.0" in urls_chamadas[0] and "v20.0" not in urls_chamadas[0]
