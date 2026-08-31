@@ -53,6 +53,7 @@ def _para_contrato_publico(results: list[dict]) -> list[dict]:
 @router.post("/search")
 async def rag_search(
     req: SearchRequest,
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("ADMIN", "SOCIO", "ADVOGADO", "PARALEGAL", "ASSISTENTE")),
 ):
     invalid = [c for c in req.collections if c not in VALID_COLLECTIONS]
@@ -68,17 +69,22 @@ async def rag_search(
     try:
         from app.db.qdrant import get_qdrant
         from app.rag.retrieval import retrieve
+        from app.integrations.byok import user_ai_creds
 
         qdrant = await get_qdrant()
-        results = await retrieve(
-            qdrant_client=qdrant,
-            query=req.query,
-            collections=req.collections,
-            filters=req.filters,
-            k=req.k,
-            score_threshold=req.score_threshold,
-            tenant_id=current_user.tenant_id,  # isola coleções privadas por escritório
-        )
+        # Fase 255 — embeddings passam a honrar o BYOK do usuário (mesmo
+        # contextvar que call_llm já usa) quando a chave OpenAI central do
+        # servidor não está configurada, em vez de depender só dela.
+        async with user_ai_creds(db, current_user.id, "rag_search"):
+            results = await retrieve(
+                qdrant_client=qdrant,
+                query=req.query,
+                collections=req.collections,
+                filters=req.filters,
+                k=req.k,
+                score_threshold=req.score_threshold,
+                tenant_id=current_user.tenant_id,  # isola coleções privadas por escritório
+            )
         contrato = _para_contrato_publico(results)
         return {"query": req.query, "collections": req.collections, "results": contrato, "count": len(contrato)}
     except Exception as exc:
@@ -211,6 +217,7 @@ async def rag_ingest(
     try:
         from app.rag.ingestion import ingest_document
         from app.rag.retrieval import PRIVATE_COLLECTIONS
+        from app.integrations.byok import user_ai_creds
 
         metadata = {**req.metadata, "ingested_by": str(current_user.id)}
         if req.collection in PRIVATE_COLLECTIONS:
@@ -225,12 +232,14 @@ async def rag_ingest(
             # payload do cliente.
             metadata["tenant_id"] = str(current_user.tenant_id)
 
-        chunk_ids = await ingest_document(
-            content=req.content,
-            collection=req.collection,
-            metadata=metadata,
-            document_id=req.document_id,
-        )
+        # Fase 255 — mesmo fallback BYOK de /rag/search.
+        async with user_ai_creds(db, current_user.id, "rag_ingest"):
+            chunk_ids = await ingest_document(
+                content=req.content,
+                collection=req.collection,
+                metadata=metadata,
+                document_id=req.document_id,
+            )
         return {
             "status": "queued",
             "collection": req.collection,

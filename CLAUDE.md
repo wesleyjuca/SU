@@ -4536,6 +4536,139 @@ Histórico:
   - **Fora de escopo desta fase**: correção em massa com confirmação
     explícita (o endpoint de auditoria da Fase 253 continua só-relatório)
     — nenhum item da lista original ficou de fora desta vez.
+- **Fase 255** — 3 pedidos na mesma tarefa: (1) print de "Pesquisa
+  Jurídica" com erro "OPENAI_API_KEY não configurada"; (2) "siga a
+  evolução do mapa" — o único item deixado de fora pelas Fases 253/254
+  ("correção em massa com confirmação explícita"); (3) doc oficial
+  "WhatsApp Cloud API Get Started" da Meta colada pelo usuário, pedindo
+  pra ajustar a integração.
+  - **RAG/embeddings — BYOK, mesma classe de gap já fechada em outras
+    rotas de IA (Fase 204.A/226), agora em embeddings**: investigação
+    (2 Explore + leitura direta) confirmou que `get_openai_client()`
+    (`backend/app/rag/embeddings.py`) nunca olhava o BYOK do usuário —
+    dependia 100% de `settings.OPENAI_API_KEY` (chave central), ao
+    contrário de toda outra chamada de IA do sistema (generate_petition/
+    review_document/manage_contract/brain_insights/brain_assistant/
+    prazo_sugestao, todas já em `user_ai_creds()`). A peça já existia
+    pronta pra reusar: `AIProviderConfig.provider` já aceita `"openai"`,
+    e `user_ai_creds()` já seta o contextvar `ai_creds_ctx`
+    (`{"provider","api_key","model","base_url"}`) — a mesma estrutura
+    de credencial que uma chave OpenAI usa pra completions já serve
+    pra embeddings, é a mesma API. Fix: novo `_resolve_byok_openai_key()`
+    em `embeddings.py` lê `ai_creds_ctx.get()` — se `provider=="openai"`
+    e tem `api_key`, constrói um `AsyncOpenAI` novo (nunca cacheado,
+    mesmo padrão de `_call_openai_compatible` em `llm_client.py`, já
+    que a chave varia por usuário); senão, mantém o singleton cacheado
+    na chave central de sempre. `POST /rag/search` e `POST /rag/ingest`
+    (`backend/app/api/v1/rag.py`) passam a rodar dentro de
+    `user_ai_creds(db, current_user.id, "rag_search"/"rag_ingest")` —
+    `/coverage`/`/jurisprudencia/favorabilidade*` não mudam (confirmado
+    que não chamam `embed_text`, são agregação/contagem direta no
+    Qdrant). Mensagem de erro (quando nem central nem BYOK existem)
+    ganha uma 2ª frase citando "Minha IA" como caminho de
+    autoatendimento. **Fora de escopo, documentado**: `brain_assistant.py`
+    tem a mesma dependência direta de `OPENAI_API_KEY` pra sua busca por
+    embedding (call site diferente, mesmo gap) — não tocado nesta fase;
+    `app/rag/auto_ingest.py` (ingestão automática em background) já é
+    fail-soft por desenho (só loga, Fase 217), threading BYOK ali exigiria
+    persistir `user_id` no payload do job Celery, mudança maior;
+    `embeddings_compare.py` é ferramenta SUPERADMIN, não caminho de
+    produção. Verificado com Qdrant real em memória (mesmo padrão da Fase
+    187) + `AsyncOpenAI` monkeypatchado (sem egress real neste sandbox) +
+    Postgres real (`AIProviderConfig` de verdade): `POST /rag/search`
+    ponta a ponta, chave central ausente, BYOK do usuário efetivamente
+    usada, resultado real do Qdrant retornado — não só `embeddings.py`
+    isolado. Regressão confirmada: sem BYOK, comportamento idêntico ao de
+    antes (chave central quando presente, mesmo `RuntimeError` quando
+    nem central nem BYOK existem). Providers != `"openai"` no BYOK
+    (Anthropic/Gemini/...) corretamente ignorados — não geram embedding
+    compatível. Testes novos (`test_rag_search_byok_fase255.py`) batem na
+    mesma flakiness de pool asyncpg/pytest-asyncio documentada desde a
+    Fase 199 (confirmada não-regressão cross-checando contra
+    `test_crm_metas_fase213.py`, arquivo de controle não tocado, que
+    falha de forma idêntica) — a prova real veio de scripts standalone
+    (Postgres/Qdrant reais), mesmo padrão de toda fase recente.
+  - **Mapa — correção em massa com confirmação explícita** (o item que
+    sobrou do backlog das Fases 253/254): investigação confirmou que
+    `GET /clients/geolocalizacao/auditoria` (Fase 253) tinha **zero
+    consumidor no frontend** — a única ocorrência da string em todo
+    `frontend/src` era um comentário, não um `fetch`. Novo
+    `POST /clients/geolocalizacao/recalcular-lote`
+    (`require_role("ADMIN","SOCIO","GESTOR")` — mais estrito que o
+    endpoint individual `recalcular-localizacao`, que continua
+    `get_current_user`; mesma assimetria já usada em
+    `/processes/bulk-update` vs. editar 1 processo, Fase 207.3), teto de
+    200 ids, reaproveita um novo helper compartilhado
+    `_recalcular_uma_localizacao()` extraído do endpoint individual (sem
+    duplicar a lógica de zera-e-reconsulta). Roda sequencial, não
+    `asyncio.gather` — o `CircuitBreaker(name="brasilapi_cep")` já
+    existente em `cep_lookup.py` dá proteção natural contra martelar a
+    BrasilAPI se ela cair no meio do lote. Cliente de outro tenant ou id
+    inexistente é excluído silenciosamente da contagem (não erro, mesmo
+    padrão de transparência do bulk-update de processos); cliente sem
+    CEP é reportado como `sem_cep`, nunca tentado. Frontend
+    (`frontend/src/app/(dashboard)/mapa/page.tsx`): novo painel
+    colapsável "Auditoria de Geolocalização" (mesmo gate
+    `PODE_AJUSTAR`, ADMIN/SOCIO/GESTOR/SUPERADMIN — lição da Fase 236),
+    sob demanda (não carrega no mount), com os 3 contadores + tabela de
+    clientes pendentes + checkbox por linha + "selecionar todos os
+    pendentes" (mesmo idioma multi-select de Processos, Fase 207.3) +
+    botão "Corrigir selecionados" que abre confirmação explícita via
+    `useConfirmDialog` (Fase 241 — nunca `window.confirm`) antes de
+    disparar o lote. **Nunca** um botão de "corrigir tudo
+    automaticamente" sem seleção. Verificado via HTTP real (Postgres
+    real: teto de 200 rejeitado com 422, lote misto ok/sem_cep/
+    nao_encontrado, isolamento cross-tenant, coordenada+`geocode_source`
+    gravados no Postgres) e via Playwright real (Chromium do sandbox,
+    `npm run dev` com `API_URL` local): painel abre, contadores corretos,
+    "Selecionar todos os pendentes" funciona, modal de confirmação
+    customizado aparece (não `window.confirm` nativo, screenshot
+    confirma), resultado do lote aparece em toast — a tentativa real de
+    geocodificação no walkthrough retornou "0 de 1 corrigido" porque a
+    BrasilAPI segue bloqueada neste sandbox (mesma limitação documentada
+    desde a Fase 217), comportamento esperado do caminho de falha
+    (`falha_geocodificacao`), não um bug. Gate confirmado ao vivo:
+    ADVOGADO recebe 403 no lote mas continua com 200 no recálculo
+    individual — a assimetria de gate funciona como desenhado. Teste
+    automatizado novo (`test_recalcular_lote_*`, estendendo
+    `test_client_geocoding_fase233.py`) bate na mesma flakiness de pool
+    já documentada (mesmo padrão de cross-check).
+  - **WhatsApp — versão da Graph API desatualizada**: usuário colou a
+    doc oficial da Meta (`v23.0`); `backend/app/services/whatsapp.py`
+    tinha `_GRAPH` travado em `v20.0` — único ponto de todo o backend
+    que referencia `graph.facebook.com` (confirmado por grep), usado nos
+    2 call sites do arquivo (`testar_credenciais`/`enviar_whatsapp`).
+    Investigação confirmou que o resto da integração já estava bem
+    alinhado com a doc: `Authorization: Bearer` já correto; token já é
+    BYOK por tenant (`TenantIntegration.credentials_enc`, mesmo padrão
+    de Stripe/Clicksign, não uma chave central); texto de ajuda já
+    orientava o admin a gerar um token PERMANENTE de System User (não o
+    temporário de 24h da doc); payload de texto já usa
+    `messaging_product`/`type`/`text.body` igual ao exemplo da doc; a
+    estratégia "tenta template primeiro, cai pra texto simples" é
+    divergência deliberada e correta em relação ao "hello world" da doc
+    (mensagem de negócio fora da janela de 24h exige template aprovado).
+    Fix: `_GRAPH` → `v23.0` (corrige os 2 call sites de uma vez); texto
+    de ajuda de `PROVIDERS["whatsapp"]["obter"]`
+    (`integration_hub.py`) passa a citar as 3 permissões que a doc pede
+    no Passo 5 (`business_management`, `whatsapp_business_messaging`,
+    `whatsapp_business_management`), não só 1. **Fora de escopo,
+    decisão deliberada**: receptor de webhook pra mensagens recebidas —
+    confirmado que o sistema é só de envio hoje (o receptor genérico de
+    webhooks nem tem branch pra `"whatsapp"`, sem rota de verificação
+    `GET hub.challenge` exigida pela Meta, sem campo de WABA id
+    coletado) — construir isso exige decisão de produto não pedida (o
+    que o sistema FAZ com uma mensagem recebida), não é "ajuste".
+    Verificado via monkeypatch do cliente HTTP (sem egress real a
+    `graph.facebook.com` neste sandbox, mesma limitação de sempre)
+    capturando a URL construída — confirma `v23.0` nos 2 call sites.
+    Teste novo (`test_testar_credenciais_usa_graph_api_v23`,
+    `test_whatsapp_testar_conexao.py`) e os 11 testes pré-existentes de
+    WhatsApp (sem dependência de banco) passam limpos.
+  - `ruff check`/`py_compile` limpos nos 6 arquivos backend tocados;
+    `tsc --noEmit` limpo; `eslint` no frontend tocado — mesmo warning
+    pré-existente de `exhaustive-deps` em `mapa/page.tsx`, confirmado via
+    `git stash` como não-novo desta fase.
 
 
 ## Riscos conhecidos / débito técnico

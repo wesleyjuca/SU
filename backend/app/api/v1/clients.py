@@ -615,6 +615,17 @@ async def update_client(
     return _to_response(client)
 
 
+async def _recalcular_uma_localizacao(client: Client) -> bool:
+    """Fase 253/255 — miolo compartilhado entre o recálculo individual e o
+    em lote: zera lat/lng do endereço atual e força `_geocodificar_endereco`
+    a reconsultar mesmo sem o CEP ter mudado. Devolve se o cliente ficou com
+    coordenada válida ao final (não lança — quem chama decide o que fazer
+    com uma falha isolada dentro de um lote)."""
+    endereco_sem_coordenada = {**client.endereco_json, "latitude": None, "longitude": None}
+    client.endereco_json = await _geocodificar_endereco(endereco_sem_coordenada)
+    return bool(client.endereco_json and client.endereco_json.get("latitude") is not None)
+
+
 @router.post("/{client_id}/recalcular-localizacao", response_model=ClientResponse)
 async def recalcular_localizacao(
     client_id: str,
@@ -640,9 +651,65 @@ async def recalcular_localizacao(
     if not client.endereco_json or not client.endereco_json.get("cep"):
         raise HTTPException(status_code=422, detail="Cliente sem CEP cadastrado — nada para geocodificar.")
 
-    endereco_sem_coordenada = {**client.endereco_json, "latitude": None, "longitude": None}
-    client.endereco_json = await _geocodificar_endereco(endereco_sem_coordenada)
+    await _recalcular_uma_localizacao(client)
     return _to_response(client)
+
+
+class RecalcularLoteBody(BaseModel):
+    client_ids: list[str]
+
+
+@router.post("/geolocalizacao/recalcular-lote")
+async def recalcular_localizacao_lote(
+    body: RecalcularLoteBody,
+    # Mesmo gate de `/geolocalizacao/auditoria` — corrigir vários clientes
+    # de uma vez é ação de gestão (mais consequente que editar 1 cliente),
+    # ao contrário do recálculo individual acima, que qualquer papel que já
+    # edita cliente pode disparar. Mesma assimetria de `/processes/bulk-
+    # update` vs. editar 1 processo (Fase 207.3). Declarado ANTES de
+    # `GET /{client_id}` — mesmo cuidado de ordenação de rota já usado em
+    # `/geolocalizacao/auditoria` acima.
+    current_user: User = Depends(require_role("ADMIN", "SOCIO", "GESTOR")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Fase 255 — "correção em massa com confirmação explícita", o único
+    item que sobrou do backlog de mapa das Fases 253/254 (o endpoint de
+    auditoria acima era só relatório, sem nenhuma ação em lote por trás).
+    Nunca corrige "tudo" automaticamente — só os `client_ids` explicitamente
+    selecionados pelo chamador (o frontend exige seleção + confirmação
+    antes de montar esse payload). Roda sequencial (não `asyncio.gather`)
+    — cada chamada bate na mesma BrasilAPI real por trás de
+    `_geocodificar_endereco`, e o `CircuitBreaker(name="brasilapi_cep")`
+    já existente em `cep_lookup.py` dá proteção natural contra martelar um
+    serviço fora do ar no meio do lote (abre e falha rápido pros ids
+    restantes em vez de tentar rede de novo pra cada um)."""
+    if not body.client_ids:
+        raise HTTPException(status_code=422, detail="Selecione pelo menos um cliente.")
+    if len(body.client_ids) > 200:
+        raise HTTPException(status_code=422, detail="Selecione no máximo 200 clientes por vez.")
+
+    ids = [uuid.UUID(cid) for cid in body.client_ids]
+    result = await db.execute(
+        select(Client).where(Client.id.in_(ids), Client.tenant_id == current_user.tenant_id)
+    )
+    encontrados = {str(c.id): c for c in result.scalars().all()}
+
+    processados = []
+    for cid in body.client_ids:
+        client = encontrados.get(cid)
+        if not client:
+            # De outro tenant ou id inexistente — excluído silenciosamente
+            # da contagem, mesmo padrão de transparência do bulk-update de
+            # processos (Fase 207.3), não um erro que derruba o lote inteiro.
+            processados.append({"id": cid, "status": "nao_encontrado"})
+            continue
+        if not client.endereco_json or not client.endereco_json.get("cep"):
+            processados.append({"id": cid, "status": "sem_cep"})
+            continue
+        ok = await _recalcular_uma_localizacao(client)
+        processados.append({"id": cid, "status": "ok" if ok else "falha_geocodificacao"})
+
+    return {"solicitados": len(body.client_ids), "processados": processados}
 
 
 class LocalizacaoManualBody(BaseModel):

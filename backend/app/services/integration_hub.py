@@ -129,13 +129,14 @@ PROVIDERS: dict[str, dict] = {
         # Meta Business Suite.
         "obter": "Meta Business Suite → Configurações do negócio → Usuários do "
                  "sistema → crie (ou selecione) um usuário do sistema, atribua o "
-                 "ativo \"Conta do WhatsApp Business\" com a permissão "
-                 "whatsapp_business_messaging e gere um token PERMANENTE (sem "
-                 "expiração) — não use o token temporário de 24h da aba "
-                 "\"Configuração da API\", ele expira em 1 dia e derruba o envio. "
-                 "Crie e aprove um template chamado 'afj_notificacao' (pt_BR) com "
-                 "um parâmetro {{1}} no corpo — mensagens fora da janela de 24h "
-                 "exigem template aprovado.",
+                 "ativo \"Conta do WhatsApp Business\" e gere um token PERMANENTE "
+                 "(sem expiração) com as permissões business_management, "
+                 "whatsapp_business_messaging e whatsapp_business_management — "
+                 "não use o token temporário de 24h da aba \"Configuração da "
+                 "API\", ele expira em 1 dia e derruba o envio. Crie e aprove um "
+                 "template chamado 'afj_notificacao' (pt_BR) com um parâmetro "
+                 "{{1}} no corpo — mensagens fora da janela de 24h exigem "
+                 "template aprovado.",
     },
     "pdpj": {
         "nome": "PJe / PDPJ — Partes dos processos",
