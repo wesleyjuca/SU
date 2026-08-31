@@ -1,9 +1,11 @@
 "use client";
 import { useState, useEffect } from "react";
 import { useSearchParams } from "next/navigation";
-import { User, Bell, Shield, Save, CheckCircle, Loader2, Eye, EyeOff, AlertTriangle } from "lucide-react";
+import { User, Bell, Shield, Eye, EyeOff, AlertTriangle } from "lucide-react";
 import { usePushSubscription } from "@/hooks/usePushSubscription";
 import { maskTelefone } from "@/lib/masks";
+import { useSavedFlash } from "@/hooks/useSavedFlash";
+import { SettingsSaveButton } from "@/components/configuracoes/SettingsSaveButton";
 
 const TABS = [
   { id: "perfil", label: "Perfil", icon: User },
@@ -25,8 +27,12 @@ export function PersonalZone() {
   // exigia troca visível no 1º login. Não é bloqueio de middleware (não
   // trava nenhuma rota) — o login redireciona pra cá com esse aviso.
   const [mustChangePassword, setMustChangePassword] = useState(false);
-  const [saved, setSaved] = useState(false);
-  const [saving, setSaving] = useState(false);
+  // Fase 256 — cada ação de salvar tem seu próprio par saving/saved (antes
+  // Perfil e Notificações compartilhavam um `saved` só, o que fazia o
+  // checkmark de uma aba "vazar" pra outra se o usuário trocasse de aba
+  // rápido demais).
+  const perfilFlash = useSavedFlash();
+  const notifsFlash = useSavedFlash();
   const { subscribed, subscribe, unsubscribe, loading: pushLoading } = usePushSubscription();
 
   // Perfil
@@ -88,6 +94,12 @@ export function PersonalZone() {
           full_name: data.full_name ?? "",
           email: data.email ?? "",
           telefone: data.telefone ?? "",
+          // Fase 256 — achado real: GET /users/me já devolvia oab_number/
+          // oab_uf corretamente, mas este handler nunca os lia pro estado
+          // — os 2 campos sempre voltavam em branco ao abrir a tela, mesmo
+          // já salvos antes.
+          oab_number: data.oab_number ?? "",
+          oab_uf: data.oab_uf ?? "",
         }));
         setPerfilLoaded(true);
       }
@@ -95,10 +107,9 @@ export function PersonalZone() {
   }
 
   async function savePerfil() {
-    setSaving(true);
-    try {
+    await perfilFlash.run(async () => {
       const token = localStorage.getItem("afj_access_token");
-      await fetch("/api/v1/users/me", {
+      const res = await fetch("/api/v1/users/me", {
         method: "PUT",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({
@@ -108,9 +119,10 @@ export function PersonalZone() {
           oab_uf: perfil.oab_uf || null,
         }),
       });
-      setSaved(true);
-      setTimeout(() => setSaved(false), 3000);
-      // Update localStorage user
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.detail || "Erro ao salvar o perfil.");
+      }
       try {
         const stored = localStorage.getItem("afj_user");
         if (stored) {
@@ -118,28 +130,25 @@ export function PersonalZone() {
           localStorage.setItem("afj_user", JSON.stringify({ ...u, full_name: perfil.full_name }));
         }
       } catch {}
-    } finally {
-      setSaving(false);
-    }
+    }, "Perfil salvo.");
   }
 
   async function saveNotifs() {
-    setSaving(true);
-    try {
+    await notifsFlash.run(async () => {
       const token = localStorage.getItem("afj_access_token");
-      await fetch("/api/v1/users/me/notification-preferences", {
+      const res = await fetch("/api/v1/users/me/notification-preferences", {
         method: "PUT",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({ prefs: notifs }),
       });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.detail || "Erro ao salvar as preferências.");
+      }
       // Fase 206.2 — persistido no backend agora; mantém o localStorage como
       // cache instantâneo (evita flash de "tudo ligado" no próximo carregamento).
       localStorage.setItem("afj_notif_prefs", JSON.stringify(notifs));
-      setSaved(true);
-      setTimeout(() => setSaved(false), 3000);
-    } finally {
-      setSaving(false);
-    }
+    }, "Preferências de notificação salvas.");
   }
 
   async function changePassword(e: React.FormEvent) {
@@ -269,14 +278,12 @@ export function PersonalZone() {
               </div>
             </div>
             <div className="flex justify-end pt-3 border-t border-afj-cream-dark">
-              <button
+              <SettingsSaveButton
                 onClick={savePerfil}
-                disabled={saving}
-                className="btn-afj-primary rounded-sm flex items-center gap-2 disabled:opacity-60"
-              >
-                {saving ? <Loader2 size={14} className="animate-spin" /> : saved ? <CheckCircle size={14} /> : <Save size={14} />}
-                {saving ? "Salvando..." : saved ? "Salvo!" : "Salvar Perfil"}
-              </button>
+                saving={perfilFlash.saving}
+                saved={perfilFlash.saved}
+                label="Salvar Perfil"
+              />
             </div>
           </>
         )}
@@ -332,14 +339,12 @@ export function PersonalZone() {
               ))}
             </div>
             <div className="flex justify-end pt-3 border-t border-afj-cream-dark">
-              <button
+              <SettingsSaveButton
                 onClick={saveNotifs}
-                disabled={saving}
-                className="btn-afj-primary rounded-sm flex items-center gap-2 disabled:opacity-60"
-              >
-                {saved ? <CheckCircle size={14} /> : <Save size={14} />}
-                {saved ? "Salvo!" : "Salvar Preferências"}
-              </button>
+                saving={notifsFlash.saving}
+                saved={notifsFlash.saved}
+                label="Salvar Preferências"
+              />
             </div>
           </>
         )}
@@ -392,18 +397,25 @@ export function PersonalZone() {
                   {pwdError && <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-sm px-3 py-2">{pwdError}</p>}
                   {pwdSuccess && <p className="text-xs text-green-700 bg-green-50 border border-green-200 rounded-sm px-3 py-2">Senha alterada com sucesso!</p>}
 
-                  <button type="submit" disabled={changingPwd} className="btn-afj-primary rounded-sm flex items-center gap-2 disabled:opacity-60">
-                    {changingPwd ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
-                    {changingPwd ? "Alterando..." : "Alterar Senha"}
-                  </button>
+                  <SettingsSaveButton
+                    type="submit"
+                    saving={changingPwd}
+                    saved={false}
+                    label="Alterar Senha"
+                    savingLabel="Alterando..."
+                  />
                 </form>
               </div>
 
-              {/* MFA */}
+              {/* MFA — Fase 256: o botão "Configurar MFA" daqui não tinha
+                  nenhum onClick (era um stub morto desde sempre); em vez de
+                  fingir uma funcionalidade que não existe, a seção passa a
+                  dizer isso com todas as letras. */}
               <div className="p-5 border border-afj-cream-dark rounded-sm">
                 <h3 className="text-sm font-semibold text-afj-black mb-1">Autenticação em Dois Fatores (MFA)</h3>
-                <p className="text-xs text-afj-black/50 mb-4">Adicione uma camada extra de segurança com TOTP (Google Authenticator, Authy).</p>
-                <button className="btn-afj-outline rounded-sm">Configurar MFA</button>
+                <p className="text-xs text-afj-black/50">
+                  Autenticação em dois fatores (TOTP) ainda não está disponível neste sistema.
+                </p>
               </div>
 
               {/* LGPD */}

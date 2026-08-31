@@ -1,7 +1,8 @@
 "use client";
 import { useState, useEffect } from "react";
-import { Plus, X, Save, Loader2, CalendarClock, BadgeCheck, DownloadCloud, EyeOff } from "lucide-react";
+import { Plus, X, Loader2, CalendarClock, BadgeCheck, DownloadCloud, EyeOff } from "lucide-react";
 import { useToast } from "@/components/ui/Toast";
+import { SettingsSaveButton } from "@/components/configuracoes/SettingsSaveButton";
 
 interface Feriado { data: string; descricao: string | null }
 interface Oab { numero: string; uf: string; nome: string | null }
@@ -198,9 +199,9 @@ export function JuridicoTab() {
           </div>
         )}
 
-        <button onClick={salvar} disabled={saving} className="btn-afj-primary rounded-sm py-2 px-4 text-sm mt-4 flex items-center gap-2 disabled:opacity-50">
-          {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Salvar feriados
-        </button>
+        <div className="mt-4">
+          <SettingsSaveButton onClick={salvar} saving={saving} saved={false} label="Salvar feriados" />
+        </div>
 
         {feriadosNacionais && (
           <div className="mt-5 pt-4 border-t border-afj-cream-dark">
@@ -273,10 +274,8 @@ export function JuridicoTab() {
           </div>
         )}
 
-        <div className="flex gap-2 mt-4 flex-wrap">
-          <button onClick={salvarOabs} disabled={savingOabs} className="btn-afj-primary rounded-sm py-2 px-4 text-sm flex items-center gap-2 disabled:opacity-50">
-            {savingOabs ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Salvar OABs
-          </button>
+        <div className="flex gap-2 mt-4 flex-wrap items-center">
+          <SettingsSaveButton onClick={salvarOabs} saving={savingOabs} saved={false} label="Salvar OABs" />
           <button onClick={capturarProcessos} disabled={capturando || oabs.length === 0}
             title={oabs.length === 0 ? "Cadastre e salve as OABs primeiro" : "Busca processos nos tribunais para cada OAB salva"}
             className="btn-afj-outline rounded-sm py-2 px-4 text-sm flex items-center gap-2 disabled:opacity-50">

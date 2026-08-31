@@ -55,6 +55,11 @@ class BrandingUpdate(BaseModel):
     app_name: str | None = None
     office_name: str | None = None  # armazenado em metadata.office_name
     slogan: str | None = None       # armazenado em metadata.slogan
+    # Fase 256 — achado real: o seletor de widgets do Dashboard
+    # (EscritorioZone.tsx::saveWidgets) já mandava esse campo desde antes,
+    # mas ele nunca existiu aqui — Pydantic descartava silenciosamente
+    # (sem `extra="forbid"`), a UI mostrava 200 OK e nada era persistido.
+    dashboard_widgets: list[str] | None = None
 
     @field_validator("logo_url", "logo_dark_url", "favicon_url")
     @classmethod
@@ -122,7 +127,18 @@ async def get_config(
     db: AsyncSession = Depends(get_db),
 ):
     config = await get_tenant_config(db, tenant_slug=await _resolve_tenant_slug(db, current_user))
-    config = {**config, "logo_url": await _resolve_cached_logo_url(config)}
+    meta = config.get("metadata") or {}
+    config = {
+        **config,
+        "logo_url": await _resolve_cached_logo_url(config),
+        # Fase 256 — mesmo achado do get_theme(): TenantConfigResponse(**config)
+        # não sabe ler office_name/slogan de dentro de "metadata" sozinho
+        # (Pydantic descarta a chave "metadata" por não ser um campo
+        # declarado) — sem isso, GET /tenant/config sempre devolvia None
+        # mesmo com o GET /tenant/theme já corrigido acima.
+        "office_name": meta.get("office_name"),
+        "slogan": meta.get("slogan"),
+    }
     return TenantConfigResponse(**config)
 
 

@@ -323,12 +323,21 @@ function HubCards() {
 
             {/* Opt-in por módulo (Fase 138.2 — hoje só Google Drive Doutrina) */}
             {MODULOS_HUB[it.provider] && isAdmin && (
-              <label className="flex items-center gap-2.5 cursor-pointer mt-3">
-                <input type="checkbox" checked={Boolean(modulos[MODULOS_HUB[it.provider]])} disabled={working}
-                  onChange={(e) => alternarModuloHub(it.provider, MODULOS_HUB[it.provider], e.target.checked)}
-                  className="accent-afj-gold w-4 h-4" />
-                <span className="text-sm text-afj-black/75">Habilitar {it.nome} para este escritório</span>
-              </label>
+              <div className="mt-3">
+                <label className="flex items-center gap-2.5 cursor-pointer">
+                  <input type="checkbox" checked={Boolean(modulos[MODULOS_HUB[it.provider]])} disabled={working}
+                    onChange={(e) => alternarModuloHub(it.provider, MODULOS_HUB[it.provider], e.target.checked)}
+                    className="accent-afj-gold w-4 h-4" />
+                  <span className="text-sm text-afj-black/75">Habilitar {it.nome} para este escritório</span>
+                </label>
+                {/* Fase 256 (Alteração 2) — o mesmo toggle também aparece em
+                    Configurações → Módulos (que antes só cobria os 6
+                    módulos "core", sem os 2 do Google — ficava incompleta
+                    como "lugar único" de módulos). */}
+                <p className="text-[10px] text-afj-black/35 mt-1">
+                  Também editável em Configurações → Módulos.
+                </p>
+              </div>
             )}
             {MODULOS_HUB[it.provider] && !isAdmin && !modulos[MODULOS_HUB[it.provider]] && (
               <p className="mt-3 text-xs text-afj-black/45">Integração não habilitada pelo administrador deste escritório.</p>
