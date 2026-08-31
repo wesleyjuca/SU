@@ -5,6 +5,10 @@ import { maskCpf, maskCnpj, maskTelefone, maskCep } from "@/lib/masks";
 export interface Endereco {
   cep?: string;
   logradouro?: string;
+  /** Fase 257.4 — opcional; quando presente, refina a geocodificação via
+   * Nominatim (precisão de endereço exato) em vez de só o centro do
+   * CEP/quadra da BrasilAPI. */
+  numero?: string;
   bairro?: string;
   cidade?: string;
   uf?: string;
@@ -25,8 +29,8 @@ export interface Endereco {
  * salva. */
 export type StatusLocalizacao = "nao_geocodificado" | "requer_revisao" | "validada" | "cep_alterado";
 
-export function statusLocalizacaoDe(endereco: Endereco, cepMudouDesdeAbertura: boolean): StatusLocalizacao {
-  if (cepMudouDesdeAbertura) return "cep_alterado";
+export function statusLocalizacaoDe(endereco: Endereco, enderecoMudouDesdeAbertura: boolean): StatusLocalizacao {
+  if (enderecoMudouDesdeAbertura) return "cep_alterado";
   if (endereco.latitude == null || endereco.longitude == null) return "nao_geocodificado";
   if (!endereco.geocode_source) return "requer_revisao";
   return "validada";
@@ -168,7 +172,11 @@ export function ClienteFormFields({
           />
           <input
             type="text" value={endereco.logradouro ?? ""} onChange={(e) => onEnderecoChange({ ...endereco, logradouro: e.target.value })}
-            placeholder="Rua, número, complemento" className={`col-span-2 ${inputCls}`}
+            placeholder="Rua, complemento" className={inputCls}
+          />
+          <input
+            type="text" value={endereco.numero ?? ""} onChange={(e) => onEnderecoChange({ ...endereco, numero: e.target.value })}
+            placeholder="Número" className={inputCls}
           />
           <input
             type="text" value={endereco.bairro ?? ""} onChange={(e) => onEnderecoChange({ ...endereco, bairro: e.target.value })}
@@ -179,10 +187,15 @@ export function ClienteFormFields({
             placeholder="Cidade" className={inputCls}
           />
         </div>
+        {endereco.numero && (
+          <p className="text-[10px] text-afj-black/35 mt-1.5">
+            Com o número preenchido, a localização é refinada por endereço exato (não só o centro do CEP).
+          </p>
+        )}
         <div className="flex items-center justify-between gap-2 mt-2">
           {statusLocalizacao === "validada" && (
             <p className="text-[11px] text-green-700 flex items-center gap-1.5">
-              <Check size={12} /> Localização geográfica capturada.
+              <Check size={12} /> Localização geográfica capturada{endereco.geocode_source === "nominatim" ? " (endereço exato)" : ""}.
             </p>
           )}
           {statusLocalizacao === "requer_revisao" && (
@@ -192,7 +205,7 @@ export function ClienteFormFields({
           )}
           {statusLocalizacao === "cep_alterado" && (
             <p className="text-[11px] text-afj-black/60 flex items-center gap-1.5">
-              CEP alterado — a localização será recalculada ao salvar.
+              CEP ou número alterado — a localização será recalculada ao salvar.
             </p>
           )}
           {statusLocalizacao === "nao_geocodificado" && <span />}

@@ -30,7 +30,7 @@ interface Cliente {
   created_at: string;
 }
 
-const ENDERECO_VAZIO: Endereco = { cep: "", logradouro: "", bairro: "", cidade: "", uf: "" };
+const ENDERECO_VAZIO: Endereco = { cep: "", logradouro: "", numero: "", bairro: "", cidade: "", uf: "" };
 const FORM_VAZIO: ClienteFormValues = {
   tipo: "PF", nome_completo: "", razao_social: "", email: "", telefone: "", whatsapp: "",
   origem: "", cpf: "", cnpj: "", status: "PROSPECTO", lgpd_consent: false, observacoes: "",
@@ -115,6 +115,10 @@ export default function ClientesPage() {
   // ainda não salvou" (mostra "será recalculada ao salvar" em vez de
   // reafirmar uma confirmação que já não é mais verdadeira pro CEP novo).
   const editEnderecoCepOriginalRef = useRef("");
+  // Fase 257.4 — mesmo raciocínio acima, agora também pro número do
+  // imóvel: mudar só o número (sem mexer no CEP) também merece re-
+  // geocodificar (é o próprio caso que o refinamento via Nominatim serve).
+  const editEnderecoNumeroOriginalRef = useRef("");
   const [recalculando, setRecalculando] = useState(false);
   const [docSugestao, setDocSugestao] = useState<string | null>(null);
   const [editDocSugestao, setEditDocSugestao] = useState<string | null>(null);
@@ -198,6 +202,7 @@ export default function ClientesPage() {
     });
     setEditEndereco({ ...ENDERECO_VAZIO, ...(c.endereco_json ?? {}) });
     editEnderecoCepOriginalRef.current = c.endereco_json?.cep ?? "";
+    editEnderecoNumeroOriginalRef.current = c.endereco_json?.numero ?? "";
     setEditDocSugestao(null);
   }
 
@@ -215,6 +220,7 @@ export default function ClientesPage() {
         const novoEndereco = { ...ENDERECO_VAZIO, ...(d.endereco_json ?? {}) };
         setEditEndereco(novoEndereco);
         editEnderecoCepOriginalRef.current = novoEndereco.cep ?? "";
+        editEnderecoNumeroOriginalRef.current = novoEndereco.numero ?? "";
         const geocodificado = novoEndereco.latitude != null && novoEndereco.longitude != null;
         if (geocodificado) toast.success("Localização recalculada.");
         else toast.warning("Não foi possível geocodificar este CEP agora — tente novamente mais tarde.");
@@ -629,7 +635,8 @@ export default function ClientesPage() {
                 onCepBlur={(cep) => autofillCep(cep, editEndereco, setEditEndereco)}
                 statusLocalizacao={statusLocalizacaoDe(
                   editEndereco,
-                  (editEndereco.cep ?? "").replace(/\D/g, "") !== editEnderecoCepOriginalRef.current.replace(/\D/g, ""),
+                  (editEndereco.cep ?? "").replace(/\D/g, "") !== editEnderecoCepOriginalRef.current.replace(/\D/g, "") ||
+                    (editEndereco.numero ?? "").trim() !== editEnderecoNumeroOriginalRef.current.trim(),
                 )}
                 onRecalcularLocalizacao={recalcularLocalizacao}
                 recalculando={recalculando}
