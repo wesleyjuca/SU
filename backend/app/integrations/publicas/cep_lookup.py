@@ -22,6 +22,22 @@ _BASE_URL = "https://brasilapi.com.br/api/cep/v2"
 _breaker = CircuitBreaker(name="brasilapi_cep")
 
 
+def coordenada_valida(lat: float | None, lng: float | None) -> bool:
+    """Fase 253 — validação de sanidade geográfica, ponto único reusado
+    por `_extrair_coordenadas` (geocodificação automática) e pelo ajuste
+    manual (Fase 254, `PUT /clients/{id}/localizacao-manual`): faixa
+    geográfica válida (-90..90/-180..180) e rejeição de `(0, 0)`
+    (sentinela comum de "não encontrado" em geocodificadores, nunca uma
+    coordenada real)."""
+    if lat is None or lng is None:
+        return False
+    if not (-90.0 <= lat <= 90.0) or not (-180.0 <= lng <= 180.0):
+        return False
+    if lat == 0.0 and lng == 0.0:
+        return False
+    return True
+
+
 def _extrair_coordenadas(data: dict) -> tuple[float | None, float | None]:
     """Fase 230 — a BrasilAPI v2 devolve (quando a fonte subjacente,
     viacep/correios/widenet, tiver o dado) um bloco `location.coordinates.
@@ -40,11 +56,8 @@ def _extrair_coordenadas(data: dict) -> tuple[float | None, float | None]:
         lng = float(coords["longitude"])
     except (KeyError, TypeError, ValueError):
         return None, None
-    if not (-90.0 <= lat <= 90.0) or not (-180.0 <= lng <= 180.0):
-        log.warning("brasilapi_cep_coordenada_fora_de_faixa", latitude=lat, longitude=lng)
-        return None, None
-    if lat == 0.0 and lng == 0.0:
-        log.warning("brasilapi_cep_coordenada_null_island")
+    if not coordenada_valida(lat, lng):
+        log.warning("brasilapi_cep_coordenada_invalida", latitude=lat, longitude=lng)
         return None, None
     return lat, lng
 

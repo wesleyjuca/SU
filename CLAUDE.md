@@ -4472,6 +4472,70 @@ Histórico:
     cliente, filtro por cidade/UF, clustering, legenda dedicada, ajuste
     manual arrastando o marcador no Leaflet, correção em massa com
     confirmação explícita — ficam pra uma fase futura se pedido.
+- **Fase 254** — usuário pediu pra avançar no backlog que a Fase 253
+  tinha deixado de fora: busca por cliente, filtro por cidade/UF,
+  clustering, legenda dedicada, e ajuste manual arrastando o marcador.
+  - **`cep_lookup.py`**: extraída `coordenada_valida(lat, lng) -> bool`
+    como função pública reutilizável (antes a validação de faixa/`(0,0)`
+    vivia só dentro de `_extrair_coordenadas`, Fase 253) — agora também
+    usada pelo endpoint de ajuste manual, ponto único de validação.
+  - **`POST /clients/{id}/localizacao-manual`** (novo, gate `ADMIN/
+    SOCIO/GESTOR` — mesmo nível do endpoint de auditoria da Fase 253):
+    zera qualquer coordenada e grava a nova, validada pela mesma faixa
+    geográfica, com `geocode_source="manual"` + `geocoded_at`. Como
+    `_geocodificar_endereco` (Fase 253) só reconsulta a BrasilAPI quando
+    o CEP muda, um ajuste manual sobrevive a qualquer save subsequente
+    que não mexa no CEP — nunca é sobrescrito silenciosamente.
+  - **Frontend — `mapa/page.tsx`**: busca por nome (client-side, sobre a
+    lista já carregada — sem endpoint novo), filtros de cidade/UF
+    (opções derivadas dos próprios clientes carregados), legenda fixa
+    (cores lidas das mesmas CSS vars `--brand-primary`/`--brand-
+    secondary` que os marcadores já usam, tenant-aware de graça), e um
+    botão "Ajustar manualmente" role-gated (`ADMIN/SOCIO/GESTOR/
+    SUPERADMIN`, incluindo SUPERADMIN explicitamente — lição da Fase
+    236) que ativa o modo de arrastar.
+  - **Frontend — `EscritorioClientesMap.tsx`**: nova dependência
+    `react-leaflet-cluster@3.1.1` (+ `leaflet.markercluster` como peer
+    — versão pinada especificamente por compatibilidade: a versão mais
+    recente da lib exige react-leaflet 5/React 19, este projeto usa
+    react-leaflet 4.2.1/React 18.3.1) agrupando só os marcadores de
+    cliente (não o do escritório, que é único). Novo componente
+    `ClienteMarker` — cada marcador de cliente ganha sua própria
+    referência Leaflet e estado de "aguardando confirmação": no modo de
+    ajuste, arrastar o marcador NUNCA salva direto — abre um popup
+    "Confirmar nova localização?" com Confirmar/Cancelar (Cancelar
+    reverte a posição visualmente via `marker.setLatLng`); só Confirmar
+    dispara `POST /clients/{id}/localizacao-manual`. Se o modo de ajuste
+    for desativado com uma alteração pendente não confirmada, reverte
+    automaticamente — nunca deixa um arrasto "pendurado" sem decisão
+    explícita do usuário.
+  - **Testes**: 3 novos (`test_client_geocoding_fase233.py`) — sucesso
+    persiste `geocode_source="manual"` preservando os demais campos do
+    endereço; coordenada fora de faixa rejeitada com 422 sem gravar
+    nada; cliente de outro tenant devolve 404 (isolamento cross-tenant).
+    A suíte pytest bateu na mesma flakiness de pool asyncpg/pytest-
+    asyncio documentada desde a Fase 199 (reproduzida de novo, mesmo
+    padrão de toda fase recente) — prova real via script standalone
+    (Postgres real) reproduzindo os 3 cenários com sucesso.
+  - **Verificado via Playwright real** (Chromium do sandbox, `npm run
+    dev` com `API_URL` local, backend local real, coordenadas de teste
+    seedadas manualmente — mesma limitação de egress bloqueado à
+    BrasilAPI/tile server já documentada desde a Fase 217/231):
+    screenshot confirma busca, os 2 filtros, a legenda (3 cores
+    corretas, incluindo "Requer revisão" só aparecendo quando há
+    cliente nesse estado), e o clustering agrupando os marcadores
+    próximos numa bolha "6". Fluxo completo de ajuste manual testado
+    ponta a ponta: ativar modo → arrastar um marcador de verdade (mouse
+    down/move/up simulado) → popup de confirmação aparece com a
+    coordenada pendente → Confirmar → toast de sucesso → persistido.
+    Zero erro de console novo atribuível a esta fase (só os erros de
+    tile do OpenStreetMap, esperados neste sandbox sem egress, e os
+    já documentados de WebSocket/key duplicada). `ruff check`/
+    `py_compile` limpos no backend; `tsc --noEmit`/`eslint` limpos no
+    frontend (mesmo warning pré-existente de `exhaustive-deps`).
+  - **Fora de escopo desta fase**: correção em massa com confirmação
+    explícita (o endpoint de auditoria da Fase 253 continua só-relatório)
+    — nenhum item da lista original ficou de fora desta vez.
 
 
 ## Riscos conhecidos / débito técnico

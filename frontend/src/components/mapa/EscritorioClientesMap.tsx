@@ -1,8 +1,11 @@
 "use client";
 import "leaflet/dist/leaflet.css";
-import { useMemo } from "react";
+import "leaflet.markercluster/dist/MarkerCluster.css";
+import "leaflet.markercluster/dist/MarkerCluster.Default.css";
+import { useEffect, useMemo, useRef, useState } from "react";
 import L from "leaflet";
 import { MapContainer, TileLayer, Marker, Popup, useMap } from "react-leaflet";
+import MarkerClusterGroup from "react-leaflet-cluster";
 
 export type PontoEscritorio = {
   nome: string;
@@ -63,12 +66,122 @@ function AjustarEnquadramento({ pontos }: { pontos: [number, number][] }) {
   return null;
 }
 
+/** Fase 254 — marcador de cliente com suporte a ajuste manual (arrastar).
+ * Extraído num componente próprio porque cada marcador precisa da sua
+ * própria referência do Leaflet (pra reverter a posição se o usuário
+ * cancelar) e do seu próprio estado de "aguardando confirmação" — nunca
+ * salva direto no dragend, só depois de o usuário confirmar
+ * explicitamente (mesmo fluxo pedido: arrastar → confirmar → salvar,
+ * nunca sobrescreve a geolocalização automática silenciosamente). */
+function ClienteMarker({
+  cliente,
+  icon,
+  ajusteAtivo,
+  onAjustarLocalizacao,
+}: {
+  cliente: PontoCliente;
+  icon: L.DivIcon;
+  ajusteAtivo: boolean;
+  onAjustarLocalizacao?: (id: string, lat: number, lng: number) => Promise<void>;
+}) {
+  const markerRef = useRef<L.Marker>(null);
+  const posOriginal: [number, number] = [cliente.latitude, cliente.longitude];
+  const [pendente, setPendente] = useState<{ lat: number; lng: number } | null>(null);
+  const [salvando, setSalvando] = useState(false);
+
+  // Se o modo de ajuste for desativado (ou a coordenada mudar por baixo,
+  // ex. depois de salvar) com uma alteração ainda não confirmada, reverte
+  // — nunca deixa um arrasto pendurado sem decisão explícita do usuário.
+  useEffect(() => {
+    if (!ajusteAtivo && pendente) {
+      markerRef.current?.setLatLng(posOriginal);
+      setPendente(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ajusteAtivo]);
+
+  function handleDragEnd() {
+    const marker = markerRef.current;
+    if (!marker) return;
+    const { lat, lng } = marker.getLatLng();
+    setPendente({ lat, lng });
+    marker.openPopup();
+  }
+
+  function cancelar() {
+    markerRef.current?.setLatLng(posOriginal);
+    setPendente(null);
+  }
+
+  async function confirmar() {
+    if (!pendente || !onAjustarLocalizacao) return;
+    setSalvando(true);
+    try {
+      await onAjustarLocalizacao(cliente.id, pendente.lat, pendente.lng);
+      setPendente(null);
+    } finally {
+      setSalvando(false);
+    }
+  }
+
+  return (
+    <Marker
+      ref={markerRef}
+      position={posOriginal}
+      icon={icon}
+      draggable={ajusteAtivo}
+      eventHandlers={ajusteAtivo ? { dragend: handleDragEnd } : {}}
+    >
+      <Popup>
+        {pendente ? (
+          <div className="space-y-1.5 min-w-[160px]">
+            <p className="font-semibold text-sm">Confirmar nova localização?</p>
+            <p className="text-xs text-afj-black/60">{cliente.nome}</p>
+            <p className="text-[10px] text-afj-black/40">{pendente.lat.toFixed(5)}, {pendente.lng.toFixed(5)}</p>
+            <div className="flex gap-2 pt-1">
+              <button
+                type="button" onClick={confirmar} disabled={salvando}
+                className="text-xs px-2 py-1 bg-afj-gold text-white rounded-sm disabled:opacity-50"
+              >
+                {salvando ? "Salvando..." : "Confirmar"}
+              </button>
+              <button
+                type="button" onClick={cancelar} disabled={salvando}
+                className="text-xs px-2 py-1 border border-afj-cream-dark rounded-sm"
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <p className="font-semibold text-sm">{cliente.nome}</p>
+            <p className="text-xs text-afj-black/60">{cliente.enderecoTexto}</p>
+            {cliente.statusGeo === "requer_revisao" && (
+              <p className="text-[10px] text-amber-700 mt-1">⚠ Localização requer revisão</p>
+            )}
+            {ajusteAtivo && (
+              <p className="text-[10px] text-afj-black/40 mt-1">Arraste o marcador pra ajustar a localização.</p>
+            )}
+          </>
+        )}
+      </Popup>
+    </Marker>
+  );
+}
+
 export default function EscritorioClientesMap({
   escritorio,
   clientes,
+  ajusteAtivo = false,
+  onAjustarLocalizacao,
 }: {
   escritorio: PontoEscritorio | null;
   clientes: PontoCliente[];
+  /** Fase 254 — modo de ajuste manual (arrastar marcador de cliente),
+   * role-gated no chamador (mapa/page.tsx). */
+  ajusteAtivo?: boolean;
+  onAjustarLocalizacao?: (id: string, lat: number, lng: number) => Promise<void>;
 }) {
   const iconeEscritorio = useMemo(() => pinIcon(corMarca("--brand-primary", "184 149 74"), 34), []);
   const iconeCliente = useMemo(() => pinIcon(corMarca("--brand-secondary", "30 34 41"), 26), []);
@@ -101,17 +214,21 @@ export default function EscritorioClientesMap({
           </Popup>
         </Marker>
       )}
-      {clientes.map((c) => (
-        <Marker key={c.id} position={[c.latitude, c.longitude]} icon={iconeCliente}>
-          <Popup>
-            <p className="font-semibold text-sm">{c.nome}</p>
-            <p className="text-xs text-afj-black/60">{c.enderecoTexto}</p>
-            {c.statusGeo === "requer_revisao" && (
-              <p className="text-[10px] text-amber-700 mt-1">⚠ Localização requer revisão</p>
-            )}
-          </Popup>
-        </Marker>
-      ))}
+      {/* Fase 254 — clustering só nos marcadores de cliente (o do escritório
+          é único, não faz sentido agrupar). leaflet.markercluster já
+          separa um marcador draggable do cluster automaticamente durante
+          o arrasto, sem trabalho extra aqui. */}
+      <MarkerClusterGroup chunkedLoading>
+        {clientes.map((c) => (
+          <ClienteMarker
+            key={c.id}
+            cliente={c}
+            icon={iconeCliente}
+            ajusteAtivo={ajusteAtivo}
+            onAjustarLocalizacao={onAjustarLocalizacao}
+          />
+        ))}
+      </MarkerClusterGroup>
     </MapContainer>
   );
 }
