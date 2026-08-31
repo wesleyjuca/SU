@@ -121,6 +121,36 @@ async def test_requisicao_envia_user_agent_de_navegador(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_falha_captura_corpo_bruto_da_resposta(monkeypatch):
+    """Fase 252 — o 403 persistiu em produção mesmo depois do fix de headers
+    da Fase 250, indício de um bloqueio mais fundo (fingerprint TLS, IP na
+    lista negra do WAF) — mas até aqui só o status code era capturado,
+    nunca o CORPO da resposta (que revelaria, por exemplo, uma página de
+    desafio Cloudflare/Akamai em vez de um 403 seco). Confirma que
+    `stats["body_snippet"]` chega preenchido e truncado."""
+    corpo_desafio = "<html><body>Access denied — Cloudflare Ray ID: abc123</body></html>" + ("x" * 600)
+
+    def handler(request):
+        return httpx.Response(403, text=corpo_desafio)
+
+    transport = httpx.MockTransport(handler)
+
+    class _FakeAsyncClient(httpx.AsyncClient):
+        def __init__(self, *a, **k):
+            super().__init__(*a, transport=transport, **k)
+
+    monkeypatch.setattr(httpx, "AsyncClient", _FakeAsyncClient)
+
+    stats: dict = {}
+    resultado = await buscar_comunicacoes("123456", "CE", date(2026, 1, 1), date(2026, 7, 1), stats=stats)
+
+    assert resultado == []
+    assert stats["status_code"] == 403
+    assert "Cloudflare Ray ID" in stats["body_snippet"]
+    assert len(stats["body_snippet"]) <= 500
+
+
+@pytest.mark.asyncio
 async def test_sucesso_200_nao_seta_status_code_nem_error(monkeypatch):
     def handler(request):
         return httpx.Response(200, json={"items": []})

@@ -175,10 +175,22 @@ async def buscar_comunicacoes(
                 if stats is not None:
                     stats["requests"] = stats.get("requests", 0) + 1
                 if resp.status_code != 200:
-                    log.warning("comunica_http", status=resp.status_code, oab=numero, uf=oab_uf, pagina=pagina)
+                    # Fase 252 — achado: o 403 persistiu mesmo depois do fix de
+                    # headers de navegador (Fase 250), o que sugere um bloqueio
+                    # mais fundo (fingerprint TLS, IP do Railway na lista negra
+                    # do WAF) — mas até agora só capturávamos o status code,
+                    # nunca o CORPO da resposta. Se o WAF devolve uma página de
+                    # desafio (Cloudflare/Akamai, HTML) em vez de um 403 seco,
+                    # estávamos cegos pra essa diferença. Corpo truncado (não é
+                    # PII — é a resposta pública de um WAF), sem risco de
+                    # estourar o log.
+                    corpo_bruto = (resp.text or "")[:500]
+                    log.warning("comunica_http", status=resp.status_code, oab=numero, uf=oab_uf,
+                                pagina=pagina, corpo=corpo_bruto)
                     if stats is not None:
                         stats["status_code"] = resp.status_code
                         stats["error"] = f"HTTP {resp.status_code} da Comunica/DJEN"
+                        stats["body_snippet"] = corpo_bruto
                     break
                 if stats is not None:
                     stats["ok"] = True

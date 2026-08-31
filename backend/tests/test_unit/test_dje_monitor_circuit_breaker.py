@@ -94,6 +94,50 @@ async def test_sucesso_normal_nao_abre_breaker_nem_pula_oabs(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_falha_expoe_fonte_respondeu_e_detalhe(monkeypatch):
+    """Fase 252 — achado: `scan_publicacoes` descartava o `stats` de cada
+    OAB a cada iteração do loop, então "0 intimações" por não ter novidade
+    no dia e "0 intimações" por 403 da Comunica pareciam idênticos pro
+    endpoint /publicacoes/varrer (ao contrário de `capturar_por_oab`, que
+    já expunha isso desde a Fase 114). Confirma que o resultado final
+    agora carrega `fonte_respondeu=False`/`fonte_detalhe` com a causa real."""
+    async def _fake_buscar_falha_sempre(oab_numero, oab_uf, data_inicio, data_fim, stats=None, **kwargs):
+        if stats is not None:
+            stats["requests"] = 1
+            stats["ok"] = False
+            stats["status_code"] = 403
+            stats["error"] = "HTTP 403 da Comunica/DJEN"
+        return []
+
+    monkeypatch.setattr("app.integrations.dje.comunica.buscar_comunicacoes", _fake_buscar_falha_sempre)
+    monkeypatch.setattr(dje_monitor.asyncio, "sleep", _fake_sleep)
+
+    db = _FakeDB(_oabs(1))
+    resultado = await dje_monitor.scan_publicacoes(db, tenant_id=None, dias_retro=1)
+
+    assert resultado["fonte_respondeu"] is False
+    assert resultado["fonte_detalhe"] == "HTTP 403 da Comunica/DJEN"
+
+
+@pytest.mark.asyncio
+async def test_sucesso_expoe_fonte_respondeu_true(monkeypatch):
+    async def _fake_buscar_sucesso(oab_numero, oab_uf, data_inicio, data_fim, stats=None, **kwargs):
+        if stats is not None:
+            stats["requests"] = 1
+            stats["ok"] = True
+        return []
+
+    monkeypatch.setattr("app.integrations.dje.comunica.buscar_comunicacoes", _fake_buscar_sucesso)
+    monkeypatch.setattr(dje_monitor.asyncio, "sleep", _fake_sleep)
+
+    db = _FakeDB(_oabs(1))
+    resultado = await dje_monitor.scan_publicacoes(db, tenant_id=None, dias_retro=1)
+
+    assert resultado["fonte_respondeu"] is True
+    assert resultado["fonte_detalhe"] is None
+
+
+@pytest.mark.asyncio
 async def test_intervalo_entre_requisicoes_e_respeitado(monkeypatch):
     """Regressão: cada OAB deve passar por um pequeno sleep — confirma que o
     reforço (rajada sem pausa) foi de fato aplicado, sem depender de medir

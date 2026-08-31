@@ -4295,6 +4295,73 @@ Histórico:
     reseta em qualquer redeploy (novo processo), e mesmo sem redeploy o
     `reset_timeout` de 30min já limita o tempo de um breaker aberto por
     engano.
+- **Fase 252** — usuário confirmou, depois do deploy das Fases 250
+  (headers de navegador) e 251 (breaker sincronizando com Redis), que o
+  403 do Comunica/DJEN **continua** aparecendo nas duas capturas — a
+  hipótese "só faltava parecer um navegador nos headers" não se sustenta
+  mais sozinha. Recontado o hipotético com o dado novo (documentado no
+  código): pode ser fingerprint TLS/JA3 (WAFs modernos identificam o
+  cliente pelo aperto de mão TLS antes de olhar qualquer header HTTP —
+  nenhum header sozinho resolveria isso), bloqueio por IP do range de
+  saída do Railway, ou o deploy anterior ainda não ter propagado —
+  nenhuma das três é verificável desta sessão (sandbox sem egress real
+  pro Comunica, sem acesso ao dashboard do Railway). Usuário escolheu
+  (via pergunta) resolver o diagnóstico primeiro, sem apostar de novo
+  numa correção mais pesada e especulativa sem dado real.
+  - **`backend/app/integrations/dje/comunica.py`**: até aqui só o
+    **status code** de uma falha era capturado — nunca o CORPO da
+    resposta. Se o WAF devolve uma página de desafio (Cloudflare/Akamai,
+    HTML) em vez de um 403 seco, estávamos cegos pra essa diferença.
+    `buscar_comunicacoes()` agora captura `resp.text[:500]` (truncado,
+    não é PII — é a resposta pública de um WAF) em `stats["body_snippet"]`
+    e no log, pra qualquer 403 futuro já vir com o corpo real anexado.
+  - **Achado colateral, corrigido junto**: ao contrário de
+    `capturar_por_oab()` (`oab_capture.py`, expõe `fonte_respondeu`/
+    `fonte_detalhe` desde a Fase 114), `scan_publicacoes()`
+    (`dje_monitor.py`) descartava o `stats` de cada OAB a cada iteração
+    do loop — "0 intimações" por não ter novidade no dia e "0 intimações"
+    por 403 da Comunica pareciam **idênticos** pro chamador. Isso também
+    explica por que o 403 relatado pelo usuário só aparecia como toast
+    visível na captura de PROCESSOS (`/tenant/oabs/capturar`, que já
+    tinha essa distinção) — a captura de PUBLICAÇÕES (`/publicacoes/
+    varrer`) sempre respondia `"Varredura concluída."` mesmo numa falha
+    total, escondendo o problema em vez de mostrar. `scan_publicacoes()`
+    agora rastreia e expõe `fonte_respondeu`/`fonte_detalhe` também;
+    `POST /publicacoes/varrer` (`publications.py`) ganha a mesma
+    mensagem dinâmica de 3 vias que `/tenant/oabs/capturar` já tinha
+    (novas>0 / fonte não respondeu com detalhe / fonte respondeu mas
+    vazio) + um 4º caso (zero OAB monitorada); o frontend
+    (`publicacoes/page.tsx`) troca o toast de sucesso sempre-verde por
+    um aviso (`toast.warning`) quando `fonte_respondeu === false`.
+  - Testes novos: `test_falha_captura_corpo_bruto_da_resposta`
+    (`test_comunica_diagnostico.py`, corpo simulando uma página de
+    desafio Cloudflare) e `test_falha_expoe_fonte_respondeu_e_detalhe`/
+    `test_sucesso_expoe_fonte_respondeu_true`
+    (`test_dje_monitor_circuit_breaker.py`) — 24 testes relacionados
+    passam limpos (`test_dje_monitor_circuit_breaker.py`,
+    `test_dje_monitor_syncrun_erro.py`, `test_comunica_diagnostico.py`,
+    `test_publication_monitor_real_scan.py`,
+    `test_oab_capture_syncrun_erro.py`, `test_oab_discovery.py`,
+    `test_tribunais_base_http_client.py`). `ruff check`/`py_compile`
+    limpos no backend; `tsc --noEmit` limpo; `eslint` no arquivo
+    frontend tocado — 1 warning pré-existente de `exhaustive-deps`,
+    confirmado via `git stash` como não-novo desta fase.
+  - **Limitação de verificação, a mesma de toda fase anterior que mexeu
+    nesta fonte**: este sandbox continua sem egress real pra
+    `comunicaapi.pje.jus.br` (reconfirmado — `curl` → `CONNECT tunnel
+    failed, response 403`, bloqueio do proxy da sessão, não do servidor
+    real) — não foi possível reproduzir o 403 de produção nem confirmar
+    ao vivo qual das 3 hipóteses é a real. **Nenhuma correção de causa
+    raiz foi tentada nesta fase** (decisão deliberada do usuário) — só a
+    melhoria de diagnóstico. **Próximo passo real**: usuário testar de
+    novo em produção depois do deploy e colar o erro detalhado novo
+    (agora com o corpo da resposta) + confirmar no dashboard do Railway
+    qual commit está de fato rodando — com esse dado real, decide-se
+    entre as 3 hipóteses (fingerprint TLS → trocar o cliente HTTP por um
+    que imite um navegador de verdade, ex. `curl_cffi`; bloqueio por IP →
+    não resolvível só com código, precisa de contato com o suporte do
+    PJe/CNJ; deploy não propagado → nada a fazer, só esperar) antes de
+    tentar mais uma correção às cegas.
 
 
 ## Riscos conhecidos / débito técnico

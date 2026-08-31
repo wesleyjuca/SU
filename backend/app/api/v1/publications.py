@@ -209,7 +209,28 @@ async def varrer_agora(
     current_user: User = Depends(require_role("ADMIN", "SOCIO", "GESTOR")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Dispara a varredura do DJe agora, só para este escritório."""
+    """Dispara a varredura do DJe agora, só para este escritório.
+
+    Fase 252 — achado: até aqui a mensagem era sempre "Varredura concluída.",
+    mesmo quando a Comunica devolvia 403/erro pra todas as OABs — "0 novas"
+    por não ter novidade no dia e "0 novas" por falha de rede pareciam
+    idênticos pro usuário (ao contrário de `POST /tenant/oabs/capturar`,
+    que já distinguia os 2 casos desde a Fase 114). Mesmo padrão de
+    mensagem aplicado aqui agora que `scan_publicacoes` expõe
+    `fonte_respondeu`/`fonte_detalhe`.
+    """
     from app.services.dje_monitor import scan_publicacoes
     resumo = await scan_publicacoes(db, tenant_id=current_user.tenant_id, dias_retro=1)
-    return {"message": "Varredura concluída.", **resumo}
+    novas = resumo.get("intimacoes_novas", 0)
+    if novas:
+        msg = f"{novas} nova(s) intimação(ões) encontrada(s)."
+    elif not resumo.get("oabs_monitoradas"):
+        msg = "Nenhuma OAB monitorada — cadastre em Configurações → Jurídico."
+    elif not resumo.get("fonte_respondeu"):
+        detalhe = resumo.get("fonte_detalhe")
+        msg = ("A fonte pública (Comunica/DJEN) não respondeu"
+               + (f" ({detalhe})" if detalhe else "")
+               + ". Verifique se o ambiente tem acesso à internet externa (egress) ou tente novamente mais tarde.")
+    else:
+        msg = "A fonte respondeu, mas não há intimações novas no período."
+    return {"message": msg, **resumo}

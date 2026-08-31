@@ -77,7 +77,12 @@ export default function PublicacoesPage() {
       const res = await fetch("/api/v1/publicacoes/varrer", { method: "POST", headers: { Authorization: `Bearer ${token()}` } });
       const d = await res.json().catch(() => ({}));
       if (res.ok) {
-        toast.success(`Varredura concluída: ${d.intimacoes_novas ?? 0} nova(s), ${d.casadas_com_processo ?? 0} vinculada(s).`);
+        // Fase 252 — antes sempre mostrava sucesso mesmo quando a Comunica
+        // respondia 403 pra todas as OABs (0 novas por falha de rede
+        // parecia idêntico a 0 novas por não ter novidade no dia).
+        if (d.intimacoes_novas > 0) toast.success(d.message || `${d.intimacoes_novas} nova(s) intimação(ões).`);
+        else if (d.fonte_respondeu === false) toast.warning(d.message || "A fonte pública não respondeu.");
+        else toast.success(d.message || "Varredura concluída.");
         fetchItems();
       } else toast.error(d.detail || "Erro na varredura.");
     } catch { toast.error("Erro de conexão."); }
