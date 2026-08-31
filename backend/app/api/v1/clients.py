@@ -21,6 +21,7 @@ from app.core.security import hash_password, hash_token
 from app.models.gov_registry_lookup import GovRegistryLookup
 from app.integrations.serpro.consulta_cpf_cnpj import consultar_cpf, consultar_cnpj
 from app.integrations.publicas.cep_lookup import consultar_cep as _consultar_cep_externa
+from app.integrations.publicas.cep_lookup import coordenada_valida
 
 log = structlog.get_logger()
 router = APIRouter(prefix="/clients", tags=["clients"])
@@ -641,6 +642,51 @@ async def recalcular_localizacao(
 
     endereco_sem_coordenada = {**client.endereco_json, "latitude": None, "longitude": None}
     client.endereco_json = await _geocodificar_endereco(endereco_sem_coordenada)
+    return _to_response(client)
+
+
+class LocalizacaoManualBody(BaseModel):
+    latitude: float
+    longitude: float
+
+
+@router.put("/{client_id}/localizacao-manual", response_model=ClientResponse)
+async def ajustar_localizacao_manual(
+    client_id: str,
+    body: LocalizacaoManualBody,
+    current_user: User = Depends(require_role("ADMIN", "SOCIO", "GESTOR")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Fase 254 — ajuste manual (arrastar o marcador no mapa), pro caso em
+    que a geocodificação automática (precisão de CEP/quadra, nunca do
+    número exato) não fica boa o bastante. Mesmo gate de `/geolocalizacao/
+    auditoria` — ação de gestão, não operação do dia a dia de um
+    advogado qualquer. `geocode_source="manual"` marca explicitamente que
+    a coordenada não veio da BrasilAPI (nunca sobrescrita silenciosamente
+    por uma geocodificação automática futura — `_geocodificar_endereco`
+    só reconsulta quando o CEP muda, então um ajuste manual sobrevive a
+    qualquer save subsequente que não mexa no CEP)."""
+    if not coordenada_valida(body.latitude, body.longitude):
+        raise HTTPException(status_code=422, detail="Coordenada fora da faixa geográfica válida.")
+
+    result = await db.execute(
+        select(Client).where(
+            Client.id == uuid.UUID(client_id),
+            Client.tenant_id == current_user.tenant_id,
+        )
+    )
+    client = result.scalar_one_or_none()
+    if not client:
+        raise NotFoundError("Cliente", client_id)
+
+    from datetime import datetime as _datetime, timezone as _tz
+    client.endereco_json = {
+        **(client.endereco_json or {}),
+        "latitude": body.latitude,
+        "longitude": body.longitude,
+        "geocoded_at": _datetime.now(_tz.utc).isoformat(),
+        "geocode_source": "manual",
+    }
     return _to_response(client)
 
 

@@ -355,3 +355,94 @@ async def test_auditoria_geolocalizacao_classifica_status(cenario, monkeypatch):
     assert status_por_nome["Cliente Validado"] == "VALIDADA"
     assert status_por_nome["Cliente Sem Coordenada"] == "NAO_GEOCODIFICADO"
     assert status_por_nome["Cliente Legado"] == "REQUER_REVISAO"
+
+
+# ─── Fase 254 — ajuste manual (arrastar marcador no mapa) ───────────────────
+
+async def test_ajustar_localizacao_manual_persiste_com_geocode_source_manual(cenario):
+    async with AsyncSessionLocal() as db:
+        legado = Client(
+            tenant_id=cenario["tenant"], responsavel_id=cenario["user"], tipo="PF",
+            nome_completo="Cliente Pra Ajustar",
+            endereco_json={"cep": "01310-100", "latitude": -23.55, "longitude": -46.63},
+        )
+        db.add(legado)
+        await db.commit()
+        client_id = legado.id
+
+    async with AsyncSessionLocal() as db:
+        resp = await clients_mod.ajustar_localizacao_manual(
+            str(client_id),
+            clients_mod.LocalizacaoManualBody(latitude=-9.9750, longitude=-67.8100),
+            current_user=_CurrentUser(cenario["tenant"], cenario["user"]), db=db,
+        )
+        await db.commit()
+
+    assert resp.endereco_json["latitude"] == -9.9750
+    assert resp.endereco_json["longitude"] == -67.8100
+    assert resp.endereco_json["geocode_source"] == "manual"
+    assert "geocoded_at" in resp.endereco_json
+    # CEP/demais campos do endereço preservados — só a coordenada muda.
+    assert resp.endereco_json["cep"] == "01310-100"
+
+    async with AsyncSessionLocal() as db:
+        from sqlalchemy import select
+        row = (await db.execute(select(Client).where(Client.id == client_id))).scalar_one()
+    assert row.endereco_json["latitude"] == -9.9750
+    assert row.endereco_json["geocode_source"] == "manual"
+
+
+async def test_ajustar_localizacao_manual_rejeita_coordenada_fora_de_faixa(cenario):
+    async with AsyncSessionLocal() as db:
+        cliente = Client(
+            tenant_id=cenario["tenant"], responsavel_id=cenario["user"], tipo="PF",
+            nome_completo="Cliente Coordenada Invalida",
+            endereco_json={"cep": "01310-100"},
+        )
+        db.add(cliente)
+        await db.commit()
+        client_id = cliente.id
+
+    from fastapi import HTTPException
+    async with AsyncSessionLocal() as db:
+        with pytest.raises(HTTPException) as exc:
+            await clients_mod.ajustar_localizacao_manual(
+                str(client_id),
+                clients_mod.LocalizacaoManualBody(latitude=999.0, longitude=-46.63),
+                current_user=_CurrentUser(cenario["tenant"], cenario["user"]), db=db,
+            )
+    assert exc.value.status_code == 422
+
+    async with AsyncSessionLocal() as db:
+        from sqlalchemy import select
+        row = (await db.execute(select(Client).where(Client.id == client_id))).scalar_one()
+    assert row.endereco_json.get("latitude") is None  # não gravou a coordenada inválida
+
+
+async def test_ajustar_localizacao_manual_cliente_de_outro_tenant_404(cenario):
+    async with AsyncSessionLocal() as db:
+        outro_tenant = Tenant(name="Outro Tenant 254", slug=f"outro-254-{uuid.uuid4().hex[:8]}")
+        db.add(outro_tenant)
+        await db.flush()
+        cliente_outro = Client(
+            tenant_id=outro_tenant.id, tipo="PF", nome_completo="Cliente de Outro Tenant",
+            endereco_json={"cep": "01310-100"},
+        )
+        db.add(cliente_outro)
+        await db.commit()
+        client_id = cliente_outro.id
+        outro_tenant_id = outro_tenant.id
+
+    from app.core.exceptions import NotFoundError
+    async with AsyncSessionLocal() as db:
+        with pytest.raises(NotFoundError):
+            await clients_mod.ajustar_localizacao_manual(
+                str(client_id),
+                clients_mod.LocalizacaoManualBody(latitude=-9.9750, longitude=-67.8100),
+                current_user=_CurrentUser(cenario["tenant"], cenario["user"]), db=db,
+            )
+
+    async with AsyncSessionLocal() as db:
+        await db.execute(Client.__table__.delete().where(Client.tenant_id == outro_tenant_id))
+        await db.execute(Tenant.__table__.delete().where(Tenant.id == outro_tenant_id))
+        await db.commit()

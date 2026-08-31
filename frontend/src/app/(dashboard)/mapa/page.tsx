@@ -1,8 +1,10 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
-import { MapPin, RefreshCw, Loader2 } from "lucide-react";
+import { MapPin, RefreshCw, Loader2, Search, MousePointer2 } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
+import { useToast } from "@/components/ui/Toast";
+import { useUserStore } from "@/store";
 import type { PontoEscritorio, PontoCliente } from "@/components/mapa/EscritorioClientesMap";
 
 // Leaflet acessa window/document no import — precisa ser client-only
@@ -18,15 +20,35 @@ type EnderecoResponse = {
   geocode_source?: string | null;
 };
 
+// Fase 254 — versão "crua" do cliente, com cidade/UF preservados pra
+// alimentar os filtros (o tipo que o mapa consome, PontoCliente, não
+// carrega esses 2 campos separados — só o enderecoTexto já formatado).
+type ClienteRaw = PontoCliente & { cidade: string; uf: string };
+
 function enderecoTexto(e: EnderecoResponse): string {
   return [e.logradouro, e.bairro, [e.cidade, e.uf].filter(Boolean).join("/")].filter(Boolean).join(" — ") || "Endereço não informado";
 }
 
+// Fase 254 — mesmo gate de "ação de gestão" já usado no endpoint de
+// auditoria (`GET /clients/geolocalizacao/auditoria`, ADMIN/SOCIO/GESTOR)
+// e no novo `PUT /clients/{id}/localizacao-manual` — inclui SUPERADMIN
+// explicitamente (lição da Fase 236: nunca confiar só em "ADMIN" sem
+// incluir o superconjunto).
+const PODE_AJUSTAR = ["ADMIN", "SOCIO", "GESTOR", "SUPERADMIN"];
+
 export default function MapaPage() {
+  const toast = useToast();
+  const userRole = useUserStore((s) => s.user?.role);
+  const podeAjustar = PODE_AJUSTAR.includes(userRole ?? "");
+
   const [escritorio, setEscritorio] = useState<PontoEscritorio | null>(null);
-  const [clientes, setClientes] = useState<PontoCliente[]>([]);
+  const [clientesRaw, setClientesRaw] = useState<ClienteRaw[]>([]);
   const [totalClientesComEndereco, setTotalClientesComEndereco] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [busca, setBusca] = useState("");
+  const [filtroCidade, setFiltroCidade] = useState("");
+  const [filtroUf, setFiltroUf] = useState("");
+  const [ajusteAtivo, setAjusteAtivo] = useState(false);
 
   useEffect(() => {
     carregar();
@@ -41,7 +63,7 @@ export default function MapaPage() {
     try {
       const [resEndereco, resClientes] = await Promise.all([
         fetch("/api/v1/tenant/endereco", { headers: headers() }),
-        fetch("/api/v1/clients", { headers: headers() }),
+        fetch("/api/v1/clients?limit=200", { headers: headers() }),
       ]);
 
       if (resEndereco.ok) {
@@ -59,13 +81,15 @@ export default function MapaPage() {
           (c: any) => c.endereco_json?.latitude != null && c.endereco_json?.longitude != null
         );
         setTotalClientesComEndereco(comEndereco.length);
-        setClientes(
+        setClientesRaw(
           comEndereco.map((c: any) => ({
             id: c.id,
             nome: c.nome_completo,
             latitude: c.endereco_json.latitude,
             longitude: c.endereco_json.longitude,
             enderecoTexto: enderecoTexto(c.endereco_json),
+            cidade: c.endereco_json.cidade || "",
+            uf: c.endereco_json.uf || "",
             // Fase 253 — sem `geocode_source` = coordenada herdada de
             // antes do fix de causa-raiz (endereço mudou sem re-geocodificar).
             statusGeo: c.endereco_json.geocode_source ? "validada" : "requer_revisao",
@@ -77,7 +101,49 @@ export default function MapaPage() {
     }
   }
 
-  const semMarcadores = !loading && !escritorio && clientes.length === 0;
+  // Fase 254 — ajuste manual: nunca sobrescreve silenciosamente, só
+  // depois do usuário confirmar no popup do marcador (EscritorioClientesMap).
+  async function ajustarLocalizacao(clienteId: string, lat: number, lng: number) {
+    try {
+      const res = await fetch(`/api/v1/clients/${clienteId}/localizacao-manual`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", ...headers() },
+        body: JSON.stringify({ latitude: lat, longitude: lng }),
+      });
+      if (res.ok) {
+        toast.success("Localização ajustada manualmente.");
+        await carregar();
+      } else {
+        const d = await res.json().catch(() => ({}));
+        toast.error(d.detail || "Erro ao ajustar localização.");
+      }
+    } catch {
+      toast.error("Erro de conexão.");
+    }
+  }
+
+  const cidadesDisponiveis = useMemo(
+    () => Array.from(new Set(clientesRaw.map((c) => c.cidade).filter(Boolean))).sort(),
+    [clientesRaw]
+  );
+  const ufsDisponiveis = useMemo(
+    () => Array.from(new Set(clientesRaw.map((c) => c.uf).filter(Boolean))).sort(),
+    [clientesRaw]
+  );
+
+  const clientesFiltrados: PontoCliente[] = useMemo(() => {
+    const buscaNorm = busca.trim().toLowerCase();
+    return clientesRaw.filter((c) => {
+      if (buscaNorm && !c.nome.toLowerCase().includes(buscaNorm)) return false;
+      if (filtroCidade && c.cidade !== filtroCidade) return false;
+      if (filtroUf && c.uf !== filtroUf) return false;
+      return true;
+    });
+  }, [clientesRaw, busca, filtroCidade, filtroUf]);
+
+  const filtroAtivo = !!(busca || filtroCidade || filtroUf);
+  const semMarcadores = !loading && !escritorio && clientesRaw.length === 0;
+  const semResultadoFiltro = !loading && !semMarcadores && filtroAtivo && !escritorio && clientesFiltrados.length === 0;
 
   return (
     <div className="max-w-7xl mx-auto space-y-5">
@@ -87,18 +153,81 @@ export default function MapaPage() {
         <div>
           <h1 className="font-display text-2xl font-semibold text-afj-black">Mapa</h1>
           <p className="text-afj-black/50 text-sm">
-            Localização do escritório{clientes.length > 0 || totalClientesComEndereco > 0 ? ` e ${totalClientesComEndereco} cliente(s) geocodificado(s)` : ""}
+            Localização do escritório{clientesRaw.length > 0 || totalClientesComEndereco > 0 ? ` e ${totalClientesComEndereco} cliente(s) geocodificado(s)` : ""}
           </p>
         </div>
-        <button
-          onClick={carregar}
-          disabled={loading}
-          className="btn-afj-outline rounded-sm flex items-center gap-2 disabled:opacity-50"
-        >
-          {loading ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
-          Atualizar
-        </button>
+        <div className="flex items-center gap-2">
+          {podeAjustar && !semMarcadores && (
+            <button
+              onClick={() => setAjusteAtivo((v) => !v)}
+              className={`rounded-sm flex items-center gap-2 px-3 py-2 text-sm border ${
+                ajusteAtivo
+                  ? "bg-afj-gold text-white border-afj-gold"
+                  : "btn-afj-outline"
+              }`}
+              title="Arrastar marcadores de cliente para corrigir manualmente a localização"
+            >
+              <MousePointer2 size={14} />
+              {ajusteAtivo ? "Ajuste manual ativo" : "Ajustar manualmente"}
+            </button>
+          )}
+          <button
+            onClick={carregar}
+            disabled={loading}
+            className="btn-afj-outline rounded-sm flex items-center gap-2 disabled:opacity-50"
+          >
+            {loading ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+            Atualizar
+          </button>
+        </div>
       </div>
+
+      {ajusteAtivo && (
+        <div className="afj-card p-3 text-xs text-afj-black/60 bg-afj-cream/40 border-l-2 border-afj-gold">
+          Modo de ajuste manual ativo — arraste um marcador de cliente pra corrigir a localização e confirme
+          no popup que abre. A alteração fica marcada como ajuste manual e não é sobrescrita automaticamente depois.
+        </div>
+      )}
+
+      {!semMarcadores && !loading && clientesRaw.length > 0 && (
+        <div className="afj-card p-3 flex flex-wrap items-center gap-2">
+          <div className="relative flex-1 min-w-[180px]">
+            <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-afj-black/30" />
+            <input
+              type="text" value={busca} onChange={(e) => setBusca(e.target.value)}
+              placeholder="Buscar cliente por nome..."
+              className="w-full pl-8 pr-3 py-2 text-sm border border-afj-cream-dark rounded-sm focus:outline-none focus:border-afj-gold"
+            />
+          </div>
+          <select
+            value={filtroCidade} onChange={(e) => setFiltroCidade(e.target.value)}
+            className="px-3 py-2 text-sm border border-afj-cream-dark rounded-sm"
+          >
+            <option value="">Todas as cidades</option>
+            {cidadesDisponiveis.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+          <select
+            value={filtroUf} onChange={(e) => setFiltroUf(e.target.value)}
+            className="px-3 py-2 text-sm border border-afj-cream-dark rounded-sm"
+          >
+            <option value="">Todas as UFs</option>
+            {ufsDisponiveis.map((u) => <option key={u} value={u}>{u}</option>)}
+          </select>
+          {filtroAtivo && (
+            <button
+              onClick={() => { setBusca(""); setFiltroCidade(""); setFiltroUf(""); }}
+              className="text-xs text-afj-black/50 hover:text-afj-black underline"
+            >
+              Limpar filtros
+            </button>
+          )}
+          {filtroAtivo && (
+            <span className="text-xs text-afj-black/40 ml-auto">
+              {clientesFiltrados.length} de {clientesRaw.length} cliente(s)
+            </span>
+          )}
+        </div>
+      )}
 
       {loading ? (
         <MapSkeleton />
@@ -113,9 +242,42 @@ export default function MapaPage() {
             com CEP — a localização é capturada automaticamente ao salvar.
           </p>
         </div>
+      ) : semResultadoFiltro ? (
+        <div className="afj-card p-12 text-center">
+          <p className="text-afj-black/40 text-sm">Nenhum cliente encontrado com esse filtro.</p>
+        </div>
       ) : (
-        <div className="afj-card p-2 overflow-hidden">
-          <EscritorioClientesMap escritorio={escritorio} clientes={clientes} />
+        <div className="afj-card p-2 overflow-hidden relative">
+          <EscritorioClientesMap
+            escritorio={escritorio}
+            clientes={clientesFiltrados}
+            ajusteAtivo={ajusteAtivo}
+            onAjustarLocalizacao={ajustarLocalizacao}
+          />
+          <Legenda temEscritorio={!!escritorio} temRequerRevisao={clientesFiltrados.some((c) => c.statusGeo === "requer_revisao")} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Legenda({ temEscritorio, temRequerRevisao }: { temEscritorio: boolean; temRequerRevisao: boolean }) {
+  return (
+    <div className="absolute bottom-4 left-4 z-[1000] bg-white/95 rounded-sm shadow-md px-3 py-2 text-[11px] text-afj-black/70 space-y-1 pointer-events-none">
+      {temEscritorio && (
+        <div className="flex items-center gap-1.5">
+          <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ backgroundColor: "rgb(var(--brand-primary))" }} />
+          Escritório
+        </div>
+      )}
+      <div className="flex items-center gap-1.5">
+        <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ backgroundColor: "rgb(var(--brand-secondary))" }} />
+        Cliente
+      </div>
+      {temRequerRevisao && (
+        <div className="flex items-center gap-1.5">
+          <span className="inline-block w-2.5 h-2.5 rounded-full bg-amber-600" />
+          Requer revisão
         </div>
       )}
     </div>
