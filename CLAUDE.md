@@ -4669,6 +4669,143 @@ Histórico:
     `tsc --noEmit` limpo; `eslint` no frontend tocado — mesmo warning
     pré-existente de `exhaustive-deps` em `mapa/page.tsx`, confirmado via
     `git stash` como não-novo desta fase.
+- **Nova rodada de teste geral (audit-only)** — usuário pediu explicitamente
+  "nova rodada de teste geral" depois do merge do PR #244 (Fase 255), sem
+  pedir correção na mesma rodada. **9 fases inteiras (247-255) nunca tinham
+  passado por nenhuma rodada de teste geral** — cada uma só tinha sido
+  verificada isoladamente no momento da própria implementação. Ambiente
+  real (Postgres+Redis+uvicorn+frontend `npm run dev` com `API_URL` local)
+  subido de verdade.
+  - **Reconfirmação independente das Fases 247-255, via HTTP real/scripts
+    diretos**: 247 (LGPD alcança `Intimacao.texto`/`resumo_ia` e
+    `Contract.assinaturas` — reproduzido de novo, criar→embutir PII→
+    esquecer→conferir); 248 (as 5 sondas de `testar_conexao` — stripe/
+    mercadopago/clicksign/google_drive_doutrina/google_workspace —
+    confirmadas intactas no dict `_GET_TEST_PROBE`; HMAC de webhook
+    reconfirmado com assinatura REAL computada — Stripe e Mercado Pago,
+    válida aceita/adulterada rejeitada/replay expirado rejeitado, não só
+    "header ausente"); 249 (lógica de watchdog intacta em `start.sh`, sem
+    regressão das Fases 250-255; `alert_celery_crashloop.py` rodado de
+    verdade, `Notification` criada no Postgres); 250 (headers de navegador
+    do Comunica/DJEN confirmados intactos); 251 (circuit breaker
+    sincroniza com Redis — reproduzido corretamente desta vez: abre na 3ª
+    falha, bloqueia a 4ª tentativa sem nova chamada de rede, estado
+    `open`/`failures:3` persistido no Redis); 253 (causa-raiz reconfirmada
+    — cenário SP→Rio Branco/AC de novo, coordenada não fica presa ao CEP
+    antigo); 254/255 (mapa e RAG/WhatsApp confirmados via Playwright real
+    e HTTP real, ver abaixo).
+  - **Lacuna fechada — auditoria exaustiva e definitiva de `client_id`**:
+    pergunta repetida desde a Fase 219/228/246 sem resposta definitiva
+    ("vale um mecanismo estrutural pra parar de achar tabela esquecida
+    pelo LGPD erasure pela Nª vez?") finalmente respondida com uma
+    auditoria completa (não mais pontual) — mapeado o grafo INTEIRO de FK
+    (direto ou transitivo, até 2 saltos) de todo model em
+    `backend/app/models/` até `clients.id`, cruzado contra os 15 models
+    que `erase_client_data`/`export_client_data` já cobrem hoje.
+    **8 gaps reais encontrados, nunca reportados antes** (esta é a 8ª
+    ocorrência da mesma classe de bug — 176.3→210→220→228→238→246→247→
+    esta rodada), por ordem de severidade:
+    1. **`Client.endereco_json`** — o mais grave: campo na PRÓPRIA linha
+       que `erase_client_data` já abre e anonimiza parcialmente
+       (nome/cpf/cnpj/email/telefone/whatsapp/observações), só esqueceu
+       o endereço/coordenadas. **Reproduzido ao vivo**: nome vira
+       `[ANONIMIZADO-...]`, mas `logradouro`/`latitude`/`longitude`
+       sobrevivem intactos na mesma linha.
+    2. **`DocumentVersion`** (2 saltos via `document_id → Document`) —
+       histórico de versões anteriores de petição/contrato
+       (`conteudo_texto`/`conteudo_html`), servido ativamente por `GET`
+       de histórico de versão — mesma classe de bug já fechada pra
+       `Document.conteudo_texto` na Fase 247, um salto além.
+       **Reproduzido ao vivo**: texto original sobrevive intacto.
+    3. **`AgentStep`** (2 saltos via `run_id → AgentRun`) — espelha os
+       mesmos campos que `AgentRun.input_data/output_data` já são
+       escrubados desde a Fase 228, mas as linhas filhas não são
+       tocadas. **Reproduzido ao vivo**: `output_json` sobrevive intacto.
+    4. **`ProcessMovement`** (2 saltos via `process_id → LegalProcess`)
+       — `descricao`/`raw_html`/`ai_summary`, texto de movimentação
+       processual real, populado ativamente pelo pipeline de captura.
+    5. **`Approval`** (2 saltos via `run_id → AgentRun`) — conteúdo
+       livre de aprovação HITL (`titulo`/`descricao`/`ai_suggestion`/
+       `rejection_reason`).
+    6. **`AgentMemory`** — alcançável só por match de `context_id` em
+       CÓDIGO (não FK declarada), confirmado ao vivo em
+       `strategy_agent.py` guardando resumo de estratégia gerada por
+       IA. **Investigação dedicada desta rodada**: essa tabela **não
+       tem nenhuma coluna `tenant_id`** — mas grep confirma que
+       `AgentMemory` é hoje **só escrita** (`agent.py::remember()`),
+       nunca lida de volta em lugar nenhum do código (`select
+       (AgentMemory)` não existe em todo o repo) — sem caminho de leitura
+       ativo hoje, não há vazamento cross-tenant explorável no momento.
+       Continua sendo um gap real de LGPD (PII acumulada, nunca
+       escrubada) e um risco estrutural latente: se uma feature futura
+       de "recall de memória" for construída sem lembrar de adicionar
+       `tenant_id` (que nem existe como coluna hoje), isso vira um
+       vazamento cross-tenant de verdade.
+    7. **`ProcessDeadline`** (2 saltos) — `descricao` obrigatório, pode
+       referenciar parte/caso.
+    8. **`Petition`** (2 saltos) — `ai_prompt`/`review_notes`,
+       confirmado **sempre NULL hoje** (nenhum call site escreve nesses
+       campos em todo o repo) — risco latente, não ativo.
+    Reconfirmado como corretamente fora de escopo (não são achados):
+    `LGPDConsentRecord` (código morto, nenhum endpoint cria linha),
+    `AgentAreaPlaybook` e os models de Ética/Integridade (Fase 189, sem
+    `client_id`) — `ClientPortalAccess` reconfirmado campo a campo como
+    PII-free.
+  - **Auditoria paralela adversarial (`Agent` tool, 2 agentes)**:
+    - **Frente A — isolamento cross-tenant, 5 superfícies novas desde a
+      Fase 246** — **todas as 5 vieram limpas**, cada uma com reprodução
+      real (não só leitura de código): `POST /clients/geolocalizacao/
+      recalcular-lote` (ids de outro tenant excluídos silenciosamente,
+      dado intocado no Postgres); `POST /rag/search` com BYOK (40
+      chamadas verdadeiramente concorrentes, 20+20 alternadas entre 2
+      tenants, 0 vazamento — confirma que o contextvar por-Task do
+      asyncio isola corretamente sob concorrência real); webhook de
+      pagamento (payload forjado referenciando fatura de outro tenant →
+      credencial certa usada, verificação cross-account rejeitada,
+      fatura intocada); as 5 sondas de `testar_conexao` (credencial
+      certa por tenant, nunca cruzada); `disconnect()` (escopado
+      corretamente a `(tenant_id, provider)`).
+    - **Frente B — walkthrough real via Playwright** das 5 telas
+      tocadas 247-255 numa sessão contínua (nunca feito) — todas
+      carregam limpas, zero diálogo nativo do navegador disparado em
+      toda a sessão (`page.on('dialog')` armado desde o início,
+      invariante da Fase 241 confirmado de ponta a ponta), painel de
+      auditoria do mapa + modal de confirmação customizado funcionando,
+      badges de prioridade de IA em Publicações renderizando, mensagem
+      de degradação graciosa do RAG (BYOK) aparecendo como banner
+      inline, não crash.
+  - **Achado novo, real, confirmado por leitura direta de código +
+    estado ao vivo do Redis (não hipótese)**: `RateLimitMiddleware`
+    (`backend/app/core/middleware.py:148-166`) pode travar um IP/usuário
+    **permanentemente**. A lógica só chama `redis.expire(redis_key,
+    window)` quando `count == 1` — se essa chamada específica falhar
+    (ex.: blip de conexão do Redis entre o `incr()` e o `expire()`), a
+    exceção é engolida pelo `except Exception: pass` do bloco inteiro, a
+    chave fica sem TTL pra sempre, e todo request seguinte só incrementa
+    o contador — sem nenhum mecanismo de auto-recuperação, exigindo
+    intervenção manual (`DEL` da chave no Redis) pra desbloquear.
+    Confirmado ao vivo durante a auditoria: uma chave
+    `ratelimit:default:127.0.0.1` já estava presa nesse estado (`TTL
+    -1`, contador em 493 contra o limite de 200/min documentado),
+    degradando badges de notificação/aprovação e widgets de tema/
+    faturamento em toda a sessão até a chave ser apagada manualmente
+    pra permitir o resto da auditoria prosseguir. Não é um achado ligado
+    a nenhuma fase específica 247-255 — é código de infraestrutura
+    pré-existente, achado incidental desta rodada.
+  - Nenhuma correção de código foi feita nesta fase (metodologia padrão
+    audit-only) — decisão do usuário sobre quais achados viram fase
+    nova. **Próxima rodada deve**: se os 8 gaps de LGPD forem
+    corrigidos, reconfirmar com o mesmo padrão criar→embutir PII→
+    esquecer→conferir usado aqui; se o rate limiter for corrigido,
+    reconfirmar que uma chave sem TTL nunca mais acontece (ex.:
+    `SET ... EX` atômico em vez de `INCR`+`EXPIRE` separados, ou um
+    watchdog que reseta chaves com `TTL == -1`); considerar se vale a
+    pena, de uma vez por todas, um mecanismo estrutural (lint/teste que
+    force toda tabela nova com FK até `clients.id` — direta ou
+    transitiva — a aparecer numa lista central que `lgpd.py` precisa
+    cobrir) em vez de continuar achando essa classe de bug pela 9ª vez
+    no futuro — pergunta repetida desde a Fase 219, agora com uma
+    resposta exaustiva mas ainda sem mecanismo automático.
 
 
 ## Riscos conhecidos / débito técnico
