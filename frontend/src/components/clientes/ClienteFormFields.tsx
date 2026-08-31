@@ -1,5 +1,5 @@
 "use client";
-import { Check } from "lucide-react";
+import { Check, AlertTriangle, RefreshCw } from "lucide-react";
 import { maskCpf, maskCnpj, maskTelefone, maskCep } from "@/lib/masks";
 
 export interface Endereco {
@@ -10,6 +10,26 @@ export interface Endereco {
   uf?: string;
   latitude?: number | null;
   longitude?: number | null;
+  /** Fase 253 — presença de `geocode_source` distingue coordenada que já
+   * passou pela validação de causa-raiz (CEP comparado contra o anterior
+   * antes de decidir se re-geocodifica) de coordenada herdada de antes
+   * desse fix, que não dá pra confiar sem revisão. */
+  geocode_source?: string | null;
+  geocoded_at?: string | null;
+}
+
+/** Fase 253 — status de geolocalização computado no frontend a partir do
+ * que a API já devolve, sem endpoint dedicado: mesmo critério de
+ * `_status_geolocalizacao` no backend (clients.py), mais um 5º estado
+ * ("cep_alterado") que só faz sentido no meio de uma edição ainda não
+ * salva. */
+export type StatusLocalizacao = "nao_geocodificado" | "requer_revisao" | "validada" | "cep_alterado";
+
+export function statusLocalizacaoDe(endereco: Endereco, cepMudouDesdeAbertura: boolean): StatusLocalizacao {
+  if (cepMudouDesdeAbertura) return "cep_alterado";
+  if (endereco.latitude == null || endereco.longitude == null) return "nao_geocodificado";
+  if (!endereco.geocode_source) return "requer_revisao";
+  return "validada";
 }
 
 export interface ClienteFormValues {
@@ -36,11 +56,14 @@ interface ClienteFormFieldsProps {
   docSugestao: string | null;
   onDocumentoBlur: (tipo: "cpf" | "cnpj", valor: string) => void;
   onCepBlur: (cep: string) => void;
-  /** Fase 233 — mesma confirmação visual já usada no endereço do
-   * escritório (EscritorioZone.tsx): fica true depois que o backend
-   * geocodifica o CEP com sucesso (populado a partir da resposta do
-   * POST/PUT /clients, não do preview de autofill de CEP). */
-  temCoordenadas: boolean;
+  /** Fase 233/253 — status computado (ver `statusLocalizacaoDe` acima). */
+  statusLocalizacao: StatusLocalizacao;
+  /** Fase 253 — só em modo edição (precisa de um cliente já existente).
+   * Força nova geocodificação mesmo sem o CEP ter mudado — útil pra
+   * registros "requer revisão" (herdados de antes do fix de causa-raiz)
+   * ou que ficaram sem coordenada por falha temporária da BrasilAPI. */
+  onRecalcularLocalizacao?: () => void;
+  recalculando?: boolean;
 }
 
 const inputCls = "w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-afj-gold";
@@ -52,7 +75,8 @@ const inputCls = "w-full border border-afj-cream-dark rounded-sm px-3 py-2 text-
  * o status ganha a opção INATIVO só na edição (um cliente não nasce
  * inativo). */
 export function ClienteFormFields({
-  mode, values, onChange, endereco, onEnderecoChange, docSugestao, onDocumentoBlur, onCepBlur, temCoordenadas,
+  mode, values, onChange, endereco, onEnderecoChange, docSugestao, onDocumentoBlur, onCepBlur,
+  statusLocalizacao, onRecalcularLocalizacao, recalculando,
 }: ClienteFormFieldsProps) {
   return (
     <>
@@ -155,11 +179,32 @@ export function ClienteFormFields({
             placeholder="Cidade" className={inputCls}
           />
         </div>
-        {temCoordenadas && (
-          <p className="text-[11px] text-green-700 flex items-center gap-1.5 mt-2">
-            <Check size={12} /> Localização geográfica capturada.
-          </p>
-        )}
+        <div className="flex items-center justify-between gap-2 mt-2">
+          {statusLocalizacao === "validada" && (
+            <p className="text-[11px] text-green-700 flex items-center gap-1.5">
+              <Check size={12} /> Localização geográfica capturada.
+            </p>
+          )}
+          {statusLocalizacao === "requer_revisao" && (
+            <p className="text-[11px] text-amber-700 flex items-center gap-1.5">
+              <AlertTriangle size={12} /> Localização requer revisão (capturada antes de uma verificação mais recente).
+            </p>
+          )}
+          {statusLocalizacao === "cep_alterado" && (
+            <p className="text-[11px] text-afj-black/60 flex items-center gap-1.5">
+              CEP alterado — a localização será recalculada ao salvar.
+            </p>
+          )}
+          {statusLocalizacao === "nao_geocodificado" && <span />}
+          {mode === "edit" && onRecalcularLocalizacao && endereco.cep && (
+            <button
+              type="button" onClick={onRecalcularLocalizacao} disabled={recalculando}
+              className="text-[11px] text-afj-gold hover:underline flex items-center gap-1 disabled:opacity-50 shrink-0"
+            >
+              <RefreshCw size={11} className={recalculando ? "animate-spin" : ""} /> Recalcular localização
+            </button>
+          )}
+        </div>
       </div>
 
       <div>

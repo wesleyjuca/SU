@@ -6,7 +6,7 @@ import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
 import { ViewToggle } from "@/components/ui/ViewToggle";
 import { useUserStore } from "@/store";
-import { ClienteFormFields, type ClienteFormValues, type Endereco } from "@/components/clientes/ClienteFormFields";
+import { ClienteFormFields, statusLocalizacaoDe, type ClienteFormValues, type Endereco } from "@/components/clientes/ClienteFormFields";
 import { ClientPortalAccessPanel } from "@/components/clientes/ClientPortalAccessPanel";
 import Link from "next/link";
 
@@ -109,11 +109,13 @@ export default function ClientesPage() {
   const [editEndereco, setEditEndereco] = useState<Endereco>(ENDERECO_VAZIO);
   const [form, setForm] = useState<ClienteFormValues>(FORM_VAZIO);
   const [endereco, setEndereco] = useState<Endereco>(ENDERECO_VAZIO);
-  // Fase 233 — confirmação visual de geocodificação, populada a partir da
-  // resposta do POST/PUT /clients (mesmo padrão de EscritorioZone.tsx),
-  // nunca do preview de autofill de CEP (que não tem coordenada nenhuma).
-  const [enderecoTemCoordenadas, setEnderecoTemCoordenadas] = useState(false);
-  const [editEnderecoTemCoordenadas, setEditEnderecoTemCoordenadas] = useState(false);
+  // Fase 253 — CEP do cliente no instante em que o modal de edição foi
+  // aberto, pra `statusLocalizacaoDe` saber distinguir "coordenada
+  // capturada pro endereço atual" de "usuário trocou o CEP nesta edição,
+  // ainda não salvou" (mostra "será recalculada ao salvar" em vez de
+  // reafirmar uma confirmação que já não é mais verdadeira pro CEP novo).
+  const editEnderecoCepOriginalRef = useRef("");
+  const [recalculando, setRecalculando] = useState(false);
   const [docSugestao, setDocSugestao] = useState<string | null>(null);
   const [editDocSugestao, setEditDocSugestao] = useState<string | null>(null);
   const [view, setView] = useState<"table" | "grid">(() => {
@@ -195,8 +197,35 @@ export default function ClientesPage() {
       status: c.status, lgpd_consent: c.lgpd_consent, tipo: c.tipo,
     });
     setEditEndereco({ ...ENDERECO_VAZIO, ...(c.endereco_json ?? {}) });
-    setEditEnderecoTemCoordenadas(c.endereco_json?.latitude != null && c.endereco_json?.longitude != null);
+    editEnderecoCepOriginalRef.current = c.endereco_json?.cep ?? "";
     setEditDocSugestao(null);
+  }
+
+  async function recalcularLocalizacao() {
+    if (!editingId) return;
+    setRecalculando(true);
+    try {
+      const token = localStorage.getItem("afj_access_token");
+      const res = await fetch(`/api/v1/clients/${editingId}/recalcular-localizacao`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const d = await res.json().catch(() => ({}));
+      if (res.ok) {
+        const novoEndereco = { ...ENDERECO_VAZIO, ...(d.endereco_json ?? {}) };
+        setEditEndereco(novoEndereco);
+        editEnderecoCepOriginalRef.current = novoEndereco.cep ?? "";
+        const geocodificado = novoEndereco.latitude != null && novoEndereco.longitude != null;
+        if (geocodificado) toast.success("Localização recalculada.");
+        else toast.warning("Não foi possível geocodificar este CEP agora — tente novamente mais tarde.");
+      } else {
+        toast.error(d.detail || "Erro ao recalcular localização.");
+      }
+    } catch {
+      toast.error("Erro de conexão.");
+    } finally {
+      setRecalculando(false);
+    }
   }
 
   async function salvarEdicao() {
@@ -212,7 +241,6 @@ export default function ClientesPage() {
       if (res.ok) {
         const saved = await res.json();
         const geocodificado = saved.endereco_json?.latitude != null && saved.endereco_json?.longitude != null;
-        setEditEnderecoTemCoordenadas(geocodificado);
         toast.success(geocodificado ? "Cliente salvo — localização geográfica capturada." : "Cliente salvo.");
         setEditingId(null);
         fetchClientes(0, false);
@@ -318,7 +346,6 @@ export default function ClientesPage() {
         setShowModal(false);
         setForm(FORM_VAZIO);
         setEndereco(ENDERECO_VAZIO);
-        setEnderecoTemCoordenadas(false);
         fetchClientes(0, false);
       } else {
         const err = await res.json().catch(() => null);
@@ -600,7 +627,12 @@ export default function ClientesPage() {
                 docSugestao={editDocSugestao}
                 onDocumentoBlur={(tipo, valor) => validarDocumento(tipo, valor, setEditDocSugestao)}
                 onCepBlur={(cep) => autofillCep(cep, editEndereco, setEditEndereco)}
-                temCoordenadas={editEnderecoTemCoordenadas}
+                statusLocalizacao={statusLocalizacaoDe(
+                  editEndereco,
+                  (editEndereco.cep ?? "").replace(/\D/g, "") !== editEnderecoCepOriginalRef.current.replace(/\D/g, ""),
+                )}
+                onRecalcularLocalizacao={recalcularLocalizacao}
+                recalculando={recalculando}
               />
               <div className="flex gap-3 mt-5">
                 <button type="button" onClick={() => setEditingId(null)} className="flex-1 btn-afj-outline rounded-sm">Cancelar</button>
@@ -640,7 +672,7 @@ export default function ClientesPage() {
                 docSugestao={docSugestao}
                 onDocumentoBlur={(tipo, valor) => validarDocumento(tipo, valor, setDocSugestao)}
                 onCepBlur={(cep) => autofillCep(cep, endereco, setEndereco)}
-                temCoordenadas={enderecoTemCoordenadas}
+                statusLocalizacao={statusLocalizacaoDe(endereco, false)}
               />
               <div className="flex gap-3 pt-2">
                 <button type="button" onClick={() => setShowModal(false)} className="flex-1 btn-afj-outline rounded-sm">Cancelar</button>
