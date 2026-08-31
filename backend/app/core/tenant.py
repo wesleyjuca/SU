@@ -77,6 +77,14 @@ async def get_tenant_config(db: AsyncSession, tenant_slug: str | None = None) ->
         "modules_enabled": config.modules_enabled or {},
         "document_templates": config.document_templates or {},
         "custom_css": config.custom_css,
+        # Fase 256 — achado real: `get_theme()`/`get_config()` (tenant.py)
+        # já esperavam `config.get("metadata")` pra extrair office_name/
+        # slogan, mas esse dict nunca tinha essa chave — os 2 campos
+        # sempre voltavam None em qualquer GET, mesmo já salvos via PUT
+        # /tenant/branding (que grava certo em TenantConfig.extra_data,
+        # só a leitura seguinte nunca devolvia). Corrigido incluindo o
+        # dict aqui, no mesmo formato que update_branding() já usa.
+        "metadata": config.extra_data or {},
     }
 
     try:
@@ -129,6 +137,7 @@ def _default_config() -> dict:
         },
         "document_templates": {},
         "custom_css": None,
+        "metadata": {},
     }
 
 

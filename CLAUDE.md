@@ -4806,6 +4806,240 @@ Histórico:
     cobrir) em vez de continuar achando essa classe de bug pela 9ª vez
     no futuro — pergunta repetida desde a Fase 219, agora com uma
     resposta exaustiva mas ainda sem mecanismo automático.
+- **Fase 256** — usuário pediu uma reformulação completa e estruturada da
+  área de Configurações (`/configuracoes`): investigar antes de alterar,
+  eliminar duplicidade, validar que toda opção tem efeito real (não só
+  existe no formulário/banco), pelo menos 3 alterações concretas
+  (reorganização estrutural, unificação de configurações semelhantes,
+  padronização/validação), relatório final detalhado. Confirmado via 2
+  perguntas: "Minha IA" (BYOK) fica separada (não vira aba), e os bugs
+  reais confirmados nesta auditoria devem ser corrigidos, não só
+  documentados.
+
+  **Diagnóstico** (3 Explore agents + leitura direta) — a área já tinha
+  passado por uma consolidação (Fase 224): 1 página `/configuracoes`,
+  2 zonas por pill (Pessoal — todo mundo; Escritório & Jurídico —
+  ADMIN/SUPERADMIN, 9 abas). O problema não era arquitetura de rota
+  (já resolvido em 224), era: 9 abas onde 5 eram facetas do mesmo
+  conceito (identidade visual) separadas por acidente histórico;
+  Módulos incompleto (só 6 dos 8 módulos reais, os 2 do Google só
+  editáveis em Integrações); 5 bugs reais onde a configuração existia
+  na tela mas não tinha efeito (ou o efeito nunca era mostrado de
+  volta); e o padrão de salvar/feedback reimplementado à mão ~10+
+  vezes de forma inconsistente entre os 3 arquivos.
+
+  **Alterações realizadas:**
+
+  1. **Reorganização estrutural** — `EscritorioZone.tsx` caiu de 9
+     abas pra 5 (Escritório, Identidade Visual, Módulos, Dashboard,
+     Jurídico). As 5 abas antigas Aparência/Cores/Tipografia/
+     Templates/Exportar-Importar viraram seções dentro de uma única
+     aba "Identidade Visual" — nenhum controle foi removido, só
+     reagrupado. Deep-links antigos (`?aba=marca/cores/tipografia/
+     templates/exportar`) continuam funcionando via
+     `ABA_LEGADA_PARA_NOVA` (mapeia pra "identidade" no estado interno
+     — mesmo padrão de `admin/cerebro`, não reescreve a URL).
+     Arquivos: `EscritorioZone.tsx`. Impacto: navegação de topo mais
+     rasa, nenhum comportamento perdido.
+  2. **Unificação de configurações semelhantes (Módulos)** — a aba
+     Módulos de Configurações só mostrava 6 dos 8 módulos reais do
+     sistema; os 2 módulos Google (Drive Doutrina, Workspace) só
+     existiam em Integrações, embutidos no fluxo de conectar cada
+     provedor. Investigação confirmou que **não dava pra simplesmente
+     mover** o toggle de Integrações pra Configurações sem quebrar o
+     fluxo "habilite e conecte aqui mesmo" (load-bearing pro botão
+     "Conectar" daquela tela) — então a solução foi **aditiva, não
+     substitutiva**: os 2 toggles do Google passaram a existir TAMBÉM
+     na aba Módulos (mesma chave `modules_enabled`, mesmo endpoint `PUT
+     /tenant/modules`, nenhuma duplicação de estado — só de UI), e
+     Integrações ganhou uma nota cruzada ("Também editável em
+     Configurações → Módulos"). Comportamento preservado: os 2
+     checkboxes de Integrações continuam idênticos a antes. Arquivos:
+     `EscritorioZone.tsx`, `integracoes/page.tsx`.
+  3. **Padronização de salvar/feedback** — o padrão "botão salvar com
+     spinner/checkmark + toast" estava reimplementado à mão de forma
+     inconsistente: `PersonalZone.tsx` nunca usava `useToast()` (só
+     trocava o texto do botão), `EscritorioZone.tsx` misturava 2
+     mecanismos diferentes entre abas do mesmo arquivo. Novo
+     `useSavedFlash()` (hook) + `<SettingsSaveButton>` (componente)
+     encapsulam loading/spinner/checkmark + disparo de toast de forma
+     uniforme — aplicados a TODA ação de salvar nos 3 arquivos (9
+     instâncias independentes de `useSavedFlash()` em
+     `EscritorioZone.tsx`: `infoFlash`, `enderecoFlash`, `lhFlash`,
+     `marcaFlash`, `coresFlash`, `modulesFlash`, `widgetsFlash`,
+     `undoFlash`, `templateFlash` — cada uma isolada, fechando um bug
+     colateral real onde o checkmark de "salvo" podia vazar entre
+     seções/abas diferentes que compartilhavam o mesmo estado). Erros
+     agora sempre mostram o `detail` real da API quando existir, em vez
+     de texto genérico. Arquivos: `useSavedFlash.ts` (novo),
+     `SettingsSaveButton.tsx` (novo), `PersonalZone.tsx`,
+     `EscritorioZone.tsx`, `JuridicoTab.tsx`.
+
+  **5 bugs reais confirmados e corrigidos** (rastreados
+  configuração→persistência→leitura→componente, não assumidos pelo
+  nome):
+  - **D.1 — `GET /tenant/theme`/`GET /tenant/config` sempre
+    devolviam `office_name`/`slogan` como `null`**, mesmo já salvos
+    via `PUT /tenant/branding`. Causa-raiz: `get_tenant_config()`
+    (`backend/app/core/tenant.py`) nunca incluía `TenantConfig.
+    extra_data` (onde os 2 campos moram) no dict cacheado no Redis —
+    o PUT gravava certo, a leitura seguinte nunca devolvia. Corrigido
+    incluindo `"metadata": config.extra_data or {}` no dict.
+    **2º bug encontrado durante a própria verificação empírica desta
+    fase** (não fazia parte do diagnóstico original — só apareceu ao
+    rodar o script de prova real): `get_config()` (`GET
+    /tenant/config`) continuava devolvendo `null` mesmo depois do fix
+    de `core/tenant.py`, porque `TenantConfigResponse(**config)` não
+    sabe extrair `office_name`/`slogan` de dentro da chave
+    `"metadata"` sozinho (Pydantic descarta silenciosamente uma chave
+    não declarada como campo) — só `get_theme()` já fazia essa
+    extração manual (`meta.get("office_name")`). Corrigido replicando
+    a mesma extração em `get_config()`. Lição registrada: o script de
+    verificação real pegou um bug que a leitura de código sozinha não
+    tinha visto — exatamente o motivo de nunca confiar só em "parece
+    correto pela lógica".
+  - **D.2 — seletor de widgets do Dashboard nunca salvava nada**
+    (placebo completo). `EscritorioZone.tsx::saveWidgets()` já
+    mandava `dashboard_widgets` no `PUT /tenant/branding` desde antes,
+    mas o Pydantic `BrandingUpdate` não tinha esse campo — FastAPI
+    descartava silenciosamente, devolvia 200 OK, nada persistia.
+    Corrigido adicionando `dashboard_widgets: list[str] | None = None`
+    a `BrandingUpdate` (o loop genérico `for field, value in updates.
+    items(): setattr(config, field, value)` já cobre a gravação, sem
+    precisar de código novo ali).
+  - **D.3 — aba Perfil nunca recarregava OAB/UF salvos.** `GET
+    /users/me` já devolvia `oab_number`/`oab_uf` corretamente, mas o
+    handler de carregamento de `PersonalZone.tsx` só populava
+    `full_name`/`email`/`telefone` no estado. Corrigido incluindo os 2
+    campos no `setPerfil`.
+  - **D.4 — botão "Configurar MFA" sem `onClick`**, único lugar do
+    sistema (fora de uma frase de marketing na landing pública) que
+    menciona MFA. Removido, substituído por uma nota honesta
+    ("Autenticação em dois fatores ainda não está disponível neste
+    sistema.") — não finge uma funcionalidade que não existe, mas
+    também não some com a seção sem explicação.
+  - **D.5 — módulos "core" (Processos/Petições/Clientes/Financeiro/
+    Agentes/Visual Law) sem nenhum efeito real** — confirmado por
+    grep duplo (backend nunca lê essas chaves pra bloquear nada;
+    frontend só usa `modules_enabled` em 2 arquivos, nunca em
+    `nav.ts`/guard de rota). Não é um bug corrigível com o escopo
+    desta fase (construir enforcement de verdade é feature nova, não
+    ajuste de configuração) — ganhou uma legenda honesta no lugar
+    ("Ainda não afeta a navegação ou o acesso a telas — só registra a
+    preferência.").
+
+  **Antes × Depois** (3 comparações, formato pedido):
+  1. `Configurações > Escritório & Jurídico` — ANTES: 9 abas
+     (Escritório, Aparência, Cores, Tipografia, Templates, Módulos,
+     Dashboard, Exportar/Importar, Jurídico). DEPOIS: 5 abas
+     (Escritório, Identidade Visual, Módulos, Dashboard, Jurídico) —
+     as 5 primeiras viraram seções de "Identidade Visual".
+  2. `Configurações > Módulos` — ANTES: 6 módulos, sem os 2 do Google
+     (só em Integrações, invisíveis aqui). DEPOIS: 8 módulos — os 2
+     do Google agora também aparecem aqui, com nota cruzada pra
+     Integrações (onde a credencial é configurada).
+  3. `Configurações > Pessoal > Segurança` — ANTES: botão "Configurar
+     MFA" sem `onClick`, clicar não fazia nada. DEPOIS: nota explícita
+     "Autenticação em dois fatores ainda não está disponível neste
+     sistema." — nenhum controle morto na tela.
+  4. (bônus) `GET /tenant/config` — ANTES: `office_name`/`slogan`
+     sempre `null`, mesmo com o cadastro preenchido e salvo. DEPOIS:
+     reflete o valor real salvo, em ambos os endpoints (`/tenant/
+     theme` e `/tenant/config`).
+
+  **Configurações removidas ou consolidadas:**
+  - Removidas (não existem mais como abas próprias): Aparência,
+    Cores, Tipografia, Templates, Exportar/Importar — consolidadas em
+    "Identidade Visual" (nenhum campo/controle interno foi removido,
+    só a navegação de topo).
+  - Removido: botão "Configurar MFA" (nunca teve efeito) — substituído
+    por texto informativo.
+  - Nenhuma configuração foi apagada do banco/backend — só reagrupada
+    na UI.
+
+  **Configurações que precisam de atenção** (não escondido, registrado
+  explicitamente):
+  - **Módulos "core"** (Processos/Petições/Clientes/Financeiro/
+    Agentes/Visual Law) — a UI deixa claro agora, mas o comportamento
+    de fundo continua sendo "não afeta nada real" — enforcement de
+    verdade é trabalho futuro, não coberto nesta fase.
+  - **Seleção de fonte (Tipografia/"Fonte de Destaque")** — escolher
+    uma fonte sozinha na Identidade Visual só atualiza a
+    pré-visualização em tela, não é persistido em lugar nenhum (só um
+    Tema Pronto, que já combina cor+fonte, persiste). Achado real
+    (confirmado por leitura do fluxo de estado), não corrigido nesta
+    fase por exigir um campo novo no backend — fora do escopo de
+    "reorganizar/consolidar/validar o que já existe" que o pedido
+    definiu; a UI agora avisa isso explicitamente em vez de deixar
+    como armadilha silenciosa.
+  - **`custom_css`** (`TenantConfig`) — coluna sem nenhum endpoint de
+    escrita, código morto. Não removida, não implementada — decisão de
+    produto pra outra hora.
+  - **`PUT /tenant/nav`/`nav_config`** — endpoint completo e
+    funcional, mas zero chamador no frontend. Não removido (pode ser
+    usado por integração direta de API), não ganhou UI nova.
+  - **Assimetria `require_active_tenant`** (`tenant.router` exige,
+    `users.router` não) — pode ser intencional (não travar
+    configurações pessoais por inadimplência do escritório); só
+    documentada, não alterada.
+
+  **Testes:**
+  - `ruff check`/`py_compile` limpos em `tenant.py`/`core/tenant.py`
+    (incluindo o 2º bug encontrado e corrigido durante a verificação).
+  - `tsc --noEmit` limpo no frontend inteiro; `eslint` nos 6 arquivos
+    tocados — só os mesmos 2 warnings pré-existentes de
+    `exhaustive-deps` (`PersonalZone.tsx`/`JuridicoTab.tsx`),
+    confirmados via `git stash` como não-novos desta fase.
+  - Teste automatizado novo
+    (`test_tenant_branding_readback_fase256.py`, 2 casos — office_name/
+    slogan refletidos no GET após salvar; dashboard_widgets persiste)
+    bate na mesma flakiness de pool asyncpg/pytest-asyncio documentada
+    desde a Fase 199 (confirmada não-regressão cross-checando contra
+    `test_crm_metas_fase213.py`, arquivo de controle não tocado, que
+    falha de forma idêntica) — a prova real veio de um script
+    standalone (Postgres real, `AsyncSessionLocal` direto): PUT com
+    office_name/slogan/dashboard_widgets → GET /tenant/theme reflete
+    os 2 campos → GET /tenant/config reflete os 3 (incluindo o 2º bug
+    achado e corrigido no meio do processo). Mesmo padrão HTTP/direto-
+    por-função já usado a sessão inteira.
+  - Playwright real (Chromium do sandbox, `npm run dev` com `API_URL`
+    local, backend local real): 25 verificações cobrindo as 2 zonas
+    completas (Pessoal: Perfil/Notificações/Segurança sem o botão MFA
+    morto; Escritório & Jurídico: as 5 abas novas, incluindo as 5
+    seções dentro de Identidade Visual, os 2 toggles Google em
+    Módulos, Dashboard, Jurídico), os 2 redirects 307 de rotas antigas
+    (`/admin/personalizacao`, `/admin/juridico`), o mapeamento de
+    deep-link legado (`?aba=marca` → aba "Identidade Visual" no estado
+    interno), a nota cruzada em Integrações, e confirmação de **zero**
+    diálogo nativo do navegador disparado durante toda a sessão
+    (`page.on('dialog')` armado desde o login, invariante da Fase 241
+    reconfirmado). 21/25 passaram na 1ª rodada; as 4 "falhas" restantes
+    foram todas confirmadas como falso-negativo do próprio script de
+    teste (busca por texto "Tipografia" quando o heading real é "Fonte
+    de Destaque"; clique ambíguo em "Jurídico" que colidia com outro
+    elemento da página; e a expectativa equivocada de que o deep-link
+    legado reescreveria a URL — o design real só remapeia o estado
+    interno, sem `router.replace`, mesmo padrão já usado em
+    `admin/cerebro`) — todas as 4 reconfirmadas corretas por inspeção
+    direta depois do ajuste do script.
+
+  **Pendências** (não implementadas nesta fase, com o motivo):
+  - Enforcement real dos módulos "core" (feature nova, fora do escopo
+    de "configuração com efeito" — seria construir a feature, não
+    corrigir a configuração).
+  - Persistir a fonte escolhida fora de um Tema Pronto (exigiria campo
+    novo no backend — mudança de contrato de API, fora do que o pedido
+    definiu como "reorganizar/validar/consolidar o que já existe").
+  - `custom_css`/`nav_config` — código morto/órfão, decisão de produto
+    não tomada.
+  - Cobertura de teste completa de `tenant.py` (a maioria dos
+    endpoints — `/endereco`, `/letterhead`, `/feriados`,
+    `/confidencial`, `/oabs`, `/nav` — segue com pouco ou nenhum teste
+    dedicado) — fora do escopo desta fase, só os 2 bugs corrigidos
+    (D.1/D.2) ganharam teste de regressão focado.
+  - `AIBudgetLimit`/`PUT /system/ai-budgets` — confirmado como
+    controle ADMIN-sobre-outro-usuário, genuinamente separado de
+    "configuração pessoal", não fundido.
 
 
 ## Riscos conhecidos / débito técnico

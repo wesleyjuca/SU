@@ -1,22 +1,26 @@
 "use client";
 import { useState, useRef, useEffect } from "react";
 import { useSearchParams } from "next/navigation";
-import { Palette, Type, Layout, Download, Upload, Check, Sun, ImageIcon, Building2, Puzzle, LayoutDashboard, Undo2, History, Gavel } from "lucide-react";
+import { Layout, Download, Upload, Check, ImageIcon, Building2, Puzzle, LayoutDashboard, Undo2, History, Gavel } from "lucide-react";
 import { applyTheme } from "@/lib/theme";
 import { useThemeStore } from "@/store";
 import { useToast } from "@/components/ui/Toast";
+import { useSavedFlash } from "@/hooks/useSavedFlash";
+import { SettingsSaveButton } from "@/components/configuracoes/SettingsSaveButton";
 import { JuridicoTab } from "./JuridicoTab";
 import { maskCep } from "@/lib/masks";
 
+// Fase 256 — reorganização estrutural: as 5 abas antigas "Aparência"/
+// "Cores"/"Tipografia"/"Templates"/"Exportar-Importar" eram todas facetas
+// do mesmo conceito ("identidade visual do escritório"), separadas só por
+// acidente histórico de quando cada uma foi adicionada. Consolidadas numa
+// única aba "Identidade Visual" com seções internas — reduz a barra de
+// abas de 9 pra 5. Nenhum controle foi removido, só reorganizado.
 const TABS = [
   { id: "escritorio", label: "Escritório", icon: Building2 },
-  { id: "marca", label: "Aparência", icon: Layout },
-  { id: "cores", label: "Cores", icon: Palette },
-  { id: "tipografia", label: "Tipografia", icon: Type },
-  { id: "templates", label: "Templates", icon: Sun },
+  { id: "identidade", label: "Identidade Visual", icon: Layout },
   { id: "modulos", label: "Módulos", icon: Puzzle },
   { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { id: "exportar", label: "Exportar / Importar", icon: Download },
   { id: "juridico", label: "Jurídico", icon: Gavel },
 ] as const;
 type TabId = (typeof TABS)[number]["id"];
@@ -28,6 +32,18 @@ const AVAILABLE_WIDGETS = [
   { key: "custo_ia_mes", label: "Custo IA do Mês" },
   { key: "agentes_ativos", label: "Agentes Ativos" },
   { key: "total_clientes", label: "Total de Clientes" },
+];
+
+// Fase 256 (Alteração 2 — unificação) — antes só existiam em
+// integracoes/page.tsx, invisíveis na aba Módulos (que não era o "lugar
+// único" que prometia ser, apesar de escrever na mesma
+// TenantConfig.modules_enabled). Mesma chave, mesmo endpoint — o
+// checkbox em Integrações continua existindo, embutido no fluxo de
+// conectar cada provedor (não dá pra remover de lá sem quebrar esse
+// fluxo), mas agora também aparece aqui.
+const MODULOS_GOOGLE = [
+  { key: "google_drive_doutrina", label: "Google Drive Doutrina", desc: "Sincronização de doutrina jurídica de uma pasta do Drive" },
+  { key: "google_workspace", label: "Google Workspace", desc: "Gmail, Agenda e Drive do escritório integrados ao sistema" },
 ];
 
 const COLOR_PRESETS = [
@@ -162,10 +178,12 @@ function LivePreview({ color, font }: { color: string; font: string }) {
 }
 
 /** Fase 224 — zona "Escritório & Jurídico" de Configurações (ADMIN/SUPERADMIN
- * apenas). Fusão de `admin/personalizacao` (8 abas, inalteradas) +
- * `admin/juridico` (3 cards, agora a aba "Jurídico"). Lógica/handlers
- * idênticos ao que já existia em cada página — só a casca de página
- * (Breadcrumb/título) saiu, movida pro orquestrador de `/configuracoes`. */
+ * apenas). Fase 256 reorganizou as 9 abas originais em 5 (ver TABS acima),
+ * corrigiu 3 bugs reais confirmados (office_name/slogan sempre em branco —
+ * causa-raiz no backend, `core/tenant.py`; seletor de widgets do Dashboard
+ * que nunca salvava nada; e adicionou os 2 módulos Google que só existiam
+ * em Integrações), e padronizou o feedback de salvar (useSavedFlash +
+ * SettingsSaveButton em vez de ~7 pares soltos de saving/saved). */
 export function EscritorioZone() {
   const { theme, setTheme } = useThemeStore();
   const toast = useToast();
@@ -174,18 +192,42 @@ export function EscritorioZone() {
 
   // ?aba= na URL (ex.: redirect de /admin/personalizacao ou /admin/juridico)
   // tem prioridade sobre a última aba salva — senão o link nunca abriria na
-  // aba certa. Mesmo padrão de `admin/cerebro`.
+  // aba certa. Mesmo padrão de `admin/cerebro`. Fase 256: as antigas abas
+  // "marca"/"cores"/"tipografia"/"templates"/"exportar" agora vivem dentro
+  // de "identidade" — um deep link antigo pra qualquer uma delas cai na
+  // aba consolidada certa.
+  const ABA_LEGADA_PARA_NOVA: Record<string, TabId> = {
+    marca: "identidade", cores: "identidade", tipografia: "identidade",
+    templates: "identidade", exportar: "identidade",
+  };
   useEffect(() => {
     const daUrl = searchParams.get("aba");
-    if (daUrl && TABS.some((t) => t.id === daUrl)) {
-      setTab(daUrl as TabId);
-      return;
+    if (daUrl) {
+      if (TABS.some((t) => t.id === daUrl)) { setTab(daUrl as TabId); return; }
+      if (ABA_LEGADA_PARA_NOVA[daUrl]) { setTab(ABA_LEGADA_PARA_NOVA[daUrl]); return; }
     }
     const salva = typeof window !== "undefined" ? localStorage.getItem("afj_configuracoes_aba") : null;
-    if (salva && TABS.some((t) => t.id === salva)) setTab(salva as TabId);
+    if (salva) {
+      if (TABS.some((t) => t.id === salva)) { setTab(salva as TabId); return; }
+      if (ABA_LEGADA_PARA_NOVA[salva]) setTab(ABA_LEGADA_PARA_NOVA[salva]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
-  const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
+
+  // Fase 256 — cada ação de salvar ganha seu próprio estado saving/saved
+  // (antes várias compartilhavam um `saved` só entre abas/seções
+  // diferentes — o checkmark de "Cores" podia "vazar" pro botão de
+  // "Módulos" se o usuário trocasse de aba rápido demais).
+  const infoFlash = useSavedFlash();
+  const enderecoFlash = useSavedFlash();
+  const lhFlash = useSavedFlash();
+  const marcaFlash = useSavedFlash();
+  const coresFlash = useSavedFlash();
+  const modulesFlash = useSavedFlash();
+  const widgetsFlash = useSavedFlash();
+  const undoFlash = useSavedFlash();
+  const templateFlash = useSavedFlash();
+
   const [previewColor, setPreviewColor] = useState(theme.primaryColor);
   const [previewSecondary, setPreviewSecondary] = useState(theme.secondaryColor);
   const [previewFont, setPreviewFont] = useState("Optima, 'Optima Nova', Georgia, serif");
@@ -198,15 +240,11 @@ export function EscritorioZone() {
   const [officeName, setOfficeName] = useState("");
   const [slogan, setSlogan] = useState("");
   // Fase 230 — endereço físico do escritório, geocodificado no backend
-  // (groundwork pro mapa com marcadores planejado pra uma fase futura).
+  // (groundwork pro mapa com marcadores, Fase 231+).
   const [endereco, setEndereco] = useState({ cep: "", logradouro: "", bairro: "", cidade: "", uf: "" });
   const [enderecoTemCoordenadas, setEnderecoTemCoordenadas] = useState(false);
-  const [enderecoSaving, setEnderecoSaving] = useState(false);
-  const [enderecoSaved, setEnderecoSaved] = useState(false);
   // Timbrado dos documentos (PDFs gerados)
   const [lh, setLh] = useState({ office_name: "", address: "", contact: "", oab: "", footer: "", use_logo: true });
-  const [lhSaving, setLhSaving] = useState(false);
-  const [lhSaved, setLhSaved] = useState(false);
   // Fase 232 — "Nome no cabeçalho"/"Endereço" do timbrado seguem
   // automaticamente "Nome do Escritório"/"Endereço do Escritório" por
   // padrão (elimina o cadastro duplicado); só ficam editáveis quando o
@@ -214,7 +252,6 @@ export function EscritorioZone() {
   const [officeNameCustom, setOfficeNameCustom] = useState(false);
   const [addressCustom, setAddressCustom] = useState(false);
   const [modules, setModules] = useState<Record<string, boolean>>({});
-  const [modulesLoading, setModulesLoading] = useState(false);
   const [widgets, setWidgets] = useState<string[]>(AVAILABLE_WIDGETS.map((w) => w.key));
   const [previousTheme, setPreviousTheme] = useState<typeof theme | null>(null);
   const [themeHistory, setThemeHistory] = useState<Array<{ color: string; appName: string; ts: string }>>([]);
@@ -229,6 +266,7 @@ export function EscritorioZone() {
     fetchEndereco();
     const stored = localStorage.getItem("afj_theme_history");
     if (stored) { try { setThemeHistory(JSON.parse(stored)); } catch {} }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function fetchEndereco() {
@@ -270,24 +308,20 @@ export function EscritorioZone() {
   }
 
   async function saveEndereco() {
-    setEnderecoSaving(true);
-    try {
+    await enderecoFlash.run(async () => {
       const token = localStorage.getItem("afj_access_token");
       const res = await fetch("/api/v1/tenant/endereco", {
         method: "PUT",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify(endereco),
       });
-      if (res.ok) {
-        const d = await res.json();
-        setEnderecoTemCoordenadas(d.latitude != null && d.longitude != null);
-        setEnderecoSaved(true);
-        setTimeout(() => setEnderecoSaved(false), 2000);
-      } else {
-        toast.error("Erro ao salvar o endereço.");
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.detail || "Erro ao salvar o endereço.");
       }
-    } catch { toast.error("Erro de conexão."); }
-    finally { setEnderecoSaving(false); }
+      const d = await res.json();
+      setEnderecoTemCoordenadas(d.latitude != null && d.longitude != null);
+    }, "Endereço do escritório salvo.");
   }
 
   async function fetchLetterhead() {
@@ -311,27 +345,23 @@ export function EscritorioZone() {
   }
 
   async function saveLetterhead() {
-    setLhSaving(true);
-    try {
+    await lhFlash.run(async () => {
       const token = localStorage.getItem("afj_access_token");
       const res = await fetch("/api/v1/tenant/letterhead", {
         method: "PUT",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({ ...lh, office_name_custom: officeNameCustom, address_custom: addressCustom }),
       });
-      if (res.ok) {
-        const d = await res.json();
-        // Reflete o valor efetivo devolvido pelo backend (pode ter sido
-        // recalculado automaticamente se algum dos 2 campos voltou a
-        // "automático" nesta mesma chamada).
-        setLh((atual) => ({ ...atual, office_name: d.office_name || "", address: d.address || "" }));
-        setLhSaved(true);
-        setTimeout(() => setLhSaved(false), 2000);
-      } else {
-        toast.error("Erro ao salvar o timbrado.");
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.detail || "Erro ao salvar o timbrado.");
       }
-    } catch { toast.error("Erro de conexão."); }
-    finally { setLhSaving(false); }
+      const d = await res.json();
+      // Reflete o valor efetivo devolvido pelo backend (pode ter sido
+      // recalculado automaticamente se algum dos 2 campos voltou a
+      // "automático" nesta mesma chamada).
+      setLh((atual) => ({ ...atual, office_name: d.office_name || "", address: d.address || "" }));
+    }, "Timbrado salvo.");
   }
 
   async function fetchConfig() {
@@ -341,6 +371,11 @@ export function EscritorioZone() {
       if (res.ok) {
         const data = await res.json();
         setModules(data.modules_enabled || {});
+        // Fase 256 — achado real corrigido no backend (core/tenant.py):
+        // office_name/slogan nunca vinham nesta resposta, mesmo já
+        // salvos, porque o cache do tenant nunca incluía
+        // TenantConfig.extra_data. Continuam lidos aqui exatamente como
+        // antes — a correção foi no backend, não nesta leitura.
         if (data.office_name) setOfficeName(data.office_name);
         if (data.slogan) setSlogan(data.slogan);
         if (data.favicon_url) setFaviconUrl(data.favicon_url);
@@ -351,28 +386,28 @@ export function EscritorioZone() {
     }
   }
 
-  async function saveBranding(updates: Record<string, string>) {
-    setSaving(true);
-    // Salvar estado anterior para undo
+  async function saveBranding(
+    updates: Record<string, string>,
+    flash: ReturnType<typeof useSavedFlash>,
+    successMessage?: string
+  ) {
     setPreviousTheme({ ...theme });
-    try {
+    await flash.run(async () => {
       const token = localStorage.getItem("afj_access_token");
-      await fetch("/api/v1/tenant/branding", {
+      const res = await fetch("/api/v1/tenant/branding", {
         method: "PUT",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify(updates),
       });
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
-      // Salvar no histórico
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.detail || "Erro ao salvar. Tente novamente.");
+      }
       const entry = { color: previewColor, appName, ts: new Date().toISOString() };
       const next = [entry, ...themeHistory].slice(0, 5);
       setThemeHistory(next);
       localStorage.setItem("afj_theme_history", JSON.stringify(next));
-    } catch {
-      toast.error("Erro ao salvar. Tente novamente.");
-    }
-    setSaving(false);
+    }, successMessage);
   }
 
   async function handleUndo() {
@@ -380,7 +415,7 @@ export function EscritorioZone() {
     applyTheme(previousTheme);
     setTheme(previousTheme);
     setPreviewColor(previousTheme.primaryColor);
-    await saveBranding({ primary_color: previousTheme.primaryColor });
+    await saveBranding({ primary_color: previousTheme.primaryColor }, undoFlash, "Alteração desfeita.");
     setPreviousTheme(null);
   }
 
@@ -409,37 +444,36 @@ export function EscritorioZone() {
   }
 
   async function saveModules() {
-    setModulesLoading(true);
-    try {
+    await modulesFlash.run(async () => {
       const token = localStorage.getItem("afj_access_token");
-      await fetch("/api/v1/tenant/modules", {
+      const res = await fetch("/api/v1/tenant/modules", {
         method: "PUT",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify(modules),
       });
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
-    } catch {
-      toast.error("Erro ao salvar módulos. Tente novamente.");
-    }
-    setModulesLoading(false);
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.detail || "Erro ao salvar módulos.");
+      }
+    }, "Módulos salvos.");
   }
 
   async function saveWidgets() {
-    setSaving(true);
-    try {
+    // Fase 256 — achado real corrigido no backend (BrandingUpdate ganhou
+    // o campo dashboard_widgets, que faltava): antes esse botão sempre
+    // devolvia 200 OK sem persistir nada — placebo completo.
+    await widgetsFlash.run(async () => {
       const token = localStorage.getItem("afj_access_token");
-      await fetch("/api/v1/tenant/branding", {
+      const res = await fetch("/api/v1/tenant/branding", {
         method: "PUT",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({ dashboard_widgets: widgets }),
       });
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
-    } catch {
-      toast.error("Erro ao salvar widgets. Tente novamente.");
-    }
-    setSaving(false);
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.detail || "Erro ao salvar widgets.");
+      }
+    }, "Widgets do dashboard salvos.");
   }
 
   async function uploadLogoFile(e: React.ChangeEvent<HTMLInputElement>) {
@@ -469,8 +503,7 @@ export function EscritorioZone() {
           setFaviconUrl(data.logo_url);
           applyTheme({ ...theme, logoUrl: data.logo_url, faviconUrl: data.logo_url });
         }
-        setSaved(true);
-        setTimeout(() => setSaved(false), 2000);
+        toast.success("Logo enviado.");
       }
     } catch {
       toast.error("Erro ao enviar logo. Tente novamente.");
@@ -500,7 +533,11 @@ export function EscritorioZone() {
     // applyTheme converte hex→canais e seta --brand-* (inclui secondary/accent).
     applyTheme({ ...theme, primaryColor: t.primary, secondaryColor: t.secondary, accentColor: t.accent });
     setTheme({ ...theme, primaryColor: t.primary, secondaryColor: t.secondary, accentColor: t.accent });
-    saveBranding({ primary_color: t.primary, secondary_color: t.secondary, accent_color: t.accent });
+    saveBranding(
+      { primary_color: t.primary, secondary_color: t.secondary, accent_color: t.accent },
+      templateFlash,
+      `Tema "${t.name}" aplicado.`
+    );
   }
 
   function exportTheme() {
@@ -539,7 +576,10 @@ export function EscritorioZone() {
           setPreviewFont(data.fontDisplay);
           document.documentElement.style.setProperty("--font-display", data.fontDisplay);
         }
-      } catch {}
+        toast.success("Tema importado — revise e clique em Salvar nas seções abaixo pra persistir.");
+      } catch {
+        toast.error("Arquivo de tema inválido.");
+      }
     };
     reader.readAsText(file);
   }
@@ -548,8 +588,8 @@ export function EscritorioZone() {
     <div className="space-y-6">
       <div className="flex items-center justify-end gap-2">
         {previousTheme && (
-          <button onClick={handleUndo} className="btn-afj-outline text-xs py-1.5 px-3 rounded-sm flex items-center gap-1.5">
-            <Undo2 size={12} /> Desfazer
+          <button onClick={handleUndo} disabled={undoFlash.saving} className="btn-afj-outline text-xs py-1.5 px-3 rounded-sm flex items-center gap-1.5 disabled:opacity-60">
+            <Undo2 size={12} /> {undoFlash.saving ? "Desfazendo..." : "Desfazer"}
           </button>
         )}
         <button onClick={() => setShowHistory(true)} className="btn-afj-outline text-xs py-1.5 px-3 rounded-sm flex items-center gap-1.5">
@@ -628,11 +668,12 @@ export function EscritorioZone() {
                   )}
                 </div>
               </div>
-              <button onClick={() => saveBranding({ office_name: officeName, slogan })} disabled={saving}
-                className="btn-afj-primary py-2.5 rounded-sm flex items-center gap-2">
-                {saved ? <Check size={14} /> : null}
-                {saving ? "Salvando..." : saved ? "Salvo!" : "Salvar Escritório"}
-              </button>
+              <SettingsSaveButton
+                onClick={() => saveBranding({ office_name: officeName, slogan }, infoFlash, "Informações do escritório salvas.")}
+                saving={infoFlash.saving}
+                saved={infoFlash.saved}
+                label="Salvar Escritório"
+              />
             </div>
 
             {/* ── Endereço do Escritório ── */}
@@ -641,7 +682,7 @@ export function EscritorioZone() {
                 <p className="afj-section-title">Endereço do Escritório</p>
               </div>
               <p className="text-xs text-afj-black/45 -mt-2">
-                Usado como base pro futuro mapa com marcadores de escritório e clientes.
+                Usado no mapa (menu Mapa) e como base pro timbrado dos documentos.
                 A localização geográfica é aproximada (centro do CEP, não o número exato).
               </p>
               <div className="space-y-4">
@@ -686,11 +727,12 @@ export function EscritorioZone() {
                   </p>
                 )}
               </div>
-              <button onClick={saveEndereco} disabled={enderecoSaving}
-                className="btn-afj-primary py-2.5 rounded-sm flex items-center gap-2">
-                {enderecoSaved ? <Check size={14} /> : null}
-                {enderecoSaving ? "Salvando..." : enderecoSaved ? "Salvo!" : "Salvar Endereço"}
-              </button>
+              <SettingsSaveButton
+                onClick={saveEndereco}
+                saving={enderecoFlash.saving}
+                saved={enderecoFlash.saved}
+                label="Salvar Endereço"
+              />
             </div>
 
             {/* ── Timbrado dos Documentos ── */}
@@ -775,22 +817,26 @@ export function EscritorioZone() {
                   <input type="checkbox" checked={lh.use_logo} onChange={(e) => setLh({ ...lh, use_logo: e.target.checked })} className="accent-afj-gold w-4 h-4" />
                   <span className="text-sm text-afj-black/75">Incluir o logo do escritório no topo dos PDFs</span>
                 </label>
-                <p className="text-[10px] text-afj-black/35">O logo usado é o da aba Marca (upload de logo).</p>
+                <p className="text-[10px] text-afj-black/35">O logo usado é o da aba Identidade Visual (upload de logo).</p>
               </div>
-              <button onClick={saveLetterhead} disabled={lhSaving}
-                className="btn-afj-primary py-2.5 rounded-sm flex items-center gap-2">
-                {lhSaved ? <Check size={14} /> : null}
-                {lhSaving ? "Salvando..." : lhSaved ? "Salvo!" : "Salvar Timbrado"}
-              </button>
+              <SettingsSaveButton
+                onClick={saveLetterhead}
+                saving={lhFlash.saving}
+                saved={lhFlash.saved}
+                label="Salvar Timbrado"
+              />
             </div>
             </>
           )}
 
-          {/* ── Tab: Marca ── */}
-          {tab === "marca" && (
+          {/* ── Tab: Identidade Visual (Fase 256 — fusão de Aparência +
+              Cores + Tipografia + Templates + Exportar/Importar) ── */}
+          {tab === "identidade" && (
+            <>
+            {/* ── Seção: Nome e Logo (antiga aba "Aparência") ── */}
             <div className="afj-card p-6 space-y-5">
               <div className="afj-section-header">
-                <p className="afj-section-title">Identidade da Marca</p>
+                <p className="afj-section-title">Nome e Logo do Sistema</p>
               </div>
 
               <div className="space-y-4">
@@ -805,13 +851,15 @@ export function EscritorioZone() {
                     className="w-full bg-afj-cream border border-afj-cream-dark rounded-sm px-4 py-2.5 text-sm focus:outline-none focus:border-afj-gold focus:bg-white transition-colors"
                     placeholder="AFJ CORE"
                   />
+                  <p className="text-[10px] text-afj-black/35 mt-1">
+                    Nome do produto/software, exibido na interface — diferente de &quot;Nome do Escritório&quot; (aba Escritório), que é o nome legal usado nos documentos.
+                  </p>
                 </div>
 
                 <div>
                   <label className="block text-[10px] font-semibold text-afj-black/55 mb-1.5 uppercase tracking-widest">
                     Logo do Sistema
                   </label>
-                  {/* Upload de arquivo */}
                   <input
                     ref={logoFileRef}
                     type="file"
@@ -855,23 +903,19 @@ export function EscritorioZone() {
                 </div>
               </div>
 
-              <button
-                onClick={() => saveBranding({
-                  app_name: appName,
-                  logo_url: logoUrl,
-                  ...(useLogoAsFavicon && logoUrl ? { favicon_url: logoUrl } : {}),
-                })}
-                disabled={saving}
-                className="btn-afj-primary py-2.5 rounded-sm flex items-center gap-2"
-              >
-                {saved ? <Check size={14} /> : null}
-                {saving ? "Salvando..." : saved ? "Salvo!" : "Salvar Aparência"}
-              </button>
+              <SettingsSaveButton
+                onClick={() => saveBranding(
+                  { app_name: appName, logo_url: logoUrl, ...(useLogoAsFavicon && logoUrl ? { favicon_url: logoUrl } : {}) },
+                  marcaFlash,
+                  "Nome e logo salvos."
+                )}
+                saving={marcaFlash.saving}
+                saved={marcaFlash.saved}
+                label="Salvar Nome e Logo"
+              />
             </div>
-          )}
 
-          {/* ── Tab: Cores ── */}
-          {tab === "cores" && (
+            {/* ── Seção: Cores (antiga aba "Cores") ── */}
             <div className="afj-card p-6 space-y-5">
               <div className="afj-section-header">
                 <p className="afj-section-title">Cor Primária</p>
@@ -998,19 +1042,19 @@ export function EscritorioZone() {
                 </div>
               </div>
 
-              <button
-                onClick={() => saveBranding({ primary_color: previewColor, secondary_color: previewSecondary })}
-                disabled={saving}
-                className="btn-afj-primary py-2.5 rounded-sm flex items-center gap-2"
-              >
-                {saved ? <Check size={14} /> : null}
-                {saving ? "Salvando..." : saved ? "Salvo!" : "Aplicar Cores"}
-              </button>
+              <SettingsSaveButton
+                onClick={() => saveBranding(
+                  { primary_color: previewColor, secondary_color: previewSecondary },
+                  coresFlash,
+                  "Cores salvas."
+                )}
+                saving={coresFlash.saving}
+                saved={coresFlash.saved}
+                label="Aplicar Cores"
+              />
             </div>
-          )}
 
-          {/* ── Tab: Tipografia ── */}
-          {tab === "tipografia" && (
+            {/* ── Seção: Tipografia (antiga aba "Tipografia") ── */}
             <div className="afj-card p-6 space-y-5">
               <div className="afj-section-header">
                 <p className="afj-section-title">Fonte de Destaque</p>
@@ -1050,11 +1094,19 @@ export function EscritorioZone() {
               <p className="text-xs text-afj-black/30">
                 A fonte é aplicada em títulos, cabeçalhos e elementos de destaque. O corpo do texto usa sempre Inter.
               </p>
+              {/* Fase 256 — achado real, não corrigido nesta fase (exigiria
+                  um campo novo persistido no backend, fora do escopo desta
+                  reformulação): escolher uma fonte aqui sozinho só atualiza
+                  a pré-visualização, não é salvo em lugar nenhum. Em vez de
+                  deixar isso como uma armadilha silenciosa, o aviso abaixo
+                  torna esse comportamento explícito. */}
+              <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-sm px-3 py-2">
+                Escolher uma fonte aqui atualiza só a pré-visualização — para persistir, aplique um dos Temas Prontos
+                abaixo (que já salva cor e fonte juntos).
+              </p>
             </div>
-          )}
 
-          {/* ── Tab: Templates ── */}
-          {tab === "templates" && (
+            {/* ── Seção: Temas Prontos (antiga aba "Templates") ── */}
             <div className="afj-card p-6 space-y-5">
               <div className="afj-section-header">
                 <p className="afj-section-title">Temas Prontos</p>
@@ -1065,7 +1117,8 @@ export function EscritorioZone() {
                   <button
                     key={t.id}
                     onClick={() => applyTemplate(t)}
-                    className="text-left border border-afj-cream-dark rounded-sm overflow-hidden hover:border-afj-gold/50 hover:shadow-md transition-all group"
+                    disabled={templateFlash.saving}
+                    className="text-left border border-afj-cream-dark rounded-sm overflow-hidden hover:border-afj-gold/50 hover:shadow-md transition-all group disabled:opacity-60"
                   >
                     {/* Thumbnail */}
                     <div
@@ -1088,81 +1141,12 @@ export function EscritorioZone() {
               </div>
 
               <p className="text-xs text-afj-black/30">
-                Ao aplicar um template, a cor, fundo e tipografia são atualizados instantaneamente.
-                As alterações são persistidas no banco de dados.
+                Ao aplicar um template, a cor, fundo e tipografia são atualizados instantaneamente e já ficam salvos —
+                não precisa clicar em nenhum botão de salvar separado.
               </p>
             </div>
-          )}
 
-          {/* ── Tab: Módulos ── */}
-          {tab === "modulos" && (
-            <div className="afj-card p-6 space-y-5">
-              <div className="afj-section-header">
-                <p className="afj-section-title">Módulos Disponíveis</p>
-              </div>
-              <p className="text-sm text-afj-black/50">
-                Módulos desativados ficam ocultos no menu para todos os usuários do escritório.
-              </p>
-              <div className="space-y-3">
-                {[
-                  { key: "processos", label: "Processos Jurídicos", desc: "Gestão de processos, prazos e movimentações" },
-                  { key: "peticoes", label: "Petições com IA", desc: "Geração automática de petições via agentes" },
-                  { key: "clientes", label: "CRM de Clientes", desc: "Cadastro e gestão de clientes (PF e PJ)" },
-                  { key: "financeiro", label: "Financeiro", desc: "Receitas, despesas e controle financeiro" },
-                  { key: "agentes", label: "Agentes IA", desc: "Painel de controle dos agentes de IA" },
-                  { key: "visual_law", label: "Visual Law", desc: "Visualizações gráficas de processos" },
-                ].map(({ key, label, desc }) => (
-                  <div key={key} className="flex items-center justify-between p-4 border border-afj-cream-dark rounded-sm bg-white">
-                    <div>
-                      <p className="font-medium text-sm text-afj-black">{label}</p>
-                      <p className="text-xs text-afj-black/40 mt-0.5">{desc}</p>
-                    </div>
-                    <label className="relative inline-flex items-center cursor-pointer ml-4">
-                      <input type="checkbox" className="sr-only peer"
-                        checked={modules[key] !== false}
-                        onChange={(e) => setModules((m) => ({ ...m, [key]: e.target.checked }))} />
-                      <div className="w-10 h-5 bg-afj-cream-dark peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-afj-gold" />
-                    </label>
-                  </div>
-                ))}
-              </div>
-              <button onClick={saveModules} disabled={modulesLoading}
-                className="btn-afj-primary py-2.5 rounded-sm flex items-center gap-2">
-                {saved ? <Check size={14} /> : null}
-                {modulesLoading ? "Salvando..." : saved ? "Salvo!" : "Salvar Módulos"}
-              </button>
-            </div>
-          )}
-
-          {/* ── Tab: Dashboard ── */}
-          {tab === "dashboard" && (
-            <div className="afj-card p-6 space-y-5">
-              <div className="afj-section-header">
-                <p className="afj-section-title">Widgets do Dashboard</p>
-              </div>
-              <p className="text-sm text-afj-black/50">
-                Selecione quais indicadores aparecem no dashboard principal.
-              </p>
-              <div className="space-y-2">
-                {AVAILABLE_WIDGETS.map(({ key, label }) => (
-                  <label key={key} className="flex items-center gap-3 p-3 border border-afj-cream-dark rounded-sm bg-white cursor-pointer hover:border-afj-gold/40 transition-colors">
-                    <input type="checkbox" className="accent-afj-gold w-4 h-4"
-                      checked={widgets.includes(key)}
-                      onChange={(e) => setWidgets((w) => e.target.checked ? [...w, key] : w.filter((k) => k !== key))} />
-                    <span className="text-sm text-afj-black">{label}</span>
-                  </label>
-                ))}
-              </div>
-              <button onClick={saveWidgets} disabled={saving}
-                className="btn-afj-primary py-2.5 rounded-sm flex items-center gap-2">
-                {saved ? <Check size={14} /> : null}
-                {saving ? "Salvando..." : saved ? "Salvo!" : "Salvar Widgets"}
-              </button>
-            </div>
-          )}
-
-          {/* ── Tab: Exportar / Importar ── */}
-          {tab === "exportar" && (
+            {/* ── Seção: Exportar / Importar (antiga aba "Exportar/Importar") ── */}
             <div className="afj-card p-6 space-y-5">
               <div className="afj-section-header">
                 <p className="afj-section-title">Exportar / Importar Tema</p>
@@ -1184,7 +1168,8 @@ export function EscritorioZone() {
                   <Upload size={28} className="mx-auto text-afj-gold" />
                   <p className="font-semibold text-afj-black text-sm">Importar Tema</p>
                   <p className="text-afj-black/40 text-xs">
-                    Carrega um arquivo JSON de tema exportado anteriormente e aplica as configurações.
+                    Carrega um JSON exportado e aplica na pré-visualização — clique em Salvar em Cores/Nome e Logo,
+                    acima, pra persistir de verdade.
                   </p>
                   <input
                     ref={importRef}
@@ -1210,6 +1195,110 @@ export function EscritorioZone() {
                   {JSON.stringify({ primaryColor: previewColor, fontDisplay: previewFont.split(",")[0], appName }, null, 2)}
                 </pre>
               </div>
+            </div>
+            </>
+          )}
+
+          {/* ── Tab: Módulos ── */}
+          {tab === "modulos" && (
+            <div className="afj-card p-6 space-y-5">
+              <div className="afj-section-header">
+                <p className="afj-section-title">Módulos Disponíveis</p>
+              </div>
+              <div className="space-y-3">
+                {[
+                  { key: "processos", label: "Processos Jurídicos", desc: "Gestão de processos, prazos e movimentações" },
+                  { key: "peticoes", label: "Petições com IA", desc: "Geração automática de petições via agentes" },
+                  { key: "clientes", label: "CRM de Clientes", desc: "Cadastro e gestão de clientes (PF e PJ)" },
+                  { key: "financeiro", label: "Financeiro", desc: "Receitas, despesas e controle financeiro" },
+                  { key: "agentes", label: "Agentes IA", desc: "Painel de controle dos agentes de IA" },
+                  { key: "visual_law", label: "Visual Law", desc: "Visualizações gráficas de processos" },
+                ].map(({ key, label, desc }) => (
+                  <div key={key} className="flex items-center justify-between p-4 border border-afj-cream-dark rounded-sm bg-white">
+                    <div>
+                      <p className="font-medium text-sm text-afj-black">{label}</p>
+                      <p className="text-xs text-afj-black/40 mt-0.5">{desc}</p>
+                    </div>
+                    <label className="relative inline-flex items-center cursor-pointer ml-4">
+                      <input type="checkbox" className="sr-only peer"
+                        checked={modules[key] !== false}
+                        onChange={(e) => setModules((m) => ({ ...m, [key]: e.target.checked }))} />
+                      <div className="w-10 h-5 bg-afj-cream-dark peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-afj-gold" />
+                    </label>
+                  </div>
+                ))}
+              </div>
+              {/* Fase 256 — achado real: nenhum desses 6 toggles tem efeito
+                  hoje (confirmado por grep: `modules_enabled` não é lido em
+                  `nav.ts` nem em nenhum guard de rota) — a legenda antiga
+                  ("ficam ocultos no menu") prometia um comportamento que
+                  não existe. Corrigido pra ser honesta em vez de remover
+                  ou fingir a funcionalidade — construir o bloqueio de
+                  verdade é uma feature nova, fora do escopo desta fase. */}
+              <p className="text-[11px] text-afj-black/45 bg-afj-cream/60 border border-afj-cream-dark rounded-sm px-3 py-2">
+                Estes 6 módulos ainda não afetam a navegação ou o acesso a telas — só registram a preferência.
+              </p>
+
+              {/* Fase 256 (Alteração 2) — antes só existiam em Integrações,
+                  invisíveis aqui apesar de escreverem na mesma
+                  TenantConfig.modules_enabled. */}
+              <div className="afj-section-header pt-2">
+                <p className="afj-section-title">Integrações Google</p>
+              </div>
+              <div className="space-y-3">
+                {MODULOS_GOOGLE.map(({ key, label, desc }) => (
+                  <div key={key} className="flex items-center justify-between p-4 border border-afj-cream-dark rounded-sm bg-white">
+                    <div>
+                      <p className="font-medium text-sm text-afj-black">{label}</p>
+                      <p className="text-xs text-afj-black/40 mt-0.5">{desc}</p>
+                    </div>
+                    <label className="relative inline-flex items-center cursor-pointer ml-4">
+                      <input type="checkbox" className="sr-only peer"
+                        checked={modules[key] === true}
+                        onChange={(e) => setModules((m) => ({ ...m, [key]: e.target.checked }))} />
+                      <div className="w-10 h-5 bg-afj-cream-dark peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-afj-gold" />
+                    </label>
+                  </div>
+                ))}
+              </div>
+              <p className="text-[11px] text-afj-black/45">
+                Configure a credencial de acesso em Integrações — este toggle é o mesmo que aparece por lá.
+              </p>
+
+              <SettingsSaveButton
+                onClick={saveModules}
+                saving={modulesFlash.saving}
+                saved={modulesFlash.saved}
+                label="Salvar Módulos"
+              />
+            </div>
+          )}
+
+          {/* ── Tab: Dashboard ── */}
+          {tab === "dashboard" && (
+            <div className="afj-card p-6 space-y-5">
+              <div className="afj-section-header">
+                <p className="afj-section-title">Widgets do Dashboard</p>
+              </div>
+              <p className="text-sm text-afj-black/50">
+                Selecione quais indicadores aparecem no dashboard principal.
+              </p>
+              <div className="space-y-2">
+                {AVAILABLE_WIDGETS.map(({ key, label }) => (
+                  <label key={key} className="flex items-center gap-3 p-3 border border-afj-cream-dark rounded-sm bg-white cursor-pointer hover:border-afj-gold/40 transition-colors">
+                    <input type="checkbox" className="accent-afj-gold w-4 h-4"
+                      checked={widgets.includes(key)}
+                      onChange={(e) => setWidgets((w) => e.target.checked ? [...w, key] : w.filter((k) => k !== key))} />
+                    <span className="text-sm text-afj-black">{label}</span>
+                  </label>
+                ))}
+              </div>
+              <SettingsSaveButton
+                onClick={saveWidgets}
+                saving={widgetsFlash.saving}
+                saved={widgetsFlash.saved}
+                label="Salvar Widgets"
+              />
             </div>
           )}
 
