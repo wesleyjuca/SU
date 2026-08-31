@@ -4362,6 +4362,116 @@ Histórico:
     não resolvível só com código, precisa de contato com o suporte do
     PJe/CNJ; deploy não propagado → nada a fazer, só esperar) antes de
     tentar mais uma correção às cegas.
+- **Fase 253** — usuário pediu auditoria completa do módulo Mapa/
+  geolocalização: pelo menos um cliente aparecia com marcador em local
+  geograficamente incompatível com o endereço cadastrado (imagem de
+  referência: escritório em Rio Branco/AC). Investigação (3 Explore
+  agents em paralelo — backend de geocodificação/clientes, frontend do
+  mapa/Leaflet, dados reais no Postgres local + histórico do CLAUDE.md —
+  mais releitura direta de cada trecho citado antes de planejar)
+  confirmou uma causa-raiz única, batida de forma independente pelos 2
+  agentes de código sem eu ter direcionado nenhum dos dois pra lá:
+  **`_geocodificar_endereco()` (`backend/app/api/v1/clients.py`) decidia
+  se re-geocodificava só olhando se o payload JÁ tinha `latitude`/
+  `longitude` — nunca comparava com o CEP anterior.** O formulário de
+  edição de cliente (`frontend/.../clientes/page.tsx::abrirEdicao`)
+  reidrata o `endereco_json` inteiro no estado de edição (inclusive
+  coordenadas antigas); nenhum `onChange`/`autofillCep` as limpava ao
+  trocar o CEP. No submit, o payload ia com `{cep: novo, ..., latitude:
+  antiga, longitude: antiga}`, e `_geocodificar_endereco` via que já
+  tinha coordenada e devolvia sem consultar a BrasilAPI de novo — texto
+  do endereço novo, coordenada presa ao CEP antigo. Hipótese **E** da
+  lista do usuário ("endereço alterado sem nova geocodificação"),
+  confirmada por trace de código ponta a ponta.
+  - **Descartado por evidência direta** (não suposição): Leaflet/
+    react-leaflet sem troca de eixo lat/lng nem colisão de `key`; sem
+    cache de coordenada em lugar nenhum (Redis só guarda estado do
+    `CircuitBreaker`, nunca uma coordenada); mapa nunca usa a coordenada
+    do escritório como fallback de cliente; `_extrair_coordenadas`
+    (`cep_lookup.py`) lê `latitude`/`longitude` por nome, sem inversão;
+    endereço do Tenant (escritório) não tinha esse bug (`EnderecoUpdate`
+    não aceita lat/lng no body, sempre re-geocodificava). Dados locais
+    deste sandbox não reproduzem o cenário exato do usuário (nenhum
+    cliente com Rio Branco/AC aqui — os 4 clientes com coordenada no
+    Postgres local são todos de São Paulo, semeados manualmente nas
+    Fases 230/231/233, já que a geocodificação real nunca rodou neste
+    sandbox por bloqueio de egress à BrasilAPI). **Não foi possível
+    identificar o cliente exato do screenshot nem confirmar sua
+    coordenada antes/depois** — sem acesso ao banco de produção desta
+    sessão.
+  - **Correção da causa-raiz**: `_geocodificar_endereco()` ganha
+    `endereco_anterior` (o valor ainda não sobrescrito no banco, passado
+    pelo chamador antes do `setattr`) — só pula a geocodificação se já
+    tem coordenada **e** o CEP não mudou. Se o CEP mudou e a nova
+    consulta falhar, a coordenada antiga é explicitamente zerada (nunca
+    fica presa ao endereço novo). `update_client` passa `endereco_
+    anterior=client.endereco_json`; `tenant.py::update_endereco` passa
+    por simetria (não tinha o bug, mas ganha a mesma validação nova).
+  - **Validação de sanidade, nunca existia**: `_extrair_coordenadas`
+    (`cep_lookup.py`) ganha rejeição de faixa inválida (`-90..90`/
+    `-180..180`) e de `(0,0)` (sentinela comum de "não encontrado" em
+    geocodificadores) — ponto único, todo consumidor de `consultar_cep()`
+    (Cliente/Tenant/preview do form) protegido de graça.
+  - **Rastreabilidade, reaproveitando `endereco_json`** (sem tabela/
+    coluna nova): `geocoded_at` (ISO 8601 UTC) e `geocode_source`
+    (`"brasilapi"`) gravados junto com toda coordenada nova. Sem
+    migração (JSONB schemaless) e sem backfill de dado legado (mesma
+    decisão das Fases 233/245) — registros antigos simplesmente não têm
+    essas chaves, o que vira o critério do badge de status abaixo.
+  - **Botão "Recalcular localização"** — novo `POST /clients/{id}/
+    recalcular-localizacao`: zera a coordenada atual e força nova
+    consulta mesmo sem o CEP ter mudado (útil de forma geral, não só
+    pro cliente do screenshot — o usuário decidiu resolver o registro
+    já afetado reeditando manualmente, sem mecanismo dedicado pra isso
+    especificamente).
+  - **Badge de status ✓/⚠/○** — computado no frontend a partir do que a
+    API já devolve, sem endpoint dedicado: `NAO_GEOCODIFICADO` (sem
+    coordenada), `REQUER_REVISAO` (tem coordenada mas sem `geocode_
+    source` — herdada de antes do fix, mesma classe de registro que
+    pode ter sido afetada), `VALIDADA` (passou pelo caminho corrigido).
+    Mostrado no cadastro de cliente (`ClienteFormFields.tsx`) e no
+    popup do mapa (`EscritorioClientesMap.tsx`).
+  - **Auditoria de geolocalização — só relatório**: novo `GET /clients/
+    geolocalizacao/auditoria` (declarado antes de `GET /{client_id}`,
+    mesmo cuidado de ordenação já usado em `/portal-access`), gate
+    ADMIN/SOCIO/GESTOR, lista todo cliente com CEP + status computado.
+    Nenhuma correção em massa automática — usuário decidiu não precisar
+    disso nesta fase.
+  - **Verificado ao vivo (Postgres real, `_consultar_cep_externa`
+    monkeypatchada — mesma limitação de egress bloqueado à BrasilAPI já
+    documentada desde a Fase 217/230)**: script direto reproduzindo o
+    cenário exato do achado — cliente criado com CEP de São Paulo
+    (geocodificado), editado pro CEP de Rio Branco/AC com o payload
+    trazendo lat/lng antigas de SP (mesmo formato que o frontend real
+    envia) — confirma que a coordenada persistida passa a ser a de Rio
+    Branco, não fica presa a São Paulo; CEP inalterado não rebate a API
+    (comportamento preservado); CEP mudado com geocodificação falha zera
+    a coordenada em vez de deixar presa; botão Recalcular força nova
+    consulta; validação de faixa/`(0,0)` rejeitada; auditoria classifica
+    `REQUER_REVISAO` (registro legado sem `geocode_source`, inserido
+    direto no banco simulando dado pré-fix) vs. `VALIDADA` corretamente.
+    A suíte pytest (`test_client_geocoding_fase233.py` estendido) bateu
+    na mesma flakiness de pool asyncpg/pytest-asyncio documentada desde
+    a Fase 199 — reproduzida de novo mesmo isolando teste a teste, cross-
+    checada contra um arquivo de controle não tocado
+    (`test_crm_metas_fase213.py`, falha de forma idêntica) — não é
+    regressão desta fase; a prova real veio do script standalone. Novo
+    `test_cep_lookup_coordenadas_fase253.py` (puramente unitário, sem
+    banco) passa limpo. Playwright real (Chromium do sandbox, `npm run
+    dev` com `API_URL` local, backend local real): criou cliente com CEP
+    via UI, confirmou que o botão "Recalcular localização" aparece no
+    modal de edição e que trocar o CEP no formulário mostra ao vivo o
+    aviso "CEP alterado — a localização será recalculada ao salvar" —
+    zero erro de console atribuível a esta fase (só WebSocket do dev
+    server, já documentado, e o warning de key duplicada pré-existente
+    desde a Fase 219). `ruff check`/`py_compile` limpos no backend;
+    `tsc --noEmit`/`eslint` limpos no frontend (2 warnings pré-
+    existentes de `exhaustive-deps`, confirmados via `git stash` como
+    não-novos desta fase).
+  - **Fora de escopo desta fase** (decisão do usuário): busca por
+    cliente, filtro por cidade/UF, clustering, legenda dedicada, ajuste
+    manual arrastando o marcador no Leaflet, correção em massa com
+    confirmação explícita — ficam pra uma fase futura se pedido.
 
 
 ## Riscos conhecidos / débito técnico

@@ -17,6 +17,11 @@ export type PontoCliente = {
   latitude: number;
   longitude: number;
   enderecoTexto: string;
+  /** Fase 253 — "validada" (passou pelo fix de causa-raiz que compara CEP
+   * novo x anterior antes de reutilizar coordenada) ou "requer_revisao"
+   * (herdada de antes do fix — mesma classe de registro que pode ter
+   * ficado com endereço novo + coordenada antiga). */
+  statusGeo: "validada" | "requer_revisao";
 };
 
 /** Fase 231 — ícone de pin custom (evita o bug clássico do Leaflet com
@@ -101,6 +106,9 @@ export default function EscritorioClientesMap({
           <Popup>
             <p className="font-semibold text-sm">{c.nome}</p>
             <p className="text-xs text-afj-black/60">{c.enderecoTexto}</p>
+            {c.statusGeo === "requer_revisao" && (
+              <p className="text-[10px] text-amber-700 mt-1">⚠ Localização requer revisão</p>
+            )}
           </Popup>
         </Marker>
       ))}

@@ -15,6 +15,7 @@ const EscritorioClientesMap = dynamic(() => import("@/components/mapa/Escritorio
 type EnderecoResponse = {
   cep?: string; logradouro?: string; bairro?: string; cidade?: string; uf?: string;
   latitude?: number | null; longitude?: number | null;
+  geocode_source?: string | null;
 };
 
 function enderecoTexto(e: EnderecoResponse): string {
@@ -65,6 +66,9 @@ export default function MapaPage() {
             latitude: c.endereco_json.latitude,
             longitude: c.endereco_json.longitude,
             enderecoTexto: enderecoTexto(c.endereco_json),
+            // Fase 253 — sem `geocode_source` = coordenada herdada de
+            // antes do fix de causa-raiz (endereço mudou sem re-geocodificar).
+            statusGeo: c.endereco_json.geocode_source ? "validada" : "requer_revisao",
           }))
         );
       }

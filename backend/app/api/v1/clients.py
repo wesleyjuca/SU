@@ -107,22 +107,69 @@ async def list_clients(
     return [_to_response(c) for c in clients]
 
 
-async def _geocodificar_endereco(endereco: dict | None) -> dict | None:
+async def _geocodificar_endereco(endereco: dict | None, endereco_anterior: dict | None = None) -> dict | None:
     """Fase 230 — preenche latitude/longitude no endereço via BrasilAPI
     (mesma fonte de `POST /clients/consultar-cep`, Fase 217) quando o
     endereço tem CEP mas ainda não tem coordenadas — groundwork pro mapa
     com marcadores de cliente/escritório planejado pra uma fase futura.
     Fail-soft: nunca lança, nunca bloqueia o save do cliente/escritório se
     a geocodificação falhar/estiver indisponível; precisão de CEP, não do
-    número exato do endereço (limitação da própria BrasilAPI)."""
+    número exato do endereço (limitação da própria BrasilAPI).
+
+    Fase 253 — achado real (marcador de cliente em local incompatível no
+    mapa): a condição original só olhava se o payload JÁ tinha lat/lng
+    pra decidir se pulava a geocodificação — nunca comparava com o CEP
+    anterior. Como o formulário de edição reidrata o endereço inteiro
+    (inclusive lat/lng antigas) e o usuário pode trocar só o CEP, o
+    endereço novo era salvo com a coordenada do CEP ANTIGO grudada, sem
+    nunca re-consultar a API. `endereco_anterior` (o valor ainda não
+    sobrescrito no banco, passado pelo chamador antes do `setattr`)
+    resolve isso: só pula a geocodificação se já tem coordenada E o CEP
+    não mudou. Se o CEP mudou e a nova consulta falhar, a coordenada
+    antiga é explicitamente zerada — nunca fica associada ao endereço
+    novo silenciosamente (fluxo "endereço alterado → invalida → tenta
+    geocodificar de novo", nunca "mantém o que tinha por inércia")."""
     if not endereco or not endereco.get("cep"):
         return endereco
-    if endereco.get("latitude") is not None and endereco.get("longitude") is not None:
+    cep_novo = re.sub(r"\D", "", endereco.get("cep") or "")
+    cep_anterior = re.sub(r"\D", "", (endereco_anterior or {}).get("cep") or "") if endereco_anterior else None
+    cep_mudou = endereco_anterior is not None and cep_novo != cep_anterior
+    tem_coordenada = endereco.get("latitude") is not None and endereco.get("longitude") is not None
+    if tem_coordenada and not cep_mudou:
         return endereco
     resultado = await _consultar_cep_externa(endereco["cep"])
     if resultado and resultado.get("latitude") is not None:
-        endereco = {**endereco, "latitude": resultado["latitude"], "longitude": resultado["longitude"]}
+        from datetime import datetime, timezone as _tz
+        endereco = {
+            **endereco,
+            "latitude": resultado["latitude"],
+            "longitude": resultado["longitude"],
+            "geocoded_at": datetime.now(_tz.utc).isoformat(),
+            "geocode_source": "brasilapi",
+        }
+    elif cep_mudou:
+        endereco = {**endereco, "latitude": None, "longitude": None}
+        endereco.pop("geocoded_at", None)
+        endereco.pop("geocode_source", None)
     return endereco
+
+
+def _status_geolocalizacao(endereco: dict | None) -> str:
+    """Fase 253 — status computado a partir do que já existe em
+    `endereco_json`, sem precisar de coluna/campo novo persistido:
+    - NAO_GEOCODIFICADO: sem latitude/longitude (nunca geocodificado, ou
+      CEP mudou e a nova consulta falhou — `_geocodificar_endereco` zera
+      as coordenadas nesse caso em vez de deixar presas ao endereço novo).
+    - REQUER_REVISAO: tem coordenada mas sem `geocode_source` — herdada
+      de antes deste fix, não dá pra confiar que passou pela validação
+      nova (é justamente a classe de registro que pode ter sido afetada
+      pelo bug de coordenada grudada ao trocar o CEP).
+    - VALIDADA: tem coordenada e passou pelo caminho corrigido."""
+    if not endereco or endereco.get("latitude") is None or endereco.get("longitude") is None:
+        return "NAO_GEOCODIFICADO"
+    if not endereco.get("geocode_source"):
+        return "REQUER_REVISAO"
+    return "VALIDADA"
 
 
 async def _documento_ja_cadastrado(
@@ -474,6 +521,45 @@ async def list_portal_access(
     ]
 
 
+@router.get("/geolocalizacao/auditoria")
+async def auditoria_geolocalizacao(
+    current_user: User = Depends(require_role("ADMIN", "SOCIO", "GESTOR")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Fase 253 — "Validar geolocalização dos clientes": só relatório,
+    nenhuma correção em massa automática (o usuário decidiu não precisar
+    disso agora — corrige um a um via `PUT /clients/{id}` normal ou via
+    `POST /clients/{id}/recalcular-localizacao`). Declarado ANTES de
+    `GET /{client_id}` — mesmo cuidado de ordenação de rota já usado em
+    `GET /portal-access` acima, senão "geolocalizacao" seria capturado
+    como `client_id`."""
+    result = await db.execute(
+        select(Client.id, Client.nome_completo, Client.endereco_json)
+        .where(Client.tenant_id == current_user.tenant_id, Client.endereco_json.isnot(None))
+        .order_by(Client.nome_completo)
+    )
+    itens = []
+    contagem = {"NAO_GEOCODIFICADO": 0, "REQUER_REVISAO": 0, "VALIDADA": 0}
+    for client_id, nome, endereco in result.all():
+        if not endereco or not endereco.get("cep"):
+            continue  # sem CEP cadastrado — fora do escopo desta auditoria (nada pra geocodificar)
+        status = _status_geolocalizacao(endereco)
+        contagem[status] += 1
+        itens.append({
+            "id": str(client_id),
+            "nome": nome,
+            "cidade": endereco.get("cidade"),
+            "uf": endereco.get("uf"),
+            "cep": endereco.get("cep"),
+            "latitude": endereco.get("latitude"),
+            "longitude": endereco.get("longitude"),
+            "geocode_source": endereco.get("geocode_source"),
+            "geocoded_at": endereco.get("geocoded_at"),
+            "status": status,
+        })
+    return {"total": len(itens), "contagem": contagem, "clientes": itens}
+
+
 @router.get("/{client_id}", response_model=ClientResponse)
 async def get_client(
     client_id: str,
@@ -520,11 +606,41 @@ async def update_client(
         if field in ("cpf", "cnpj"):
             value = encrypt(value)
         elif field == "endereco_json":
-            value = await _geocodificar_endereco(value)
+            value = await _geocodificar_endereco(value, endereco_anterior=client.endereco_json)
         setattr(client, field, value)
     if body.lgpd_consent and not client.lgpd_consent:
         client.lgpd_consent_at = datetime.now(timezone.utc)
 
+    return _to_response(client)
+
+
+@router.post("/{client_id}/recalcular-localizacao", response_model=ClientResponse)
+async def recalcular_localizacao(
+    client_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Fase 253 — força uma nova geocodificação mesmo sem o CEP ter
+    mudado (`_geocodificar_endereco` normalmente pula quando já existe
+    coordenada válida para o CEP atual — aqui zeramos antes de chamar,
+    pra sempre re-consultar). Útil de forma geral (não só pro caso do
+    achado original): reprocessa um cliente cuja coordenada é suspeita
+    (`REQUER_REVISAO`) ou que ficou sem coordenada por falha temporária
+    da BrasilAPI. Mesmo gate/escopo de tenant de `update_client`."""
+    result = await db.execute(
+        select(Client).where(
+            Client.id == uuid.UUID(client_id),
+            Client.tenant_id == current_user.tenant_id,
+        )
+    )
+    client = result.scalar_one_or_none()
+    if not client:
+        raise NotFoundError("Cliente", client_id)
+    if not client.endereco_json or not client.endereco_json.get("cep"):
+        raise HTTPException(status_code=422, detail="Cliente sem CEP cadastrado — nada para geocodificar.")
+
+    endereco_sem_coordenada = {**client.endereco_json, "latitude": None, "longitude": None}
+    client.endereco_json = await _geocodificar_endereco(endereco_sem_coordenada)
     return _to_response(client)
 
 
