@@ -6,7 +6,7 @@ import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
 import { useUserStore } from "@/store";
 import { useConfirmDialog } from "@/hooks/useConfirmDialog";
-import type { PontoEscritorio, PontoCliente } from "@/components/mapa/EscritorioClientesMap";
+import type { PontoEscritorio, PontoCliente, ResumoOperacional } from "@/components/mapa/EscritorioClientesMap";
 
 // Leaflet acessa window/document no import — precisa ser client-only
 // (mesmo padrão de GestaoCharts/ProcessosCharts em relatorios/page.tsx).
@@ -118,6 +118,18 @@ export default function MapaPage() {
       }
     } finally {
       setLoading(false);
+    }
+  }
+
+  // Fase 257.1 — resumo operacional pro popup do marcador, buscado sob
+  // demanda no 1º popupopen de cada cliente (nunca pré-carregado pros
+  // até 200 clientes de uma vez).
+  async function carregarResumoCliente(clienteId: string): Promise<ResumoOperacional | null> {
+    try {
+      const res = await fetch(`/api/v1/clients/${clienteId}/mapa-resumo`, { headers: headers() });
+      return res.ok ? await res.json() : null;
+    } catch {
+      return null;
     }
   }
 
@@ -432,6 +444,7 @@ export default function MapaPage() {
             clientes={clientesFiltrados}
             ajusteAtivo={ajusteAtivo}
             onAjustarLocalizacao={ajustarLocalizacao}
+            carregarResumo={carregarResumoCliente}
           />
           <Legenda temEscritorio={!!escritorio} temRequerRevisao={clientesFiltrados.some((c) => c.statusGeo === "requer_revisao")} />
         </div>

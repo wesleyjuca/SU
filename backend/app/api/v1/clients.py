@@ -22,6 +22,7 @@ from app.models.gov_registry_lookup import GovRegistryLookup
 from app.integrations.serpro.consulta_cpf_cnpj import consultar_cpf, consultar_cnpj
 from app.integrations.publicas.cep_lookup import consultar_cep as _consultar_cep_externa
 from app.integrations.publicas.cep_lookup import coordenada_valida
+from app.integrations.publicas.nominatim import geocodificar_endereco_completo as _geocodificar_nominatim
 
 log = structlog.get_logger()
 router = APIRouter(prefix="/clients", tags=["clients"])
@@ -129,26 +130,55 @@ async def _geocodificar_endereco(endereco: dict | None, endereco_anterior: dict 
     não mudou. Se o CEP mudou e a nova consulta falhar, a coordenada
     antiga é explicitamente zerada — nunca fica associada ao endereço
     novo silenciosamente (fluxo "endereço alterado → invalida → tenta
-    geocodificar de novo", nunca "mantém o que tinha por inércia")."""
+    geocodificar de novo", nunca "mantém o que tinha por inércia").
+
+    Fase 257.4 — refinamento opcional de precisão: quando o endereço tem
+    `numero` (campo novo — a BrasilAPI é CEP-only, nunca leva o número do
+    imóvel em conta, então sua coordenada é sempre "centro do CEP/quadra",
+    não do endereço exato), tenta primeiro o Nominatim (geocoder do OSM,
+    gratuito, aceita rua+número estruturados) — só cai pra BrasilAPI se o
+    Nominatim não encontrar nada ou estiver fora do ar. `geocode_source`
+    reflete de qual dos dois veio a coordenada final, pra distinguir no
+    relatório de auditoria (Fase 253) qual precisão cada registro tem.
+    Mudar só o `numero` (sem mudar o CEP) também dispara nova tentativa —
+    é justamente o caso que só o Nominatim consegue melhorar."""
     if not endereco or not endereco.get("cep"):
         return endereco
     cep_novo = re.sub(r"\D", "", endereco.get("cep") or "")
     cep_anterior = re.sub(r"\D", "", (endereco_anterior or {}).get("cep") or "") if endereco_anterior else None
     cep_mudou = endereco_anterior is not None and cep_novo != cep_anterior
+    numero_novo = (endereco.get("numero") or "").strip()
+    numero_anterior = ((endereco_anterior or {}).get("numero") or "").strip() if endereco_anterior else ""
+    numero_mudou = endereco_anterior is not None and numero_novo != numero_anterior
     tem_coordenada = endereco.get("latitude") is not None and endereco.get("longitude") is not None
-    if tem_coordenada and not cep_mudou:
+    if tem_coordenada and not cep_mudou and not numero_mudou:
         return endereco
-    resultado = await _consultar_cep_externa(endereco["cep"])
-    if resultado and resultado.get("latitude") is not None:
+
+    latitude = longitude = None
+    fonte = None
+    if numero_novo and endereco.get("logradouro") and endereco.get("cidade") and endereco.get("uf"):
+        coords = await _geocodificar_nominatim(
+            endereco["logradouro"], numero_novo, endereco["cidade"], endereco["uf"]
+        )
+        if coords:
+            latitude, longitude = coords
+            fonte = "nominatim"
+    if latitude is None:
+        resultado = await _consultar_cep_externa(endereco["cep"])
+        if resultado and resultado.get("latitude") is not None:
+            latitude, longitude = resultado["latitude"], resultado["longitude"]
+            fonte = "brasilapi"
+
+    if latitude is not None:
         from datetime import datetime, timezone as _tz
         endereco = {
             **endereco,
-            "latitude": resultado["latitude"],
-            "longitude": resultado["longitude"],
+            "latitude": latitude,
+            "longitude": longitude,
             "geocoded_at": datetime.now(_tz.utc).isoformat(),
-            "geocode_source": "brasilapi",
+            "geocode_source": fonte,
         }
-    elif cep_mudou:
+    elif cep_mudou or numero_mudou:
         endereco = {**endereco, "latitude": None, "longitude": None}
         endereco.pop("geocoded_at", None)
         endereco.pop("geocode_source", None)
@@ -559,6 +589,107 @@ async def auditoria_geolocalizacao(
             "status": status,
         })
     return {"total": len(itens), "contagem": contagem, "clientes": itens}
+
+
+async def _agregar_regioes_geolocalizacao(db: AsyncSession, tenant_id) -> dict:
+    """Fase 257.3 — agregação de clientes geocodificados por cidade/UF, base
+    da aba "Geográfico" em Relatórios (reservada desde a Fase 230). Reusa o
+    mesmo critério de "tem coordenada utilizável" de `_status_geolocalizacao`
+    — inclui VALIDADA e REQUER_REVISAO (os 2 têm lat/lng, só diverge a
+    confiança na precisão), nunca NAO_GEOCODIFICADO. Extraído como helper
+    (não endpoint direto) pra ser reusado tanto pelo JSON quanto pelo export."""
+    result = await db.execute(
+        select(Client.endereco_json)
+        .where(Client.tenant_id == tenant_id, Client.endereco_json.isnot(None))
+    )
+    contagem_regiao: dict[tuple[str, str], int] = {}
+    total_geocodificados = 0
+    for (endereco,) in result.all():
+        if not endereco or endereco.get("latitude") is None or endereco.get("longitude") is None:
+            continue
+        total_geocodificados += 1
+        chave = (endereco.get("cidade") or "(sem cidade)", endereco.get("uf") or "—")
+        contagem_regiao[chave] = contagem_regiao.get(chave, 0) + 1
+    regioes = [
+        {"cidade": cidade, "uf": uf, "quantidade": qtd}
+        for (cidade, uf), qtd in sorted(contagem_regiao.items(), key=lambda kv: -kv[1])
+    ]
+    return {"total_geocodificados": total_geocodificados, "regioes": regioes}
+
+
+@router.get("/geolocalizacao/regioes")
+async def regioes_geolocalizacao(
+    current_user: User = Depends(require_role("ADMIN", "SOCIO", "GESTOR")),
+    db: AsyncSession = Depends(get_db),
+):
+    return await _agregar_regioes_geolocalizacao(db, current_user.tenant_id)
+
+
+@router.get("/geolocalizacao/regioes/export")
+async def exportar_regioes_geolocalizacao(
+    format: str = Query(...),
+    current_user: User = Depends(require_role("ADMIN", "SOCIO", "GESTOR")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Fase 257.3 — exporta a agregação por região em PDF/CSV. Reaproveita
+    `build_report_pdf` (mesmo builder genérico do dossiê de cliente, Fase
+    214) — deliberadamente não tenta exportar uma IMAGEM do mapa renderizado
+    (exigiria ou um screenshot client-side novo, ou uma API paga de mapa
+    estático — a mesma classe de custo recorrente que a avaliação de Google
+    Maps desta fase concluiu não valer a pena); só a tabela agregada."""
+    fmt = (format or "").lower()
+    if fmt not in ("pdf", "csv"):
+        raise HTTPException(status_code=422, detail="Formato inválido. Use 'pdf' ou 'csv'.")
+
+    dados = await _agregar_regioes_geolocalizacao(db, current_user.tenant_id)
+
+    if fmt == "csv":
+        import csv
+        import io
+        from fastapi.responses import StreamingResponse
+
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow(["Cidade", "UF", "Quantidade de clientes"])
+        for r in dados["regioes"]:
+            writer.writerow([r["cidade"], r["uf"], r["quantidade"]])
+        buf.seek(0)
+        return StreamingResponse(
+            iter([buf.getvalue()]),
+            media_type="text/csv",
+            headers={"Content-Disposition": 'attachment; filename="clientes-por-regiao.csv"'},
+        )
+
+    from app.models.tenant import TenantConfig
+    from app.services.letterhead import resolve_logo_data_url
+    from app.utils.pdf_builder import build_report_pdf
+
+    body = "\n".join(
+        f"{r['cidade']}/{r['uf']} — {r['quantidade']} cliente(s)" for r in dados["regioes"]
+    ) or "Nenhum cliente geocodificado ainda."
+
+    letterhead = None
+    cfg = (await db.execute(
+        select(TenantConfig).where(TenantConfig.tenant_id == current_user.tenant_id)
+    )).scalar_one_or_none()
+    if cfg:
+        letterhead = dict((cfg.document_templates or {}).get("letterhead", {}))
+        logo_data_url = await resolve_logo_data_url(cfg)
+        if logo_data_url:
+            letterhead["logo_data_url"] = logo_data_url
+
+    pdf = build_report_pdf(
+        title="Clientes por Região",
+        sections=[
+            {"heading": f"Total de clientes geocodificados: {dados['total_geocodificados']}", "body": body},
+        ],
+        letterhead=letterhead,
+    )
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": 'attachment; filename="clientes-por-regiao.pdf"'},
+    )
 
 
 @router.get("/{client_id}", response_model=ClientResponse)
@@ -1078,24 +1209,17 @@ async def client_financeiro(
     }
 
 
-@router.get("/{client_id}/health-score")
-async def client_health_score(
-    client_id: str,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
+async def _calcular_health_score(db: AsyncSession, tenant_id, cliente: Client) -> dict:
     """Fase 207.1 — score de saúde do cliente (0-100), combinando 3 sinais já
     existentes: confiabilidade de pagamento (40 pts), engajamento recente via
     interações (30 pts) e taxa de êxito dos processos (30 pts). Puramente
-    informativo — não aciona nenhuma ação automática, não bloqueia nada."""
+    informativo — não aciona nenhuma ação automática, não bloqueia nada.
+
+    Fase 257.1 — extraído de `client_health_score` pra um helper próprio,
+    reusado também por `client_mapa_resumo` (popup do mapa) — evita duplicar
+    esta mesma lógica de agregação numa 2ª rota."""
     from app.models.financial import FinancialEntry
     from app.models.process import LegalProcess, client_linked_processes_filter
-
-    cliente = (await db.execute(
-        select(Client).where(Client.id == uuid.UUID(client_id), Client.tenant_id == current_user.tenant_id)
-    )).scalar_one_or_none()
-    if not cliente:
-        raise NotFoundError("Cliente", client_id)
 
     hoje = date.today()
 
@@ -1103,7 +1227,7 @@ async def client_health_score(
     # nenhum lançamento de receita ainda, não há sinal negativo: pontuação cheia.
     receitas = (await db.execute(
         select(FinancialEntry.status, FinancialEntry.data_vencimento)
-        .where(FinancialEntry.client_id == cliente.id, FinancialEntry.tenant_id == current_user.tenant_id,
+        .where(FinancialEntry.client_id == cliente.id, FinancialEntry.tenant_id == tenant_id,
                FinancialEntry.tipo == "RECEITA")
     )).all()
     total_receita = len(receitas)
@@ -1113,7 +1237,7 @@ async def client_health_score(
     # ── Engajamento (30 pts) — recência da última interação registrada.
     ultima_interacao = (await db.execute(
         select(func.max(ClientInteraction.created_at))
-        .where(ClientInteraction.client_id == cliente.id, ClientInteraction.tenant_id == current_user.tenant_id)
+        .where(ClientInteraction.client_id == cliente.id, ClientInteraction.tenant_id == tenant_id)
     )).scalar_one_or_none()
     dias_desde_interacao = None
     if ultima_interacao is None:
@@ -1131,7 +1255,7 @@ async def client_health_score(
     # Processos em andamento (sem desfecho) não penalizam nem beneficiam.
     desf_rows = (await db.execute(
         select(LegalProcess.desfecho, func.count(LegalProcess.id))
-        .where(client_linked_processes_filter(cliente.id), LegalProcess.tenant_id == current_user.tenant_id,
+        .where(client_linked_processes_filter(cliente.id), LegalProcess.tenant_id == tenant_id,
                LegalProcess.desfecho.is_not(None))
         .group_by(LegalProcess.desfecho)
     )).all()
@@ -1160,6 +1284,76 @@ async def client_health_score(
                 "total_com_desfecho": total_desfecho,
             },
         },
+    }
+
+
+@router.get("/{client_id}/health-score")
+async def client_health_score(
+    client_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    cliente = (await db.execute(
+        select(Client).where(Client.id == uuid.UUID(client_id), Client.tenant_id == current_user.tenant_id)
+    )).scalar_one_or_none()
+    if not cliente:
+        raise NotFoundError("Cliente", client_id)
+    return await _calcular_health_score(db, current_user.tenant_id, cliente)
+
+
+@router.get("/{client_id}/mapa-resumo")
+async def client_mapa_resumo(
+    client_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Fase 257.1 — resumo operacional pro popup do marcador de cliente no
+    `/mapa`: score de saúde (207.1), quantos processos ativos e o próximo
+    prazo pendente entre eles. Buscado sob demanda (só quando o popup de UM
+    marcador é aberto — nunca pré-carregado pra todos os clientes do mapa
+    de uma vez, evitando N chamadas em paralelo pra uma listagem de até
+    200 clientes). Reaproveita `_calcular_health_score` e
+    `client_linked_processes_filter` (Fase 222) — nenhuma lógica nova de
+    agregação."""
+    from app.models.process import LegalProcess, ProcessDeadline, client_linked_processes_filter
+
+    cliente = (await db.execute(
+        select(Client).where(Client.id == uuid.UUID(client_id), Client.tenant_id == current_user.tenant_id)
+    )).scalar_one_or_none()
+    if not cliente:
+        raise NotFoundError("Cliente", client_id)
+
+    saude = await _calcular_health_score(db, current_user.tenant_id, cliente)
+
+    processos_ativos = (await db.execute(
+        select(func.count(LegalProcess.id)).where(
+            client_linked_processes_filter(cliente.id),
+            LegalProcess.tenant_id == current_user.tenant_id,
+            LegalProcess.situacao.in_(["ATIVO", "SUSPENSO"]),
+        )
+    )).scalar_one()
+
+    prazo_row = (await db.execute(
+        select(ProcessDeadline.descricao, ProcessDeadline.data_prazo, ProcessDeadline.data_fatal)
+        .join(LegalProcess, ProcessDeadline.process_id == LegalProcess.id)
+        .where(
+            client_linked_processes_filter(cliente.id),
+            LegalProcess.tenant_id == current_user.tenant_id,
+            ProcessDeadline.status == "PENDENTE",
+        )
+        .order_by(ProcessDeadline.data_prazo.asc())
+        .limit(1)
+    )).first()
+
+    return {
+        "score": saude["score"],
+        "banda": saude["banda"],
+        "processos_ativos": processos_ativos,
+        "proximo_prazo": {
+            "descricao": prazo_row[0],
+            "data_prazo": prazo_row[1].isoformat() if prazo_row[1] else None,
+            "data_fatal": prazo_row[2].isoformat() if prazo_row[2] else None,
+        } if prazo_row else None,
     }
 
 

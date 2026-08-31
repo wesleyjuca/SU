@@ -5040,6 +5040,124 @@ Histórico:
   - `AIBudgetLimit`/`PUT /system/ai-budgets` — confirmado como
     controle ADMIN-sobre-outro-usuário, genuinamente separado de
     "configuração pessoal", não fundido.
+- **Fase 257** — usuário pediu pra evoluir o módulo Mapa e avaliar se é
+  mais viável usar Google Maps. Levantamento do estado atual (Fases
+  231/253/254/255 — busca/filtro/legenda/clustering/ajuste manual/
+  auditoria em lote já implementados) + pesquisa de preço/termos atuais
+  do Google Maps Platform (2026): **veredito — manter Leaflet +
+  OpenStreetMap**. Desde a reestruturação de março/2025, o Google Maps
+  Platform exige cartão de crédito vinculado à conta do Google Cloud
+  mesmo dentro do limite grátis, com cobrança por SKU (~US$7/1.000
+  carregamentos do mapa, ~US$5/1.000 geocodificações) assim que o
+  limiar é excedido — o primeiro custo recorrente/credenciado que o
+  módulo de mapa teria, contrariando o padrão já estabelecido no
+  projeto (BrasilAPI/PDPJ/SERPRO trial, sempre grátis/sem credencial).
+  Confirmado por busca em todo o repositório: zero uso de Google Maps
+  em qualquer lugar do sistema hoje.
+
+  **4 evoluções implementadas** (usuário escolheu as 4 opções
+  propostas, via pergunta):
+  - **257.1 — dados operacionais no popup do cliente**: novo `GET
+    /clients/{id}/mapa-resumo` (`clients.py`, gate `get_current_user`)
+    — score de saúde (207.1, extraído pra `_calcular_health_score()`
+    compartilhado, evitando duplicar a lógica com `client_health_
+    score`), processos ativos (`client_linked_processes_filter`, Fase
+    222) e o próximo prazo pendente (`ProcessDeadline`, com destaque
+    quando tem `data_fatal`). Buscado sob demanda só quando o popup de
+    UM marcador abre (`eventHandlers.popupopen` no `ClienteMarker`,
+    `EscritorioClientesMap.tsx`) — nunca pré-carregado pros até 200
+    clientes do mapa de uma vez.
+  - **257.2 — distância do escritório**: cálculo de linha reta
+    (haversine) 100% client-side, sem custo/credencial nova — não é
+    rota real (evitaria depender de outro serviço externo só pra essa
+    métrica secundária), mas já dá uma noção útil de proximidade.
+  - **257.3 — aba "Geográfico" em Relatórios**: item reservado desde a
+    Fase 230 ("reservar uma aba pra quando o mapa existir"). Novo `GET
+    /clients/geolocalizacao/regioes` (agregação por cidade/UF, mesmo
+    gate ADMIN/SOCIO/GESTOR de `/geolocalizacao/auditoria`) + `GET
+    /clients/geolocalizacao/regioes/export?format=pdf|csv` (reaproveita
+    `build_report_pdf`, Fase 214, e o mesmo padrão de download blob já
+    usado em Auditoria/Financeiro). Deliberadamente **não** tenta
+    exportar uma imagem do mapa renderizado — exigiria ou um screenshot
+    client-side novo ou uma API paga de mapa estático (mesma classe de
+    custo que a avaliação do Google Maps já descartou); só a tabela
+    agregada.
+  - **257.4 — refinamento de precisão via Nominatim**: campo novo
+    `numero` (número do imóvel) no formulário de endereço — cliente
+    (`ClienteFormFields.tsx`) e escritório (`EscritorioZone.tsx`/
+    `EnderecoUpdate`). Novo `app/integrations/publicas/nominatim.py`
+    (mesma família "fonte pública gratuita, sem credencial" de
+    `cep_lookup.py`) — quando `numero` está presente,
+    `_geocodificar_endereco()` tenta primeiro o Nominatim (geocoder do
+    OpenStreetMap, aceita endereço estruturado rua+número, mais preciso
+    que o centro do CEP/quadra da BrasilAPI), com fallback fail-soft
+    pra BrasilAPI se não encontrar nada ou o serviço estiver fora do
+    ar. `geocode_source` passa a distinguir `"nominatim"` de
+    `"brasilapi"` no relatório de auditoria (Fase 253). Endereço sem
+    número continua exatamente como antes (só BrasilAPI) — sem
+    regressão pro caminho já existente.
+
+  **Verificado**: `ruff check`/`py_compile` limpos no backend (3
+  arquivos + 1 teste novo); `tsc --noEmit`/`eslint` limpos no frontend
+  (mesmos 3 warnings pré-existentes de `exhaustive-deps`, confirmados
+  via `git stash` como não-novos desta fase). Script standalone
+  (Postgres real): confirma que endereço com número tenta Nominatim
+  primeiro e nunca chama a BrasilAPI quando resolve
+  (`geocode_source="nominatim"`); endereço sem número continua só na
+  BrasilAPI (regressão preservada); Nominatim falhando cai
+  corretamente pra BrasilAPI; `mapa-resumo` calcula `processos_ativos`/
+  `próximo_prazo` corretos com um processo+prazo reais; isolamento
+  cross-tenant do `mapa-resumo` (404 pra tenant errado); agregação por
+  região correta (2 SP + 1 RJ → `total_geocodificados=3`, contagem por
+  cidade certa); export CSV com conteúdo real e PDF com header `%PDF`
+  válido; formato inválido rejeitado com 422; `EnderecoUpdate` (Tenant)
+  com número também aciona o Nominatim. Teste automatizado novo
+  (`test_map_evolution_fase257.py`) — os 3 testes puramente unitários
+  (sem Postgres) passam limpos isolados; os 3 que dependem de fixture
+  com Postgres batem na mesma flakiness de pool asyncpg/pytest-asyncio
+  documentada desde a Fase 199, reproduzida de novo mesmo isolando
+  teste a teste — cross-checada contra `test_crm_metas_fase213.py`
+  (arquivo de controle não tocado, falha de forma idêntica); a prova
+  real veio do script standalone, mesmo padrão de toda fase recente.
+  Playwright real (Chromium do sandbox, `npm run dev` com `API_URL`
+  local, dado semeado manualmente já que este sandbox bloqueia egress
+  a `tile.openstreetmap.org`/BrasilAPI/Nominatim, mesma limitação
+  documentada desde a Fase 217/231): popup de cliente real mostrando
+  distância do escritório, score de saúde, contagem de processos
+  ativos e o badge "requer revisão" — todos confirmados visualmente em
+  4 popups distintos; o caso específico do badge "FATAL" (prazo com
+  `data_fatal`) não foi visualmente alcançável via clique de marcador
+  nesta sessão porque o cliente de teste ficou clusterizado com outro
+  registro próximo (limitação de automação de clique em cluster do
+  Leaflet, não um bug de produto) — confirmado em vez disso através da
+  mesma chamada `fetch` que o popup real faz, dentro do navegador real
+  (mesmo proxy Next.js, mesmo token), devolvendo exatamente o payload
+  com `data_fatal` esperado; o JSX que renderiza esse badge é um
+  condicional trivial, estruturalmente idêntico ao badge "requer
+  revisão" já confirmado visualmente ao lado dele no mesmo componente.
+  Aba Geográfico confirmada com screenshot mostrando as 2 regiões e o
+  download real do CSV disparado pelo navegador. Campo "Número"
+  confirmado presente nos 2 formulários (Cliente e Escritório) via
+  Playwright. Zero erro de console novo atribuível a esta fase (só os
+  `ERR_TUNNEL_CONNECTION_FAILED` esperados dos tiles do OpenStreetMap
+  bloqueados por este sandbox, já documentados desde a Fase 231).
+
+  **Achado incidental, não desta fase, reproduzido de novo durante a
+  verificação**: o mesmo bug do `RateLimitMiddleware` já documentado na
+  "Nova rodada de teste geral" anterior (chave `ratelimit:default:
+  127.0.0.1` sem TTL, incrementando pra sempre) apareceu de novo
+  durante os testes repetidos desta fase — confirmado ao vivo no Redis
+  (`TTL -1`, contagem em 341, muito acima do limite de 200/min
+  documentado), bloqueando a própria sessão de teste até a chave ser
+  apagada manualmente. Mesmo achado, mesma causa-raiz já registrada,
+  ainda sem decisão do usuário sobre corrigir.
+
+  **Fora de escopo desta fase** (não pedido): rota real via serviço de
+  roteamento externo (só distância em linha reta); exportar a imagem
+  do mapa renderizado; qualquer forma de mapa de calor/densidade;
+  atualização em massa de coordenadas legadas pra Nominatim (sem
+  backfill, mesma decisão já usada em todo dado geográfico legado
+  deste projeto desde a Fase 233/245).
 
 
 ## Riscos conhecidos / débito técnico

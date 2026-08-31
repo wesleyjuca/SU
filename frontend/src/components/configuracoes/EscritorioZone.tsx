@@ -241,7 +241,7 @@ export function EscritorioZone() {
   const [slogan, setSlogan] = useState("");
   // Fase 230 — endereço físico do escritório, geocodificado no backend
   // (groundwork pro mapa com marcadores, Fase 231+).
-  const [endereco, setEndereco] = useState({ cep: "", logradouro: "", bairro: "", cidade: "", uf: "" });
+  const [endereco, setEndereco] = useState({ cep: "", logradouro: "", numero: "", bairro: "", cidade: "", uf: "" });
   const [enderecoTemCoordenadas, setEnderecoTemCoordenadas] = useState(false);
   // Timbrado dos documentos (PDFs gerados)
   const [lh, setLh] = useState({ office_name: "", address: "", contact: "", oab: "", footer: "", use_logo: true });
@@ -276,7 +276,7 @@ export function EscritorioZone() {
       if (res.ok) {
         const d = await res.json();
         setEndereco({
-          cep: d.cep || "", logradouro: d.logradouro || "", bairro: d.bairro || "",
+          cep: d.cep || "", logradouro: d.logradouro || "", numero: d.numero || "", bairro: d.bairro || "",
           cidade: d.cidade || "", uf: d.uf || "",
         });
         setEnderecoTemCoordenadas(d.latitude != null && d.longitude != null);
@@ -683,7 +683,8 @@ export function EscritorioZone() {
               </div>
               <p className="text-xs text-afj-black/45 -mt-2">
                 Usado no mapa (menu Mapa) e como base pro timbrado dos documentos.
-                A localização geográfica é aproximada (centro do CEP, não o número exato).
+                Preencher o número refina a localização pro endereço exato — sem ele, a localização
+                fica aproximada (centro do CEP).
               </p>
               <div className="space-y-4">
                 <div className="max-w-[200px]">
@@ -694,12 +695,20 @@ export function EscritorioZone() {
                     placeholder="00000-000"
                     className="w-full bg-afj-cream border border-afj-cream-dark rounded-sm px-4 py-2.5 text-sm focus:outline-none focus:border-afj-gold focus:bg-white transition-colors" />
                 </div>
-                <div>
-                  <label className="block text-[10px] font-semibold text-afj-black/55 mb-1.5 uppercase tracking-widest">Logradouro</label>
-                  <input type="text" value={endereco.logradouro}
-                    onChange={(e) => setEndereco({ ...endereco, logradouro: e.target.value })}
-                    placeholder="Rua, número, complemento"
-                    className="w-full bg-afj-cream border border-afj-cream-dark rounded-sm px-4 py-2.5 text-sm focus:outline-none focus:border-afj-gold focus:bg-white transition-colors" />
+                <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                  <div className="sm:col-span-3">
+                    <label className="block text-[10px] font-semibold text-afj-black/55 mb-1.5 uppercase tracking-widest">Logradouro</label>
+                    <input type="text" value={endereco.logradouro}
+                      onChange={(e) => setEndereco({ ...endereco, logradouro: e.target.value })}
+                      placeholder="Rua, complemento"
+                      className="w-full bg-afj-cream border border-afj-cream-dark rounded-sm px-4 py-2.5 text-sm focus:outline-none focus:border-afj-gold focus:bg-white transition-colors" />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-semibold text-afj-black/55 mb-1.5 uppercase tracking-widest">Número</label>
+                    <input type="text" value={endereco.numero}
+                      onChange={(e) => setEndereco({ ...endereco, numero: e.target.value })}
+                      className="w-full bg-afj-cream border border-afj-cream-dark rounded-sm px-4 py-2.5 text-sm focus:outline-none focus:border-afj-gold focus:bg-white transition-colors" />
+                  </div>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div>

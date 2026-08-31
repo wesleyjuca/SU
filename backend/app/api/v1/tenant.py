@@ -541,6 +541,7 @@ async def update_feriados(
 class EnderecoUpdate(BaseModel):
     cep: str | None = None
     logradouro: str | None = None
+    numero: str | None = None  # Fase 257.4 — opcional, refina a precisão via Nominatim
     bairro: str | None = None
     cidade: str | None = None
     uf: str | None = None

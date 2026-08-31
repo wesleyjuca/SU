@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import dynamic from "next/dynamic";
-import { BarChart2, Loader2, RefreshCw } from "lucide-react";
+import { BarChart2, Loader2, RefreshCw, Download, MapPin } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import type { FinancialData } from "@/components/relatorios/FinanceiroCharts";
 import type { ProcessoData } from "@/components/relatorios/ProcessosCharts";
@@ -25,7 +25,13 @@ const GestaoCharts = dynamic(() => import("@/components/relatorios/GestaoCharts"
   loading: () => <ChartSkeleton />,
 });
 
-const TABS = ["Gestão", "Financeiro", "Processos", "Agentes IA"] as const;
+const TABS = ["Gestão", "Financeiro", "Processos", "Agentes IA", "Geográfico"] as const;
+
+// Fase 257.3 — shape de GET /clients/geolocalizacao/regioes.
+type GeograficoData = {
+  total_geocodificados: number;
+  regioes: { cidade: string; uf: string; quantidade: number }[];
+};
 
 // Fase 206.3 — dado um período [from, to], devolve o período imediatamente
 // anterior de mesma duração (pra comparativo lado a lado).
@@ -49,6 +55,8 @@ export default function RelatoriosPage() {
   const [financial, setFinancial] = useState<FinancialData | null>(null);
   const [processos, setProcessos] = useState<ProcessoData | null>(null);
   const [agentes, setAgentes] = useState<AgentesData | null>(null);
+  const [geografico, setGeografico] = useState<GeograficoData | null>(null);
+  const [exportando, setExportando] = useState(false);
   const [loading, setLoading] = useState(false);
 
   async function loadGestao() {
@@ -100,11 +108,40 @@ export default function RelatoriosPage() {
     } finally { setLoading(false); }
   }
 
+  async function loadGeografico() {
+    setLoading(true);
+    try {
+      const res = await fetch("/api/v1/clients/geolocalizacao/regioes", { headers: headers() });
+      if (res.ok) setGeografico(await res.json());
+    } finally { setLoading(false); }
+  }
+
+  // Fase 257.3 — reaproveita o mesmo padrão de download já usado em
+  // Auditoria/Financeiro (blob + link temporário, sem lib nova).
+  async function exportarGeografico(fmt: "pdf" | "csv") {
+    setExportando(true);
+    try {
+      const res = await fetch(`/api/v1/clients/geolocalizacao/regioes/export?format=${fmt}`, { headers: headers() });
+      if (res.ok) {
+        const blob = await res.blob();
+        const a = Object.assign(document.createElement("a"), {
+          href: URL.createObjectURL(blob),
+          download: `clientes-por-regiao.${fmt}`,
+        });
+        a.click();
+        URL.revokeObjectURL(a.href);
+      }
+    } finally {
+      setExportando(false);
+    }
+  }
+
   useEffect(() => {
     if (tab === "Gestão" && !gestao) loadGestao();
     if (tab === "Financeiro" && !financial) loadFinancial();
     if (tab === "Processos" && !processos) loadProcessos();
     if (tab === "Agentes IA" && !agentes) loadAgentes();
+    if (tab === "Geográfico" && !geografico) loadGeografico();
   }, [tab]);
 
   function refresh() {
@@ -112,6 +149,7 @@ export default function RelatoriosPage() {
     if (tab === "Financeiro") { setFinancial(null); loadFinancial(); }
     if (tab === "Processos") { setProcessos(null); loadProcessos(); }
     if (tab === "Agentes IA") { setAgentes(null); loadAgentes(); }
+    if (tab === "Geográfico") { setGeografico(null); loadGeografico(); }
   }
 
   return (
@@ -221,6 +259,58 @@ export default function RelatoriosPage() {
           : agentes
             ? <AgentesCharts data={agentes} />
             : <EmptyTab icon={<BarChart2 size={28} className="text-afj-black/20" />} msg="Sem dados de agentes" />
+      )}
+
+      {/* ─── Geográfico (Fase 257.3 — item reservado desde a Fase 230) ─────── */}
+      {tab === "Geográfico" && (
+        loading && !geografico
+          ? <ChartSkeleton />
+          : geografico && geografico.regioes.length > 0
+            ? (
+              <div className="space-y-4">
+                <div className="afj-card p-3 flex items-center justify-between flex-wrap gap-2">
+                  <p className="text-sm text-afj-black/60">
+                    {geografico.total_geocodificados} cliente(s) geocodificado(s) em {geografico.regioes.length} região(ões).
+                    Ver marcadores no <a href="/mapa" className="text-afj-gold hover:underline">Mapa</a>.
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => exportarGeografico("csv")} disabled={exportando}
+                      className="btn-afj-outline rounded-sm text-xs flex items-center gap-1.5 disabled:opacity-50"
+                    >
+                      <Download size={12} /> CSV
+                    </button>
+                    <button
+                      onClick={() => exportarGeografico("pdf")} disabled={exportando}
+                      className="btn-afj-outline rounded-sm text-xs flex items-center gap-1.5 disabled:opacity-50"
+                    >
+                      <Download size={12} /> PDF
+                    </button>
+                  </div>
+                </div>
+                <div className="afj-card overflow-hidden">
+                  <table className="afj-table w-full">
+                    <thead>
+                      <tr>
+                        <th>Cidade</th>
+                        <th>UF</th>
+                        <th className="text-right">Clientes</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {geografico.regioes.map((r) => (
+                        <tr key={`${r.cidade}-${r.uf}`}>
+                          <td className="flex items-center gap-1.5"><MapPin size={12} className="text-afj-black/30" /> {r.cidade}</td>
+                          <td>{r.uf}</td>
+                          <td className="text-right">{r.quantidade}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )
+            : <EmptyTab icon={<MapPin size={28} className="text-afj-black/20" />} msg="Nenhum cliente geocodificado ainda" />
       )}
     </div>
   );
