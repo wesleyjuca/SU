@@ -1,10 +1,14 @@
-"""Fase 138.2 — endpoint PUT /integrations/hub/google_drive_doutrina/folder:
-exige conexão prévia (Google OAuth já feito), valida o ID da pasta extraído
-da URL/ID colado pelo ADMIN, grava em `extra_data` (não é segredo)."""
+"""Fase 138.2 / Fase 258 — endpoint PUT /integrations/hub/{provider}/folder:
+exige conexão prévia (Google OAuth já feito), recebe o folder_id JÁ RESOLVIDO
+pela seleção no picker (Fase 258 — nunca mais um link/ID colado, o antigo
+DriveFolderBody/hub_set_drive_folder/extrair_folder_id saiu do caminho de
+escrita), grava em `extra_data` (não é segredo). Generalizado pra funcionar
+tanto com `google_drive_doutrina` (pasta de pesquisa) quanto
+`google_workspace` (pasta de salvamento, nova nesta fase)."""
 import pytest
 from fastapi import HTTPException
 
-from app.api.v1.integrations_hub import hub_set_drive_folder, DriveFolderBody
+from app.api.v1.integrations_hub import hub_set_folder, FolderBody
 
 
 class _FakeDB:
@@ -34,8 +38,8 @@ async def test_sem_conexao_previa_rejeita(monkeypatch):
     monkeypatch.setattr(ih, "get_integration", _get)
 
     with pytest.raises(HTTPException) as exc:
-        await hub_set_drive_folder(
-            DriveFolderBody(folder="1a2B3c4D5e6F7g8H9i0J"),
+        await hub_set_folder(
+            "google_drive_doutrina", FolderBody(folder_id="1a2B3c4D5e6F7g8H9i0J"),
             current_user=_FakeUser(), db=_FakeDB(),
         )
     assert exc.value.status_code == 422
@@ -53,15 +57,15 @@ async def test_conectado_mas_sem_credentials_enc_rejeita(monkeypatch):
     monkeypatch.setattr(ih, "get_integration", _get)
 
     with pytest.raises(HTTPException) as exc:
-        await hub_set_drive_folder(
-            DriveFolderBody(folder="1a2B3c4D5e6F7g8H9i0J"),
+        await hub_set_folder(
+            "google_drive_doutrina", FolderBody(folder_id="1a2B3c4D5e6F7g8H9i0J"),
             current_user=_FakeUser(), db=_FakeDB(),
         )
     assert exc.value.status_code == 422
 
 
 @pytest.mark.asyncio
-async def test_folder_invalido_rejeita_com_422(monkeypatch):
+async def test_folder_id_vazio_rejeita_com_422(monkeypatch):
     from app.services import integration_hub as ih
 
     async def _get(db, tenant_id, provider):
@@ -69,12 +73,23 @@ async def test_folder_invalido_rejeita_com_422(monkeypatch):
     monkeypatch.setattr(ih, "get_integration", _get)
 
     with pytest.raises(HTTPException) as exc:
-        await hub_set_drive_folder(
-            DriveFolderBody(folder="não é uma pasta do drive"),
+        await hub_set_folder(
+            "google_drive_doutrina", FolderBody(folder_id="   "),
             current_user=_FakeUser(), db=_FakeDB(),
         )
     assert exc.value.status_code == 422
-    assert "ID da pasta" in exc.value.detail
+    assert "Selecione uma pasta" in exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_provider_invalido_rejeita_com_422():
+    with pytest.raises(HTTPException) as exc:
+        await hub_set_folder(
+            "stripe", FolderBody(folder_id="1a2B3c4D5e6F7g8H9i0J"),
+            current_user=_FakeUser(), db=_FakeDB(),
+        )
+    assert exc.value.status_code == 422
+    assert "sem configuração de pasta" in exc.value.detail
 
 
 @pytest.mark.asyncio
@@ -88,25 +103,56 @@ async def test_folder_valido_grava_em_extra_data_e_preserva_o_resto(monkeypatch)
     monkeypatch.setattr(ih, "get_integration", _get)
 
     db = _FakeDB()
-    url = "https://drive.google.com/drive/u/0/folders/1a2B3c4D5e6F7g8H9i0J?usp=sharing"
-    result = await hub_set_drive_folder(
-        DriveFolderBody(folder=url), current_user=_FakeUser(), db=db,
+    result = await hub_set_folder(
+        "google_drive_doutrina",
+        FolderBody(folder_id="1a2B3c4D5e6F7g8H9i0J", folder_name="Doutrina 2026"),
+        current_user=_FakeUser(), db=db,
     )
 
     assert result["folder_id"] == "1a2B3c4D5e6F7g8H9i0J"
-    assert integ.extra_data == {"algo_ja_existente": "valor", "folder_id": "1a2B3c4D5e6F7g8H9i0J"}
+    assert result["folder_name"] == "Doutrina 2026"
+    assert integ.extra_data == {
+        "algo_ja_existente": "valor", "folder_id": "1a2B3c4D5e6F7g8H9i0J", "folder_name": "Doutrina 2026",
+    }
     assert db.committed is True
+    assert "todo dia" in result["message"]
 
 
 @pytest.mark.asyncio
-async def test_folder_id_cru_tambem_aceito(monkeypatch):
+async def test_folder_name_omitido_nao_grava_chave(monkeypatch):
     from app.services import integration_hub as ih
 
+    integ = _FakeInteg(extra_data={})
+
     async def _get(db, tenant_id, provider):
-        return _FakeInteg()
+        return integ
     monkeypatch.setattr(ih, "get_integration", _get)
 
-    result = await hub_set_drive_folder(
-        DriveFolderBody(folder="  1a2B3c4D5e6F7g8H9i0J  "), current_user=_FakeUser(), db=_FakeDB(),
+    await hub_set_folder(
+        "google_drive_doutrina", FolderBody(folder_id="1a2B3c4D5e6F7g8H9i0J"),
+        current_user=_FakeUser(), db=_FakeDB(),
+    )
+    assert integ.extra_data == {"folder_id": "1a2B3c4D5e6F7g8H9i0J"}
+    assert "folder_name" not in integ.extra_data
+
+
+@pytest.mark.asyncio
+async def test_google_workspace_tambem_aceito(monkeypatch):
+    """Fase 258 — o endpoint não é mais hardcoded só pra google_drive_
+    doutrina; google_workspace (pasta de salvamento) usa o mesmo caminho,
+    com mensagem de sucesso diferente."""
+    from app.services import integration_hub as ih
+
+    integ = _FakeInteg()
+
+    async def _get(db, tenant_id, provider):
+        assert provider == "google_workspace"
+        return integ
+    monkeypatch.setattr(ih, "get_integration", _get)
+
+    result = await hub_set_folder(
+        "google_workspace", FolderBody(folder_id="1a2B3c4D5e6F7g8H9i0J", folder_name="Petições"),
+        current_user=_FakeUser(), db=_FakeDB(),
     )
     assert result["folder_id"] == "1a2B3c4D5e6F7g8H9i0J"
+    assert "salvamento" in result["message"]

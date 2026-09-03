@@ -100,14 +100,27 @@ async def calendar_create_allday_event(token: str, titulo: str, descricao: str, 
         return {"id": d.get("id"), "link": d.get("htmlLink")}
 
 
-async def _drive_upload(token: str, nome: str, content_bytes: bytes, source_mime: str, target_mime: str) -> dict:
+async def _drive_upload(
+    token: str, nome: str, content_bytes: bytes, source_mime: str, target_mime: str,
+    parent_folder_id: str | None = None,
+) -> dict:
     """Sobe um arquivo ao Drive do escritório (multipart upload). Quando
     `target_mime` é um formato nativo do Google (Doc/Sheet), a própria Drive
     API converte automaticamente durante o upload — evita chamar a Docs API
     ou a Sheets API diretamente, que exigiriam escopos OAuth próprios
     (`.../documents`, `.../spreadsheets`) não concedidos hoje. O escopo
-    `drive.file` já autorizado (Fase 139) cobre esse upload+conversão."""
+    `drive.file` já autorizado (Fase 139) cobre esse upload+conversão.
+
+    Fase 258 — `parent_folder_id` opcional: quando informado, o arquivo é
+    criado dentro dessa pasta (`metadata["parents"]`) em vez de cair sempre
+    na raiz ("Meu Drive"). `drive.file` já cobre criar em QUALQUER pasta
+    pré-existente no momento da criação (mesmo uma não criada pela app) —
+    só LISTAR pastas pré-existentes exigia o escopo novo
+    `drive.metadata.readonly` (ver `integration_hub.py::OAUTH_PROVIDERS`).
+    Sem pasta configurada, comportamento idêntico ao de antes desta fase."""
     metadata = {"name": nome, "mimeType": target_mime}
+    if parent_folder_id:
+        metadata["parents"] = [parent_folder_id]
     boundary = "afjcoreboundary"
     body = (
         f"--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n"
@@ -128,25 +141,64 @@ async def _drive_upload(token: str, nome: str, content_bytes: bytes, source_mime
         return {"id": d.get("id"), "link": d.get("webViewLink")}
 
 
-async def drive_upload_pdf(token: str, nome: str, pdf_bytes: bytes) -> dict:
+async def drive_upload_pdf(token: str, nome: str, pdf_bytes: bytes, parent_folder_id: str | None = None) -> dict:
     """Sobe um PDF ao Drive do escritório (multipart upload)."""
-    return await _drive_upload(token, f"{nome}.pdf", pdf_bytes, "application/pdf", "application/pdf")
+    return await _drive_upload(
+        token, f"{nome}.pdf", pdf_bytes, "application/pdf", "application/pdf", parent_folder_id,
+    )
 
 
-async def drive_upload_doc(token: str, nome: str, html_content: str) -> dict:
+async def drive_upload_doc(token: str, nome: str, html_content: str, parent_folder_id: str | None = None) -> dict:
     """Sobe HTML ao Drive convertendo pro formato nativo Google Doc (Fase 182)
     — vira um documento colaborável de verdade, editável no Google Docs."""
     return await _drive_upload(
         token, nome, html_content.encode("utf-8"), "text/html", "application/vnd.google-apps.document",
+        parent_folder_id,
     )
 
 
-async def drive_upload_sheet(token: str, nome: str, csv_bytes: bytes) -> dict:
+async def drive_upload_sheet(token: str, nome: str, csv_bytes: bytes, parent_folder_id: str | None = None) -> dict:
     """Sobe CSV ao Drive convertendo pro formato nativo Google Sheets (Fase 182)
     — vira uma planilha colaborável de verdade, editável no Google Sheets."""
     return await _drive_upload(
-        token, nome, csv_bytes, "text/csv", "application/vnd.google-apps.spreadsheet",
+        token, nome, csv_bytes, "text/csv", "application/vnd.google-apps.spreadsheet", parent_folder_id,
     )
+
+
+async def get_configured_folder_id(db, tenant_id) -> str | None:
+    """Fase 258 — lê o folder_id de salvamento configurado para
+    google_workspace, ou None se não configurado (upload cai na raiz,
+    comportamento atual preservado)."""
+    from app.services import integration_hub
+
+    integ = await integration_hub.get_integration(db, tenant_id, "google_workspace")
+    return (integ.extra_data or {}).get("folder_id") if integ else None
+
+
+def classificar_erro_upload_drive(exc: httpx.HTTPStatusError) -> tuple[int, str]:
+    """Fase 258 — traduz o `httpx.HTTPStatusError` que `_drive_upload`
+    levanta (via `resp.raise_for_status()`) numa mensagem específica
+    (token expirado/revogado, permissão negada, pasta removida), em vez do
+    genérico "Erro ao salvar no Google Drive." que os 3 call sites usavam
+    antes desta fase. Reusa a mesma classificação já usada na listagem de
+    pastas — sem duplicar a lógica em cada endpoint. Devolve
+    `(status_http, mensagem)` — sem depender de FastAPI aqui (este módulo
+    é REST puro), o chamador HTTP monta o `HTTPException`."""
+    from app.integrations.google_drive.client import _classificar_erro_drive
+
+    corpo = None
+    try:
+        corpo = exc.response.json()
+    except Exception:
+        corpo = None
+    erro = _classificar_erro_drive(exc.response.status_code, corpo)
+    status = {
+        "token_expirado": 401,
+        "permissao_negada": 403,
+        "escopo_insuficiente": 403,
+        "pasta_nao_encontrada": 404,
+    }.get(erro.categoria, 502)
+    return status, str(erro)
 
 
 async def gmail_send(token: str, to: str, subject: str, html_body: str) -> bool:

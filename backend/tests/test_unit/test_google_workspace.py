@@ -117,3 +117,107 @@ async def test_get_valid_token_credenciais_sem_access_token_levanta_not_connecte
 
     with pytest.raises(GoogleNotConnected):
         await get_valid_token(db=None, tenant_id="tenant-a")
+
+
+# ─── Fase 258 — pasta de salvamento (parent_folder_id) ─────────────────────
+@pytest.mark.asyncio
+async def test_drive_upload_pdf_com_parent_folder_id_inclui_parents(monkeypatch):
+    import app.services.google_workspace as gw
+
+    monkeypatch.setattr(gw.httpx, "AsyncClient", lambda **k: _FakeUploadClient())
+
+    await gw.drive_upload_pdf("token-fake", "Petição", b"%PDF-fake", parent_folder_id="pasta-123")
+
+    body = _FakeUploadClient.last_call["content"].decode(errors="replace")
+    metadata = json.loads(body.split("\r\n\r\n")[1].split("\r\n--")[0])
+    assert metadata == {"name": "Petição.pdf", "mimeType": "application/pdf", "parents": ["pasta-123"]}
+
+
+@pytest.mark.asyncio
+async def test_drive_upload_pdf_sem_parent_folder_id_nao_inclui_parents(monkeypatch):
+    """Regressão: quem não configurar pasta de salvamento continua com o
+    comportamento de antes desta fase (raiz do Drive, sem chave `parents`)."""
+    import app.services.google_workspace as gw
+
+    monkeypatch.setattr(gw.httpx, "AsyncClient", lambda **k: _FakeUploadClient())
+
+    await gw.drive_upload_pdf("token-fake", "Petição", b"%PDF-fake")
+
+    body = _FakeUploadClient.last_call["content"].decode(errors="replace")
+    metadata = json.loads(body.split("\r\n\r\n")[1].split("\r\n--")[0])
+    assert "parents" not in metadata
+
+
+@pytest.mark.asyncio
+async def test_drive_upload_doc_com_parent_folder_id_inclui_parents(monkeypatch):
+    import app.services.google_workspace as gw
+
+    monkeypatch.setattr(gw.httpx, "AsyncClient", lambda **k: _FakeUploadClient())
+
+    await gw.drive_upload_doc("token-fake", "Contrato", "<p>x</p>", parent_folder_id="pasta-456")
+
+    body = _FakeUploadClient.last_call["content"].decode()
+    metadata = json.loads(body.split("\r\n\r\n")[1].split("\r\n--")[0])
+    assert metadata["parents"] == ["pasta-456"]
+
+
+@pytest.mark.asyncio
+async def test_drive_upload_sheet_com_parent_folder_id_inclui_parents(monkeypatch):
+    import app.services.google_workspace as gw
+
+    monkeypatch.setattr(gw.httpx, "AsyncClient", lambda **k: _FakeUploadClient())
+
+    await gw.drive_upload_sheet("token-fake", "financeiro", b"a,b\n1,2", parent_folder_id="pasta-789")
+
+    body = _FakeUploadClient.last_call["content"]
+    assert b'"parents": ["pasta-789"]' in body
+
+
+@pytest.mark.asyncio
+async def test_get_configured_folder_id_sem_integracao_devolve_none(monkeypatch):
+    import app.services.google_workspace as gw
+
+    async def _sem_integ(db, tenant_id, provider):
+        return None
+    monkeypatch.setattr(gw.integration_hub, "get_integration", _sem_integ)
+
+    assert await gw.get_configured_folder_id(db=None, tenant_id="tenant-a") is None
+
+
+@pytest.mark.asyncio
+async def test_get_configured_folder_id_le_extra_data(monkeypatch):
+    import app.services.google_workspace as gw
+
+    class _FakeInteg:
+        extra_data = {"folder_id": "pasta-configurada"}
+
+    async def _com_integ(db, tenant_id, provider):
+        assert provider == "google_workspace"
+        return _FakeInteg()
+    monkeypatch.setattr(gw.integration_hub, "get_integration", _com_integ)
+
+    assert await gw.get_configured_folder_id(db=None, tenant_id="tenant-a") == "pasta-configurada"
+
+
+def test_classificar_erro_upload_drive_traduz_401():
+    import httpx
+    import app.services.google_workspace as gw
+
+    resp = httpx.Response(401, json={"error": {"errors": [{"reason": "authError"}]}}, request=httpx.Request("POST", "https://example.com"))
+    exc = httpx.HTTPStatusError("erro", request=resp.request, response=resp)
+
+    status, detail = gw.classificar_erro_upload_drive(exc)
+    assert status == 401
+    assert "token" in detail.lower() or "reconecte" in detail.lower()
+
+
+def test_classificar_erro_upload_drive_traduz_404_pasta_removida():
+    import httpx
+    import app.services.google_workspace as gw
+
+    resp = httpx.Response(404, json={}, request=httpx.Request("POST", "https://example.com"))
+    exc = httpx.HTTPStatusError("erro", request=resp.request, response=resp)
+
+    status, detail = gw.classificar_erro_upload_drive(exc)
+    assert status == 404
+    assert "não encontrada" in detail.lower() or "removida" in detail.lower()

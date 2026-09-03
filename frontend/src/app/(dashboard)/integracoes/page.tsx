@@ -5,6 +5,7 @@ import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
 import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 import { StatusBadge, type StatusTone } from "@/components/integrations/StatusBadge";
+import { DriveFolderPicker } from "@/components/integrations/DriveFolderPicker";
 
 // Cards estáticos (recursos que não são "conectar conta" — hoje só o PWA).
 const INTEGRACOES = [
@@ -101,8 +102,10 @@ function HubCards() {
   const [pdpjForm, setPdpjForm] = useState({ username: "", password: "" });
   const [pdpjWorking, setPdpjWorking] = useState(false);
   const [modulos, setModulos] = useState<Record<string, boolean>>({});
-  const [folderInputs, setFolderInputs] = useState<Record<string, string>>({});
   const [salvandoPasta, setSalvandoPasta] = useState<string | null>(null);
+  // Fase 258 — seletor real de pasta (substitui o input de colar link).
+  const [pickerAberto, setPickerAberto] = useState<{ provider: string } | null>(null);
+  const [sincronizando, setSincronizando] = useState(false);
   // Fase 188.2 — achado da Fase 186: a tela não mostrava nenhum resultado
   // da sincronização de doutrina (processados/pulados/falhas/erro).
   const [driveLastSync, setDriveLastSync] = useState<{
@@ -231,20 +234,31 @@ function HubCards() {
     finally { setWorking(false); }
   }
 
-  async function salvarPasta(it: HubIntegracao) {
-    const valor = (folderInputs[it.provider] ?? it.extra_data?.folder_id ?? "").trim();
-    if (!valor) return;
-    setSalvandoPasta(it.provider);
+  async function salvarPasta(provider: string, folderId: string, folderName: string) {
+    setSalvandoPasta(provider);
     try {
-      const res = await fetch(`/api/v1/integrations/hub/${it.provider}/folder`, {
+      const res = await fetch(`/api/v1/integrations/hub/${provider}/folder`, {
         method: "PUT", headers: authH(),
-        body: JSON.stringify({ folder: valor }),
+        body: JSON.stringify({ folder_id: folderId, folder_name: folderName }),
       });
       const d = await res.json().catch(() => ({}));
       if (res.ok) { toast.success(d.message || "Pasta configurada."); fetchHub(); }
       else toast.error(d.detail || "Erro ao configurar a pasta.");
     } catch { toast.error("Falha de conexão."); }
-    finally { setSalvandoPasta(null); }
+    finally { setSalvandoPasta(null); setPickerAberto(null); }
+  }
+
+  async function sincronizarAgora() {
+    setSincronizando(true);
+    try {
+      const res = await fetch("/api/v1/integrations/hub/google_drive_doutrina/sync-now", {
+        method: "POST", headers: authH(),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (res.ok) { toast.success(d.message || "Sincronização concluída."); fetchDriveLastSync(); }
+      else toast.error(d.detail || "Erro ao sincronizar.");
+    } catch { toast.error("Falha de conexão."); }
+    finally { setSincronizando(false); }
   }
 
   async function desconectar(it: HubIntegracao) {
@@ -307,8 +321,10 @@ function HubCards() {
             {it.provider === "google_workspace" && !temCredencial && (
               <p className="mt-2 text-[11px] text-afj-black/45 leading-relaxed">
                 A conexão concede ao AFJ CORE permissão para: enviar e-mails em nome dessa conta
-                (Gmail), criar/editar eventos na Agenda do Google, e salvar arquivos no Drive dessa
-                conta. Nenhum e-mail ou arquivo existente é lido — só o necessário pra essas 3 ações.
+                (Gmail), criar/editar eventos na Agenda do Google, salvar arquivos no Drive dessa
+                conta, e ler os nomes/IDs das pastas existentes no Drive dessa conta (sem acessar
+                o conteúdo de nenhum arquivo) — só para permitir escolher onde salvar. Nenhum
+                e-mail ou conteúdo de arquivo existente é lido.
               </p>
             )}
 
@@ -343,26 +359,29 @@ function HubCards() {
               <p className="mt-3 text-xs text-afj-black/45">Integração não habilitada pelo administrador deste escritório.</p>
             )}
 
-            {/* Pasta do Drive a sincronizar — só depois de conectado (Fase 138.2) */}
+            {/* Pasta do Drive a sincronizar — só depois de conectado (Fase 138.2).
+                Fase 258 — seletor real via Drive API, substitui o input de
+                colar link/ID (nunca mais exige pasta pública/compartilhada). */}
             {it.provider === "google_drive_doutrina" && it.status === "CONECTADA" && (
               <div className="mt-3 pt-3 border-t border-afj-cream-dark">
                 <label className="block text-xs font-medium text-afj-black/70 mb-1">Pasta do Drive a sincronizar</label>
                 <div className="flex items-center gap-2">
-                  <input type="text" value={folderInputs[it.provider] ?? it.extra_data?.folder_id ?? ""}
-                    onChange={(e) => setFolderInputs((prev) => ({ ...prev, [it.provider]: e.target.value }))}
-                    placeholder="Cole a URL ou o ID da pasta do Drive"
-                    disabled={!isAdmin}
-                    className="flex-1 border border-afj-cream-dark rounded-sm px-3 py-1.5 text-xs focus:outline-none focus:border-afj-gold disabled:opacity-60" />
                   {isAdmin && (
-                    <button onClick={() => salvarPasta(it)} disabled={salvandoPasta === it.provider}
+                    <button onClick={() => setPickerAberto({ provider: it.provider })}
+                      className="btn-afj-outline text-xs py-1.5 px-3 rounded-sm flex items-center gap-1.5 flex-shrink-0">
+                      <FolderOpen size={12} /> Escolher pasta
+                    </button>
+                  )}
+                  {isAdmin && (
+                    <button onClick={sincronizarAgora} disabled={sincronizando}
                       className="btn-afj-outline text-xs py-1.5 px-3 rounded-sm flex items-center gap-1.5 disabled:opacity-50 flex-shrink-0">
-                      {salvandoPasta === it.provider ? <Loader2 size={12} className="animate-spin" /> : <FolderOpen size={12} />} Salvar
+                      {sincronizando ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />} Sincronizar agora
                     </button>
                   )}
                 </div>
                 {it.extra_data?.folder_id && (
                   <p className="text-[11px] text-afj-black/40 mt-1">
-                    Pasta atual: <code className="bg-afj-cream px-1 rounded">{it.extra_data.folder_id}</code>
+                    Pasta atual: <code className="bg-afj-cream px-1 rounded">{it.extra_data.folder_name || it.extra_data.folder_id}</code>
                   </p>
                 )}
                 {driveLastSync && (
@@ -382,6 +401,30 @@ function HubCards() {
                       <p className="mt-0.5">{String(driveLastSync.stats.erro)}</p>
                     ) : null}
                   </div>
+                )}
+              </div>
+            )}
+
+            {/* Fase 258 — pasta de salvamento, nova: antes todo arquivo
+                gerado pelo sistema (petição, contrato, planilha financeira)
+                caía sempre na raiz do Drive, sem opção nenhuma. */}
+            {it.provider === "google_workspace" && it.status === "CONECTADA" && (
+              <div className="mt-3 pt-3 border-t border-afj-cream-dark">
+                <label className="block text-xs font-medium text-afj-black/70 mb-1">Pasta de salvamento no Drive</label>
+                {isAdmin && (
+                  <button onClick={() => setPickerAberto({ provider: it.provider })}
+                    className="btn-afj-outline text-xs py-1.5 px-3 rounded-sm flex items-center gap-1.5">
+                    <FolderOpen size={12} /> Escolher pasta
+                  </button>
+                )}
+                {it.extra_data?.folder_id ? (
+                  <p className="text-[11px] text-afj-black/40 mt-1">
+                    Pasta atual: <code className="bg-afj-cream px-1 rounded">{it.extra_data.folder_name || it.extra_data.folder_id}</code>
+                  </p>
+                ) : (
+                  <p className="text-[11px] text-afj-black/40 mt-1">
+                    Nenhuma pasta configurada — os arquivos são salvos na raiz (Meu Drive).
+                  </p>
                 )}
               </div>
             )}
@@ -523,6 +566,13 @@ function HubCards() {
             </div>
           </div>
         </div>
+      )}
+      {pickerAberto && (
+        <DriveFolderPicker
+          provider={pickerAberto.provider as "google_drive_doutrina" | "google_workspace"}
+          onSelect={(folderId, folderName) => salvarPasta(pickerAberto.provider, folderId, folderName)}
+          onClose={() => setPickerAberto(null)}
+        />
       )}
       {confirmDialog}
     </>

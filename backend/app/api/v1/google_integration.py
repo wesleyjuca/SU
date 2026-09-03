@@ -91,7 +91,11 @@ async def save_document_to_drive(
     db: AsyncSession = Depends(get_db),
 ):
     """Gera o PDF timbrado do documento e salva no Google Drive do escritório."""
-    from app.services.google_workspace import get_valid_token, drive_upload_pdf, GoogleNotConnected
+    import httpx
+    from app.services.google_workspace import (
+        GoogleNotConnected, classificar_erro_upload_drive, drive_upload_pdf,
+        get_configured_folder_id, get_valid_token,
+    )
     from app.models.document import Document
     from app.models.tenant import TenantConfig
     from app.utils.pdf_builder import build_petition_pdf
@@ -131,10 +135,14 @@ async def save_document_to_drive(
     )
     try:
         token = await get_valid_token(db, current_user.tenant_id)
-        result = await drive_upload_pdf(token, doc.titulo[:80], pdf)
+        folder_id = await get_configured_folder_id(db, current_user.tenant_id)
+        result = await drive_upload_pdf(token, doc.titulo[:80], pdf, parent_folder_id=folder_id)
         return {"message": "Documento salvo no Google Drive do escritório.", **result}
     except GoogleNotConnected as exc:
         raise HTTPException(status_code=422, detail=str(exc))
+    except httpx.HTTPStatusError as exc:
+        status, detail = classificar_erro_upload_drive(exc)
+        raise HTTPException(status_code=status, detail=detail)
     except Exception:
         raise HTTPException(status_code=502, detail="Erro ao salvar no Google Drive.")
 
@@ -149,7 +157,11 @@ async def save_document_as_google_doc(
     Drive API converte o HTML automaticamente no upload, sob o mesmo escopo
     `drive.file` já concedido — sem timbrado (isso continua exclusivo do PDF
     baixado/protocolado, via `/drive-save`)."""
-    from app.services.google_workspace import get_valid_token, drive_upload_doc, GoogleNotConnected
+    import httpx
+    from app.services.google_workspace import (
+        GoogleNotConnected, classificar_erro_upload_drive, drive_upload_doc,
+        get_configured_folder_id, get_valid_token,
+    )
     from app.models.document import Document
     from app.core.exceptions import NotFoundError
 
@@ -168,7 +180,8 @@ async def save_document_as_google_doc(
     conteudo = doc.conteudo_html or "".join(f"<p>{linha}</p>" for linha in (doc.conteudo_texto or "").split("\n"))
     try:
         token = await get_valid_token(db, current_user.tenant_id)
-        result = await drive_upload_doc(token, doc.titulo[:80], conteudo)
+        folder_id = await get_configured_folder_id(db, current_user.tenant_id)
+        result = await drive_upload_doc(token, doc.titulo[:80], conteudo, parent_folder_id=folder_id)
         meta = dict(doc.metadata_json or {})
         meta["google_doc_id"] = result.get("id")
         meta["google_doc_url"] = result.get("link")
@@ -191,5 +204,8 @@ async def save_document_as_google_doc(
         return {"message": "Documento salvo como Google Doc no Drive do escritório.", **result}
     except GoogleNotConnected as exc:
         raise HTTPException(status_code=422, detail=str(exc))
+    except httpx.HTTPStatusError as exc:
+        status, detail = classificar_erro_upload_drive(exc)
+        raise HTTPException(status_code=status, detail=detail)
     except Exception:
         raise HTTPException(status_code=502, detail="Erro ao salvar como Google Doc.")
