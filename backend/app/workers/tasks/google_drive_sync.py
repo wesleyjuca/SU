@@ -32,7 +32,9 @@ async def executar_sync_drive_doutrina(db, tenant_id=None) -> dict:
     from app.models.tenant import TenantConfig
     from app.models.jurisprudencia_ingerida import JurisprudenciaIngerida
     from app.services import integration_hub
-    from app.integrations.google_drive.client import listar_arquivos, baixar_conteudo, extrair_texto
+    from app.integrations.google_drive.client import (
+        listar_arquivos, baixar_conteudo, extrair_texto, tipo_suportado,
+    )
     from app.rag.ingestion import ingest_document, delete_document_chunks
     from app.services.movements_import import iniciar_sync, finalizar_sync
 
@@ -107,7 +109,11 @@ async def executar_sync_drive_doutrina(db, tenant_id=None) -> dict:
                 # de novo, mesmo depois da causa da falha ser corrigida.
                 # Reaproveita a linha existente em vez de inserir outra —
                 # `(fonte, fonte_documento_id)` é UNIQUE.
-                metadata = {"nome_arquivo": arq.get("name"), "google_file_id": file_id}
+                metadata = {
+                    "nome_arquivo": arq.get("name"),
+                    "google_file_id": file_id,
+                    "caminho_pasta": arq.get("caminho_pasta") or "",
+                }
                 if existe:
                     if existe.status == "EMBEDDED":
                         pulados += 1
@@ -124,10 +130,28 @@ async def executar_sync_drive_doutrina(db, tenant_id=None) -> dict:
                 await db.flush()
 
                 try:
-                    conteudo = await baixar_conteudo(creds["access_token"], file_id, arq.get("mimeType"))
+                    mime_type = arq.get("mimeType")
+                    # Achado real (validação da pasta Doutrina): tipos
+                    # nativos do Google Workspace fora de Docs (Sheets/
+                    # Slides/Forms/Desenhos) caíam em `alt=media`, que a
+                    # Drive API rejeita pra esses tipos — o download falhava
+                    # com um erro HTTP genérico, virando uma mensagem que
+                    # não deixava claro que o FORMATO em si não é suportado.
+                    # Checar antes evita a chamada HTTP fadada a falhar e dá
+                    # uma mensagem precisa — não adiciona suporte a nenhum
+                    # formato novo, só move o ponto de checagem pra antes do
+                    # download.
+                    if not tipo_suportado(mime_type):
+                        entrada.status = "FALHOU"
+                        entrada.erro = f"Formato não suportado ({mime_type}) — suportados: PDF, DOCX, Google Docs."
+                        falhas += 1
+                        entrada.processed_at = datetime.now(timezone.utc)
+                        await db.commit()
+                        continue
+                    conteudo = await baixar_conteudo(creds["access_token"], file_id, mime_type)
                     if conteudo is None:
                         raise RuntimeError("download do arquivo falhou")
-                    texto = await extrair_texto(arq.get("mimeType"), conteudo)
+                    texto = await extrair_texto(mime_type, conteudo)
                     if not texto:
                         entrada.status = "FALHOU"
                         entrada.erro = "tipo de arquivo não suportado ou sem texto extraível"

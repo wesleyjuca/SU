@@ -6,7 +6,7 @@ import pytest
 from app.integrations.google_drive.client import (
     extrair_folder_id, listar_arquivos, extrair_texto, baixar_conteudo,
     listar_pastas, DriveApiError, _classificar_erro_drive,
-    _MIME_DOCX, _MIME_PDF, _MIME_GDOC,
+    _MIME_DOCX, _MIME_PDF, _MIME_GDOC, tipo_suportado, _MAX_RECURSAO_SUBPASTAS,
 )
 
 
@@ -310,3 +310,142 @@ async def test_listar_pastas_falha_de_rede_vira_indisponivel(monkeypatch):
         await listar_pastas("token-fake")
     assert exc.value.categoria == "indisponivel"
     assert _FakeDownloadClient.last_call["params"] == {"alt": "media"}
+
+
+# ─── Achados reais (validação da pasta Doutrina): tipo_suportado + paginação
+# + recursão em subpastas de listar_arquivos ─────────────────────────────
+
+def test_tipo_suportado_pdf_docx_gdoc():
+    assert tipo_suportado(_MIME_PDF)
+    assert tipo_suportado(_MIME_DOCX)
+    assert tipo_suportado(_MIME_GDOC)
+
+
+def test_tipo_suportado_google_sheets_nao_suportado():
+    # Achado real: Sheets/Slides caíam em alt=media (que a Drive API rejeita
+    # pra tipos nativos fora de Docs) com uma mensagem genérica de falha de
+    # download — checar isso ANTES do download dá uma mensagem precisa.
+    assert not tipo_suportado("application/vnd.google-apps.spreadsheet")
+    assert not tipo_suportado("application/vnd.google-apps.presentation")
+
+
+def test_tipo_suportado_none_ou_desconhecido():
+    assert not tipo_suportado(None)
+    assert not tipo_suportado("image/png")
+
+
+class _FakeSequenceClient:
+    """Devolve respostas em sequência entre chamadas `.get()` sucessivas —
+    simula múltiplas páginas (`nextPageToken`) ou múltiplas pastas (raiz +
+    subpastas) dentro da mesma listagem recursiva."""
+    def __init__(self, respostas):
+        self._respostas = list(respostas)
+        self.calls = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def get(self, url, params=None, headers=None):
+        self.calls.append({"url": url, "params": params, "headers": headers})
+        status_code, json_body = self._respostas.pop(0)
+
+        class _Resp:
+            def json(self_inner):
+                return json_body
+        _Resp.status_code = status_code
+        return _Resp()
+
+
+@pytest.mark.asyncio
+async def test_listar_arquivos_segue_paginacao(monkeypatch):
+    import httpx
+    fake = _FakeSequenceClient([
+        (200, {"files": [{"id": "a1", "name": "Um.pdf", "mimeType": _MIME_PDF}], "nextPageToken": "tok1"}),
+        (200, {"files": [{"id": "a2", "name": "Dois.pdf", "mimeType": _MIME_PDF}]}),
+        (200, {"files": []}),  # subpastas — nenhuma
+    ])
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **k: fake)
+
+    arquivos = await listar_arquivos("token-fake", "folder-raiz")
+
+    assert [a["id"] for a in arquivos] == ["a1", "a2"]
+    assert all(a["caminho_pasta"] == "" for a in arquivos)
+    assert "pageToken" not in fake.calls[0]["params"]
+    assert fake.calls[1]["params"]["pageToken"] == "tok1"
+
+
+@pytest.mark.asyncio
+async def test_listar_arquivos_recursa_em_subpasta(monkeypatch):
+    import httpx
+    fake = _FakeSequenceClient([
+        (200, {"files": [{"id": "r1", "name": "Raiz.pdf", "mimeType": _MIME_PDF}]}),   # arquivos da raiz
+        (200, {"files": [{"id": "sub1", "name": "Civil"}]}),                            # subpastas da raiz
+        (200, {"files": [{"id": "s1", "name": "Sub.pdf", "mimeType": _MIME_PDF}]}),     # arquivos de "Civil"
+        (200, {"files": []}),                                                           # subpastas de "Civil" — nenhuma
+    ])
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **k: fake)
+
+    arquivos = await listar_arquivos("token-fake", "folder-raiz")
+
+    por_id = {a["id"]: a for a in arquivos}
+    assert set(por_id) == {"r1", "s1"}
+    assert por_id["r1"]["caminho_pasta"] == ""
+    assert por_id["s1"]["caminho_pasta"] == "Civil"
+
+
+@pytest.mark.asyncio
+async def test_listar_arquivos_subpasta_com_falha_e_pulada_sem_derrubar_raiz(monkeypatch):
+    import httpx
+    fake = _FakeSequenceClient([
+        (200, {"files": [{"id": "r1", "name": "Raiz.pdf", "mimeType": _MIME_PDF}]}),  # arquivos da raiz — OK
+        (200, {"files": [{"id": "sub1", "name": "Civil"}]}),                           # subpastas da raiz — OK
+        (500, {}),                                                                     # arquivos de "Civil" — falha
+    ])
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **k: fake)
+
+    arquivos = await listar_arquivos("token-fake", "folder-raiz")
+
+    # A subpasta que falhou é pulada (fail-soft) — o arquivo da raiz
+    # continua presente, a sincronização inteira não é abortada.
+    assert [a["id"] for a in arquivos] == ["r1"]
+
+
+@pytest.mark.asyncio
+async def test_listar_arquivos_falha_de_listagem_de_subpastas_nao_afeta_raiz(monkeypatch):
+    import httpx
+    fake = _FakeSequenceClient([
+        (200, {"files": [{"id": "r1", "name": "Raiz.pdf", "mimeType": _MIME_PDF}]}),  # arquivos da raiz — OK
+        (500, {}),                                                                     # descoberta de subpastas — falha
+    ])
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **k: fake)
+
+    arquivos = await listar_arquivos("token-fake", "folder-raiz")
+
+    assert [a["id"] for a in arquivos] == ["r1"]
+
+
+@pytest.mark.asyncio
+async def test_listar_arquivos_pasta_raiz_falha_devolve_none(monkeypatch):
+    import httpx
+    fake = _FakeSequenceClient([(500, {})])
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **k: fake)
+
+    assert await listar_arquivos("token-fake", "folder-raiz") is None
+
+
+@pytest.mark.asyncio
+async def test_listar_arquivos_profundidade_maxima_nao_lista_subpastas(monkeypatch):
+    import httpx
+    fake = _FakeSequenceClient([
+        (200, {"files": [{"id": "r1", "name": "Raiz.pdf", "mimeType": _MIME_PDF}]}),
+    ])
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **k: fake)
+
+    arquivos = await listar_arquivos("token-fake", "folder-raiz", _profundidade=_MAX_RECURSAO_SUBPASTAS)
+
+    assert [a["id"] for a in arquivos] == ["r1"]
+    # Só 1 chamada HTTP — não tentou descobrir subpastas no limite de profundidade.
+    assert len(fake.calls) == 1

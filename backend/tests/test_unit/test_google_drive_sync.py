@@ -268,3 +268,70 @@ async def test_arquivo_ja_embedded_continua_sendo_pulado(monkeypatch):
 
     assert resultado["processados"] == 0
     assert resultado["pulados"] == 1
+
+
+@pytest.mark.asyncio
+async def test_tipo_nativo_do_google_nao_suportado_falha_sem_tentar_download(monkeypatch):
+    """Achado real (validação da pasta Doutrina): antes desta fase, um
+    Google Sheet/Slides caía em `baixar_conteudo` (que a Drive API rejeita
+    pra tipos nativos fora de Docs) e virava um erro genérico de "download
+    do arquivo falhou" — a checagem nova (`tipo_suportado`) intercepta
+    ANTES, com mensagem precisa, sem sequer tentar baixar."""
+    import app.workers.tasks.google_drive_sync as mod
+
+    tenant = uuid.uuid4()
+    integ = _FakeInteg(tenant, "folder_x")
+
+    async def _fake_iniciar_sync(db, tenant_id, fonte, tipo):
+        return type("Run", (), {"tenant_id": tenant_id})()
+
+    async def _fake_finalizar_sync(db, run, status, stats):
+        pass
+
+    monkeypatch.setattr("app.services.movements_import.iniciar_sync", _fake_iniciar_sync)
+    monkeypatch.setattr("app.services.movements_import.finalizar_sync", _fake_finalizar_sync)
+
+    async def _fake_get_credentials(db, tenant_id, provider):
+        return {"access_token": "tok"}
+
+    monkeypatch.setattr("app.services.integration_hub.get_credentials", _fake_get_credentials)
+
+    async def _fake_listar_arquivos(access_token, folder_id):
+        return [{"id": "sheet1", "name": "planilha.xlsx", "mimeType": "application/vnd.google-apps.spreadsheet"}]
+
+    monkeypatch.setattr("app.integrations.google_drive.client.listar_arquivos", _fake_listar_arquivos)
+
+    chamou_download = False
+
+    async def _fake_baixar_conteudo(access_token, file_id, mime_type):
+        nonlocal chamou_download
+        chamou_download = True
+        return b"nao deveria chegar aqui"
+
+    monkeypatch.setattr("app.integrations.google_drive.client.baixar_conteudo", _fake_baixar_conteudo)
+
+    class _FakeDBCapturaAdd(_FakeDB):
+        """Registra a instância real de `JurisprudenciaIngerida` que
+        `google_drive_sync.py` cria e passa pra `db.add()`, sem alterá-la —
+        a base `_FakeDB.add()` descarta o objeto, aqui só observamos."""
+        def __init__(self, *a, **k):
+            super().__init__(*a, **k)
+            self._entrada_real = None
+
+        def add(self, obj):
+            self._entrada_real = obj
+
+    db = _FakeDBCapturaAdd([
+        _FakeScalarsResult([integ]),
+        _FakeScalarResult(_FakeCfg()),
+        _FakeScalarResult(None),  # dedup: arquivo novo
+    ])
+
+    resultado = await mod.executar_sync_drive_doutrina(db)
+
+    assert not chamou_download
+    assert resultado["processados"] == 0
+    assert resultado["falhas"] == 1
+    assert db._entrada_real.status == "FALHOU"
+    assert "Formato não suportado" in db._entrada_real.erro
+    assert "application/vnd.google-apps.spreadsheet" in db._entrada_real.erro

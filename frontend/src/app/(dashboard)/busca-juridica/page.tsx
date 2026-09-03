@@ -17,6 +17,12 @@ const COLECOES = [
   { value: "jurisprudencia", label: "Jurisprudência", color: "bg-blue-100 text-blue-700" },
   { value: "legislacao", label: "Legislação", color: "bg-green-100 text-green-700" },
   { value: "doutrina", label: "Doutrina", color: "bg-purple-100 text-purple-700" },
+  // Achado real: coleção privada por tenant, populada automaticamente pela
+  // sincronização do Google Drive (Integrações → Google Drive — Doutrina)
+  // — distinta de "doutrina" (pública/compartilhada, manual). Antes desta
+  // fase, essa coleção nunca aparecia aqui — mesmo com a sincronização
+  // funcionando, o conteúdo nunca ficava buscável nem contado na tela.
+  { value: "doutrina_privada", label: "Doutrina AFJ", color: "bg-fuchsia-100 text-fuchsia-700" },
   { value: "peticoes_afj", label: "Petições AFJ", color: "bg-amber-100 text-amber-700" },
   { value: "memorias_afj", label: "Memórias AFJ", color: "bg-orange-100 text-orange-700" },
   { value: "documentos_clientes", label: "Docs. Clientes", color: "bg-teal-100 text-teal-700" },
