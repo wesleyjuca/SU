@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect } from "react";
-import { Plug, MessageCircle, PenTool, Clock, CheckCircle2, Smartphone, Loader2, LogOut, Link2, CreditCard, Wallet, X, RefreshCw, AlertTriangle, Scale, Search, ScrollText, FolderOpen } from "lucide-react";
+import { Plug, MessageCircle, PenTool, Clock, CheckCircle2, Smartphone, Loader2, LogOut, Link2, CreditCard, Wallet, X, RefreshCw, AlertTriangle, Scale, Search, ScrollText, FolderOpen, ChevronDown, ChevronUp } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
 import { useConfirmDialog } from "@/hooks/useConfirmDialog";
@@ -111,6 +111,29 @@ function HubCards() {
   const [driveLastSync, setDriveLastSync] = useState<{
     status: string; stats: Record<string, unknown>; started_at: string | null; finished_at: string | null;
   } | null>(null);
+  // Achado real (validação da pasta Doutrina): "processados/pulados/falhas"
+  // era um agregado opaco — nenhuma tela mostrava QUAL arquivo falhou nem
+  // por quê. Detalhe buscado sob demanda (não no mount), mesmo padrão já
+  // usado no painel de auditoria do /mapa.
+  const [arquivosDriveAbertos, setArquivosDriveAbertos] = useState(false);
+  const [arquivosDrive, setArquivosDrive] = useState<Array<{
+    google_file_id: string; nome_arquivo: string | null; caminho_pasta: string;
+    status: string; erro: string | null; processed_at: string | null;
+  }> | null>(null);
+  const [carregandoArquivosDrive, setCarregandoArquivosDrive] = useState(false);
+
+  async function alternarArquivosDrive() {
+    const abrindo = !arquivosDriveAbertos;
+    setArquivosDriveAbertos(abrindo);
+    if (abrindo && arquivosDrive === null) {
+      setCarregandoArquivosDrive(true);
+      try {
+        const res = await fetch("/api/v1/integrations/hub/google_drive_doutrina/last-sync/arquivos", { headers: authH() });
+        if (res.ok) setArquivosDrive((await res.json()).arquivos || []);
+      } catch { /* mantém null, mostra estado de erro discreto */ }
+      finally { setCarregandoArquivosDrive(false); }
+    }
+  }
 
   async function fetchHub() {
     try {
@@ -400,6 +423,52 @@ function HubCards() {
                     {driveLastSync.status === "ERRO" && driveLastSync.stats?.erro ? (
                       <p className="mt-0.5">{String(driveLastSync.stats.erro)}</p>
                     ) : null}
+                  </div>
+                )}
+                {driveLastSync && (
+                  <div className="mt-1.5">
+                    <button type="button" onClick={alternarArquivosDrive}
+                      className="text-[11px] text-afj-gold hover:underline flex items-center gap-1">
+                      {arquivosDriveAbertos ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
+                      Ver arquivos
+                    </button>
+                    {arquivosDriveAbertos && (
+                      <div className="mt-1.5 border border-afj-cream-dark rounded-sm overflow-hidden">
+                        {carregandoArquivosDrive ? (
+                          <p className="text-[11px] text-afj-black/40 px-2.5 py-2 flex items-center gap-1.5">
+                            <Loader2 size={11} className="animate-spin" /> Carregando...
+                          </p>
+                        ) : arquivosDrive === null ? (
+                          <p className="text-[11px] text-afj-black/40 px-2.5 py-2">Não foi possível carregar os arquivos.</p>
+                        ) : arquivosDrive.length === 0 ? (
+                          <p className="text-[11px] text-afj-black/40 px-2.5 py-2">Nenhum arquivo processado ainda.</p>
+                        ) : (
+                          <table className="w-full text-[11px]">
+                            <tbody>
+                              {arquivosDrive.map((arq) => (
+                                <tr key={arq.google_file_id} className="border-t border-afj-cream-dark first:border-t-0">
+                                  <td className="px-2.5 py-1.5 align-top">
+                                    <p className="font-medium text-afj-black/80 truncate max-w-[180px]" title={arq.nome_arquivo || arq.google_file_id}>
+                                      {arq.caminho_pasta ? `${arq.caminho_pasta}/` : ""}{arq.nome_arquivo || arq.google_file_id}
+                                    </p>
+                                    {arq.erro && <p className="text-red-600 mt-0.5">{arq.erro}</p>}
+                                  </td>
+                                  <td className="px-2.5 py-1.5 align-top text-right whitespace-nowrap">
+                                    <span className={`px-1.5 py-0.5 rounded-sm ${
+                                      arq.status === "EMBEDDED" ? "bg-green-100 text-green-700"
+                                        : arq.status === "FALHOU" ? "bg-red-100 text-red-700"
+                                        : "bg-afj-cream text-afj-black/50"
+                                    }`}>
+                                      {arq.status}
+                                    </span>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

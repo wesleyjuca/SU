@@ -117,6 +117,22 @@ _MIME_PDF = "application/pdf"
 # precisa do endpoint `/export`.
 _MIME_GDOC = "application/vnd.google-apps.document"
 
+_TIPOS_SUPORTADOS = {_MIME_DOCX, _MIME_PDF, _MIME_GDOC}
+
+
+def tipo_suportado(mime_type: str | None) -> bool:
+    """Achado real (validação da pasta Doutrina): outros tipos nativos do
+    Google Workspace (Sheets/Slides/Forms/Desenhos) caíam sem essa checagem
+    em `baixar_arquivo`/`alt=media`, que a Drive API rejeita pra esses
+    tipos — o download falhava com um erro HTTP genérico, virando
+    `"download do arquivo falhou"` no chamador (`google_drive_sync.py`),
+    uma mensagem tecnicamente correta mas que não diz que o FORMATO em si
+    não é suportado. `google_drive_sync.py` agora checa isso ANTES de
+    tentar baixar, produzindo uma mensagem precisa e evitando uma chamada
+    HTTP fadada a falhar — não adiciona suporte a nenhum formato novo, só
+    move o ponto de checagem pra antes do download."""
+    return mime_type in _TIPOS_SUPORTADOS
+
 # Aceita URL completa (com ou sem /u/0/, com ou sem query string) ou ID cru.
 _PADRAO_URL_PASTA = re.compile(r"drive\.google\.com/drive/(?:u/\d+/)?folders/([a-zA-Z0-9_-]+)")
 _PADRAO_ID_CRU = re.compile(r"^[a-zA-Z0-9_-]{10,}$")
@@ -137,16 +153,23 @@ def extrair_folder_id(texto: str) -> str | None:
     return None
 
 
-async def listar_arquivos(access_token: str, folder_id: str) -> list[dict] | None:
-    """Lista arquivos (não-pastas, não-lixeira) dentro da pasta configurada.
-    Devolve `None` se a chamada falhar (rede, token inválido, circuito
-    aberto) — distinto de lista vazia (pasta existente mas sem arquivos)."""
+_MAX_RECURSAO_SUBPASTAS = 5
+
+
+async def _listar_pagina(access_token: str, query: str, page_token: str | None = None) -> dict | None:
+    """Uma página de `files.list` com o filtro `query`, sob o `_breaker`
+    compartilhado — devolve o JSON bruto (`files` + `nextPageToken`
+    opcional) ou `None` se a chamada falhar (rede, token inválido, circuito
+    aberto)."""
+    params: dict = {
+        "q": query,
+        "fields": "files(id,name,mimeType,modifiedTime),nextPageToken",
+        "pageSize": 100,
+    }
+    if page_token:
+        params["pageToken"] = page_token
+
     async def _f():
-        params = {
-            "q": f"'{folder_id}' in parents and trashed=false and mimeType != 'application/vnd.google-apps.folder'",
-            "fields": "files(id,name,mimeType,modifiedTime)",
-            "pageSize": 100,
-        }
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
             resp = await client.get(
                 DRIVE_FILES_URL, params=params,
@@ -157,11 +180,102 @@ async def listar_arquivos(access_token: str, folder_id: str) -> list[dict] | Non
                 raise RuntimeError(f"drive list status {resp.status_code}")
             return resp.json()
 
-    data = await _breaker.run(_f, default=None)
-    if not data or not isinstance(data, dict):
+    return await _breaker.run(_f, default=None)
+
+
+async def _listar_arquivos_de_uma_pasta(access_token: str, folder_id: str) -> list[dict] | None:
+    """Lista TODOS os arquivos (não-pastas, não-lixeira) de UMA pasta,
+    seguindo `nextPageToken` até esgotar — achado real: a versão anterior só
+    pedia a 1ª página (`pageSize: 100`), arquivos além dela nunca eram
+    vistos. `None` só se a 1ª página falhar; se uma página seguinte falhar,
+    mantém o que já foi coletado em vez de descartar tudo (fail-soft, mesmo
+    espírito do resto do módulo)."""
+    query = f"'{folder_id}' in parents and trashed=false and mimeType != 'application/vnd.google-apps.folder'"
+    arquivos: list[dict] = []
+    page_token = None
+    primeira_pagina = True
+    while True:
+        data = await _listar_pagina(access_token, query, page_token)
+        if not data or not isinstance(data, dict):
+            if primeira_pagina:
+                return None
+            log.warning("drive_list_pagina_falhou", folder_id=folder_id)
+            break
+        files = data.get("files")
+        if isinstance(files, list):
+            arquivos.extend(files)
+        primeira_pagina = False
+        page_token = data.get("nextPageToken")
+        if not page_token:
+            break
+    return arquivos
+
+
+async def _listar_subpastas_de_uma_pasta(access_token: str, folder_id: str) -> list[dict]:
+    """Lista subpastas diretas de `folder_id`, seguindo paginação —
+    fail-soft: devolve `[]` (nunca `None`) se a listagem falhar, já que a
+    ausência de subpastas nunca deve abortar os arquivos já coletados na
+    pasta pai."""
+    query = f"mimeType = 'application/vnd.google-apps.folder' and trashed = false and '{folder_id}' in parents"
+    subpastas: list[dict] = []
+    page_token = None
+    while True:
+        data = await _listar_pagina(access_token, query, page_token)
+        if not data or not isinstance(data, dict):
+            log.warning("drive_list_subpastas_falhou", folder_id=folder_id)
+            break
+        files = data.get("files")
+        if isinstance(files, list):
+            subpastas.extend(files)
+        page_token = data.get("nextPageToken")
+        if not page_token:
+            break
+    return subpastas
+
+
+async def listar_arquivos(
+    access_token: str, folder_id: str, *, _profundidade: int = 0,
+) -> list[dict] | None:
+    """Lista arquivos (não-pastas, não-lixeira) dentro da pasta configurada,
+    RECURSIVAMENTE em subpastas (até `_MAX_RECURSAO_SUBPASTAS` níveis) e
+    seguindo paginação em cada nível — achados reais: a versão anterior só
+    via a 1ª página do nível raiz, arquivos organizados em subpasta (comum
+    numa base de doutrina por área/autor) eram invisíveis, sem aviso nenhum.
+
+    Devolve `None` se a chamada à pasta RAIZ (`_profundidade=0`) falhar
+    (rede, token inválido, circuito aberto) — distinto de lista vazia (pasta
+    existente mas sem arquivos), mesmo contrato de antes. Uma subpasta
+    específica que falhe ao listar é pulada com um aviso, sem abortar o
+    restante (fail-soft, mesmo espírito do resto do módulo).
+
+    Cada item ganha `caminho_pasta` (caminho relativo à pasta configurada,
+    string vazia na raiz) — só pra diagnóstico (exibido em `GET
+    .../last-sync/arquivos`), nunca usado como chave de idempotência."""
+    arquivos_raiz = await _listar_arquivos_de_uma_pasta(access_token, folder_id)
+    if arquivos_raiz is None:
         return None
-    files = data.get("files")
-    return files if isinstance(files, list) else None
+    for arq in arquivos_raiz:
+        arq.setdefault("caminho_pasta", "")
+
+    if _profundidade >= _MAX_RECURSAO_SUBPASTAS:
+        return arquivos_raiz
+
+    subpastas = await _listar_subpastas_de_uma_pasta(access_token, folder_id)
+    todos = list(arquivos_raiz)
+    for sub in subpastas:
+        sub_id = sub.get("id")
+        if not sub_id:
+            continue
+        sub_nome = sub.get("name") or sub_id
+        arquivos_sub = await listar_arquivos(access_token, sub_id, _profundidade=_profundidade + 1)
+        if arquivos_sub is None:
+            log.warning("drive_list_subpasta_falhou", folder_id=sub_id)
+            continue
+        for arq in arquivos_sub:
+            caminho_existente = arq.get("caminho_pasta") or ""
+            arq["caminho_pasta"] = f"{sub_nome}/{caminho_existente}".rstrip("/")
+        todos.extend(arquivos_sub)
+    return todos
 
 
 async def baixar_arquivo(access_token: str, file_id: str) -> bytes | None:

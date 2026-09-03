@@ -5295,6 +5295,116 @@ Histórico:
     upload com pasta) exercitado com Postgres real e a chamada HTTP
     externa mockada de forma controlada, mesmo padrão de honestidade já
     usado em toda integração externa desta sessão.
+- **Fase pós-258** — usuário reportou (2 screenshots): a pasta "09 -
+  Doutrina" (Google Drive — Doutrina) mostrava "0 processados, 0 pulados,
+  1 falhas" mesmo com arquivos inseridos, e a tela de Pesquisa Jurídica
+  mostrava todas as 6 bases com "· 0" conteúdos + "Nenhum acórdão
+  classificado ainda". Pediu diagnóstico completo da pipeline (Drive →
+  arquivos → leitura → extração → indexação → Pesquisa Jurídica),
+  correção da causa raiz (não só esconder o "0"), e revisão completa da
+  Pesquisa Jurídica.
+  - **Causa raiz #1, a mais grave — a coleção que o Drive sincroniza era
+    invisível na Pesquisa Jurídica.** Existem 2 coleções Qdrant distintas
+    de doutrina (`backend/app/rag/collections.py`): `doutrina` (pública/
+    compartilhada, sem pipeline automático) e `doutrina_privada` (privada
+    por tenant, isolada por `tenant_id` — é essa que
+    `google_drive_sync.py` efetivamente grava). O backend já suportava
+    buscar/contar `doutrina_privada` corretamente com isolamento de
+    tenant — o bug era 100% frontend:
+    `busca-juridica/page.tsx::COLECOES` (as 6 chips mostradas) só tinha
+    `doutrina`, nunca `doutrina_privada` — a única das 7
+    `VALID_COLLECTIONS` do backend ausente da UI. Ou seja: mesmo com a
+    sincronização do Drive funcionando 100%, o conteúdo nunca aparecia
+    no contador nem podia ser buscado. Fix: nova chip "Doutrina AFJ"
+    (`value: "doutrina_privada"`), mesmo padrão de nomenclatura "X AFJ"
+    já usado pra `peticoes_afj`/`memorias_afj` — zero mudança de backend
+    necessária.
+  - **Causa raiz #2 — "1 falhas" tinha motivo real gravado, mas
+    invisível.** `JurisprudenciaIngerida.erro` (por arquivo) já era
+    preenchido corretamente pela sync, mas nenhum endpoint o expunha —
+    `GET .../last-sync` só devolvia o agregado
+    `{processados,pulados,falhas}`. Novo `GET .../google_drive_doutrina/
+    last-sync/arquivos` (`integrations_hub.py`, mesmo gate
+    `get_current_user`) devolve os até 50 arquivos mais recentes com
+    `nome_arquivo`/`caminho_pasta`/`status`/`erro` reais. Frontend
+    (`integracoes/page.tsx`): link "Ver arquivos" sob demanda no bloco
+    de última sincronização, tabela compacta com badge por status.
+  - **Causa raiz #3 — 2 gaps reais na listagem** (`client.py::
+    listar_arquivos`): (a) sem paginação (só `pageSize: 100`, nunca
+    seguia `nextPageToken`); (b) sem recursão em subpastas (query só
+    olhava o nível raiz da pasta configurada). Reescrito com paginação
+    completa (loop até esgotar `nextPageToken`) e recursão em subpastas
+    (até 5 níveis, fail-soft por subpasta — uma subpasta que falhe ao
+    listar é pulada com aviso, sem abortar as demais). Cada arquivo
+    ganha `caminho_pasta` (relativo à pasta configurada) só pra
+    diagnóstico. Contrato de retorno preservado (`None` só se a pasta
+    RAIZ falhar) — zero mudança no único call site.
+  - **Causa raiz #4 — mensagem enganosa pra tipos nativos do Google não
+    suportados.** Google Sheets/Slides (fora de Docs) caíam em
+    `alt=media` (que a Drive API rejeita pra esses tipos), virando
+    "download do arquivo falhou" — tecnicamente correto mas não dizia
+    que o FORMATO em si não é suportado. Novo `client.py::
+    tipo_suportado()` checado ANTES do download em `google_drive_sync.py`
+    — mensagem agora é "Formato não suportado (X) — suportados: PDF,
+    DOCX, Google Docs.", sem tentar a chamada HTTP fadada a falhar. Não
+    adiciona suporte a nenhum formato novo (pedido explícito do
+    usuário) — só move o ponto de checagem e melhora a mensagem.
+  - **Descartado como causa** (confirmado, não é bug): as outras 5 bases
+    (Jurisprudência/Legislação/Petições AFJ/Memórias AFJ/Docs. Clientes)
+    com "0" são reflexo correto de coleções genuinamente vazias — sem
+    pipeline de ingestão rodado ainda; `/rag/coverage`/`/rag/
+    jurisprudencia/favorabilidade` funcionam corretamente, loading/erro/
+    vazio já tratados na UI, nenhuma opção aponta pra endpoint quebrado.
+  - **Verificado — pipeline completo, ponta a ponta** (script standalone,
+    Postgres real + Qdrant real em memória — motor de verdade, não Fake
+    escrito à mão — chamada HTTP à Drive API mockada, já que
+    `googleapis.com` segue bloqueado neste sandbox desde a Fase 138.2):
+    pasta simulada com PDF + DOCX + Google Doc + Google Sheets (não
+    suportado) + arquivo em subpasta "Penal" + arquivo sem permissão de
+    download → sync processa 4/pula 0/falha 2, cada um com o motivo
+    certo (`caminho_pasta` correto, mensagem de formato/download
+    precisa); embedding fake com similaridade de cosseno REAL (bag-of-
+    words hasheado, não vetor aleatório) confirma que `POST /rag/search`
+    com `collections=["doutrina_privada"]` acha o documento certo como
+    resultado #1 por um termo real do texto (score 0.63), e que um termo
+    sem overlap de vocabulário não acha nada; `GET /rag/coverage`
+    reflete o total real (não mais 0 fixo); `GET .../last-sync/
+    arquivos` expõe o erro/caminho reais; isolamento cross-tenant
+    confirmado com um 2º tenant (zero vazamento em busca/coverage/
+    listagem de arquivos); reexecutar a sync confirma retry correto
+    (pula os já EMBEDDED, reprocessa os FALHOU) e que um arquivo
+    removido do Drive não quebra a sync nem apaga a linha antiga
+    (comportamento documentado, não um bug — sem limpeza automática de
+    conteúdo órfão). 22/22 checks PASS.
+  - **Verificado — testes automatizados**: 11 testes novos em
+    `test_google_drive_client.py` (paginação segue `nextPageToken`,
+    recursão em subpasta com `caminho_pasta` correto, subpasta que falha
+    é pulada sem derrubar a raiz, falha na descoberta de subpastas não
+    afeta os arquivos já coletados, pasta raiz que falha devolve `None`,
+    profundidade máxima não tenta listar mais subpastas,
+    `tipo_suportado()` pros 3 formatos aceitos e rejeitando Sheets/
+    Slides/`None`); 1 teste novo em `test_google_drive_sync.py` (tipo
+    nativo do Google não suportado falha SEM tentar download, mensagem
+    precisa); 4 testes novos em `test_hub_drive_last_sync_arquivos.py`
+    (endpoint novo, isolamento e resiliência a metadata ausente). 102
+    testes relacionados passam limpos isolados (suíte completa dos
+    arquivos de Drive/RAG tocados nesta e em fases anteriores).
+  - **Verificado — Playwright real** (Chromium do sandbox, `npm run dev`
+    local, backend local real, dado semeado no tenant `afj` real —
+    integração conectada + 3 linhas de `JurisprudenciaIngerida`, 2
+    `EMBEDDED` + 1 `FALHOU`, e um `SyncRun` real): chip "Doutrina AFJ"
+    presente e clicável em Pesquisa Jurídica (muda de estado ao
+    selecionar), link "Ver arquivos" em Integrações expande e mostra os
+    3 arquivos reais com nome/status/erro/caminho de subpasta
+    corretos — zero diálogo nativo do navegador, console limpo. 16/16
+    checks PASS.
+  - **Fora de escopo, deliberado** (pedido explícito do usuário): suporte
+    a novos formatos de arquivo (Sheets/Slides/imagens); limpeza/expiração
+    de linhas de `JurisprudenciaIngerida` referentes a arquivos removidos
+    do Drive (tabela já documentada como registro histórico de controle,
+    não índice ao vivo — comportamento atual só confirmado como correto,
+    não alterado); qualquer mudança na coleção `doutrina` pública
+    (manual-only, fora do problema relatado).
 
 
 ## Riscos conhecidos / débito técnico

@@ -239,6 +239,45 @@ async def hub_drive_doutrina_last_sync(
     }
 
 
+@router.get("/google_drive_doutrina/last-sync/arquivos")
+async def hub_drive_doutrina_last_sync_arquivos(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Achado real (validação da pasta Doutrina): `GET .../last-sync` só
+    devolve a contagem agregada (`processados`/`pulados`/`falhas`) — o erro
+    real de CADA arquivo já era gravado em `JurisprudenciaIngerida.erro`,
+    mas nenhum endpoint o expunha, tornando "1 falhas" uma caixa-preta sem
+    acesso direto ao banco. Devolve os até 50 arquivos mais recentes deste
+    tenant, com o motivo real de cada falha."""
+    from app.models.jurisprudencia_ingerida import JurisprudenciaIngerida
+
+    fonte = f"google_drive:{current_user.tenant_id}"
+    linhas = (await db.execute(
+        select(JurisprudenciaIngerida)
+        .where(
+            JurisprudenciaIngerida.tenant_id == current_user.tenant_id,
+            JurisprudenciaIngerida.fonte == fonte,
+        )
+        .order_by(JurisprudenciaIngerida.processed_at.desc().nullslast(), JurisprudenciaIngerida.created_at.desc())
+        .limit(50)
+    )).scalars().all()
+
+    return {
+        "arquivos": [
+            {
+                "google_file_id": linha.fonte_documento_id,
+                "nome_arquivo": (linha.metadata_extraida or {}).get("nome_arquivo"),
+                "caminho_pasta": (linha.metadata_extraida or {}).get("caminho_pasta") or "",
+                "status": linha.status,
+                "erro": linha.erro,
+                "processed_at": linha.processed_at.isoformat() if linha.processed_at else None,
+            }
+            for linha in linhas
+        ]
+    }
+
+
 # ─── OAuth "Conectar conta" — Fase 117 (Stripe Connect, Mercado Pago) ─────────
 async def _modulo_habilitado(db: AsyncSession, tenant_id, chave: str) -> bool:
     """Opt-in por escritório (mesmo padrão de google_integration.py::_google_enabled)."""
