@@ -21,7 +21,13 @@ from app.workers.worker import celery_app
 log = structlog.get_logger()
 
 
-async def executar_sync_drive_doutrina(db) -> dict:
+async def executar_sync_drive_doutrina(db, tenant_id=None) -> dict:
+    """`tenant_id` — Fase 258, opcional: quando informado, sincroniza só esse
+    tenant (usado por `POST /integrations/hub/google_drive_doutrina/
+    sync-now`, ação manual do ADMIN). Omitido (chamada do Celery Beat via
+    `sync_google_drive_doutrina` abaixo, sem mudança) continua iterando
+    todos os tenants conectados — comportamento idêntico ao de antes desta
+    fase."""
     from app.models.integrations import TenantIntegration
     from app.models.tenant import TenantConfig
     from app.models.jurisprudencia_ingerida import JurisprudenciaIngerida
@@ -30,11 +36,15 @@ async def executar_sync_drive_doutrina(db) -> dict:
     from app.rag.ingestion import ingest_document, delete_document_chunks
     from app.services.movements_import import iniciar_sync, finalizar_sync
 
+    where_clause = [
+        TenantIntegration.provider == "google_drive_doutrina",
+        TenantIntegration.status == "CONECTADA",
+    ]
+    if tenant_id is not None:
+        where_clause.append(TenantIntegration.tenant_id == tenant_id)
+
     integracoes = (await db.execute(
-        select(TenantIntegration).where(
-            TenantIntegration.provider == "google_drive_doutrina",
-            TenantIntegration.status == "CONECTADA",
-        )
+        select(TenantIntegration).where(*where_clause)
     )).scalars().all()
 
     tenants_sincronizados = 0

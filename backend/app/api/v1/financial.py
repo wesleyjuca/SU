@@ -285,8 +285,12 @@ async def export_financial_to_google_sheets(
     (Fase 139) — sem precisar da Sheets API nem de reconexão."""
     import csv
     import io
+    import httpx
     from app.models.tenant import TenantConfig
-    from app.services.google_workspace import get_valid_token, drive_upload_sheet, GoogleNotConnected
+    from app.services.google_workspace import (
+        GoogleNotConnected, classificar_erro_upload_drive, drive_upload_sheet,
+        get_configured_folder_id, get_valid_token,
+    )
 
     cfg = (await db.execute(
         select(TenantConfig).where(TenantConfig.tenant_id == current_user.tenant_id)
@@ -329,9 +333,15 @@ async def export_financial_to_google_sheets(
 
     try:
         token = await get_valid_token(db, current_user.tenant_id)
-        result = await drive_upload_sheet(token, "financeiro", output.getvalue().encode("utf-8-sig"))
+        folder_id = await get_configured_folder_id(db, current_user.tenant_id)
+        result = await drive_upload_sheet(
+            token, "financeiro", output.getvalue().encode("utf-8-sig"), parent_folder_id=folder_id,
+        )
     except GoogleNotConnected as exc:
         raise HTTPException(status_code=422, detail=str(exc))
+    except httpx.HTTPStatusError as exc:
+        status, detail = classificar_erro_upload_drive(exc)
+        raise HTTPException(status_code=status, detail=detail)
     except Exception:
         raise HTTPException(status_code=502, detail="Erro ao exportar pro Google Sheets.")
 

@@ -5158,6 +5158,143 @@ Histórico:
   atualização em massa de coordenadas legadas pra Nominatim (sem
   backfill, mesma decisão já usada em todo dado geográfico legado
   deste projeto desde a Fase 233/245).
+- **Fase 258** — usuário pediu pra substituir o fluxo de "colar link/ID
+  de pasta do Google Drive" (exige pasta pública/compartilhada por
+  link) por um seletor real de pastas, navegável, usando só a
+  permissão já concedida na conexão OAuth — tanto pra pesquisa
+  (Pesquisa Jurídica/RAG) quanto pra salvamento de documentos gerados.
+  Investigação (2 Explore + 1 Plan agent) confirmou 2 integrações
+  Google independentes no hub (`OAUTH_PROVIDERS`,
+  `backend/app/services/integration_hub.py`): `google_drive_doutrina`
+  (escopo `drive.readonly`, alimenta a sincronização diária que indexa
+  o RAG) e `google_workspace` (escopos `calendar.events`/`drive.file`/
+  `gmail.send`/`userinfo.email`, só upload — nunca tinha campo de pasta,
+  todo salvamento caía sempre na raiz). Usuário confirmou (via 2
+  perguntas): manter as 2 conexões separadas (não consolidar), e
+  "pesquisa de arquivos" = a Pesquisa Jurídica (RAG) já existente, não
+  uma busca instantânea nova.
+  - **Achado crítico de escopo OAuth**: `drive.file` só permite ver/criar
+    arquivos que a própria app criou — não permite LISTAR pastas
+    pré-existentes do usuário. `google_workspace` ganhou
+    `drive.metadata.readonly` (mínimo privilégio — só metadados, sem
+    acesso a conteúdo; menos permissivo que `drive.readonly`, que
+    `google_drive_doutrina` usa porque genuinamente precisa ler
+    conteúdo pra doutrina). Como `build_oauth_url()` já força
+    `access_type=offline`+`prompt=consent` incondicionalmente pros 2
+    providers Google, contas já conectadas só precisam clicar
+    "Conectar com login" de novo — sem exigir desconectar manualmente.
+  - **`backend/app/integrations/google_drive/client.py`**: novo
+    `DriveApiError` + `_classificar_erro_drive(status_code, corpo)` —
+    mapeia 401→`token_expirado`, 403 com `reason` de escopo→
+    `escopo_insuficiente`, 403 genérico→`permissao_negada`, 404→
+    `pasta_nao_encontrada`, resto→`indisponivel`. Novo
+    `listar_pastas(access_token, parent_id=None)` — query real da Drive
+    API v3 (`mimeType='application/vnd.google-apps.folder' and
+    trashed=false and '<parent ou root>' in parents`), deliberadamente
+    fora do `CircuitBreaker` já usado por `listar_arquivos` (listagem
+    interativa não deve ficar presa atrás do circuito compartilhado com
+    a sincronização em background, e `_breaker.run()` engoliria o
+    status HTTP que a classificação de erro precisa).
+  - **Endpoints generalizados por provider** (substituindo o hardcoded
+    só de `google_drive_doutrina`), `backend/app/api/v1/
+    integrations_hub.py`: `GET /integrations/hub/{provider}/folders?
+    parent_id=` (lista pastas reais, `_PROVIDERS_COM_PASTA =
+    ("google_drive_doutrina", "google_workspace")`) e `PUT
+    /integrations/hub/{provider}/folder` (novo payload `{folder_id,
+    folder_name}` — nunca mais um link colado; `extrair_folder_id`/
+    regex ficam sem chamador ativo, não removidos). Novo `POST
+    /integrations/hub/google_drive_doutrina/sync-now` — necessário pro
+    critério de aceite (salvar→pesquisar de ponta a ponta sem esperar a
+    rodada diária do Celery Beat), chama
+    `executar_sync_drive_doutrina(db, tenant_id=current_user.tenant_id)`
+    diretamente via `await`.
+  - **`backend/app/workers/tasks/google_drive_sync.py`**:
+    `executar_sync_drive_doutrina(db, tenant_id=None)` — filtro opcional
+    por tenant quando informado (usado pelo `sync-now`); omitido (Celery
+    Beat) continua iterando todos os tenants conectados, comportamento
+    idêntico ao anterior.
+  - **`backend/app/services/google_workspace.py`**: `_drive_upload` +
+    3 wrappers (`drive_upload_pdf/doc/sheet`) ganham
+    `parent_folder_id: str | None = None` (último parâmetro, default
+    `None` — chamadas existentes sem esse argumento continuam idênticas,
+    zero regressão pra quem não configurar pasta), adiciona
+    `metadata["parents"] = [parent_folder_id]` quando informado. Novo
+    `get_configured_folder_id(db, tenant_id)` lê `TenantIntegration.
+    extra_data.folder_id` do `google_workspace`; novo
+    `classificar_erro_upload_drive(exc)` reusa
+    `_classificar_erro_drive` pro caminho de upload. 3 call sites
+    (`google_integration.py` × 2, `financial.py` export de planilha)
+    resolvem a pasta configurada antes do upload e capturam
+    `httpx.HTTPStatusError` com a mensagem diferenciada em vez do 502
+    genérico anterior.
+  - **Frontend**: novo `frontend/src/components/integrations/
+    DriveFolderPicker.tsx` — modal com breadcrumb, navegação por
+    subpasta, "Selecionar esta pasta" (raiz incluída como destino
+    válido), erro diferenciado por status (401/403/404/genérico).
+    `integracoes/page.tsx`: remove o input de colar link; blocos de
+    pasta pra `google_drive_doutrina` ("Escolher pasta" + "Sincronizar
+    agora", "Pasta atual" mostra o NOME salvo, não mais o ID cru) e um
+    bloco NOVO espelhado pra `google_workspace` ("Pasta de salvamento no
+    Drive", estado vazio explícito "Nenhuma pasta configurada — os
+    arquivos são salvos na raiz (Meu Drive)."); disclosure do
+    `google_workspace` ganha 1 frase citando o escopo novo
+    (`drive.metadata.readonly`, honestidade já padrão do projeto).
+  - **Nuance documentada, não escondida**: "salvar → pesquisar" só
+    funciona de ponta a ponta se a pasta de SALVAMENTO
+    (`google_workspace`) e a pasta de PESQUISA (`google_drive_doutrina`)
+    forem configuradas pra MESMA pasta do Drive — são 2 conceitos
+    propositalmente independentes (decisão confirmada com o usuário),
+    não uma pasta unificada automática.
+  - **Fora de escopo, deliberado**: Google Picker API (widget JS
+    client-side do Google) — a listagem server-side já resolve o pedido
+    sem dependência de UI externa nova, mantendo o padrão "backend
+    proxeia API externa" já usado no resto do projeto; multi-seleção de
+    pastas (mantém 1 pasta de pesquisa + 1 de salvamento, mesma
+    cardinalidade já usada hoje); remoção de `extrair_folder_id`/regex
+    (fica sem chamador, não removido nesta fase).
+  - **Verificado**: `ruff check`/`py_compile` limpos nos 7 arquivos
+    backend + 5 de teste tocados/novos. Script standalone (Postgres
+    real — egress a `googleapis.com` bloqueado neste sandbox desde
+    sempre nesta sessão, chamada HTTP à Drive API mockada) confirmando:
+    listagem na raiz e em subpasta pros 2 providers; configuração de
+    pasta persistindo em `extra_data` pros 2 providers, preservando o
+    resto do dict; upload com `parent_folder_id` incluindo `"parents"`
+    no metadata multipart, e sem ele preservando o comportamento atual
+    (raiz); erro 403 da Drive API propagando como
+    `escopo_insuficiente`/403 até o chamador HTTP; `sync-now` só
+    processa o tenant do chamador (não itera outros tenants
+    conectados), confirmado tanto via `POST /sync-now` quanto chamando
+    `executar_sync_drive_doutrina(db, tenant_id=X)` direto; isolamento
+    cross-tenant do `PUT /folder` (pasta configurada por um tenant nunca
+    vaza pra outro). Testes automatizados: `test_hub_drive_folder.py`
+    reescrito por completo pro novo contrato `{folder_id, folder_name}`
+    (7 testes); `test_google_drive_client.py` ganha 6 testes de
+    `_classificar_erro_drive` + 7 de `listar_pastas` (raiz/subpasta/
+    vazio/401/403/404/erro de rede); `test_google_workspace.py` ganha 8
+    testes (upload com/sem `parent_folder_id` nos 3 wrappers,
+    `get_configured_folder_id`, `classificar_erro_upload_drive`); novo
+    `test_hub_drive_folders_listing.py` (8 testes — listagem, erro
+    classificado, `sync-now` isolado por tenant); `test_integration_hub_
+    oauth.py` atualizado pro escopo novo (`google_workspace` agora com 5
+    escopos, não 4). 81 testes relacionados passam limpos isolados.
+    Playwright real (Chromium do sandbox, `npm run dev` com `API_URL`
+    local, chamada à Drive API interceptada via `page.route` já que o
+    egress real está bloqueado neste sandbox): fluxo completo — abrir o
+    picker, navegar por subpasta via breadcrumb, selecionar, confirmar
+    que o PUT usa `folder_id` (não mais `folder`), "Pasta atual" mostra
+    o NOME salvo, persistência sobrevive a um reload, "Sincronizar
+    agora" dispara e responde 200, zero diálogo nativo do navegador
+    disparado (invariante da Fase 241) e console limpo — 19/19
+    verificações PASS.
+  - **Limitação de verificação, mesma classe de toda fase anterior que
+    mexeu em integração externa**: este sandbox bloqueia egress pra
+    `googleapis.com` (mesmo padrão documentado desde a Fase 138.2/185/
+    230) — a listagem/upload real contra a conta Google de produção só
+    pode ser confirmada depois do deploy; a prova aqui é o pipeline
+    inteiro (query montada, classificação de erro, persistência,
+    upload com pasta) exercitado com Postgres real e a chamada HTTP
+    externa mockada de forma controlada, mesmo padrão de honestidade já
+    usado em toda integração externa desta sessão.
 
 
 ## Riscos conhecidos / débito técnico

@@ -102,34 +102,110 @@ async def hub_disconnect(
     return {"message": "Integração desconectada." if removed else "Integração já estava desconectada."}
 
 
-# ─── Pasta de doutrina do Google Drive — Fase 138.2 ───────────────────────────
-class DriveFolderBody(BaseModel):
-    folder: str
+# ─── Pasta do Google Drive — pesquisa (google_drive_doutrina) e salvamento
+# (google_workspace) — Fase 138.2 / Fase 258 ───────────────────────────────────
+# Fase 258 — o fluxo antigo (link/ID colado, `DriveFolderBody.folder: str`,
+# parseado por regex via `extrair_folder_id`) exigia implicitamente uma
+# pasta que o usuário já tivesse a URL — substituído por um seletor real
+# (navega pelas pastas de verdade via Drive API, usando só a permissão já
+# concedida na conexão OAuth, nunca pasta pública/compartilhada por link).
+_PROVIDERS_COM_PASTA = ("google_drive_doutrina", "google_workspace")
 
 
-@router.put("/google_drive_doutrina/folder")
-async def hub_set_drive_folder(
-    body: DriveFolderBody,
+class FolderBody(BaseModel):
+    folder_id: str
+    folder_name: str | None = None  # só exibição — nunca usado pra resolver a pasta
+
+
+@router.get("/{provider}/folders")
+async def hub_list_folders(
+    provider: str,
+    parent_id: str | None = Query(None),
     current_user: User = Depends(require_role("ADMIN")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Configura a pasta do Drive a sincronizar — só depois de conectado
-    (a URL/ID nunca é segredo, fica em `extra_data`, não em `credentials_enc`)."""
-    from app.integrations.google_drive.client import extrair_folder_id
+    """Lista subpastas de `parent_id` (raiz se omitido) via Drive API, usando
+    o token já conectado do provider — base do seletor real de pasta que
+    substitui o link colado. `parent_id` vem de uma chamada anterior a este
+    mesmo endpoint (navegação/breadcrumb no frontend)."""
+    if provider not in _PROVIDERS_COM_PASTA:
+        raise HTTPException(status_code=422, detail="Provedor sem seletor de pasta.")
+    from app.integrations.google_drive.client import DriveApiError, listar_pastas
 
-    integ = await integration_hub.get_integration(db, current_user.tenant_id, "google_drive_doutrina")
+    creds = await integration_hub.get_credentials(db, current_user.tenant_id, provider)
+    if not creds or not creds.get("access_token"):
+        raise HTTPException(status_code=422, detail="Conecte a conta Google antes de escolher a pasta.")
+    try:
+        pastas = await listar_pastas(creds["access_token"], parent_id)
+    except DriveApiError as exc:
+        status = {
+            "token_expirado": 401,
+            "permissao_negada": 403,
+            "escopo_insuficiente": 403,
+            "pasta_nao_encontrada": 404,
+        }.get(exc.categoria, 502)
+        raise HTTPException(status_code=status, detail=str(exc))
+    return {"pastas": pastas}
+
+
+@router.put("/{provider}/folder")
+async def hub_set_folder(
+    provider: str,
+    body: FolderBody,
+    current_user: User = Depends(require_role("ADMIN")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Configura a pasta do provider — pesquisa (google_drive_doutrina) ou
+    salvamento (google_workspace). Recebe o `folder_id` já resolvido pela
+    seleção no picker (nunca mais um link colado). A URL/ID nunca é
+    segredo, fica em `extra_data`, não em `credentials_enc`."""
+    if provider not in _PROVIDERS_COM_PASTA:
+        raise HTTPException(status_code=422, detail="Provedor sem configuração de pasta.")
+
+    integ = await integration_hub.get_integration(db, current_user.tenant_id, provider)
     if not integ or not integ.credentials_enc:
         raise HTTPException(status_code=422, detail="Conecte a conta Google antes de configurar a pasta.")
 
-    folder_id = extrair_folder_id(body.folder)
+    folder_id = body.folder_id.strip()
     if not folder_id:
-        raise HTTPException(
-            status_code=422,
-            detail="Não foi possível identificar o ID da pasta — cole a URL completa da pasta do Drive ou o ID.",
-        )
-    integ.extra_data = {**(integ.extra_data or {}), "folder_id": folder_id}
+        raise HTTPException(status_code=422, detail="Selecione uma pasta.")
+
+    extra = {**(integ.extra_data or {}), "folder_id": folder_id}
+    if body.folder_name:
+        extra["folder_name"] = body.folder_name.strip()
+    integ.extra_data = extra
     await db.commit()
-    return {"folder_id": folder_id, "message": "Pasta configurada — a sincronização roda automaticamente todo dia."}
+
+    msg = (
+        "Pasta configurada — a sincronização roda automaticamente todo dia."
+        if provider == "google_drive_doutrina" else
+        "Pasta de salvamento configurada — os próximos arquivos gerados serão salvos nela."
+    )
+    return {"folder_id": folder_id, "folder_name": body.folder_name, "message": msg}
+
+
+@router.post("/google_drive_doutrina/sync-now")
+async def hub_drive_sync_now(
+    current_user: User = Depends(require_role("ADMIN")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Fase 258 — dispara a sincronização da pasta de doutrina imediatamente,
+    só pra este tenant (a task do Beat continua rodando 1x/dia pra todos os
+    tenants conectados, sem mudança). Chamada síncrona/direta (await, sem
+    `.delay()`), mesmo padrão de ação manual já usado por outras
+    sincronizações sob demanda do projeto (ex. "Capturar processos" da OAB)
+    — operação I/O-bound de poucos arquivos, cabe no timeout HTTP normal.
+    Necessário pra "salvar arquivo → pesquisar novamente" ser verificável
+    sem esperar a rodada diária do Beat."""
+    integ = await integration_hub.get_integration(db, current_user.tenant_id, "google_drive_doutrina")
+    if not integ or integ.status != "CONECTADA" or not (integ.extra_data or {}).get("folder_id"):
+        raise HTTPException(
+            status_code=422, detail="Conecte a conta Google e configure a pasta antes de sincronizar."
+        )
+    from app.workers.tasks.google_drive_sync import executar_sync_drive_doutrina
+
+    resultado = await executar_sync_drive_doutrina(db, tenant_id=current_user.tenant_id)
+    return {**resultado, "message": "Sincronização concluída."}
 
 
 @router.get("/google_drive_doutrina/last-sync")
