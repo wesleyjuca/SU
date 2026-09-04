@@ -1,8 +1,8 @@
 """RAG retrieval — busca semântica multi-collection no Qdrant."""
 import hashlib
 import json
-from qdrant_client.models import Filter, FieldCondition, MatchValue
-from app.rag.embeddings import embed_text
+from qdrant_client.models import Filter, FieldCondition, MatchValue, IsEmptyCondition, PayloadField
+from app.rag.embeddings import embed_text_with_meta
 from app.rag.collections import COLLECTIONS
 from app.db.redis import get_redis
 import structlog
@@ -69,15 +69,37 @@ async def retrieve(
         except Exception as exc:
             log.warning("rag_cache_read_failed", error=str(exc))
 
-    query_vector = await embed_text(query)
+    # Fase pós-260 (desacoplamento de embeddings de um provedor único) —
+    # até 2 vetores da mesma pergunta, já que uma única chamada pode pedir
+    # collections públicas e privadas ao mesmo tempo. Collections PÚBLICAS/
+    # compartilhadas (jurisprudencia/legislacao/doutrina/documentacao_sistema)
+    # sempre resolvem pro provedor PADRÃO da plataforma — a busca pública
+    # precisa funcionar pra qualquer tenant, não importa o provedor BYOK
+    # dele, já que o conteúdo público foi indexado com um único provedor.
+    # Collections PRIVADAS usam o BYOK já ativo no contexto do chamador
+    # (mesmo comportamento de antes desta fase).
+    alvo = [c for c in collections if c in COLLECTIONS]
+    tem_publica = any(c not in PRIVATE_COLLECTIONS for c in alvo)
+    tem_privada = any(c in PRIVATE_COLLECTIONS for c in alvo)
+
+    vetor_publico = provider_publico = None
+    vetor_privado = provider_privado = None
+    if tem_publica:
+        vetor_publico, provider_publico, _ = await embed_text_with_meta(query, force_system_default=True)
+    if tem_privada:
+        vetor_privado, provider_privado, _ = await embed_text_with_meta(query, force_system_default=False)
 
     all_results = []
-    for collection in collections:
-        if collection not in COLLECTIONS:
+    for collection in alvo:
+        privada = collection in PRIVATE_COLLECTIONS
+        query_vector = vetor_privado if privada else vetor_publico
+        provider = provider_privado if privada else provider_publico
+        if query_vector is None:
             continue
-        # Filtro por coleção: condições do usuário + tenant_id se for privada.
-        extra = {"tenant_id": str(tenant_id)} if (collection in PRIVATE_COLLECTIONS and tenant_id) else None
-        qdrant_filter = _build_filter(filters, extra)
+        # Filtro por coleção: condições do usuário + tenant_id se for
+        # privada + provedor de embedding compatível com o vetor de busca.
+        extra = {"tenant_id": str(tenant_id)} if (privada and tenant_id) else None
+        qdrant_filter = _build_filter(filters, extra, provider)
         try:
             # Fase 187 — `.search()` foi removido do qdrant-client (a versão
             # pinada em requirements.txt, 1.18.0, só tem `.query_points()`,
@@ -116,10 +138,30 @@ async def retrieve(
     return top_k
 
 
-def _build_filter(filters: dict | None, extra: dict | None = None) -> Filter | None:
+def _provider_filter(provider: str) -> Filter:
+    """Sub-filtro exigindo que o ponto tenha sido embedado pelo MESMO
+    provedor do vetor de busca — embeddings de provedores diferentes não
+    são comparáveis por cosseno, mesmo com dimensão idêntica (Fase pós-260).
+
+    Compatibilidade retroativa: todo conteúdo indexado antes desta fase
+    nunca gravou `embedding_provider` no payload (só existia OpenAI, nunca
+    precisou ser registrado) — tratado aqui como equivalente a "openai",
+    senão esse conteúdo desapareceria da busca no dia do deploy.
+    """
+    condicoes = [FieldCondition(key="embedding_provider", match=MatchValue(value=provider))]
+    if provider == "openai":
+        condicoes.append(IsEmptyCondition(is_empty=PayloadField(key="embedding_provider")))
+    return Filter(should=condicoes)
+
+
+def _build_filter(
+    filters: dict | None, extra: dict | None = None, embedding_provider: str | None = None
+) -> Filter | None:
     conditions = []
     for field, value in {**(filters or {}), **(extra or {})}.items():
         conditions.append(FieldCondition(key=field, match=MatchValue(value=value)))
+    if embedding_provider:
+        conditions.append(_provider_filter(embedding_provider))
     if not conditions:
         return None
     return Filter(must=conditions)

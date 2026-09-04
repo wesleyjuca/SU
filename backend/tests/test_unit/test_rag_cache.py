@@ -48,11 +48,11 @@ async def test_segunda_chamada_identica_usa_cache_sem_reembedar(monkeypatch):
 
     embed_calls = {"n": 0}
 
-    async def fake_embed_text(query):
+    async def fake_embed_text_with_meta(query, force_system_default=False):
         embed_calls["n"] += 1
-        return [0.1, 0.2, 0.3]
+        return [0.1, 0.2, 0.3], "openai", "text-embedding-3-large"
 
-    monkeypatch.setattr(retrieval_mod, "embed_text", fake_embed_text)
+    monkeypatch.setattr(retrieval_mod, "embed_text_with_meta", fake_embed_text_with_meta)
 
     client = _FakeQdrantClient()
     r1 = await retrieval_mod.retrieve(client, "citação de lei X", collections=["legislacao"], tenant_id=TENANT_A)
@@ -67,7 +67,7 @@ async def test_segunda_chamada_identica_usa_cache_sem_reembedar(monkeypatch):
 async def test_tenants_diferentes_nao_compartilham_cache(monkeypatch):
     fake_redis = _FakeRedis()
     monkeypatch.setattr(retrieval_mod, "get_redis", lambda: _async_return(fake_redis))
-    monkeypatch.setattr(retrieval_mod, "embed_text", lambda query: _async_return([0.1, 0.2, 0.3]))
+    monkeypatch.setattr(retrieval_mod, "embed_text_with_meta", lambda query, force_system_default=False: _async_return_meta())
 
     client = _FakeQdrantClient()
     await retrieval_mod.retrieve(client, "mesma query", collections=["peticoes_afj"], tenant_id=TENANT_A)
@@ -79,7 +79,7 @@ async def test_tenants_diferentes_nao_compartilham_cache(monkeypatch):
 @pytest.mark.asyncio
 async def test_sem_redis_comportamento_identico_ao_anterior(monkeypatch):
     monkeypatch.setattr(retrieval_mod, "get_redis", lambda: _async_return(None))
-    monkeypatch.setattr(retrieval_mod, "embed_text", lambda query: _async_return([0.1, 0.2, 0.3]))
+    monkeypatch.setattr(retrieval_mod, "embed_text_with_meta", lambda query, force_system_default=False: _async_return_meta())
 
     client = _FakeQdrantClient()
     r1 = await retrieval_mod.retrieve(client, "consulta sem cache", collections=["legislacao"])
@@ -91,3 +91,7 @@ async def test_sem_redis_comportamento_identico_ao_anterior(monkeypatch):
 
 async def _async_return(value):
     return value
+
+
+async def _async_return_meta():
+    return [0.1, 0.2, 0.3], "openai", "text-embedding-3-large"

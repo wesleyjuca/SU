@@ -183,6 +183,7 @@ async def executar_sync_stj(db) -> dict:
                 await ingest_document(
                     content=reg["texto"], collection="jurisprudencia",
                     metadata=qdrant_metadata, document_id=fonte_documento_id,
+                    force_system_default=True,  # collection pública/compartilhada
                 )
                 entrada.status = "EMBEDDED"
                 processados += 1

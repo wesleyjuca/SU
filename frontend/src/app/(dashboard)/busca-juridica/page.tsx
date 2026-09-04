@@ -335,6 +335,7 @@ export default function BuscaJuridicaPage() {
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState<RagResult[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [needsEmbeddingProvider, setNeedsEmbeddingProvider] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
   const [coverage, setCoverage] = useState<Record<string, number>>({});
 
@@ -364,6 +365,7 @@ export default function BuscaJuridicaPage() {
     if (!query.trim() || selectedCols.length === 0) return;
     setLoading(true);
     setError(null);
+    setNeedsEmbeddingProvider(false);
     setResults(null);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15000);
@@ -382,7 +384,16 @@ export default function BuscaJuridicaPage() {
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        setError(data.detail || "Erro ao buscar. Verifique se a base vetorial está disponível.");
+        const detail = data.detail;
+        // Fase pós-260 — `detail` pode vir estruturado (503 de embeddings
+        // indisponível: {message, needs_embedding_provider}) ou como string
+        // simples (demais erros) — nunca mais sniffing de texto por "openai".
+        if (detail && typeof detail === "object") {
+          setError(detail.message || "Erro ao buscar. Verifique se a base vetorial está disponível.");
+          setNeedsEmbeddingProvider(Boolean(detail.needs_embedding_provider));
+        } else {
+          setError(detail || "Erro ao buscar. Verifique se a base vetorial está disponível.");
+        }
         return;
       }
       const data = await res.json();
@@ -481,7 +492,7 @@ export default function BuscaJuridicaPage() {
           <AlertTriangle size={16} className="text-red-500 flex-shrink-0 mt-0.5" />
           <div>
             <p className="text-sm text-red-700">{error}</p>
-            {error.toLowerCase().includes("openai") && (
+            {needsEmbeddingProvider && (
               <Link href="/minha-ia" className="text-sm text-red-800 underline font-medium mt-1 inline-block">
                 Ir para Minha IA →
               </Link>
