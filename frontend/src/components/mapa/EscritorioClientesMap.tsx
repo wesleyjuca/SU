@@ -2,10 +2,11 @@
 import "leaflet/dist/leaflet.css";
 import "leaflet.markercluster/dist/MarkerCluster.css";
 import "leaflet.markercluster/dist/MarkerCluster.Default.css";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import L from "leaflet";
-import { MapContainer, TileLayer, Marker, Popup, useMap } from "react-leaflet";
+import "leaflet.heat";
+import { LayersControl, MapContainer, TileLayer, Marker, Popup, useMap } from "react-leaflet";
 import MarkerClusterGroup from "react-leaflet-cluster";
 
 export type PontoEscritorio = {
@@ -94,6 +95,38 @@ function AjustarEnquadramento({ pontos }: { pontos: [number, number][] }) {
       map.fitBounds(pontos, { padding: [40, 40], maxZoom: 15 });
     }
   }, [map, pontos]);
+  return null;
+}
+
+/** Mapa de calor — camada alternativa aos marcadores de cliente
+ * (`leaflet.heat`, única dependência nova; sem custo/chave de API,
+ * puramente client-side). Substitui o cluster de pinos quando ativo, não
+ * soma em cima — as duas visualizações juntas ficariam poluídas. */
+function CamadaCalor({ pontos }: { pontos: [number, number][] }) {
+  const map = useMap();
+  useEffect(() => {
+    if (pontos.length === 0) return;
+    // leaflet.heat espera [lat, lng, intensidade] — peso uniforme (1) por
+    // cliente, sem nenhuma métrica de ponderação real neste momento.
+    const pontosComIntensidade: [number, number, number][] = pontos.map(([lat, lng]) => [lat, lng, 1]);
+    const camada = L.heatLayer(pontosComIntensidade, { radius: 22, blur: 18, maxZoom: 16 }).addTo(map);
+    return () => {
+      map.removeLayer(camada);
+    };
+  }, [map, pontos]);
+  return null;
+}
+
+/** Tela cheia (Fullscreen API nativa do navegador, sem plugin) muda o
+ * tamanho do container do mapa via CSS, mas o Leaflet não recalcula o
+ * canvas sozinho nessa transição — precisa de `invalidateSize()`
+ * explícito, com um pequeno atraso pra a mudança de layout assentar. */
+function InvalidarAoRedimensionar({ gatilho }: { gatilho: boolean }) {
+  const map = useMap();
+  useEffect(() => {
+    const id = setTimeout(() => map.invalidateSize(), 150);
+    return () => clearTimeout(id);
+  }, [map, gatilho]);
   return null;
 }
 
@@ -199,12 +232,19 @@ export default function EscritorioClientesMap({
   escritorio,
   clientes,
   carregarResumo,
+  mostrarCalor = false,
+  emTelaCheia = false,
 }: {
   escritorio: PontoEscritorio | null;
   clientes: PontoCliente[];
   /** Fase 257.1 — resumo operacional (score/processos/próximo prazo) do
    * popup de cliente, buscado sob demanda no chamador. */
   carregarResumo?: (id: string) => Promise<ResumoOperacional | null>;
+  /** Alterna cluster de pinos ⇄ mapa de calor dos clientes. */
+  mostrarCalor?: boolean;
+  /** Só usado pra disparar `invalidateSize()` do Leaflet quando o
+   * container entra/sai da Fullscreen API (controlada pelo chamador). */
+  emTelaCheia?: boolean;
 }) {
   const iconeEscritorio = useMemo(() => pinIcon(corMarca("--brand-primary", "184 149 74"), 34), []);
   const iconeCliente = useMemo(() => pinIcon(corMarca("--brand-secondary", "30 34 41"), 26), []);
@@ -213,6 +253,7 @@ export default function EscritorioClientesMap({
     ...(escritorio ? [[escritorio.latitude, escritorio.longitude] as [number, number]] : []),
     ...clientes.map((c) => [c.latitude, c.longitude] as [number, number]),
   ];
+  const pontosClientes: [number, number][] = clientes.map((c) => [c.latitude, c.longitude]);
 
   if (pontos.length === 0) return null;
 
@@ -221,13 +262,34 @@ export default function EscritorioClientesMap({
       center={pontos[0]}
       zoom={13}
       scrollWheelZoom
-      style={{ height: "560px", width: "100%", borderRadius: "2px" }}
+      style={{ height: emTelaCheia ? "100%" : "560px", width: "100%", borderRadius: "2px" }}
     >
-      <TileLayer
-        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-        url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-      />
+      {/* Camadas — Padrão (OSM, sem chave) já era a única opção; Satélite
+          (Esri World Imagery) e Terreno (OpenTopoMap) são igualmente
+          gratuitas/sem credencial, mesmo espírito da camada já existente.
+          `LayersControl` é nativo do react-leaflet — sem UI customizada. */}
+      <LayersControl position="topright">
+        <LayersControl.BaseLayer checked name="Padrão">
+          <TileLayer
+            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          />
+        </LayersControl.BaseLayer>
+        <LayersControl.BaseLayer name="Satélite">
+          <TileLayer
+            attribution="Tiles &copy; Esri &mdash; Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community"
+            url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+          />
+        </LayersControl.BaseLayer>
+        <LayersControl.BaseLayer name="Terreno">
+          <TileLayer
+            attribution='Map data: &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, SRTM | Map style: &copy; <a href="https://opentopomap.org">OpenTopoMap</a> (CC-BY-SA)'
+            url="https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png"
+          />
+        </LayersControl.BaseLayer>
+      </LayersControl>
       <AjustarEnquadramento pontos={pontos} />
+      <InvalidarAoRedimensionar gatilho={emTelaCheia} />
       {escritorio && (
         <Marker position={[escritorio.latitude, escritorio.longitude]} icon={iconeEscritorio}>
           <Popup>
@@ -237,19 +299,23 @@ export default function EscritorioClientesMap({
           </Popup>
         </Marker>
       )}
-      {/* Fase 254 — clustering só nos marcadores de cliente (o do escritório
-          é único, não faz sentido agrupar). */}
-      <MarkerClusterGroup chunkedLoading>
-        {clientes.map((c) => (
-          <ClienteMarker
-            key={c.id}
-            cliente={c}
-            icon={iconeCliente}
-            escritorio={escritorio}
-            carregarResumo={carregarResumo}
-          />
-        ))}
-      </MarkerClusterGroup>
+      {mostrarCalor ? (
+        <CamadaCalor pontos={pontosClientes} />
+      ) : (
+        // Fase 254 — clustering só nos marcadores de cliente (o do
+        // escritório é único, não faz sentido agrupar).
+        <MarkerClusterGroup chunkedLoading>
+          {clientes.map((c) => (
+            <ClienteMarker
+              key={c.id}
+              cliente={c}
+              icon={iconeCliente}
+              escritorio={escritorio}
+              carregarResumo={carregarResumo}
+            />
+          ))}
+        </MarkerClusterGroup>
+      )}
     </MapContainer>
   );
 }

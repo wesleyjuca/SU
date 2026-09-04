@@ -330,6 +330,44 @@ rediscobertas do zero a cada sessão — contexto completo de cada uma em
     fase255.py`) apresentaram a mesma flakiness de pool asyncpg/
     pytest-asyncio já documentada (confirmada isolada, não é regressão
     — arquivo nem foi tocado nesta fase).
+- **Fase pós-260.4** — usuário pediu 5 opções novas pro `/mapa`: mapa de
+  calor, satélite, terreno, tela cheia, abrir em outra janela — "priorizar
+  implementação simples e reutilizar estrutura/componentes existentes".
+  100% frontend, nenhum endpoint/modelo novo — todas reaproveitam dado já
+  buscado (`clientesFiltrados`) ou APIs nativas do navegador/Leaflet:
+  - **Satélite/Terreno** — `LayersControl`/`LayersControl.BaseLayer`,
+    nativos do `react-leaflet` (nenhuma dependência nova), envolvendo os
+    `TileLayer` — "Padrão" (OSM, já existia), "Satélite" (Esri World
+    Imagery, `server.arcgisonline.com`, grátis/sem chave) e "Terreno"
+    (OpenTopoMap, grátis/sem chave) — mesmo espírito "grátis, sem
+    credencial" já usado pro tile OSM original. Zero UI customizada — o
+    seletor de camadas é o controle nativo do Leaflet.
+  - **Mapa de calor** — única dependência nova (`leaflet.heat` + `@types/
+    leaflet.heat`, ~5KB, sem chave de API, puramente client-side).
+    Alterna com o `MarkerClusterGroup` (nunca os dois juntos — ficaria
+    poluído), peso uniforme por cliente (sem métrica de ponderação real
+    ainda).
+  - **Tela cheia** — Fullscreen API nativa do navegador
+    (`element.requestFullscreen()`/`document.exitFullscreen()`), sem
+    plugin. **Achado real durante a verificação**: o botão inicialmente
+    ficava no cabeçalho da página — fora do elemento que entra em
+    fullscreen. Como a Fullscreen API só renderiza o elemento-alvo e seus
+    filhos, uma vez em tela cheia o próprio botão pra SAIR desaparecia
+    (só restava `Esc`). Corrigido movendo o botão pra dentro do container
+    do mapa, como overlay flutuante (mesmo padrão já usado pela
+    `Legenda`) — fica acessível nos dois estados. `invalidateSize()` do
+    Leaflet disparado com um pequeno atraso ao entrar/sair (o canvas não
+    recalcula sozinho numa mudança de tamanho só por CSS).
+  - **Abrir em outra janela** — `window.open(window.location.href,
+    "_blank", "noopener,noreferrer")`, zero componente novo.
+  - **Verificado**: `tsc --noEmit`/`eslint` limpos. Playwright real
+    (Chromium do sandbox, dados de teste da Fase pós-260.2 reaproveitados)
+    confirmando as 3 camadas listadas no controle nativo, canvas do mapa
+    de calor aparecendo/sumindo ao alternar (com os marcadores voltando
+    corretamente), o botão de tela cheia continuando clicável DENTRO do
+    fullscreen (a prova do achado corrigido), saindo corretamente ao
+    clicar de novo, e "abrir em outra janela" abrindo `/mapa` numa aba
+    nova — 18/18 checks PASS, zero diálogo nativo, console limpo.
 
 ## Teste geral do sistema (metodologia)
 
