@@ -66,3 +66,8 @@ Infra:        Docker Compose (dev) + Railway + Vercel (prod)
 ```
 IA sugere → Humano revisa → Humano aprova → IA executa → Sistema registra
 ```
+## Licença
+
+**Projeto proprietário — Almeida, Freire & Jucá Advogados.**
+
+O código, dados, modelos, documentos e demais ativos do sistema são confidenciais e estão sujeitos às regras de propriedade intelectual, segurança e uso aplicáveis ao escritório.
