@@ -181,8 +181,27 @@ async def executar_sync_drive_doutrina(db, tenant_id=None) -> dict:
         except Exception as exc:
             log.error("drive_sync_loop_falhou", tenant_id=str(integ.tenant_id), error=str(exc))
             stats = {"processados": processados, "pulados": pulados, "falhas": falhas, "erro": str(exc)[:300]}
-            await finalizar_sync(db, run, "ERRO", stats)
-            await db.commit()
+            # Achado real (validação da pasta Doutrina): este commit final
+            # estava desprotegido — se a sessão tivesse sido invalidada por
+            # uma falha anterior no loop, ele lançava de novo, sem nada pra
+            # capturar, escapando de `executar_sync_drive_doutrina()` inteira
+            # (chamada sem try/except por `hub_drive_sync_now`). O `SyncRun`
+            # ficava preso em RUNNING pra sempre — a tela mostrava "em
+            # andamento"/"0 processados" mesmo com arquivos já processados e
+            # commitados individualmente antes da falha. `rollback()` antes
+            # de tentar limpa uma transação possivelmente abortada; se ainda
+            # assim falhar, loga e segue pro próximo tenant com sessão limpa
+            # — nunca deixa uma 2ª exceção escapar daqui.
+            try:
+                await db.rollback()
+                await finalizar_sync(db, run, "ERRO", stats)
+                await db.commit()
+            except Exception as exc2:
+                log.error("drive_sync_finalizar_erro_falhou", tenant_id=str(integ.tenant_id), error=str(exc2))
+                try:
+                    await db.rollback()
+                except Exception:
+                    pass
             continue
 
         stats = {"processados": processados, "pulados": pulados, "falhas": falhas}

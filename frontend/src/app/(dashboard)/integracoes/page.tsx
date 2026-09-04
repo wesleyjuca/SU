@@ -110,6 +110,7 @@ function HubCards() {
   // da sincronização de doutrina (processados/pulados/falhas/erro).
   const [driveLastSync, setDriveLastSync] = useState<{
     status: string; stats: Record<string, unknown>; started_at: string | null; finished_at: string | null;
+    provavelmente_travada?: boolean;
   } | null>(null);
   // Achado real (validação da pasta Doutrina): "processados/pulados/falhas"
   // era um agregado opaco — nenhuma tela mostrava QUAL arquivo falhou nem
@@ -122,17 +123,19 @@ function HubCards() {
   }> | null>(null);
   const [carregandoArquivosDrive, setCarregandoArquivosDrive] = useState(false);
 
+  async function buscarArquivosDrive() {
+    setCarregandoArquivosDrive(true);
+    try {
+      const res = await fetch("/api/v1/integrations/hub/google_drive_doutrina/last-sync/arquivos", { headers: authH() });
+      if (res.ok) setArquivosDrive((await res.json()).arquivos || []);
+    } catch { /* mantém null, mostra estado de erro discreto */ }
+    finally { setCarregandoArquivosDrive(false); }
+  }
+
   async function alternarArquivosDrive() {
     const abrindo = !arquivosDriveAbertos;
     setArquivosDriveAbertos(abrindo);
-    if (abrindo && arquivosDrive === null) {
-      setCarregandoArquivosDrive(true);
-      try {
-        const res = await fetch("/api/v1/integrations/hub/google_drive_doutrina/last-sync/arquivos", { headers: authH() });
-        if (res.ok) setArquivosDrive((await res.json()).arquivos || []);
-      } catch { /* mantém null, mostra estado de erro discreto */ }
-      finally { setCarregandoArquivosDrive(false); }
-    }
+    if (abrindo && arquivosDrive === null) await buscarArquivosDrive();
   }
 
   async function fetchHub() {
@@ -278,8 +281,17 @@ function HubCards() {
         method: "POST", headers: authH(),
       });
       const d = await res.json().catch(() => ({}));
-      if (res.ok) { toast.success(d.message || "Sincronização concluída."); fetchDriveLastSync(); }
-      else toast.error(d.detail || "Erro ao sincronizar.");
+      if (res.ok) {
+        toast.success(d.message || "Sincronização concluída.");
+        fetchDriveLastSync();
+        // Achado real (validação da pasta Doutrina): o painel "Ver
+        // arquivos" só buscava 1x por sessão de página — depois de rodar
+        // uma sincronização nova, ficava congelado mostrando o snapshot
+        // antigo. Se já está aberto, rebusca na hora; senão, só reseta
+        // pra forçar um fetch novo na próxima vez que o usuário abrir.
+        if (arquivosDriveAbertos) buscarArquivosDrive();
+        else setArquivosDrive(null);
+      } else toast.error(d.detail || "Erro ao sincronizar.");
     } catch { toast.error("Falha de conexão."); }
     finally { setSincronizando(false); }
   }
@@ -409,17 +421,27 @@ function HubCards() {
                 )}
                 {driveLastSync && (
                   <div className={`mt-2.5 text-[11px] rounded-sm px-2.5 py-1.5 border ${
-                    driveLastSync.status === "ERRO" ? "bg-red-50 border-red-200 text-red-700" : "bg-afj-cream border-afj-cream-dark text-afj-black/60"
+                    driveLastSync.status === "ERRO" || driveLastSync.provavelmente_travada
+                      ? "bg-amber-50 border-amber-200 text-amber-800" : "bg-afj-cream border-afj-cream-dark text-afj-black/60"
                   }`}>
                     <p className="font-medium">
-                      Última sincronização: {driveLastSync.status === "ERRO" ? "com erro" : driveLastSync.status === "OK" ? "concluída" : "em andamento"}
+                      Última sincronização: {driveLastSync.provavelmente_travada
+                        ? "pode ter travado"
+                        : driveLastSync.status === "ERRO" ? "com erro" : driveLastSync.status === "OK" ? "concluída" : "em andamento"}
                       {driveLastSync.started_at && ` — ${new Date(driveLastSync.started_at).toLocaleString("pt-BR")}`}
                     </p>
-                    {driveLastSync.status !== "ERRO" && (
+                    {driveLastSync.provavelmente_travada ? (
+                      // Achado real (validação da pasta Doutrina): um SyncRun
+                      // pode ficar preso em RUNNING pra sempre (crash de
+                      // processo no meio da sincronização) — nunca corrigido
+                      // sozinho, só sinalizado pra evitar "em andamento"
+                      // enganoso pra sempre.
+                      <p className="mt-0.5">Sem atualização há muito tempo — clique em &quot;Sincronizar agora&quot; pra tentar de novo.</p>
+                    ) : driveLastSync.status !== "ERRO" ? (
                       <p className="mt-0.5">
                         {String(driveLastSync.stats?.processados ?? 0)} processados, {String(driveLastSync.stats?.pulados ?? 0)} pulados, {String(driveLastSync.stats?.falhas ?? 0)} falhas
                       </p>
-                    )}
+                    ) : null}
                     {driveLastSync.status === "ERRO" && driveLastSync.stats?.erro ? (
                       <p className="mt-0.5">{String(driveLastSync.stats.erro)}</p>
                     ) : null}

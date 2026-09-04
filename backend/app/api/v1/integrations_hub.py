@@ -23,6 +23,12 @@ log = structlog.get_logger()
 
 router = APIRouter(prefix="/integrations/hub", tags=["integrations-hub"])
 webhooks_router = APIRouter(prefix="/integrations/webhooks", tags=["integrations-webhooks"])
+
+# Achado real (validação da pasta Doutrina) — folga generosa acima do tempo
+# real de uma sincronização síncrona via HTTP (nunca deveria demorar tanto
+# pra uma pasta razoável); usado só pra sinalizar um SyncRun provavelmente
+# travado, nunca pra corrigir/reabrir automaticamente.
+_SYNC_RUNNING_THRESHOLD_MINUTOS = 30
 # Fase 180.x — /oauth/callback precisa ficar num router PÚBLICO separado:
 # é o navegador do usuário sendo redirecionado pelo provedor (Google/Stripe/
 # Mercado Pago), sem header Authorization — se ficasse no `router` acima
@@ -219,6 +225,7 @@ async def hub_drive_doutrina_last_sync(
     (`google_drive_sync.py::executar_sync_drive_doutrina`, `fonte`
     `google_drive:{tenant_id}`). Mesmo padrão de leitura já usado em
     `system.py::tenant_infra` pra "última sincronização" de captura."""
+    from datetime import datetime, timezone
     from app.models.sync_run import SyncRun
 
     ultimo = (await db.execute(
@@ -229,12 +236,29 @@ async def hub_drive_doutrina_last_sync(
     )).scalar_one_or_none()
     if not ultimo:
         return {"ultima_sincronizacao": None}
+
+    # Achado real (validação da pasta Doutrina): um crash de processo no
+    # meio da sincronização (fora do alcance de try/except em Python) pode
+    # deixar o SyncRun preso em RUNNING pra sempre — a tela mostraria "em
+    # andamento" indefinidamente, mesmo que arquivos já processados antes
+    # do crash já tenham status real em "Ver arquivos". Só sinaliza (não
+    # tenta corrigir/reabrir sozinho) quando RUNNING há mais tempo do que
+    # uma sincronização síncrona via HTTP levaria em qualquer cenário real.
+    provavelmente_travada = False
+    if ultimo.status == "RUNNING" and ultimo.started_at:
+        started_at = ultimo.started_at
+        if started_at.tzinfo is None:
+            started_at = started_at.replace(tzinfo=timezone.utc)
+        idade_minutos = (datetime.now(timezone.utc) - started_at).total_seconds() / 60
+        provavelmente_travada = idade_minutos > _SYNC_RUNNING_THRESHOLD_MINUTOS
+
     return {
         "ultima_sincronizacao": {
             "status": ultimo.status,
             "stats": ultimo.stats or {},
             "started_at": ultimo.started_at.isoformat() if ultimo.started_at else None,
             "finished_at": ultimo.finished_at.isoformat() if ultimo.finished_at else None,
+            "provavelmente_travada": provavelmente_travada,
         }
     }
 

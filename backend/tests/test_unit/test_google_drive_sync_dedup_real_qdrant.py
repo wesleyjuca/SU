@@ -51,6 +51,9 @@ class _FakeDB:
     async def flush(self):
         pass
 
+    async def rollback(self):
+        pass
+
     async def commit(self):
         pass
 
