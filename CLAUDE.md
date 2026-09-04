@@ -5405,6 +5405,74 @@ Histórico:
     não índice ao vivo — comportamento atual só confirmado como correto,
     não alterado); qualquer mudança na coleção `doutrina` pública
     (manual-only, fora do problema relatado).
+- **Fase pós-259** — usuário reportou (print): "Pesquisa Jurídica" sempre
+  falhava com "Serviço RAG indisponível: ... OPENAI_API_KEY não
+  configurada" — pediu validação e correção. Investigação (leitura direta
+  de código, sem subagentes) confirmou 2 achados reais, independentes:
+  - **Achado 1 — bug real em `_resolve_byok_openai_key()`
+    (`backend/app/rag/embeddings.py`)**: só considerava a config de IA
+    PADRÃO/primária do usuário (`ai_creds_ctx`), nunca a cadeia de
+    fallback (`ai_fallback_ctx`) que `user_ai_creds()` já expõe pras
+    demais IAs habilitadas do usuário (Fase 137.3). Um usuário com
+    Anthropic como padrão (o comum, já que é o provedor do resto do
+    sistema — chat, geração de petição, etc.) e uma chave OpenAI
+    cadastrada só como config SECUNDÁRIA em "Minha IA" (não marcada como
+    padrão) tinha essa chave completamente ignorada pela Pesquisa
+    Jurídica — a busca continuava exigindo a `OPENAI_API_KEY` central
+    mesmo com uma OpenAI BYOK válida cadastrada. Fix: a função agora
+    percorre a config primária + toda a cadeia de fallback, na mesma
+    ordem de prioridade do usuário, procurando a 1ª entrada
+    `provider=="openai"` em qualquer posição.
+  - **Achado 2 — gap de descoberta (UX)**: nada na tela "Minha IA"
+    (`frontend/.../minha-ia/page.tsx`) explicava que uma chave OpenAI é
+    necessária especificamente pra Pesquisa Jurídica (Anthropic, o
+    provedor padrão do resto do sistema, não tem API de embeddings) — um
+    usuário cadastrando só a Anthropic nunca teria como adivinhar isso,
+    mesmo seguindo a instrução do próprio erro. **Confirmado com o
+    usuário**: a `OPENAI_API_KEY` central nunca será configurada de
+    propósito (decisão de arquitetura — depender só de BYOK por usuário,
+    nunca de uma chave central do escritório) — o que torna esse gap de
+    descoberta o único caminho real pra qualquer usuário habilitar a
+    busca. Fix: nota informativa em "Minha IA" (só exibida enquanto o
+    usuário não tem nenhuma config OpenAI habilitada) explicando que a
+    chave OpenAI não precisa ser a padrão, só precisa existir; banner de
+    erro em `busca-juridica/page.tsx` ganha um link direto "Ir para Minha
+    IA →" quando o erro menciona OpenAI.
+  - **Verificado — o bug de código, com o caminho real completo** (script
+    standalone, Postgres real, só o construtor do SDK `AsyncOpenAI` é
+    mockado — capturando qual `api_key` foi realmente usada, sem mockar
+    `embed_batch`/`get_openai_client` inteiros): usuário com Anthropic
+    padrão + OpenAI secundária → `POST /rag/search` não lança mais erro,
+    e o `AsyncOpenAI` real é construído com a chave OpenAI SECUNDÁRIA
+    (não a Anthropic); regressão confirmada — sem nenhuma OpenAI em
+    lugar nenhum, o erro "OPENAI_API_KEY não configurada" com a mensagem
+    de sempre continua disparando; sem regressão — uma config OpenAI já
+    marcada como padrão continua funcionando exatamente como antes (usada
+    direto, sem precisar do fallback). **Achado incidental durante a
+    verificação**: a 1ª tentativa do script "achou" que o fix não
+    funcionava num 2º cenário — na verdade era o cache de busca do Redis
+    (`retrieval.py`, mesma `query`+`collections`+`tenant_id` = mesma
+    chave de cache) devolvendo o resultado (vazio) do cenário anterior
+    sem sequer tentar embeddings de novo; corrigido usando queries
+    distintas por cenário no script, não um bug de produto.
+  - **Verificado — Playwright real** (Chromium do sandbox, `npm run dev`
+    local, backend local real, sem `OPENAI_API_KEY` central neste
+    sandbox — reproduz o cenário exato do print do usuário): nota sobre
+    Pesquisa Jurídica/embeddings presente em "Minha IA" sem config OpenAI
+    cadastrada; busca real em Pesquisa Jurídica dispara `POST /rag/search`
+    → 503 com a mensagem de OPENAI_API_KEY → link "Ir para Minha IA"
+    presente e navega corretamente — zero diálogo nativo, console limpo.
+    8/8 checks PASS. 8 testes automatizados novos
+    (`test_embeddings_byok.py`, unitários e rápidos, sem depender de
+    banco) cobrindo a lógica de varredura da cadeia de fallback isolada.
+  - **Fora de escopo, deliberado**: qualquer mudança na arquitetura de
+    embeddings em si (ex. trocar OpenAI por um provedor alternativo, ou
+    um modelo local) — fora do que foi pedido, e mudaria a dimensão
+    vetorial das collections já existentes no Qdrant (migração maior,
+    não decidida nesta fase); qualquer alteração no comportamento de
+    fallback do `call_llm`/agentes de IA em geral — o achado e o fix são
+    específicos do caminho de embeddings (`_resolve_byok_openai_key`),
+    não do mecanismo de fallback mais amplo já usado por completions.
 
 
 ## Riscos conhecidos / débito técnico

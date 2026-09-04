@@ -267,6 +267,17 @@ export default function MinhaIAPage() {
         </button>
       </div>
 
+      {!configs.some((c) => c.provider === "openai" && c.enabled) && (
+        <div className="flex items-start gap-2.5 text-xs rounded-sm px-3.5 py-3 mb-4 bg-blue-50 border border-blue-200 text-blue-800">
+          <Scale size={15} className="flex-shrink-0 mt-0.5" />
+          <p className="leading-relaxed">
+            A <strong>Pesquisa Jurídica</strong> (busca semântica) usa embeddings da OpenAI — um provedor
+            diferente do que você usa pra conversar com os agentes (ex.: Anthropic). Cadastre uma chave
+            OpenAI aqui, mesmo sem torná-la a IA padrão, pra habilitar a busca.
+          </p>
+        </div>
+      )}
+
       {msg && (
         <div className={`flex items-start gap-2 text-xs rounded-sm px-3 py-2.5 mb-4 ${msg.ok ? "text-green-700 bg-green-50 border border-green-200" : "text-red-700 bg-red-50 border border-red-200"}`}>
           {msg.ok ? <CheckCircle2 size={14} className="flex-shrink-0 mt-0.5" /> : <XCircle size={14} className="flex-shrink-0 mt-0.5" />}
