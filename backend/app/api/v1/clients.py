@@ -863,7 +863,20 @@ async def ajustar_localizacao_manual(
     a coordenada não veio da BrasilAPI (nunca sobrescrita silenciosamente
     por uma geocodificação automática futura — `_geocodificar_endereco`
     só reconsulta quando o CEP muda, então um ajuste manual sobrevive a
-    qualquer save subsequente que não mexa no CEP)."""
+    qualquer save subsequente que não mexa no CEP).
+
+    Fase pós-260.2 — achado real: o botão "Ajustar manualmente" do /mapa
+    (o único chamador deste endpoint no frontend web) foi removido —
+    edição manual de coordenada crua foi considerada desnecessária como
+    ação principal; correções passaram a ser contextuais dentro da
+    Auditoria de Geolocalização (corrigir o ENDEREÇO cadastrado, que já
+    re-geocodifica sozinho ao salvar, ou "Recalcular" via
+    `/recalcular-localizacao`). Este endpoint fica SEM CHAMADOR conhecido
+    no frontend web a partir desta fase — mantido de propósito (não há
+    evidência de que algum outro consumidor, ex. mobile/script/suporte,
+    dependa dele, mas também não foi confirmado que nenhum depende — não
+    deletar API sem necessidade comprovada). Se um dia parecer código
+    morto, esta nota é o porquê."""
     if not coordenada_valida(body.latitude, body.longitude):
         raise HTTPException(status_code=422, detail="Coordenada fora da faixa geográfica válida.")
 

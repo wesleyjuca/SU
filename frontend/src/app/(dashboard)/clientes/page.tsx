@@ -144,6 +144,23 @@ export default function ClientesPage() {
       .catch(() => {});
   }, [canSeeLgpd]);
 
+  // Fase pós-260.2 — deep-link vindo da Auditoria de Geolocalização do
+  // /mapa ("Corrigir endereço" → /clientes?editar={id}"), mesmo padrão de
+  // leitura de query param já usado acima pra `?aba=`. Busca o cliente
+  // direto por id (não depende dele estar na página/paginação/filtro já
+  // carregado) e abre o modal de edição já existente — salvar lá já
+  // re-geocodifica sozinho (_geocodificar_endereco no backend).
+  useEffect(() => {
+    const idParaEditar = searchParams.get("editar");
+    if (!idParaEditar) return;
+    const token = localStorage.getItem("afj_access_token");
+    fetch(`/api/v1/clients/${idParaEditar}`, { headers: { Authorization: `Bearer ${token}` } })
+      .then((r) => (r.ok ? r.json() : Promise.reject()))
+      .then((c: Cliente) => abrirEdicao(c))
+      .catch(() => toast.error("Cliente não encontrado para edição."));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
   async function fetchClientes(newOffset = 0, append = false) {
     if (append) setLoadingMore(true);
     else setLoading(true);
