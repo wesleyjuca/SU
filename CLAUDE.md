@@ -5473,6 +5473,127 @@ Histórico:
     fallback do `call_llm`/agentes de IA em geral — o achado e o fix são
     específicos do caminho de embeddings (`_resolve_byok_openai_key`),
     não do mecanismo de fallback mais amplo já usado por completions.
+- **Fase pós-260** — usuário reportou (print do painel "Ver arquivos"):
+  a pasta "09 - Doutrina" mostrava "Última sincronização: em andamento —
+  0 processados, 0 pulados, 0 falhas", enquanto o mesmo painel já
+  listava 2 arquivos reais (`eca-2025.pdf`,
+  `TABELA-DE-HONORARIOS-...`) com status `FALHOU` e o erro
+  `Unexpected Response: 400 (Bad Request)... "Index required but not
+  found for \"document_id\" of one of the following types: [keyword].
+  Help: Create an index for this key or use a different filter."`.
+  Pediu análise, correção e validação. Investigação (2 Explore agents
+  em paralelo) confirmou 2 causas reais e independentes no mesmo print
+  — usuário confirmou (via 2 perguntas) corrigir as 2, e estender o
+  fix de índice também pra `peticoes_afj` (não só `doutrina_privada`).
+  - **Causa 1 (o 400 em si) — índice Qdrant ausente**. De 8 coleções em
+    `backend/app/rag/collections.py::COLLECTIONS`, só
+    `documentos_clientes` declarava `document_id` em `payload_fields`
+    — `doutrina_privada` e `peticoes_afj` não. `ingestion.py::
+    delete_document_chunks()` filtra por esse campo antes de reingerir
+    (evita duplicar chunks, Fase 188.1); um Qdrant rodando como
+    SERVIDOR real (não o `:memory:` usado em todo teste desta sessão)
+    exige índice de payload explícito pra filtrar por um campo — sem
+    ele, 400 exatamente como o print. `google_drive_sync.py` (linha
+    ~167, coleção `doutrina_privada`) já capturava e expunha isso como
+    `FALHOU` — é o que apareceu no print. `auto_ingest.py` (linha
+    ~28-35, coleção `peticoes_afj`/`documentos_clientes`, usado quando
+    petições/documentos são aprovados) chamava a MESMA função, mas com
+    `except Exception: pass` — 100% silencioso, mesma falha acontecendo
+    a cada reprocessamento sem deixar rastro nenhum. Fix: `document_id`
+    adicionado a `payload_fields` de `doutrina_privada` e
+    `peticoes_afj` — `ensure_collections()` (Fase 116/198) já se
+    autocura em coleções existentes a cada boot (recria todo índice
+    declarado, `try/except: pass` por campo), então nenhuma migração
+    manual é necessária. `auto_ingest.py` trocou o `except: pass` por
+    `log.warning("auto_ingest_delete_chunks_falhou", document_id=...,
+    collection=..., error=...)` — continua non-blocking (nunca impede
+    a aprovação do documento), só deixa de ser invisível.
+  - **Causa 2 (o "em andamento / 0/0/0" ao lado de erros reais) —
+    `SyncRun` podia ficar preso em `RUNNING` pra sempre**. O bloco
+    `except Exception` mais externo do loop de tenants em
+    `google_drive_sync.py` terminava com `finalizar_sync(..., "ERRO",
+    ...)` + `db.commit()` **fora de qualquer try/except** — se a
+    sessão já estivesse invalidada por uma falha anterior no mesmo
+    loop, esse commit final lançava de novo, sem nada capturando,
+    escapando de `executar_sync_drive_doutrina()` inteira (chamada sem
+    try/except por `hub_drive_sync_now()`). O `SyncRun` já commitado
+    como `RUNNING` nunca era atualizado — `GET .../last-sync` sempre
+    pega o run mais recente por `started_at`, então a tela ficava
+    presa em "em andamento"/`stats={}` (→"0/0/0") pra sempre, mesmo com
+    arquivos individuais já `FALHOU` visíveis (commitados um a um,
+    antes do commit final que quebrou). Fix: o bloco `except` externo
+    agora envolve `rollback()` + `finalizar_sync()` + `commit()` num
+    try/except próprio, com um `rollback()` de segurança se até a
+    tentativa de marcar `ERRO` falhar — o loop sempre segue pro próximo
+    tenant com sessão limpa, sem nunca deixar uma 2ª exceção escapar.
+  - **Visibilidade adicional** (item do plano, sem pedido explícito
+    separado): mesmo com a Causa 2 corrigida, um crash de
+    processo/worker fora do controle de exception-handling em Python
+    ainda pode deixar um `SyncRun` preso. Em vez de auto-recuperar
+    (decisão deliberada — nunca decidir sozinho sobre estado incerto),
+    `GET .../last-sync` (`integrations_hub.py`) ganhou
+    `"provavelmente_travada": true` quando o run mais recente está
+    `RUNNING` há mais de `_SYNC_RUNNING_THRESHOLD_MINUTOS = 30`.
+    Frontend (`integracoes/page.tsx`) mostra aviso âmbar ("Sincronização
+    pode ter travado — clique em 'Sincronizar agora' pra tentar de
+    novo.") em vez do "em andamento" enganoso pra sempre.
+  - **Achado colateral, corrigido junto**: `sincronizarAgora()`
+    (`integracoes/page.tsx`) já rechamava `fetchDriveLastSync()` após
+    sucesso, mas nunca rebuscava `arquivosDrive` — o painel "Ver
+    arquivos" era buscado 1x por sessão de página e nunca mais.
+    Corrigido: se o painel já estava aberto, "Sincronizar agora" agora
+    rebusca a lista automaticamente.
+  - **Achado real, pré-existente, corrigido durante o fix da Causa 2**:
+    o teste `test_falha_no_meio_dos_arquivos_de_um_tenant_nao_aborta_
+    os_demais` (`test_google_drive_sync.py`) quebrou depois do fix
+    porque seu `_FakeDB` não tinha `rollback()` — `AttributeError`
+    capturado silenciosamente pelo novo except, impedindo
+    `finalizar_sync` de rodar. Corrigido adicionando `rollback()`
+    no-op ao Fake (e, por consistência, ao Fake equivalente em
+    `test_google_drive_sync_dedup_real_qdrant.py`).
+  - **Verificado — Causa 1, com prova excepcionalmente forte pro padrão
+    desta sessão**: nenhuma verificação anterior desta sessão tinha
+    conseguido reproduzir esse tipo de bug, porque `AsyncQdrantClient
+    (location=":memory:")` (usado em todo teste anterior) não aplica o
+    enforcement de índice do modo servidor real. Como Docker não está
+    disponível neste sandbox (`sudo service docker start` falha com
+    "Operation not permitted"), baixado e rodado o binário standalone
+    do Qdrant direto do GitHub Releases (v1.18.0, igual ao
+    `qdrant-client` pinado) como servidor real
+    (`QDRANT__STORAGE__STORAGE_PATH`, `localhost:6333`). Descoberta no
+    processo: `StrictModeConfig.unindexed_filtering_update`/
+    `_retrieve` são flags de "permissão" com nome contra-intuitivo —
+    `False` significa que filtro sem índice NÃO é permitido (índice
+    vira obrigatório), confirmado lendo o código-fonte real do Qdrant
+    (`verification/mod.rs`, tag v1.18.0) depois de 2 tentativas com a
+    semântica invertida. Com a config certa, reproduzido o 400 EXATO
+    do print (mensagem idêntica) chamando `delete_document_chunks()`
+    real contra as 2 coleções sem o índice; depois, `ensure_collections()`
+    (com `document_id` já declarado) cria o índice sozinho, e a MESMA
+    chamada não lança mais erro — mesmo caminho que roda em produção a
+    cada boot, sem migração manual.
+  - **Verificado — Causa 2 e visibilidade**: teste novo
+    (`test_falha_seguida_de_rollback_tambem_falhando_nao_escapa_e_
+    segue_pro_proximo_tenant`) simula o pior caso (até o `rollback()`
+    de segurança falhando) — confirma que a exceção nunca escapa e o
+    loop segue pro próximo tenant. 4 testes novos em
+    `test_hub_drive_last_sync.py` cobrem `provavelmente_travada`
+    (RUNNING recente = false, RUNNING antigo = true, OK/ERRO nunca
+    sinalizados mesmo antigos, `started_at` naive não quebra o
+    cálculo). Script seedando o cenário exato do print (tenant real
+    `afj`, integração conectada, `SyncRun` preso em RUNNING há 45min,
+    2 `JurisprudenciaIngerida` FALHOU com o erro real) + Playwright
+    real (Chromium do sandbox, `npm run dev` local): aviso âmbar "pode
+    ter travado" presente (não mais "em andamento" enganoso), link "Ver
+    arquivos" mostra os 2 arquivos reais com o erro real do índice,
+    "Sincronizar agora" com o painel já aberto rebusca a lista
+    automaticamente (mockado via `page.route`, já que este sandbox não
+    tem credencial Google real), zero diálogo nativo, console limpo —
+    11/11 checks PASS.
+  - Suíte completa dos 6 arquivos relacionados (57 testes, incluindo o
+    novo `test_auto_ingest_delete_chunks_log.py`) passa limpa isolada.
+    `ruff check`/`py_compile` limpos no backend; `tsc --noEmit`/
+    `eslint` limpos no frontend.
 
 
 ## Riscos conhecidos / débito técnico

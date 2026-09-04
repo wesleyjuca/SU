@@ -52,6 +52,9 @@ class _FakeDB:
     async def flush(self):
         pass
 
+    async def rollback(self):
+        pass
+
     async def commit(self):
         self.commits += 1
 
@@ -335,3 +338,97 @@ async def test_tipo_nativo_do_google_nao_suportado_falha_sem_tentar_download(mon
     assert db._entrada_real.status == "FALHOU"
     assert "Formato não suportado" in db._entrada_real.erro
     assert "application/vnd.google-apps.spreadsheet" in db._entrada_real.erro
+
+
+class _FakeDBRollbackFalha(_FakeDB):
+    """Achado real (validação da pasta Doutrina): simula o pior caso —
+    `rollback()` também falha (sessão irrecuperável), não só o commit final.
+    `flush()`/`commit()` continuam funcionando normalmente pros DEMAIS
+    tenants (só `rollback()` está com problema, isolado), provando que o
+    novo try/except aninhado nunca deixa uma 2ª exceção escapar, mesmo no
+    cenário mais pessimista."""
+    async def rollback(self):
+        raise RuntimeError("rollback também falhou (sessão irrecuperável)")
+
+
+@pytest.mark.asyncio
+async def test_falha_seguida_de_rollback_tambem_falhando_nao_escapa_e_segue_pro_proximo_tenant(monkeypatch):
+    """Achado real: o `await db.commit()` do branch de erro (fora de
+    qualquer try/except antes deste fix) podia lançar de novo se a sessão
+    tivesse sido invalidada — escapando de `executar_sync_drive_doutrina()`
+    inteira e deixando o `SyncRun` do tenant preso em RUNNING pra sempre.
+    Este teste força o cenário mais pessimista (nem `rollback()` funciona)
+    e confirma que, mesmo assim, nada escapa e o tenant B é processado
+    normalmente depois."""
+    import app.workers.tasks.google_drive_sync as mod
+
+    tenant_a = uuid.uuid4()
+    tenant_b = uuid.uuid4()
+    integ_a = _FakeInteg(tenant_a, "folder_a")
+    integ_b = _FakeInteg(tenant_b, "folder_b")
+
+    chamadas_finalizar = []
+
+    async def _fake_iniciar_sync(db, tenant_id, fonte, tipo):
+        return type("Run", (), {"tenant_id": tenant_id})()
+
+    async def _fake_finalizar_sync(db, run, status, stats):
+        chamadas_finalizar.append((run.tenant_id, status, stats))
+
+    monkeypatch.setattr("app.services.movements_import.iniciar_sync", _fake_iniciar_sync)
+    monkeypatch.setattr("app.services.movements_import.finalizar_sync", _fake_finalizar_sync)
+
+    async def _fake_get_credentials(db, tenant_id, provider):
+        return {"access_token": "tok"}
+
+    monkeypatch.setattr("app.services.integration_hub.get_credentials", _fake_get_credentials)
+
+    async def _fake_listar_arquivos(access_token, folder_id):
+        if folder_id == "folder_a":
+            return [{"id": "fa1", "name": "a1.pdf", "mimeType": "application/pdf"}]
+        return [{"id": "fb1", "name": "b1.pdf", "mimeType": "application/pdf"}]
+
+    async def _fake_baixar_conteudo(access_token, file_id, mime_type):
+        return b"bytes"
+
+    async def _fake_extrair_texto(mimetype, conteudo):
+        return "texto extraido"
+
+    monkeypatch.setattr("app.integrations.google_drive.client.listar_arquivos", _fake_listar_arquivos)
+    monkeypatch.setattr("app.integrations.google_drive.client.baixar_conteudo", _fake_baixar_conteudo)
+    monkeypatch.setattr("app.integrations.google_drive.client.extrair_texto", _fake_extrair_texto)
+
+    async def _fake_ingest(**kwargs):
+        return None
+
+    async def _fake_delete_chunks(**kwargs):
+        return None
+
+    monkeypatch.setattr("app.rag.ingestion.ingest_document", _fake_ingest)
+    monkeypatch.setattr("app.rag.ingestion.delete_document_chunks", _fake_delete_chunks)
+
+    # Tenant A: dedup do arquivo fa1 lança (dispara o except EXTERNO, não o
+    # interno por arquivo) -> rollback também falha -> nada deve escapar.
+    # Tenant B: processa normalmente com a MESMA sessão (mesmo objeto db),
+    # confirmando que o problema fica isolado ao tenant A.
+    db = _FakeDBRollbackFalha([
+        _FakeScalarsResult([integ_a, integ_b]),
+        _FakeScalarResult(_FakeCfg()),
+        _RaiseNoExecute(RuntimeError("erro real do Qdrant: index required but not found")),
+        _FakeScalarResult(_FakeCfg()),
+        _FakeScalarResult(None),
+    ])
+
+    resultado = await mod.executar_sync_drive_doutrina(db)
+
+    # Não escapou nenhuma exceção — a função retornou normalmente.
+    assert resultado["tenants_sincronizados"] == 2
+    assert resultado["processados"] == 1  # só fb1 (tenant B)
+
+    # finalizar_sync nunca conseguiu rodar pro tenant A (rollback falhou
+    # antes de chegar lá) — mas isso não impediu o tenant B de ser
+    # processado e finalizado normalmente.
+    por_tenant = {t: (status, stats) for t, status, stats in chamadas_finalizar}
+    assert tenant_a not in por_tenant
+    assert por_tenant[tenant_b][0] == "OK"
+    assert por_tenant[tenant_b][1]["processados"] == 1

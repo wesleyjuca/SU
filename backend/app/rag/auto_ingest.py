@@ -29,10 +29,16 @@ async def auto_ingest_document(doc_id, tenant_id, titulo, tipo, texto, client_id
     try:
         from app.rag.ingestion import ingest_document, delete_document_chunks
         # Idempotência: remove chunks antigos deste documento antes de reindexar.
+        # Achado real (validação da pasta Doutrina): essa exceção ficava
+        # 100% silenciosa (`except: pass`) — se falhasse (ex.: índice de
+        # payload ausente na coleção), chunks antigos nunca eram limpos
+        # antes do reingest e duplicavam no Qdrant, sem nenhum rastro.
+        # Non-blocking continua igual (nunca impede a aprovação do
+        # documento), só passa a deixar log.
         try:
             await delete_document_chunks(collection, str(doc_id))
-        except Exception:
-            pass
+        except Exception as exc:
+            log.warning("auto_ingest_delete_chunks_falhou", document_id=str(doc_id), collection=collection, error=str(exc))
         metadata = {
             "tenant_id": str(tenant_id),
             "document_id": str(doc_id),

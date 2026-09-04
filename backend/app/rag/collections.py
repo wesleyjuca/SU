@@ -29,6 +29,14 @@ COLLECTIONS: dict[str, dict] = {
             # Coleção privada (retrieval.py::PRIVATE_COLLECTIONS) — todo filtro
             # de isolamento multi-tenant usa este campo, precisa de índice.
             "tenant_id": PayloadSchemaType.KEYWORD,
+            # Achado real (validação da pasta Doutrina): faltava aqui —
+            # `ingestion.py::delete_document_chunks()` filtra por este campo
+            # antes de reingerir (evita duplicar chunks), e o Qdrant real
+            # (servidor, não o `:memory:` usado nos testes) exige índice
+            # explícito pra filtrar por qualquer campo — sem ele, a chamada
+            # falhava com 400 "Index required but not found for
+            # document_id", engolido silenciosamente em auto_ingest.py.
+            "document_id": PayloadSchemaType.KEYWORD,
         },
     },
     "doutrina": {
@@ -52,6 +60,11 @@ COLLECTIONS: dict[str, dict] = {
             "google_file_id": PayloadSchemaType.KEYWORD,
             # Coleção privada — ver nota em peticoes_afj acima.
             "tenant_id": PayloadSchemaType.KEYWORD,
+            # Achado real (validação da pasta Doutrina) — mesma nota de
+            # peticoes_afj acima: sem este índice, a Drive sync falhava com
+            # 400 "Index required but not found for document_id" toda vez
+            # que tentava limpar chunks antigos antes de reingerir.
+            "document_id": PayloadSchemaType.KEYWORD,
         },
     },
     "legislacao": {
