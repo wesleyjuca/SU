@@ -51,12 +51,6 @@ Infra:        Docker Compose (dev) + Railway + Vercel (prod)
                                   │  LangGraph  │
                                   │   Agentes   │
                                   └─────────────┘
-```
-
-# Acesso:
-# API:      http://localhost:8000/api/v1/docs
-# Frontend: http://localhost:3000
-```
 
 ## Princípios
 
