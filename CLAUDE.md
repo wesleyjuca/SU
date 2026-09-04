@@ -197,6 +197,76 @@ rediscobertas do zero a cada sessão — contexto completo de cada uma em
   esquecimento LGPD). Ao adicionar uma tabela com vínculo (direto ou
   indireto) a `clients.id`, checar se ela precisa entrar nesses 2
   endpoints antes de considerar a feature pronta.
+- **Fase pós-260.2** — usuário pediu pra transformar `/mapa` (visualização
+  de pins) num "painel geográfico da carteira jurídica": indicadores,
+  ações contextuais ao clicar num cliente, correção de geolocalização
+  deslocada pra dentro da Auditoria (não mais um botão global de "Ajustar
+  manualmente", removido por ser considerado edição manual de coordenada
+  desnecessária). Investigação (3 Explore + 1 Plan agent) revelou que boa
+  parte do pedido já existia — clusterização (`react-leaflet-cluster`),
+  painel de Auditoria com as 3 contagens (VALIDADA/REQUER_REVISAO/
+  NAO_GEOCODIFICADO), filtros de cidade/UF — mudando o escopo real pra
+  remoção + acréscimos pequenos, não reforma do zero.
+  - **Removido**: botão global "Ajustar manualmente" (draggable +
+    popup de confirmar/cancelar coordenada crua) do header e do
+    `EscritorioClientesMap.tsx` — junto com a prop `ajusteAtivo`/
+    `onAjustarLocalizacao`. `PUT /clients/{id}/localizacao-manual`
+    (backend) fica sem chamador no frontend web — mantido de propósito
+    (decisão explícita: não deletar API sem necessidade comprovada),
+    documentado com uma nota no próprio docstring do endpoint.
+  - **Indicadores de topo** (geocodificados/sem localização/cidades/UFs)
+    — fonte única: `GET /clients/geolocalizacao/auditoria` (cobre a
+    carteira inteira, não só quem tem pino no mapa, sem o cap de 200 do
+    `GET /clients`), buscada num efeito separado reagindo a
+    `podeAjustar` — **achado real durante a verificação**: buscar no
+    mesmo efeito de mount (`deps: []`) junto com a lista de clientes
+    quebrava, porque `useUserStore` começa com `user: null` e hidrata
+    de forma assíncrona — `podeAjustar` calculado no mount quase sempre
+    vinha `false`, e a busca nunca rodava de novo (deps vazias).
+    Corrigido com um 2º `useEffect([podeAjustar])` dedicado.
+  - **Filtros de carteira** (tipo/status/segmento) — 100% frontend,
+    `tipo`/`status`/`segmento` já vinham em `GET /clients` mas eram
+    descartados no mapeamento da página antes de virar estado.
+  - **Popup do marcador** ganhou `maxWidth` explícito + botão "Ver
+    cliente completo" (link pra `/clientes/{id}`) — decisão confirmada
+    com o usuário: estender o popup existente em vez de construir um
+    painel lateral novo (sem nenhum precedente desse padrão no projeto).
+  - **Auditoria** ganhou, por linha pendente: "Recalcular" (reaproveita
+    `POST /clients/{id}/recalcular-localizacao`, já existia) e "Corrigir
+    endereço" (`/clientes?editar={id}` em nova aba — decisão confirmada
+    com o usuário, depois de um agente de plano achar que a proposta
+    original, linkar pra `/clientes/{id}`, não funcionaria: essa página
+    não tem NENHUMA UI de endereço, que só existe no modal da LISTA de
+    clientes). Novo efeito em `clientes/page.tsx` lê `?editar=`, busca
+    `GET /clients/{id}` direto e abre o modal já existente — salvar lá
+    já re-geocodifica sozinho (`_geocodificar_endereco`, comportamento
+    pré-existente). Também ganhou um rótulo agregado "Precisão
+    aproximada" (clientes VALIDADA com `geocode_source="brasilapi"`,
+    CEP/quadra, vs. `"nominatim"`, endereço+número) — sem nenhum campo
+    novo de precisão no backend, só reinterpretação do campo existente.
+  - **Fora de escopo, registrado**: heatmap (exigiria dependência nova,
+    `leaflet.heat` ausente), filtro por raio (haversine já existe no
+    frontend, mas não implementado nesta fase), camadas de mapa
+    (provavelmente frontend puro via `LayersControl` do `react-leaflet`,
+    não confirmado), histórico de mudança de coordenada (exigiria
+    backend novo — `AuditLog` nunca popula `old_value`/`new_value`
+    nessas rotas hoje). Cap de 200 clientes em `GET /clients` (limitação
+    pré-existente) também registrado, não corrigido.
+  - **Verificado**: `tsc --noEmit`/`eslint` limpos; `ruff`/`py_compile`
+    limpos no backend; suíte pytest relacionada apresentou a mesma
+    flakiness de pool asyncpg/pytest-asyncio já documentada (confirmada
+    contra um arquivo de controle não tocado, que falha do mesmo jeito
+    — não é regressão). Prova real: stack completa (Postgres+Redis+
+    uvicorn+`npm run dev`) com dados semeados cobrindo os 4 status de
+    auditoria + tipo/status/segmento variados — Playwright real
+    confirmando "Ajustar manualmente" ausente em toda a tela,
+    indicadores corretos, os 3 filtros novos funcionando (reduz
+    contagem exibida), popup com o link navegando pro cliente certo,
+    as 4 contagens + "Precisão aproximada" na Auditoria, "Recalcular"
+    disparando requisição real com feedback, e "Corrigir endereço"
+    abrindo nova aba com o modal de edição pré-carregado no cliente
+    CERTO (nome conferido) — 27/27 checks PASS, zero diálogo nativo,
+    console limpo.
 
 ## Teste geral do sistema (metodologia)
 

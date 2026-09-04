@@ -2,7 +2,8 @@
 import "leaflet/dist/leaflet.css";
 import "leaflet.markercluster/dist/MarkerCluster.css";
 import "leaflet.markercluster/dist/MarkerCluster.Default.css";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
+import Link from "next/link";
 import L from "leaflet";
 import { MapContainer, TileLayer, Marker, Popup, useMap } from "react-leaflet";
 import MarkerClusterGroup from "react-leaflet-cluster";
@@ -96,35 +97,27 @@ function AjustarEnquadramento({ pontos }: { pontos: [number, number][] }) {
   return null;
 }
 
-/** Fase 254 — marcador de cliente com suporte a ajuste manual (arrastar).
- * Extraído num componente próprio porque cada marcador precisa da sua
- * própria referência do Leaflet (pra reverter a posição se o usuário
- * cancelar) e do seu próprio estado de "aguardando confirmação" — nunca
- * salva direto no dragend, só depois de o usuário confirmar
- * explicitamente (mesmo fluxo pedido: arrastar → confirmar → salvar,
- * nunca sobrescreve a geolocalização automática silenciosamente). */
+/** Marcador de cliente — mostra nome/endereço/distância/status +, sob
+ * demanda, o resumo operacional. Correção de localização deslocada pra
+ * dentro da Auditoria de Geolocalização (mapa/page.tsx) — este marcador
+ * não é mais arrastável (o antigo "Ajustar manualmente" foi removido:
+ * edição de coordenada crua era considerada desnecessária como ação
+ * principal do mapa; correções agora passam por corrigir o ENDEREÇO
+ * cadastrado, que já re-geocodifica sozinho ao salvar). */
 function ClienteMarker({
   cliente,
   icon,
-  ajusteAtivo,
-  onAjustarLocalizacao,
   escritorio,
   carregarResumo,
 }: {
   cliente: PontoCliente;
   icon: L.DivIcon;
-  ajusteAtivo: boolean;
-  onAjustarLocalizacao?: (id: string, lat: number, lng: number) => Promise<void>;
   /** Fase 257.2 — pra calcular a distância em linha reta até o escritório. */
   escritorio?: PontoEscritorio | null;
   /** Fase 257.1 — buscado sob demanda no 1º popupopen do marcador, nunca
    * pré-carregado pra todos os clientes de uma vez. */
   carregarResumo?: (id: string) => Promise<ResumoOperacional | null>;
 }) {
-  const markerRef = useRef<L.Marker>(null);
-  const posOriginal: [number, number] = [cliente.latitude, cliente.longitude];
-  const [pendente, setPendente] = useState<{ lat: number; lng: number } | null>(null);
-  const [salvando, setSalvando] = useState(false);
   const [resumo, setResumo] = useState<ResumoOperacional | null | "carregando" | "erro">(null);
 
   function handlePopupOpen() {
@@ -135,120 +128,62 @@ function ClienteMarker({
       .catch(() => setResumo("erro"));
   }
 
-  // Se o modo de ajuste for desativado (ou a coordenada mudar por baixo,
-  // ex. depois de salvar) com uma alteração ainda não confirmada, reverte
-  // — nunca deixa um arrasto pendurado sem decisão explícita do usuário.
-  useEffect(() => {
-    if (!ajusteAtivo && pendente) {
-      markerRef.current?.setLatLng(posOriginal);
-      setPendente(null);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ajusteAtivo]);
-
-  function handleDragEnd() {
-    const marker = markerRef.current;
-    if (!marker) return;
-    const { lat, lng } = marker.getLatLng();
-    setPendente({ lat, lng });
-    marker.openPopup();
-  }
-
-  function cancelar() {
-    markerRef.current?.setLatLng(posOriginal);
-    setPendente(null);
-  }
-
-  async function confirmar() {
-    if (!pendente || !onAjustarLocalizacao) return;
-    setSalvando(true);
-    try {
-      await onAjustarLocalizacao(cliente.id, pendente.lat, pendente.lng);
-      setPendente(null);
-    } finally {
-      setSalvando(false);
-    }
-  }
-
   const distancia = escritorio
     ? distanciaKm(escritorio.latitude, escritorio.longitude, cliente.latitude, cliente.longitude)
     : null;
 
   return (
     <Marker
-      ref={markerRef}
-      position={posOriginal}
+      position={[cliente.latitude, cliente.longitude]}
       icon={icon}
-      draggable={ajusteAtivo}
-      eventHandlers={{
-        ...(ajusteAtivo ? { dragend: handleDragEnd } : {}),
-        popupopen: handlePopupOpen,
-      }}
+      eventHandlers={{ popupopen: handlePopupOpen }}
     >
-      <Popup minWidth={200}>
-        {pendente ? (
-          <div className="space-y-1.5 min-w-[160px]">
-            <p className="font-semibold text-sm">Confirmar nova localização?</p>
-            <p className="text-xs text-afj-black/60">{cliente.nome}</p>
-            <p className="text-[10px] text-afj-black/40">{pendente.lat.toFixed(5)}, {pendente.lng.toFixed(5)}</p>
-            <div className="flex gap-2 pt-1">
-              <button
-                type="button" onClick={confirmar} disabled={salvando}
-                className="text-xs px-2 py-1 bg-afj-gold text-white rounded-sm disabled:opacity-50"
-              >
-                {salvando ? "Salvando..." : "Confirmar"}
-              </button>
-              <button
-                type="button" onClick={cancelar} disabled={salvando}
-                className="text-xs px-2 py-1 border border-afj-cream-dark rounded-sm"
-              >
-                Cancelar
-              </button>
-            </div>
-          </div>
-        ) : (
-          <div className="space-y-1">
-            <p className="font-semibold text-sm">{cliente.nome}</p>
-            <p className="text-xs text-afj-black/60">{cliente.enderecoTexto}</p>
-            {distancia != null && (
-              <p className="text-[10px] text-afj-black/40">
-                ≈ {distancia < 1 ? `${Math.round(distancia * 1000)} m` : `${distancia.toFixed(1)} km`} do escritório (linha reta)
-              </p>
-            )}
-            {cliente.statusGeo === "requer_revisao" && (
-              <p className="text-[10px] text-amber-700 mt-1">⚠ Localização requer revisão</p>
-            )}
-            {ajusteAtivo && (
-              <p className="text-[10px] text-afj-black/40 mt-1">Arraste o marcador pra ajustar a localização.</p>
-            )}
+      <Popup minWidth={200} maxWidth={280}>
+        <div className="space-y-1">
+          <p className="font-semibold text-sm">{cliente.nome}</p>
+          <p className="text-xs text-afj-black/60">{cliente.enderecoTexto}</p>
+          {distancia != null && (
+            <p className="text-[10px] text-afj-black/40">
+              ≈ {distancia < 1 ? `${Math.round(distancia * 1000)} m` : `${distancia.toFixed(1)} km`} do escritório (linha reta)
+            </p>
+          )}
+          {cliente.statusGeo === "requer_revisao" && (
+            <p className="text-[10px] text-amber-700 mt-1">⚠ Localização requer revisão</p>
+          )}
 
-            {/* Fase 257.1 — resumo operacional, buscado sob demanda */}
-            {resumo === "carregando" && (
-              <p className="text-[10px] text-afj-black/35 pt-1">Carregando resumo...</p>
-            )}
-            {resumo === "erro" && (
-              <p className="text-[10px] text-afj-black/35 pt-1">Não foi possível carregar o resumo.</p>
-            )}
-            {resumo && resumo !== "carregando" && resumo !== "erro" && (
-              <div className="pt-1.5 mt-1.5 border-t border-afj-cream-dark space-y-1">
-                <p className={`text-[11px] font-semibold ${BANDA_LABEL[resumo.banda].cor}`}>
-                  Saúde: {resumo.score}/100 ({BANDA_LABEL[resumo.banda].texto})
-                </p>
+          {/* Fase 257.1 — resumo operacional, buscado sob demanda */}
+          {resumo === "carregando" && (
+            <p className="text-[10px] text-afj-black/35 pt-1">Carregando resumo...</p>
+          )}
+          {resumo === "erro" && (
+            <p className="text-[10px] text-afj-black/35 pt-1">Não foi possível carregar o resumo.</p>
+          )}
+          {resumo && resumo !== "carregando" && resumo !== "erro" && (
+            <div className="pt-1.5 mt-1.5 border-t border-afj-cream-dark space-y-1">
+              <p className={`text-[11px] font-semibold ${BANDA_LABEL[resumo.banda].cor}`}>
+                Saúde: {resumo.score}/100 ({BANDA_LABEL[resumo.banda].texto})
+              </p>
+              <p className="text-[11px] text-afj-black/60">
+                {resumo.processos_ativos} processo(s) ativo(s)
+              </p>
+              {resumo.proximo_prazo ? (
                 <p className="text-[11px] text-afj-black/60">
-                  {resumo.processos_ativos} processo(s) ativo(s)
+                  Próximo prazo: {formatarData(resumo.proximo_prazo.data_fatal || resumo.proximo_prazo.data_prazo)}
+                  {resumo.proximo_prazo.data_fatal && <span className="text-red-700 font-semibold"> (FATAL)</span>}
                 </p>
-                {resumo.proximo_prazo ? (
-                  <p className="text-[11px] text-afj-black/60">
-                    Próximo prazo: {formatarData(resumo.proximo_prazo.data_fatal || resumo.proximo_prazo.data_prazo)}
-                    {resumo.proximo_prazo.data_fatal && <span className="text-red-700 font-semibold"> (FATAL)</span>}
-                  </p>
-                ) : (
-                  <p className="text-[11px] text-afj-black/40">Sem prazo pendente</p>
-                )}
-              </div>
-            )}
-          </div>
-        )}
+              ) : (
+                <p className="text-[11px] text-afj-black/40">Sem prazo pendente</p>
+              )}
+            </div>
+          )}
+
+          <Link
+            href={`/clientes/${cliente.id}`}
+            className="block pt-1.5 mt-1.5 border-t border-afj-cream-dark text-[11px] font-semibold text-afj-gold hover:underline"
+          >
+            Ver cliente completo →
+          </Link>
+        </div>
       </Popup>
     </Marker>
   );
@@ -263,16 +198,10 @@ function formatarData(iso: string | null): string {
 export default function EscritorioClientesMap({
   escritorio,
   clientes,
-  ajusteAtivo = false,
-  onAjustarLocalizacao,
   carregarResumo,
 }: {
   escritorio: PontoEscritorio | null;
   clientes: PontoCliente[];
-  /** Fase 254 — modo de ajuste manual (arrastar marcador de cliente),
-   * role-gated no chamador (mapa/page.tsx). */
-  ajusteAtivo?: boolean;
-  onAjustarLocalizacao?: (id: string, lat: number, lng: number) => Promise<void>;
   /** Fase 257.1 — resumo operacional (score/processos/próximo prazo) do
    * popup de cliente, buscado sob demanda no chamador. */
   carregarResumo?: (id: string) => Promise<ResumoOperacional | null>;
@@ -309,17 +238,13 @@ export default function EscritorioClientesMap({
         </Marker>
       )}
       {/* Fase 254 — clustering só nos marcadores de cliente (o do escritório
-          é único, não faz sentido agrupar). leaflet.markercluster já
-          separa um marcador draggable do cluster automaticamente durante
-          o arrasto, sem trabalho extra aqui. */}
+          é único, não faz sentido agrupar). */}
       <MarkerClusterGroup chunkedLoading>
         {clientes.map((c) => (
           <ClienteMarker
             key={c.id}
             cliente={c}
             icon={iconeCliente}
-            ajusteAtivo={ajusteAtivo}
-            onAjustarLocalizacao={onAjustarLocalizacao}
             escritorio={escritorio}
             carregarResumo={carregarResumo}
           />

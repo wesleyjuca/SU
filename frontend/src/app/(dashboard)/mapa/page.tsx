@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
-import { MapPin, RefreshCw, Loader2, Search, MousePointer2, ClipboardList, ChevronDown, ChevronUp } from "lucide-react";
+import { MapPin, RefreshCw, Loader2, Search, ClipboardList, ChevronDown, ChevronUp, RotateCw, Pencil } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
 import { useUserStore } from "@/store";
@@ -24,11 +24,22 @@ type EnderecoResponse = {
 // Fase 254 — versão "crua" do cliente, com cidade/UF preservados pra
 // alimentar os filtros (o tipo que o mapa consome, PontoCliente, não
 // carrega esses 2 campos separados — só o enderecoTexto já formatado).
-type ClienteRaw = PontoCliente & { cidade: string; uf: string };
+// Fase pós-260.2 — ganha tipo/status/segmento (já vinham em GET /clients,
+// só eram descartados aqui) pra alimentar os filtros de carteira novos.
+type ClienteRaw = PontoCliente & {
+  cidade: string;
+  uf: string;
+  tipo: string;
+  status: string;
+  segmento: string;
+};
 
-// Fase 255 — shape de GET /clients/geolocalizacao/auditoria.
+// Fase 255 — shape de GET /clients/geolocalizacao/auditoria. Fase pós-260.2
+// — ganha geocode_source (já vinha na resposta do backend, só não estava
+// tipado aqui) pra derivar o rótulo de precisão aproximada/precisa.
 type ItemAuditoria = {
   id: string; nome: string; cidade: string | null; uf: string | null; cep: string | null;
+  geocode_source: string | null;
   status: "NAO_GEOCODIFICADO" | "REQUER_REVISAO" | "VALIDADA";
 };
 type Auditoria = {
@@ -37,15 +48,21 @@ type Auditoria = {
   clientes: ItemAuditoria[];
 };
 
+const TIPO_LABEL: Record<string, string> = { PF: "Pessoa Física", PJ: "Pessoa Jurídica" };
+const STATUS_LABEL: Record<string, string> = { PROSPECTO: "Prospecto", ATIVO: "Ativo", INATIVO: "Inativo" };
+const SEGMENTO_LABEL: Record<string, string> = {
+  PLATINUM: "Platinum", GOLD: "Gold", SILVER: "Silver", REGULAR: "Regular",
+};
+
 function enderecoTexto(e: EnderecoResponse): string {
   return [e.logradouro, e.bairro, [e.cidade, e.uf].filter(Boolean).join("/")].filter(Boolean).join(" — ") || "Endereço não informado";
 }
 
 // Fase 254 — mesmo gate de "ação de gestão" já usado no endpoint de
 // auditoria (`GET /clients/geolocalizacao/auditoria`, ADMIN/SOCIO/GESTOR)
-// e no novo `PUT /clients/{id}/localizacao-manual` — inclui SUPERADMIN
-// explicitamente (lição da Fase 236: nunca confiar só em "ADMIN" sem
-// incluir o superconjunto).
+// — inclui SUPERADMIN explicitamente (lição da Fase 236: nunca confiar só
+// em "ADMIN" sem incluir o superconjunto). Coincide com o gate de nav
+// pra /mapa (GESTAO) — todo papel que vê esta tela já pode auditar.
 const PODE_AJUSTAR = ["ADMIN", "SOCIO", "GESTOR", "SUPERADMIN"];
 
 export default function MapaPage() {
@@ -56,23 +73,40 @@ export default function MapaPage() {
 
   const [escritorio, setEscritorio] = useState<PontoEscritorio | null>(null);
   const [clientesRaw, setClientesRaw] = useState<ClienteRaw[]>([]);
-  const [totalClientesComEndereco, setTotalClientesComEndereco] = useState(0);
   const [loading, setLoading] = useState(true);
   const [busca, setBusca] = useState("");
   const [filtroCidade, setFiltroCidade] = useState("");
   const [filtroUf, setFiltroUf] = useState("");
-  const [ajusteAtivo, setAjusteAtivo] = useState(false);
+  const [filtroTipo, setFiltroTipo] = useState("");
+  const [filtroStatus, setFiltroStatus] = useState("");
+  const [filtroSegmento, setFiltroSegmento] = useState("");
 
   // Fase 255 — painel de auditoria de geolocalização + correção em lote.
+  // Fase pós-260.2 — buscada de forma eager no mount (não mais só ao abrir
+  // o painel), pra alimentar os indicadores de topo com uma única fonte de
+  // verdade (cobre a carteira inteira, não só quem já tem pino no mapa).
   const [auditoriaAberta, setAuditoriaAberta] = useState(false);
   const [auditoria, setAuditoria] = useState<Auditoria | null>(null);
   const [carregandoAuditoria, setCarregandoAuditoria] = useState(false);
   const [selecionados, setSelecionados] = useState<Set<string>>(new Set());
   const [corrigindo, setCorrigindo] = useState(false);
+  const [recalculandoIds, setRecalculandoIds] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     carregar();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Fase pós-260.2 — `userRole`/`podeAjustar` só resolvem depois que o
+  // Zustand store de usuário hidrata (user começa null) — buscar a
+  // auditoria já no efeito de mount (deps []) capturaria `podeAjustar`
+  // ainda false na maioria das vezes e nunca mais tentaria de novo. Efeito
+  // separado, reagindo a `podeAjustar`, garante que a busca dispara assim
+  // que o papel do usuário for conhecido.
+  useEffect(() => {
+    if (podeAjustar) carregarAuditoria();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [podeAjustar]);
 
   const headers = () => ({
     Authorization: `Bearer ${typeof window !== "undefined" ? localStorage.getItem("afj_access_token") : ""}`,
@@ -100,7 +134,6 @@ export default function MapaPage() {
         const comEndereco = (Array.isArray(lista) ? lista : []).filter(
           (c: any) => c.endereco_json?.latitude != null && c.endereco_json?.longitude != null
         );
-        setTotalClientesComEndereco(comEndereco.length);
         setClientesRaw(
           comEndereco.map((c: any) => ({
             id: c.id,
@@ -110,6 +143,9 @@ export default function MapaPage() {
             enderecoTexto: enderecoTexto(c.endereco_json),
             cidade: c.endereco_json.cidade || "",
             uf: c.endereco_json.uf || "",
+            tipo: c.tipo || "",
+            status: c.status || "",
+            segmento: c.segmento || "",
             // Fase 253 — sem `geocode_source` = coordenada herdada de
             // antes do fix de causa-raiz (endereço mudou sem re-geocodificar).
             statusGeo: c.endereco_json.geocode_source ? "validada" : "requer_revisao",
@@ -133,30 +169,9 @@ export default function MapaPage() {
     }
   }
 
-  // Fase 254 — ajuste manual: nunca sobrescreve silenciosamente, só
-  // depois do usuário confirmar no popup do marcador (EscritorioClientesMap).
-  async function ajustarLocalizacao(clienteId: string, lat: number, lng: number) {
-    try {
-      const res = await fetch(`/api/v1/clients/${clienteId}/localizacao-manual`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json", ...headers() },
-        body: JSON.stringify({ latitude: lat, longitude: lng }),
-      });
-      if (res.ok) {
-        toast.success("Localização ajustada manualmente.");
-        await carregar();
-      } else {
-        const d = await res.json().catch(() => ({}));
-        toast.error(d.detail || "Erro ao ajustar localização.");
-      }
-    } catch {
-      toast.error("Erro de conexão.");
-    }
-  }
-
-  // Fase 255 — só relatório inicialmente (GET /clients/geolocalizacao/
-  // auditoria já é read-only); a correção em lote pede seleção explícita
-  // + confirmação, nunca "corrige tudo" sozinho.
+  // Fase 255 — só relatório (GET /clients/geolocalizacao/auditoria já é
+  // read-only); a correção em lote ou individual pede seleção/ação
+  // explícita, nunca "corrige tudo" sozinho.
   async function carregarAuditoria() {
     setCarregandoAuditoria(true);
     try {
@@ -176,13 +191,21 @@ export default function MapaPage() {
   }
 
   function toggleAuditoria() {
-    const abrir = !auditoriaAberta;
-    setAuditoriaAberta(abrir);
-    if (abrir && !auditoria) carregarAuditoria();
+    setAuditoriaAberta((v) => !v);
   }
 
   const pendentes = useMemo(
     () => (auditoria?.clientes ?? []).filter((c) => c.status !== "VALIDADA"),
+    [auditoria]
+  );
+
+  // Fase pós-260.2 — "baixa/aproximada precisão" pedida na melhoria da
+  // Auditoria: sem nenhum campo novo de precisão no backend, deriva só de
+  // reinterpretar `geocode_source` já existente — "brasilapi" só localiza
+  // por CEP (nível de quadra), "nominatim" localiza por endereço+número
+  // (mais preciso). Informativo, não bloqueia nada.
+  const aproximados = useMemo(
+    () => (auditoria?.clientes ?? []).filter((c) => c.status === "VALIDADA" && c.geocode_source === "brasilapi").length,
     [auditoria]
   );
 
@@ -230,12 +253,54 @@ export default function MapaPage() {
     }
   }
 
+  // Fase pós-260.2 — correção contextual individual, direto na linha da
+  // Auditoria (substitui o antigo botão global "Ajustar manualmente").
+  // Reaproveita o endpoint single já existente (POST .../recalcular-
+  // localizacao) — útil quando o CEP já está certo mas a geocodificação
+  // falhou/está desatualizada (cobre principalmente REQUER_REVISAO).
+  async function recalcularUm(clienteId: string) {
+    setRecalculandoIds((prev) => new Set(prev).add(clienteId));
+    try {
+      const res = await fetch(`/api/v1/clients/${clienteId}/recalcular-localizacao`, {
+        method: "POST",
+        headers: headers(),
+      });
+      if (res.ok) {
+        toast.success("Localização recalculada.");
+        await Promise.all([carregar(), carregarAuditoria()]);
+      } else {
+        const d = await res.json().catch(() => ({}));
+        toast.error(d.detail || "Erro ao recalcular localização.");
+      }
+    } catch {
+      toast.error("Erro de conexão.");
+    } finally {
+      setRecalculandoIds((prev) => {
+        const next = new Set(prev);
+        next.delete(clienteId);
+        return next;
+      });
+    }
+  }
+
   const cidadesDisponiveis = useMemo(
     () => Array.from(new Set(clientesRaw.map((c) => c.cidade).filter(Boolean))).sort(),
     [clientesRaw]
   );
   const ufsDisponiveis = useMemo(
     () => Array.from(new Set(clientesRaw.map((c) => c.uf).filter(Boolean))).sort(),
+    [clientesRaw]
+  );
+  const tiposDisponiveis = useMemo(
+    () => Array.from(new Set(clientesRaw.map((c) => c.tipo).filter(Boolean))).sort(),
+    [clientesRaw]
+  );
+  const statusDisponiveis = useMemo(
+    () => Array.from(new Set(clientesRaw.map((c) => c.status).filter(Boolean))).sort(),
+    [clientesRaw]
+  );
+  const segmentosDisponiveis = useMemo(
+    () => Array.from(new Set(clientesRaw.map((c) => c.segmento).filter(Boolean))).sort(),
     [clientesRaw]
   );
 
@@ -245,13 +310,27 @@ export default function MapaPage() {
       if (buscaNorm && !c.nome.toLowerCase().includes(buscaNorm)) return false;
       if (filtroCidade && c.cidade !== filtroCidade) return false;
       if (filtroUf && c.uf !== filtroUf) return false;
+      if (filtroTipo && c.tipo !== filtroTipo) return false;
+      if (filtroStatus && c.status !== filtroStatus) return false;
+      if (filtroSegmento && c.segmento !== filtroSegmento) return false;
       return true;
     });
-  }, [clientesRaw, busca, filtroCidade, filtroUf]);
+  }, [clientesRaw, busca, filtroCidade, filtroUf, filtroTipo, filtroStatus, filtroSegmento]);
 
-  const filtroAtivo = !!(busca || filtroCidade || filtroUf);
+  const filtroAtivo = !!(busca || filtroCidade || filtroUf || filtroTipo || filtroStatus || filtroSegmento);
   const semMarcadores = !loading && !escritorio && clientesRaw.length === 0;
   const semResultadoFiltro = !loading && !semMarcadores && filtroAtivo && !escritorio && clientesFiltrados.length === 0;
+
+  // Fase pós-260.2 — indicadores de topo, fonte única (auditoria, cobre a
+  // carteira inteira — sem o cap de 200 do GET /clients usado pro mapa em
+  // si). "—" enquanto carrega, nunca "0" antes de resolver.
+  const geocodificados = auditoria ? auditoria.contagem.VALIDADA + auditoria.contagem.REQUER_REVISAO : null;
+  const semLocalizacao = auditoria ? auditoria.contagem.NAO_GEOCODIFICADO : null;
+  const cidadesCarteira = auditoria
+    ? new Set(auditoria.clientes.map((c) => c.cidade).filter(Boolean)).size
+    : null;
+  const ufsCarteira = auditoria ? new Set(auditoria.clientes.map((c) => c.uf).filter(Boolean)).size : null;
+  const capAtingido = clientesRaw.length >= 200;
 
   return (
     <div className="max-w-7xl mx-auto space-y-5">
@@ -260,9 +339,7 @@ export default function MapaPage() {
       <div className="afj-page-header">
         <div>
           <h1 className="font-display text-2xl font-semibold text-afj-black">Mapa</h1>
-          <p className="text-afj-black/50 text-sm">
-            Localização do escritório{clientesRaw.length > 0 || totalClientesComEndereco > 0 ? ` e ${totalClientesComEndereco} cliente(s) geocodificado(s)` : ""}
-          </p>
+          <p className="text-afj-black/50 text-sm">Localização do escritório e da carteira de clientes.</p>
         </div>
         <div className="flex items-center gap-2">
           {podeAjustar && (
@@ -271,25 +348,11 @@ export default function MapaPage() {
               className={`rounded-sm flex items-center gap-2 px-3 py-2 text-sm border ${
                 auditoriaAberta ? "bg-afj-gold text-white border-afj-gold" : "btn-afj-outline"
               }`}
-              title="Ver relatório de geolocalização e corrigir clientes pendentes em lote"
+              title="Ver relatório de geolocalização e corrigir clientes pendentes"
             >
               <ClipboardList size={14} />
               Auditoria de Geolocalização
               {auditoriaAberta ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-            </button>
-          )}
-          {podeAjustar && !semMarcadores && (
-            <button
-              onClick={() => setAjusteAtivo((v) => !v)}
-              className={`rounded-sm flex items-center gap-2 px-3 py-2 text-sm border ${
-                ajusteAtivo
-                  ? "bg-afj-gold text-white border-afj-gold"
-                  : "btn-afj-outline"
-              }`}
-              title="Arrastar marcadores de cliente para corrigir manualmente a localização"
-            >
-              <MousePointer2 size={14} />
-              {ajusteAtivo ? "Ajuste manual ativo" : "Ajustar manualmente"}
             </button>
           )}
           <button
@@ -303,17 +366,27 @@ export default function MapaPage() {
         </div>
       </div>
 
-      {ajusteAtivo && (
-        <div className="afj-card p-3 text-xs text-afj-black/60 bg-afj-cream/40 border-l-2 border-afj-gold">
-          Modo de ajuste manual ativo — arraste um marcador de cliente pra corrigir a localização e confirme
-          no popup que abre. A alteração fica marcada como ajuste manual e não é sobrescrita automaticamente depois.
-        </div>
-      )}
+      {/* Fase pós-260.2 — indicadores de topo (painel geográfico da
+          carteira, não só visualização de pinos). */}
+      <div className="afj-card p-3 flex flex-wrap gap-x-6 gap-y-2 text-sm">
+        <Indicador label="Geocodificados" valor={geocodificados} />
+        <Indicador label="Sem localização" valor={semLocalizacao} />
+        <Indicador label="Cidades" valor={cidadesCarteira} />
+        <Indicador label="UFs" valor={ufsCarteira} />
+        {capAtingido && (
+          <span
+            className="text-[11px] text-afj-black/40 ml-auto self-center"
+            title="O mapa mostra no máximo 200 clientes por vez — os indicadores acima cobrem a carteira inteira, mas o mapa e os filtros abaixo podem mostrar menos pinos do que o total geocodificado."
+          >
+            ⓘ mapa limitado a 200 clientes
+          </span>
+        )}
+      </div>
 
       {auditoriaAberta && podeAjustar && (
         <div className="afj-card p-4 space-y-3">
           <h2 className="text-sm font-semibold text-afj-black">Auditoria de Geolocalização</h2>
-          {carregandoAuditoria ? (
+          {carregandoAuditoria && !auditoria ? (
             <div className="flex items-center gap-2 text-sm text-afj-black/50">
               <Loader2 size={14} className="animate-spin" /> Carregando...
             </div>
@@ -325,6 +398,12 @@ export default function MapaPage() {
                 <span className="text-emerald-700">✓ Validada: {auditoria.contagem.VALIDADA}</span>
                 <span className="text-amber-700">⚠ Requer revisão: {auditoria.contagem.REQUER_REVISAO}</span>
                 <span className="text-afj-black/50">○ Não geocodificado: {auditoria.contagem.NAO_GEOCODIFICADO}</span>
+                <span
+                  className="text-afj-black/50"
+                  title="Validados, mas localizados só pelo CEP (nível de quadra) — considere corrigir o número do endereço pra uma localização mais precisa."
+                >
+                  📍 Precisão aproximada: {aproximados}
+                </span>
               </div>
               {pendentes.length === 0 ? (
                 <p className="text-sm text-afj-black/40">Nenhum cliente pendente — tudo validado.</p>
@@ -347,7 +426,7 @@ export default function MapaPage() {
                       {corrigindo ? "Corrigindo..." : `Corrigir selecionados (${selecionados.size})`}
                     </button>
                   </div>
-                  <div className="max-h-64 overflow-y-auto border border-afj-cream-dark rounded-sm">
+                  <div className="max-h-80 overflow-y-auto border border-afj-cream-dark rounded-sm">
                     <table className="w-full text-xs">
                       <tbody>
                         {pendentes.map((c) => (
@@ -367,6 +446,29 @@ export default function MapaPage() {
                               ) : (
                                 <span className="text-afj-black/50">○ Não geocodificado</span>
                               )}
+                            </td>
+                            <td className="px-2 py-1.5 whitespace-nowrap">
+                              <div className="flex items-center gap-2">
+                                <button
+                                  onClick={() => recalcularUm(c.id)}
+                                  disabled={recalculandoIds.has(c.id)}
+                                  className="flex items-center gap-1 text-afj-gold hover:underline disabled:opacity-50"
+                                  title="Refazer a geocodificação a partir do CEP já cadastrado"
+                                >
+                                  <RotateCw size={11} className={recalculandoIds.has(c.id) ? "animate-spin" : ""} />
+                                  Recalcular
+                                </button>
+                                <a
+                                  href={`/clientes?editar=${c.id}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="flex items-center gap-1 text-afj-black/60 hover:text-afj-gold hover:underline"
+                                  title="Corrigir o endereço cadastrado (abre em nova aba) — a geocodificação já é refeita automaticamente ao salvar"
+                                >
+                                  <Pencil size={11} />
+                                  Corrigir endereço
+                                </a>
+                              </div>
                             </td>
                           </tr>
                         ))}
@@ -404,9 +506,33 @@ export default function MapaPage() {
             <option value="">Todas as UFs</option>
             {ufsDisponiveis.map((u) => <option key={u} value={u}>{u}</option>)}
           </select>
+          <select
+            value={filtroTipo} onChange={(e) => setFiltroTipo(e.target.value)}
+            className="px-3 py-2 text-sm border border-afj-cream-dark rounded-sm"
+          >
+            <option value="">Todos os tipos</option>
+            {tiposDisponiveis.map((t) => <option key={t} value={t}>{TIPO_LABEL[t] || t}</option>)}
+          </select>
+          <select
+            value={filtroStatus} onChange={(e) => setFiltroStatus(e.target.value)}
+            className="px-3 py-2 text-sm border border-afj-cream-dark rounded-sm"
+          >
+            <option value="">Todos os status</option>
+            {statusDisponiveis.map((s) => <option key={s} value={s}>{STATUS_LABEL[s] || s}</option>)}
+          </select>
+          <select
+            value={filtroSegmento} onChange={(e) => setFiltroSegmento(e.target.value)}
+            className="px-3 py-2 text-sm border border-afj-cream-dark rounded-sm"
+          >
+            <option value="">Todos os segmentos</option>
+            {segmentosDisponiveis.map((s) => <option key={s} value={s}>{SEGMENTO_LABEL[s] || s}</option>)}
+          </select>
           {filtroAtivo && (
             <button
-              onClick={() => { setBusca(""); setFiltroCidade(""); setFiltroUf(""); }}
+              onClick={() => {
+                setBusca(""); setFiltroCidade(""); setFiltroUf("");
+                setFiltroTipo(""); setFiltroStatus(""); setFiltroSegmento("");
+              }}
               className="text-xs text-afj-black/50 hover:text-afj-black underline"
             >
               Limpar filtros
@@ -442,14 +568,21 @@ export default function MapaPage() {
           <EscritorioClientesMap
             escritorio={escritorio}
             clientes={clientesFiltrados}
-            ajusteAtivo={ajusteAtivo}
-            onAjustarLocalizacao={ajustarLocalizacao}
             carregarResumo={carregarResumoCliente}
           />
           <Legenda temEscritorio={!!escritorio} temRequerRevisao={clientesFiltrados.some((c) => c.statusGeo === "requer_revisao")} />
         </div>
       )}
       {confirmDialog}
+    </div>
+  );
+}
+
+function Indicador({ label, valor }: { label: string; valor: number | null }) {
+  return (
+    <div className="flex items-baseline gap-1.5">
+      <span className="font-display text-lg font-semibold text-afj-black">{valor ?? "—"}</span>
+      <span className="text-afj-black/50 text-xs">{label}</span>
     </div>
   );
 }
