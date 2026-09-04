@@ -1,7 +1,7 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
-import { MapPin, RefreshCw, Loader2, Search, ClipboardList, ChevronDown, ChevronUp, RotateCw, Pencil } from "lucide-react";
+import { MapPin, RefreshCw, Loader2, Search, ClipboardList, ChevronDown, ChevronUp, RotateCw, Pencil, Flame, Maximize, Minimize2, ExternalLink } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
 import { useUserStore } from "@/store";
@@ -92,10 +92,41 @@ export default function MapaPage() {
   const [corrigindo, setCorrigindo] = useState(false);
   const [recalculandoIds, setRecalculandoIds] = useState<Set<string>>(new Set());
 
+  // Camadas do mapa novas — todas simples/sem estado no backend.
+  const [mostrarCalor, setMostrarCalor] = useState(false);
+  const [emTelaCheia, setEmTelaCheia] = useState(false);
+  const mapaContainerRef = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
     carregar();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Tela cheia via Fullscreen API nativa do navegador (sem plugin) — o
+  // container some pra fora do fluxo normal e passa a ocupar a tela
+  // inteira sozinho; o React só precisa saber quando isso acontece (inclusive
+  // se o usuário sair via Esc, fora do nosso botão) pra ajustar o ícone e
+  // avisar o Leaflet (`InvalidarAoRedimensionar`, dentro do mapa) que o
+  // tamanho do container mudou.
+  useEffect(() => {
+    function aoMudar() {
+      setEmTelaCheia(document.fullscreenElement === mapaContainerRef.current);
+    }
+    document.addEventListener("fullscreenchange", aoMudar);
+    return () => document.removeEventListener("fullscreenchange", aoMudar);
+  }, []);
+
+  async function alternarTelaCheia() {
+    if (document.fullscreenElement) {
+      await document.exitFullscreen();
+    } else {
+      await mapaContainerRef.current?.requestFullscreen();
+    }
+  }
+
+  function abrirEmNovaJanela() {
+    window.open(window.location.href, "_blank", "noopener,noreferrer");
+  }
 
   // Fase pós-260.2 — `userRole`/`podeAjustar` só resolvem depois que o
   // Zustand store de usuário hidrata (user começa null) — buscar a
@@ -355,6 +386,26 @@ export default function MapaPage() {
               {auditoriaAberta ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
             </button>
           )}
+          {!semMarcadores && (
+            <button
+              onClick={() => setMostrarCalor((v) => !v)}
+              className={`rounded-sm flex items-center gap-2 px-3 py-2 text-sm border ${
+                mostrarCalor ? "bg-afj-gold text-white border-afj-gold" : "btn-afj-outline"
+              }`}
+              title="Alternar entre marcadores individuais e mapa de calor da carteira"
+            >
+              <Flame size={14} />
+              Mapa de calor
+            </button>
+          )}
+          <button
+            onClick={abrirEmNovaJanela}
+            className="btn-afj-outline rounded-sm flex items-center gap-2"
+            title="Abrir o mapa em outra janela/aba do navegador"
+          >
+            <ExternalLink size={14} />
+            Abrir em outra janela
+          </button>
           <button
             onClick={carregar}
             disabled={loading}
@@ -564,13 +615,35 @@ export default function MapaPage() {
           <p className="text-afj-black/40 text-sm">Nenhum cliente encontrado com esse filtro.</p>
         </div>
       ) : (
-        <div className="afj-card p-2 overflow-hidden relative">
+        <div
+          ref={mapaContainerRef}
+          className="afj-card p-2 overflow-hidden relative"
+          style={emTelaCheia ? { height: "100vh" } : undefined}
+        >
           <EscritorioClientesMap
             escritorio={escritorio}
             clientes={clientesFiltrados}
             carregarResumo={carregarResumoCliente}
+            mostrarCalor={mostrarCalor}
+            emTelaCheia={emTelaCheia}
           />
-          <Legenda temEscritorio={!!escritorio} temRequerRevisao={clientesFiltrados.some((c) => c.statusGeo === "requer_revisao")} />
+          <Legenda
+            temEscritorio={!!escritorio}
+            temRequerRevisao={clientesFiltrados.some((c) => c.statusGeo === "requer_revisao")}
+            mostrarCalor={mostrarCalor}
+          />
+          {/* Botão de tela cheia fica DENTRO do container que entra em
+              fullscreen (não no header da página) — a Fullscreen API só
+              renderiza o elemento-alvo e seus filhos, então um botão fora
+              dele fica inacessível assim que a tela cheia ativa (não daria
+              pra sair sem apertar Esc). */}
+          <button
+            onClick={alternarTelaCheia}
+            className="absolute bottom-4 right-4 z-[1000] bg-white/95 hover:bg-white rounded-sm shadow-md p-2 text-afj-black/70"
+            title={emTelaCheia ? "Sair da tela cheia" : "Ver o mapa em tela cheia"}
+          >
+            {emTelaCheia ? <Minimize2 size={16} /> : <Maximize size={16} />}
+          </button>
         </div>
       )}
       {confirmDialog}
@@ -587,7 +660,15 @@ function Indicador({ label, valor }: { label: string; valor: number | null }) {
   );
 }
 
-function Legenda({ temEscritorio, temRequerRevisao }: { temEscritorio: boolean; temRequerRevisao: boolean }) {
+function Legenda({
+  temEscritorio,
+  temRequerRevisao,
+  mostrarCalor,
+}: {
+  temEscritorio: boolean;
+  temRequerRevisao: boolean;
+  mostrarCalor: boolean;
+}) {
   return (
     <div className="absolute bottom-4 left-4 z-[1000] bg-white/95 rounded-sm shadow-md px-3 py-2 text-[11px] text-afj-black/70 space-y-1 pointer-events-none">
       {temEscritorio && (
@@ -596,15 +677,24 @@ function Legenda({ temEscritorio, temRequerRevisao }: { temEscritorio: boolean; 
           Escritório
         </div>
       )}
-      <div className="flex items-center gap-1.5">
-        <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ backgroundColor: "rgb(var(--brand-secondary))" }} />
-        Cliente
-      </div>
-      {temRequerRevisao && (
+      {mostrarCalor ? (
         <div className="flex items-center gap-1.5">
-          <span className="inline-block w-2.5 h-2.5 rounded-full bg-amber-600" />
-          Requer revisão
+          <span className="inline-block w-2.5 h-2.5 rounded-full bg-red-500" />
+          Concentração de clientes
         </div>
+      ) : (
+        <>
+          <div className="flex items-center gap-1.5">
+            <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ backgroundColor: "rgb(var(--brand-secondary))" }} />
+            Cliente
+          </div>
+          {temRequerRevisao && (
+            <div className="flex items-center gap-1.5">
+              <span className="inline-block w-2.5 h-2.5 rounded-full bg-amber-600" />
+              Requer revisão
+            </div>
+          )}
+        </>
       )}
     </div>
   );

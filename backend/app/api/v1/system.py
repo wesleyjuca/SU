@@ -1496,4 +1496,4 @@ async def brain_assistant_reindex(current_user: User = Depends(require_role("SUP
     """Reindexa a documentação do sistema na coleção RAG documentacao_sistema."""
     from app.services.brain_assistant import reindexar_documentacao
     await _audit_brain(current_user.id, "BRAIN_ASSISTANT_REINDEX")
-    return await reindexar_documentacao()
+    return await reindexar_documentacao(user_id=current_user.id)

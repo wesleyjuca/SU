@@ -267,6 +267,107 @@ rediscobertas do zero a cada sessão — contexto completo de cada uma em
     abrindo nova aba com o modal de edição pré-carregado no cliente
     CERTO (nome conferido) — 27/27 checks PASS, zero diálogo nativo,
     console limpo.
+- **Fase pós-260.3** — usuário reclamou (2ª vez, mesma frase): "a busca
+  semântica deve usar a IA escolhida nas minhas IAs, não deve ter uma
+  IA única". Investigação (1 Explore agent, leitura completa de
+  `rag/embeddings.py`, `models/ai_config.py`, `integrations/byok.py`,
+  `services/brain_assistant.py`, grep total por `OPENAI_API_KEY`,
+  frontend "Minha IA") confirmou uma limitação técnica real e uma
+  lacuna real e corrigível, distintas:
+  - **Limitação técnica, não corrigível**: a etapa de embedding (o
+    único ponto onde uma "IA" de fato participa da busca semântica —
+    `POST /rag/search` não sintetiza resposta com LLM, só devolve
+    trechos rankeados) está presa à OpenAI porque as 7 collections
+    reais do Qdrant foram criadas com a dimensão do
+    `text-embedding-3-large` (3072). A Anthropic não tem API pública de
+    embeddings — não existe como "usar Claude" nesse passo, mesmo que
+    seja a IA padrão do usuário em "Minha IA". Já mitigado desde a Fase
+    pós-259: `_resolve_byok_openai_key()` já varre toda a cadeia BYOK
+    do usuário (padrão + até 2 fallbacks), não só a padrão — se
+    QUALQUER credencial OpenAI estiver cadastrada em qualquer posição,
+    ela já é usada. O frontend ("Minha IA") já tem um aviso condicional
+    explicando isso e orientando a cadastrar uma chave OpenAI mesmo sem
+    torná-la padrão.
+  - **Lacuna real corrigida**: `backend/app/services/brain_assistant.py`
+    (RAG do assistente "Cérebro", separado da Pesquisa Jurídica) nunca
+    tinha recebido o mesmo fix — `_rag_docs()` e `reindexar_documentacao()`
+    só checavam `settings.OPENAI_API_KEY` (central), ignorando por
+    completo qualquer BYOK do usuário. Além disso, mesmo se o guard
+    fosse corrigido, `montar_system_prompt()` (que chama `_rag_docs()`)
+    rodava ANTES do bloco `async with user_ai_creds(...)` em
+    `responder_stream()` — o contextvar de credencial nunca estava
+    setado quando o embedding da pergunta era tentado. Corrigido: guard
+    de `_rag_docs()` removido (delega a resolução de chave pra
+    `retrieve()`/`embed_text()`, que já fazem isso sozinhos e já
+    degradam gracioso via o `except` existente); `montar_system_prompt()`
+    movido pra dentro do `async with`; `reindexar_documentacao()` ganhou
+    parâmetro `user_id` (passado pelo SUPERADMIN que chama
+    `POST /system/brain/assistant/reindex`) e também passou a rodar
+    dentro de `user_ai_creds()`, com uma checagem prévia (central OU
+    BYOK) pra continuar devolvendo uma mensagem clara em vez de
+    silenciosamente indexar 0 arquivos.
+  - **Fora de escopo, decisão do usuário via pergunta**: motor de
+    embedding alternativo/local (BGE-M3, já existe em modo de
+    comparação/teste em `embeddings_local.py`) pra remover de vez a
+    dependência de um provedor único — descartado por exigir
+    reindexação completa das 7 collections (dimensão de vetor
+    incompatível, 1024 vs. 3072) e ser uma mudança bem maior/mais
+    arriscada que o pedido em si.
+  - **Verificado**: `ruff`/`py_compile` limpos. Script standalone
+    (Postgres real + Qdrant em memória + `AsyncOpenAI` mockado —
+    mesmo padrão da Fase pós-259) provando ponta a ponta: usuário
+    SUPERADMIN com Anthropic como IA padrão + uma credencial OpenAI
+    cadastrada só como SECUNDÁRIA (não padrão), sem `OPENAI_API_KEY`
+    central — `reindexar_documentacao()` indexa os 5 arquivos de
+    documentação usando a chave secundária (confirmado pelo argumento
+    real passado ao construtor do SDK); `responder_stream()`/
+    `_rag_docs()` também alcançam a mesma chave secundária; regressão
+    confirmada — sem nenhuma chave (nem central, nem BYOK), as duas
+    funções degradam honesto (mensagem clara, sem crashar o chat) — 6/6
+    checks PASS. 2 testes unitários novos + 1 mensagem de teste
+    existente atualizada em `test_brain_assistant.py` (6/6 PASS
+    isolado); demais testes relacionados (`test_rag_search_byok_
+    fase255.py`) apresentaram a mesma flakiness de pool asyncpg/
+    pytest-asyncio já documentada (confirmada isolada, não é regressão
+    — arquivo nem foi tocado nesta fase).
+- **Fase pós-260.4** — usuário pediu 5 opções novas pro `/mapa`: mapa de
+  calor, satélite, terreno, tela cheia, abrir em outra janela — "priorizar
+  implementação simples e reutilizar estrutura/componentes existentes".
+  100% frontend, nenhum endpoint/modelo novo — todas reaproveitam dado já
+  buscado (`clientesFiltrados`) ou APIs nativas do navegador/Leaflet:
+  - **Satélite/Terreno** — `LayersControl`/`LayersControl.BaseLayer`,
+    nativos do `react-leaflet` (nenhuma dependência nova), envolvendo os
+    `TileLayer` — "Padrão" (OSM, já existia), "Satélite" (Esri World
+    Imagery, `server.arcgisonline.com`, grátis/sem chave) e "Terreno"
+    (OpenTopoMap, grátis/sem chave) — mesmo espírito "grátis, sem
+    credencial" já usado pro tile OSM original. Zero UI customizada — o
+    seletor de camadas é o controle nativo do Leaflet.
+  - **Mapa de calor** — única dependência nova (`leaflet.heat` + `@types/
+    leaflet.heat`, ~5KB, sem chave de API, puramente client-side).
+    Alterna com o `MarkerClusterGroup` (nunca os dois juntos — ficaria
+    poluído), peso uniforme por cliente (sem métrica de ponderação real
+    ainda).
+  - **Tela cheia** — Fullscreen API nativa do navegador
+    (`element.requestFullscreen()`/`document.exitFullscreen()`), sem
+    plugin. **Achado real durante a verificação**: o botão inicialmente
+    ficava no cabeçalho da página — fora do elemento que entra em
+    fullscreen. Como a Fullscreen API só renderiza o elemento-alvo e seus
+    filhos, uma vez em tela cheia o próprio botão pra SAIR desaparecia
+    (só restava `Esc`). Corrigido movendo o botão pra dentro do container
+    do mapa, como overlay flutuante (mesmo padrão já usado pela
+    `Legenda`) — fica acessível nos dois estados. `invalidateSize()` do
+    Leaflet disparado com um pequeno atraso ao entrar/sair (o canvas não
+    recalcula sozinho numa mudança de tamanho só por CSS).
+  - **Abrir em outra janela** — `window.open(window.location.href,
+    "_blank", "noopener,noreferrer")`, zero componente novo.
+  - **Verificado**: `tsc --noEmit`/`eslint` limpos. Playwright real
+    (Chromium do sandbox, dados de teste da Fase pós-260.2 reaproveitados)
+    confirmando as 3 camadas listadas no controle nativo, canvas do mapa
+    de calor aparecendo/sumindo ao alternar (com os marcadores voltando
+    corretamente), o botão de tela cheia continuando clicável DENTRO do
+    fullscreen (a prova do achado corrigido), saindo corretamente ao
+    clicar de novo, e "abrir em outra janela" abrindo `/mapa` numa aba
+    nova — 18/18 checks PASS, zero diálogo nativo, console limpo.
 
 ## Teste geral do sistema (metodologia)
 
