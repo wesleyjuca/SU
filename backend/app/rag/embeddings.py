@@ -11,14 +11,28 @@ def _resolve_byok_openai_key() -> tuple[str | None, str | None]:
     `call_llm` já usa), reaproveita essa chave pra embeddings: é a mesma
     API OpenAI, a mesma chave já serve completions e embeddings. Provider
     diferente de "openai" (Anthropic/Gemini/...) não gera embedding
-    compatível com as collections existentes — ignorado de propósito."""
+    compatível com as collections existentes — ignorado de propósito.
+
+    Achado real (validação pós-merge): só olhava `ai_creds_ctx` (a config
+    PADRÃO/primária do usuário) — um usuário com Anthropic como padrão
+    (o comum, já que é o provedor do resto do sistema) e uma chave OpenAI
+    cadastrada só como config SECUNDÁRIA (não marcada como padrão) nunca
+    tinha essa chave considerada aqui, mesmo com uma OpenAI válida
+    cadastrada. `user_ai_creds()` já expõe o restante da cadeia de
+    fallback do usuário via `ai_fallback_ctx` — agora também é
+    percorrida, na mesma ordem de prioridade, procurando a 1ª entrada
+    "openai" em qualquer posição da cadeia, não só a primária."""
     try:
-        from app.integrations.llm_client import ai_creds_ctx
-        creds = ai_creds_ctx.get()
+        from app.integrations.llm_client import ai_creds_ctx, ai_fallback_ctx
+        primaria = ai_creds_ctx.get()
+        fallback = ai_fallback_ctx.get()
     except LookupError:
-        creds = None
-    if creds and creds.get("provider") == "openai" and creds.get("api_key"):
-        return creds["api_key"], creds.get("base_url") or None
+        primaria = None
+        fallback = None
+    candidatos = ([primaria] if primaria else []) + (fallback or [])
+    for creds in candidatos:
+        if creds and creds.get("provider") == "openai" and creds.get("api_key"):
+            return creds["api_key"], creds.get("base_url") or None
     return None, None
 
 

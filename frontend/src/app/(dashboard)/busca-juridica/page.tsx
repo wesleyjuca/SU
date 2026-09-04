@@ -1,5 +1,6 @@
 "use client";
 import { useState, useEffect } from "react";
+import Link from "next/link";
 import { BookOpen, Search, Loader2, Copy, Check, AlertTriangle, Upload, ChevronDown, ChevronUp, BarChart2 } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
@@ -478,7 +479,14 @@ export default function BuscaJuridicaPage() {
       {error && (
         <div className="bg-red-50 border border-red-200 rounded-sm p-4 flex items-start gap-3">
           <AlertTriangle size={16} className="text-red-500 flex-shrink-0 mt-0.5" />
-          <p className="text-sm text-red-700">{error}</p>
+          <div>
+            <p className="text-sm text-red-700">{error}</p>
+            {error.toLowerCase().includes("openai") && (
+              <Link href="/minha-ia" className="text-sm text-red-800 underline font-medium mt-1 inline-block">
+                Ir para Minha IA →
+              </Link>
+            )}
+          </div>
         </div>
       )}
 
