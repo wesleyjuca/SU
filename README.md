@@ -2,28 +2,56 @@
 
 **Sistema Jurídico Inteligente — Almeida, Freire & Jucá Advogados**
 
-ERP jurídico multiagente com IA, monitoramento processual, geração de petições, memória institucional e governança humana sobre todas as ações críticas.
+Plataforma jurídica inteligente para gestão de processos, clientes e operações do escritório, combinando agentes de IA, memória institucional, automação processual e governança humana sobre ações críticas.
 
 ---
 
 ## Stack
 
-```
-Backend:   Python 3.12 + FastAPI + SQLAlchemy + Alembic
-Frontend:  Next.js 14 + TailwindCSS + Shadcn UI
-Banco:     PostgreSQL 16 + Redis 7 + Qdrant (vetorial)
-IA:        Claude (Anthropic) + OpenAI Embeddings
-Agentes:   LangGraph + 19 agentes especializados
-Infra:     Docker Compose (dev) + Railway + Vercel (prod)
+```text
+Backend:      Python 3.12 + FastAPI + SQLAlchemy + Alembic
+Frontend:     Next.js 14 + TailwindCSS + Shadcn UI
+Banco:        PostgreSQL 16 + Redis 7 + Qdrant (vetorial)
+IA:           Claude (Anthropic) + OpenAI Embeddings
+Agentes:      LangGraph + agentes especializados
+Infra:        Docker Compose (dev) + Railway + Vercel (prod)
 ```
 
-## Quick Start
+## Arquitetura
 
-```bash
-cp .env.example .env   # configure suas chaves
-make up                # sobe todos os serviços
-make migrate           # cria o schema
-make seed              # dados iniciais
+```text
+                    ┌─────────────────────┐
+                    │      Next.js        │
+                    │     Frontend        │
+                    └──────────┬──────────┘
+                               │
+                            REST / JWT
+                               │
+                    ┌──────────▼──────────┐
+                    │       FastAPI       │
+                    │       Backend       │
+                    └────┬─────┬─────┬────┘
+                         │     │     │
+             ┌───────────┘     │     └────────────┐
+             ▼                 ▼                  ▼
+       ┌───────────┐     ┌───────────┐      ┌───────────┐
+       │ PostgreSQL│     │   Redis   │      │  Qdrant   │
+       │   Dados   │     │ Cache/Jobs│      │ Vetorial  │
+       └───────────┘     └─────┬─────┘      └─────┬─────┘
+                               │                   │
+                               ▼                   │
+                         ┌───────────┐             │
+                         │  Celery   │             │
+                         │  Workers  │             │
+                         └─────┬─────┘             │
+                               │                   │
+                               └─────────┬─────────┘
+                                         ▼
+                                  ┌─────────────┐
+                                  │  LangGraph  │
+                                  │   Agentes   │
+                                  └─────────────┘
+```
 
 # Acesso:
 # API:      http://localhost:8000/api/v1/docs
@@ -32,10 +60,12 @@ make seed              # dados iniciais
 
 ## Princípios
 
-- **IA sugere — humano aprova:** toda ação irreversível requer validação humana
-- **Auditoria completa:** todo evento registrado em `audit_logs` (imutável, LGPD)
-- **Jurisprudência verificável:** proibido citar sem fonte comprovada no Qdrant
-- **Circuit breaker:** conectores de tribunal toleram falhas sem derrubar o sistema
+- **IA sugere — humano aprova:** ações críticas ou irreversíveis exigem validação humana antes da execução.
+- **Auditoria completa:** ações relevantes são registradas em `audit_logs` para rastreabilidade e governança.
+- **Isolamento multi-tenant:** dados e operações devem respeitar o `tenant_id` do usuário autenticado.
+- **Jurisprudência verificável:** fontes jurídicas devem possuir origem comprovável quando utilizadas como fundamento.
+- **Resiliência:** falhas em conectores e serviços externos não devem derrubar o sistema.
+- **Simplicidade:** reutilizar componentes e serviços existentes e evitar complexidade sem benefício claro.
 
 ## Governança
 
