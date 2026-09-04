@@ -46,14 +46,25 @@ invente números, endpoints ou estado de serviços. Responda em português."""
 
 
 async def _rag_docs(pergunta: str) -> str:
-    """Trechos da coleção documentacao_sistema (best-effort; vazio se indisponível)."""
+    """Trechos da coleção documentacao_sistema (best-effort; vazio se indisponível).
+
+    Fase pós-260.3 — achado real: este guard checava só `settings.
+    OPENAI_API_KEY` (chave central), então um SUPERADMIN com BYOK openai
+    cadastrado (sem chave central configurada) nunca via o RAG do Cérebro
+    funcionar — mesma classe de bug já corrigida em `rag/embeddings.py`
+    (Fase pós-259), nunca aplicada aqui. Removida a checagem de chave
+    aqui — `retrieve()` → `embed_text()` já resolve BYOK sozinho (chamador,
+    `responder_stream`, precisa estar dentro do `user_ai_creds()` pro
+    contextvar existir); se nenhuma chave (central ou BYOK) estiver
+    disponível, a exceção sobe e é engolida pelo `except` abaixo, igual
+    já acontecia pra qualquer outra falha de RAG (best-effort)."""
     try:
         from app.config import settings
         configurado = bool(
             settings.QDRANT_API_KEY or
             (settings.QDRANT_URL and settings.QDRANT_URL not in {"http://qdrant:6333", "http://localhost:6333"})
         )
-        if not configurado or not settings.OPENAI_API_KEY:
+        if not configurado:
             return ""
         from app.db.qdrant import get_qdrant
         from app.rag.retrieval import retrieve
@@ -120,16 +131,23 @@ async def responder_stream(db, historico: list[dict], pergunta: str, user_id=Non
     persistir a resposta do assistente ("sessão nova — o generator roda
     após o request") — `db` nunca era usada de fato até este fix (`_infra_
     resumo`/`_rag_docs` não fazem query nenhuma com ela), por isso o risco
-    nunca tinha se manifestado antes."""
+    nunca tinha se manifestado antes.
+
+    Fase pós-260.3 — achado real: `montar_system_prompt()` (que chama
+    `_rag_docs()`, que gera embeddings) rodava ANTES de entrar no bloco
+    `user_ai_creds()` abaixo — o contextvar de credencial BYOK nunca
+    estava setado quando o RAG do Cérebro tentava embeddar a pergunta,
+    então mesmo depois do fix em `_rag_docs()` (guard removido) o BYOK
+    nunca era realmente alcançado. Movido pra dentro do `async with`."""
     from app.db.base import AsyncSessionLocal
     from app.integrations.byok import user_ai_creds
     from app.integrations.llm_client import call_llm_stream
 
-    system = await montar_system_prompt(db, pergunta)
     # limita o histórico p/ não estourar contexto/custo
     mensagens = [{"role": m["role"], "content": m["content"]} for m in historico][-12:]
 
     async with AsyncSessionLocal() as creds_db, user_ai_creds(creds_db, user_id, "brain_assistant"):
+        system = await montar_system_prompt(db, pergunta)
         async for evento in call_llm_stream(mensagens, system=system, max_tokens=2048, temperature=0.2):
             yield evento
 
@@ -138,13 +156,20 @@ async def responder_stream(db, historico: list[dict], pergunta: str, user_id=Non
 _DOC_FILES = ["CLAUDE.md", "DEPLOY.md", "DEPLOY_VPS.md", "MOBILE.md", "README.md"]
 
 
-async def reindexar_documentacao() -> dict:
+async def reindexar_documentacao(user_id=None) -> dict:
     """Indexa os markdown de documentação na coleção documentacao_sistema.
-    Best-effort: exige Qdrant + OPENAI_API_KEY (embeddings). Retorna contagem."""
+    Best-effort: exige Qdrant + alguma chave OpenAI (central ou BYOK do
+    usuário que disparou) pra gerar os embeddings. Retorna contagem.
+
+    Fase pós-260.3 — achado real: mesma classe de bug de `_rag_docs()` —
+    só checava `settings.OPENAI_API_KEY` central, ignorando BYOK. `user_id`
+    (o SUPERADMIN que chamou `POST /system/brain/assistant/reindex`) agora
+    envolve toda a indexação em `user_ai_creds()`, igual `responder_stream`."""
     from app.config import settings
-    if not settings.OPENAI_API_KEY:
-        return {"ok": False, "motivo": "OPENAI_API_KEY ausente (necessária p/ embeddings)"}
+    from app.db.base import AsyncSessionLocal
+    from app.integrations.byok import user_ai_creds
     try:
+        from app.rag.embeddings import _resolve_byok_openai_key
         from app.rag.ingestion import ingest_document
     except Exception as exc:
         return {"ok": False, "motivo": f"ingestão indisponível: {exc}"}
@@ -152,20 +177,24 @@ async def reindexar_documentacao() -> dict:
     # raiz do repo (backend/ está um nível abaixo)
     raiz = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
     indexados = 0
-    for nome in _DOC_FILES:
-        caminho = os.path.join(raiz, nome)
-        if not os.path.exists(caminho):
-            continue
-        try:
-            with open(caminho, encoding="utf-8") as f:
-                texto = f.read()
-            await ingest_document(
-                content=texto,
-                collection="documentacao_sistema",
-                metadata={"fonte": nome},
-                document_id=f"doc-{nome}",
-            )
-            indexados += 1
-        except Exception as exc:
-            log.warning("reindex_doc_failed", arquivo=nome, error=str(exc))
+    async with AsyncSessionLocal() as creds_db, user_ai_creds(creds_db, user_id, "brain_assistant_reindex"):
+        byok_key, _ = _resolve_byok_openai_key()
+        if not byok_key and not settings.OPENAI_API_KEY:
+            return {"ok": False, "motivo": "Nenhuma chave OpenAI disponível (central ou BYOK) — necessária p/ embeddings."}
+        for nome in _DOC_FILES:
+            caminho = os.path.join(raiz, nome)
+            if not os.path.exists(caminho):
+                continue
+            try:
+                with open(caminho, encoding="utf-8") as f:
+                    texto = f.read()
+                await ingest_document(
+                    content=texto,
+                    collection="documentacao_sistema",
+                    metadata={"fonte": nome},
+                    document_id=f"doc-{nome}",
+                )
+                indexados += 1
+            except Exception as exc:
+                log.warning("reindex_doc_failed", arquivo=nome, error=str(exc))
     return {"ok": True, "arquivos_indexados": indexados}
