@@ -55,7 +55,10 @@ NEXT_PUBLIC_API_URL=http://localhost:8000
 
 ```
 backend/app/
-  api/v1/          — 82 REST endpoints (15 routers)
+  api/v1/          — 298 rotas REST em 32 routers (contagem medida por
+                     introspecção do app na rodada pós-260.5; o número
+                     antigo, "82 endpoints / 15 routers", estava
+                     desatualizado por 3,6× e subdimensionava auditorias)
   agents/          — 19 LangGraph agents + orchestrator
   models/          — SQLAlchemy ORM models
   schemas/         — Pydantic request/response schemas
@@ -165,16 +168,33 @@ armadilhas abaixo sobre por que a suíte sozinha não é sempre confiável.
 rediscobertas do zero a cada sessão — contexto completo de cada uma em
 `HISTORICO_FASES.md`, se precisar):
 
-- **Flakiness de pool asyncpg/pytest-asyncio**: testes que abrem
-  `AsyncClient` HTTP real falham intermitentemente com "attached to a
-  different loop" (causa raiz: engine assíncrono do SQLAlchemy é
-  singleton de módulo, mas `pytest-asyncio` cria um event loop por
-  teste por padrão). Reproduz mesmo isolado às vezes. Antes de tratar
-  como regressão de uma mudança, rodar um teste de controle **não
-  tocado** — se ele falhar do mesmo jeito, não é a sua mudança. A prova
-  real de um fix costuma vir de um script standalone
-  (`asyncio.run()` + `AsyncSessionLocal` direto, fora do pytest) contra
-  Postgres real, não da suíte.
+- **Flakiness de pool asyncpg/pytest-asyncio** — **causa-raiz isolada na
+  rodada pós-260.5**: são **dois plugins async disputando o mesmo teste**.
+  `pytest.ini` tem `asyncio_mode = auto` (pytest-asyncio) *e* 38 arquivos
+  usam `pytest.mark.anyio`, sem nenhuma fixture `anyio_backend` — o sufixo
+  `[asyncio]` nos IDs de teste é a parametrização de backend do anyio,
+  não do pytest-asyncio. O engine singleton do SQLAlchemy (a explicação
+  anterior, das Fases 199/212) é o que transforma o conflito em erro
+  visível, mas não é o gatilho. Experimento decisivo, sem editar nada:
+  o mesmo arquivo falha como está e **passa com qualquer um dos dois
+  plugins desligado** (`-p no:anyio` ou `-p no:asyncio`). Medido na
+  `test_api/` inteira: 102 falhas/34 passes/142 erros → **20 falhas/90
+  passes/78 erros** com plugin único. Enquanto o `pytest.ini` não for
+  corrigido, a prova real de um fix continua vindo de script standalone
+  (`asyncio.run()` + `AsyncSessionLocal` direto) contra Postgres real; e
+  antes de tratar uma falha como regressão da sua mudança, rode um teste
+  de controle **não tocado** — se ele falhar igual, não é sua mudança.
+- **Os testes não reprovam o CI** (achado da rodada pós-260.5): o passo de
+  testes de `.github/workflows/deploy.yml` não instala
+  `backend/requirements.txt` e ainda usa `| head -80 || true`, então a
+  suíte falha na coleção (`ModuleNotFoundError`) e o passo retorna exit 0.
+  Na prática só `ruff check app/`, `tsc --noEmit` e `next build` são gates
+  reais — não confie em "o CI passou" como sinal de que a suíte está verde.
+- **Três mecanismos de gate de papel coexistem** — auditar só um produz
+  falso positivo em escala (aconteceu 4× numa única rodada):
+  `Depends(require_role(...))`, checagem inline no corpo
+  (`if current_user.role not in (...)`) e helper (`_require_admin` em
+  `users.py`). Ao avaliar se uma rota está protegida, cheque os três.
 - **Egress de rede bloqueado no sandbox de desenvolvimento** (não em
   produção — Railway tem egress irrestrito): domínios externos como
   `brasilapi.com.br`, `googleapis.com`, `graph.facebook.com`,
@@ -540,6 +560,19 @@ nunca repetir o mesmo teste do zero.** Antes de planejar uma nova rodada:
 3. Registre abaixo, em 1-2 linhas por rodada, o que foi coberto e o que
    ficou pra trás de propósito — é o que a PRÓXIMA rodada deve ler antes
    de começar.
+
+**Rodadas registradas** (1-2 linhas cada; detalhe em `HISTORICO_FASES.md`):
+- **pós-255** — reconfirmou as Fases 247-255; achou 8 gaps de LGPD + o bug
+  do `RateLimitMiddleware`. **Nenhum deles foi corrigido até hoje.**
+- **pós-260.5** — auditou pela 1ª vez o próprio aparato de qualidade (a
+  suíte nunca rodou no CI; causa-raiz da flakiness isolada), trocou a
+  auditoria de LGPD por tabela pela **varredura de sentinela** (achou 2
+  colunas novas que 8 rodadas não viram: `documents.titulo` e
+  `opportunities.titulo`), e provou a classe "gate de papel só na
+  navegação". **Deixou pra próxima**: as 20 falhas + 78 erros residuais da
+  suíte, o fluxo de escrita de `portal`/`billing`/`publications`,
+  `ContractAgent`/`OrchestrationAgent`/`poll_all_processes` (zero testes),
+  e o cache do `retrieve()` sem provedor na chave.
 
 Histórico completo (achados, decisões de escopo, correções, verificações
 empíricas de cada fase) fica em `HISTORICO_FASES.md` — movido pra fora
