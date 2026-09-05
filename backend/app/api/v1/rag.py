@@ -70,6 +70,7 @@ async def rag_search(
         from app.db.qdrant import get_qdrant
         from app.rag.retrieval import retrieve
         from app.integrations.byok import user_ai_creds
+        from app.rag.embeddings import EmbeddingProviderUnavailable
 
         qdrant = await get_qdrant()
         # Fase 255 — embeddings passam a honrar o BYOK do usuário (mesmo
@@ -87,6 +88,13 @@ async def rag_search(
             )
         contrato = _para_contrato_publico(results)
         return {"query": req.query, "collections": req.collections, "results": contrato, "count": len(contrato)}
+    except EmbeddingProviderUnavailable as exc:
+        # Fase pós-260 — campo estruturado além da mensagem, pro frontend
+        # decidir se mostra o link "Ir para Minha IA" sem sniffing de texto.
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"message": f"Serviço RAG indisponível: {str(exc)}", "needs_embedding_provider": True},
+        )
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -233,12 +241,19 @@ async def rag_ingest(
             metadata["tenant_id"] = str(current_user.tenant_id)
 
         # Fase 255 — mesmo fallback BYOK de /rag/search.
+        # Fase pós-260 — collections PÚBLICAS/compartilhadas (fora de
+        # PRIVATE_COLLECTIONS) sempre usam o provedor de embedding padrão
+        # do sistema, nunca o BYOK de quem clicou o botão — conteúdo
+        # compartilhado entre tenants não pode depender de qual admin
+        # específico disparou a ingestão.
+        force_system_default = req.collection not in PRIVATE_COLLECTIONS
         async with user_ai_creds(db, current_user.id, "rag_ingest"):
             chunk_ids = await ingest_document(
                 content=req.content,
                 collection=req.collection,
                 metadata=metadata,
                 document_id=req.document_id,
+                force_system_default=force_system_default,
             )
         return {
             "status": "queued",

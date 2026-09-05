@@ -86,6 +86,7 @@ async def executar_sync_legislacao(db) -> dict:
                 await ingest_document(
                     content=norma["texto"], collection="legislacao",
                     metadata=qdrant_metadata, document_id=urn,
+                    force_system_default=True,  # collection pública/compartilhada
                 )
                 entrada.status = "EMBEDDED"
                 processados += 1

@@ -14,6 +14,8 @@ type ProviderInfo = {
   oauth_disponivel: boolean;
   modelo_sugerido: string;
   obter: string;
+  embedding_model: string | null;
+  embedding_dimensions: number | null;
 };
 
 type AIConfig = {
@@ -267,13 +269,17 @@ export default function MinhaIAPage() {
         </button>
       </div>
 
-      {!configs.some((c) => c.provider === "openai" && c.enabled) && (
+      {!configs.some((c) => providers[c.provider]?.embedding_model && c.enabled) && (
         <div className="flex items-start gap-2.5 text-xs rounded-sm px-3.5 py-3 mb-4 bg-blue-50 border border-blue-200 text-blue-800">
           <Scale size={15} className="flex-shrink-0 mt-0.5" />
           <p className="leading-relaxed">
-            A <strong>Pesquisa Jurídica</strong> (busca semântica) usa embeddings da OpenAI — um provedor
-            diferente do que você usa pra conversar com os agentes (ex.: Anthropic). Cadastre uma chave
-            OpenAI aqui, mesmo sem torná-la a IA padrão, pra habilitar a busca.
+            A <strong>Pesquisa Jurídica</strong> (busca semântica) precisa de um provedor com suporte a
+            embeddings — nem toda IA gera isso (ex.: Anthropic não tem). Cadastre uma chave de{" "}
+            {Object.entries(providers)
+              .filter(([, info]) => info.embedding_model)
+              .map(([, info]) => info.nome)
+              .join(" ou ") || "um provedor compatível"}
+            {" "}aqui, mesmo sem torná-la a IA padrão, pra habilitar a busca.
           </p>
         </div>
       )}

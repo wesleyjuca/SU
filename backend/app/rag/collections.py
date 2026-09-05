@@ -15,6 +15,10 @@ COLLECTIONS: dict[str, dict] = {
             # Já capturado no painel manual de indexação desde sempre, nunca
             # tinha sido indexado pra filtro/agregação (Fase 138.1).
             "relator": PayloadSchemaType.KEYWORD,
+            # Fase pós-260 — provedor de embedding real usado pra gerar o
+            # vetor deste ponto (openai/gemini/...). Ausente = "openai"
+            # (compat retroativa, todo conteúdo indexado antes desta fase).
+            "embedding_provider": PayloadSchemaType.KEYWORD,
         },
     },
     "peticoes_afj": {
@@ -37,6 +41,8 @@ COLLECTIONS: dict[str, dict] = {
             # falhava com 400 "Index required but not found for
             # document_id", engolido silenciosamente em auto_ingest.py.
             "document_id": PayloadSchemaType.KEYWORD,
+            # Fase pós-260 — ver nota em jurisprudencia acima.
+            "embedding_provider": PayloadSchemaType.KEYWORD,
         },
     },
     "doutrina": {
@@ -46,6 +52,8 @@ COLLECTIONS: dict[str, dict] = {
         "payload_fields": {
             "autor": PayloadSchemaType.KEYWORD,
             "area": PayloadSchemaType.KEYWORD,
+            # Fase pós-260 — ver nota em jurisprudencia acima.
+            "embedding_provider": PayloadSchemaType.KEYWORD,
         },
     },
     "doutrina_privada": {
@@ -65,6 +73,8 @@ COLLECTIONS: dict[str, dict] = {
             # 400 "Index required but not found for document_id" toda vez
             # que tentava limpar chunks antigos antes de reingerir.
             "document_id": PayloadSchemaType.KEYWORD,
+            # Fase pós-260 — ver nota em jurisprudencia acima.
+            "embedding_provider": PayloadSchemaType.KEYWORD,
         },
     },
     "legislacao": {
@@ -77,6 +87,8 @@ COLLECTIONS: dict[str, dict] = {
             # Fase 138.3 — ingestão automática via LexML/Planalto.
             "tipo_norma": PayloadSchemaType.KEYWORD,  # "Lei" | "Decreto"
             "urn": PayloadSchemaType.KEYWORD,         # URN LexML, chave estável do documento
+            # Fase pós-260 — ver nota em jurisprudencia acima.
+            "embedding_provider": PayloadSchemaType.KEYWORD,
         },
     },
     "memorias_afj": {
@@ -88,6 +100,8 @@ COLLECTIONS: dict[str, dict] = {
             "agent_source": PayloadSchemaType.KEYWORD,
             # Coleção privada — ver nota em peticoes_afj acima.
             "tenant_id": PayloadSchemaType.KEYWORD,
+            # Fase pós-260 — ver nota em jurisprudencia acima.
+            "embedding_provider": PayloadSchemaType.KEYWORD,
         },
     },
     "documentos_clientes": {
@@ -100,6 +114,8 @@ COLLECTIONS: dict[str, dict] = {
             "tipo": PayloadSchemaType.KEYWORD,
             # Coleção privada — ver nota em peticoes_afj acima.
             "tenant_id": PayloadSchemaType.KEYWORD,
+            # Fase pós-260 — ver nota em jurisprudencia acima.
+            "embedding_provider": PayloadSchemaType.KEYWORD,
         },
     },
     "documentacao_sistema": {
@@ -108,6 +124,8 @@ COLLECTIONS: dict[str, dict] = {
         "distance": Distance.COSINE,
         "payload_fields": {
             "fonte": PayloadSchemaType.KEYWORD,
+            # Fase pós-260 — ver nota em jurisprudencia acima.
+            "embedding_provider": PayloadSchemaType.KEYWORD,
         },
     },
 }

@@ -42,18 +42,18 @@ async def test_ingest_ignora_tenant_id_forjado_no_payload_privado(qdrant_memoria
     async def _fake_get_qdrant():
         return qdrant_memoria
 
-    async def _fake_embed_batch(texts):
-        return [[0.02] * settings.EMBEDDING_DIMENSIONS for _ in texts]
+    async def _fake_embed_batch_with_meta(texts, force_system_default=False):
+        return [[0.02] * settings.EMBEDDING_DIMENSIONS for _ in texts], "openai", "text-embedding-3-large"
 
-    async def _fake_embed_text(text):
-        return [0.02] * settings.EMBEDDING_DIMENSIONS
+    async def _fake_embed_text_with_meta(text, force_system_default=False):
+        return [0.02] * settings.EMBEDDING_DIMENSIONS, "openai", "text-embedding-3-large"
 
     async def _no_redis():
         return None
 
     monkeypatch.setattr(ingestion_mod, "get_qdrant", _fake_get_qdrant)
-    monkeypatch.setattr(ingestion_mod, "embed_batch", _fake_embed_batch)
-    monkeypatch.setattr(retrieval_mod, "embed_text", _fake_embed_text)
+    monkeypatch.setattr(ingestion_mod, "embed_batch_with_meta", _fake_embed_batch_with_meta)
+    monkeypatch.setattr(retrieval_mod, "embed_text_with_meta", _fake_embed_text_with_meta)
     monkeypatch.setattr(retrieval_mod, "get_redis", _no_redis)
 
     tenant_atacante = str(uuid.uuid4())
@@ -95,11 +95,11 @@ async def test_ingest_colecao_publica_nao_exige_tenant_id(qdrant_memoria, monkey
     async def _fake_get_qdrant():
         return qdrant_memoria
 
-    async def _fake_embed_batch(texts):
-        return [[0.03] * settings.EMBEDDING_DIMENSIONS for _ in texts]
+    async def _fake_embed_batch_with_meta(texts, force_system_default=False):
+        return [[0.03] * settings.EMBEDDING_DIMENSIONS for _ in texts], "openai", "text-embedding-3-large"
 
     monkeypatch.setattr(ingestion_mod, "get_qdrant", _fake_get_qdrant)
-    monkeypatch.setattr(ingestion_mod, "embed_batch", _fake_embed_batch)
+    monkeypatch.setattr(ingestion_mod, "embed_batch_with_meta", _fake_embed_batch_with_meta)
 
     admin = _FakeUser(uuid.uuid4(), str(uuid.uuid4()))
     req = rag_mod.IngestRequest(

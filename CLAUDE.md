@@ -368,6 +368,151 @@ rediscobertas do zero a cada sessão — contexto completo de cada uma em
     fullscreen (a prova do achado corrigido), saindo corretamente ao
     clicar de novo, e "abrir em outra janela" abrindo `/mapa` numa aba
     nova — 18/18 checks PASS, zero diálogo nativo, console limpo.
+- **Fase pós-260.5** — usuário pediu (pedido formal, 9 requisitos técnicos
+  + levantamento obrigatório antes de código) pra desacoplar a Pesquisa
+  Jurídica (busca semântica) de um provedor único de embeddings — hoje
+  presa à OpenAI mesmo quando o cliente configura Gemini como IA. Pedido
+  explícito: "não assuma que a solução é trocar `OpenAIEmbeddings` por
+  outra classe — mapeie o fluxo completo primeiro."
+  - **Achado-chave**: já existia abstração pronta pra reaproveitar — o
+    registro central `services/ai_providers.py` (`AI_PROVIDERS`) e o
+    padrão já usado por `_call_openai_compatible()` em `llm_client.py`
+    pra chat completions (gemini/openai/grok/deepseek/openrouter/ollama
+    tratados identicamente, só muda `base_url`/chave). Pesquisa externa
+    confirmou Gemini expõe endpoint OpenAI-compatible de embeddings
+    (`gemini-embedding-001`, 3072 dimensões — igual ao
+    `text-embedding-3-large` já usado); xAI/Grok sem API de embeddings
+    (confirmado); DeepSeek/OpenRouter não confirmados com confiança
+    (tratados como indisponíveis, não assumidos); Ollama/Vertex AI fora
+    de escopo (self-hosted sem dimensão fixa / auth própria).
+  - **Achado crítico de arquitetura**: das 8 collections Qdrant, 4 são
+    PRIVADAS por tenant (`peticoes_afj`, `memorias_afj`,
+    `documentos_clientes`, `doutrina_privada`) e 3+1 são
+    PÚBLICAS/compartilhadas (`jurisprudencia`, `legislacao`, `doutrina`,
+    `documentacao_sistema`). Um vetor Gemini e um vetor OpenAI NÃO são
+    comparáveis por cosseno mesmo com dimensão idêntica — decisão
+    confirmada com o usuário via pergunta: collections privadas seguem o
+    BYOK de quem gerou o conteúdo; collections públicas sempre resolvem
+    pro provedor PADRÃO do sistema (hoje OpenAI), pra funcionar pra
+    qualquer tenant sem depender do provedor dele.
+  - **Achado de compatibilidade retroativa**: nenhum ponto já indexado
+    tem `embedding_provider` no payload — tratado em todo filtro de busca
+    como equivalente a `"openai"` (via `IsEmptyCondition`), senão todo o
+    conteúdo pré-fase desapareceria da busca no dia do deploy.
+  - **`services/ai_providers.py`**: cada entrada de `AI_PROVIDERS` ganhou
+    `embedding_model`/`embedding_dimensions` (`openai`:
+    `text-embedding-3-large`/3072; `gemini`: `gemini-embedding-001`/3072;
+    demais: `None`) + novo `embedding_capable_providers() -> set[str]`.
+  - **`rag/embeddings.py` generalizado**: `_resolve_byok_openai_key()`
+    (mantido, compat retroativa — `brain_assistant.py` continua preso a
+    OpenAI especificamente, fora de escopo desta fase) ganhou irmã
+    `_resolve_embedding_credentials()` (varre a mesma cadeia BYOK
+    primária+fallback, mas filtra por `provider in
+    embedding_capable_providers()`, não só `"openai"`).
+    `get_openai_client()` (mantido, wrapper fino) ganhou irmã
+    `get_embeddings_client(*, force_system_default=False)` — devolve
+    `(client, provider, model, dimensions)`; com BYOK resolvido usa o
+    provedor do usuário, sem BYOK ou `force_system_default=True` cai no
+    padrão do sistema. Novo tipo `EmbeddingProviderUnavailable(RuntimeError)`
+    (antes um `RuntimeError` genérico) — permite ao endpoint devolver um
+    campo estruturado no 503 em vez de string. **Achado real durante a
+    implementação**: mesmo com `force_system_default=True`, se a chave
+    central estiver ausente, o sistema ainda tenta uma credencial
+    `"openai"` do usuário disparador (nunca outro provedor) como
+    fallback — preserva o fix da Fase 255 (BYOK cobre a ausência de
+    chave central) sem reabrir o risco de usar um vetor Gemini pra
+    consultar conteúdo público indexado em OpenAI. `embed_text`/
+    `embed_batch` viraram wrappers finos sobre novas
+    `embed_text_with_meta`/`embed_batch_with_meta` (retornam
+    `(vetor(es), provider, model)`) — `embeddings_compare.py` (única
+    ferramenta que só precisava do vetor) continua funcionando sem
+    mudança.
+  - **`rag/collections.py`**: as 8 collections ganharam
+    `"embedding_provider": PayloadSchemaType.KEYWORD` em
+    `payload_fields` — self-healed via `ensure_collections()` já
+    idempotente (Fase 116/198), sem migração manual.
+  - **`rag/ingestion.py` + `rag.py`**: `ingest_document(...,
+    force_system_default=False)` grava `embedding_provider`/
+    `embedding_model` REAIS no payload de cada chunk. `POST /rag/ingest`
+    força `force_system_default=True` pras collections fora de
+    `PRIVATE_COLLECTIONS` (públicas). Pipelines automáticas sem
+    `user_id` (`sync_stj_diario`, `sync_legislacao`) passaram a declarar
+    `force_system_default=True` explicitamente nos 2 call sites
+    (`jurisprudencia_sync.py`/`legislacao_sync.py`) por clareza, embora
+    já caíssem nesse comportamento naturalmente (sem contexto BYOK ativo
+    em background).
+  - **`rag/retrieval.py`** (ponto de maior risco): `retrieve()` passou a
+    computar até 2 vetores da mesma pergunta — público (sempre
+    `force_system_default=True`) e privado (BYOK ativo), conforme quais
+    collections a busca abrange. Novo `_provider_filter()`: filtro
+    `should` exigindo `embedding_provider == <provider>` OU (só quando
+    `provider == "openai"`) o campo estar ausente — a compat retroativa
+    documentada acima.
+  - **Frontend**: `GET /users/me/ai-providers` já expunha
+    `embedding_model`/`embedding_dimensions` de graça (endpoint já
+    devolvia o dict inteiro `AI_PROVIDERS`, sem mudança de backend
+    necessária). `minha-ia/page.tsx`: banner condicional trocou
+    `!configs.some(c => c.provider === "openai" && c.enabled)` por
+    `!configs.some(c => providers[c.provider]?.embedding_model &&
+    c.enabled)`, texto agora lista dinamicamente os provedores
+    embedding-capable do registro central em vez de hardcoded "OpenAI".
+    `busca-juridica/page.tsx`: `error.toLowerCase().includes("openai")`
+    (string sniffing) virou `needsEmbeddingProvider` (estado dedicado,
+    lido de `detail.needs_embedding_provider` no corpo do 503 — `rag.py`
+    passou a devolver `detail` como dict `{message,
+    needs_embedding_provider}` só nesse caso específico, string simples
+    nos demais erros).
+  - **Testes**: `test_embeddings_byok.py` ganhou 12 testes novos
+    (`_resolve_embedding_credentials()` — openai-only, gemini-only,
+    prioridade entre os dois, anthropic-only→`None`, grok ignorado; e
+    `get_embeddings_client()` — dispatch openai/gemini,
+    `force_system_default` ignora BYOK, anthropic cai no padrão).
+    `test_rag_search_byok_fase255.py` ganhou um teste de integração
+    (Postgres+Qdrant real em memória) provando um tenant 100% Gemini
+    BYOK ingerir+buscar numa collection privada sem NENHUMA chave OpenAI
+    — incluindo um ponto legado tageado `"openai"` com vetor IDÊNTICO
+    que precisa ficar de fora do resultado (prova de que é o filtro de
+    provider, não a distância do vetor, que decide). 5 testes existentes
+    (`test_rag_cache.py`, `test_rag_retrieval_real_qdrant.py`,
+    `test_rag_ingest_tenant_stamping.py`,
+    `test_google_drive_sync_dedup_real_qdrant.py`) tiveram seus
+    monkeypatches de `embed_text`/`embed_batch` migrados pras novas
+    `_with_meta`.
+  - **Verificado**: `ruff`/`py_compile` limpos no backend;
+    `tsc --noEmit`/`eslint` limpos no frontend; 48 testes automatizados
+    relacionados a RAG/embeddings PASS isolados. **Achado de
+    verificação**: a suíte HTTP real de `test_rag_search_byok_fase255.py`
+    apresentou a mesma flakiness de pool asyncpg/pytest-asyncio já
+    documentada (todos os testes `pytest.mark.anyio` desse arquivo
+    falham com "attached to a different loop" nesta sessão, mesmo
+    isolados) — confirmada contra um arquivo de controle NÃO tocado
+    (`test_lgpd_erasure_reaches_crm_fase210.py`), que falha de forma
+    idêntica, não é regressão desta fase. Prova real veio de um script
+    standalone (`asyncio.run()` + `AsyncSessionLocal` direto, Postgres
+    real + Qdrant em memória + `AsyncOpenAI` mockado) cobrindo os 13
+    cenários do critério de aceite: tenant Gemini ingere/busca privado
+    sem chave OpenAI nenhuma; busca pública do mesmo tenant sempre usa a
+    chave central (nunca a BYOK Gemini dele) e ainda acha conteúdo
+    legado sem `embedding_provider`; tenant 100% OpenAI (regressão)
+    idêntico a antes; isolamento cross-tenant e cross-provider
+    preservado; sem nenhuma chave disponível, `POST /rag/search` devolve
+    503 com `needs_embedding_provider: true` estruturado — 13/13 PASS.
+    Playwright real (Chromium do sandbox, stack completa) confirmando o
+    banner dinâmico em `/minha-ia` (sem citar mais só "OpenAI") e o link
+    "Ir para Minha IA" aparecendo em `/busca-juridica` só quando o erro é
+    de fato falta de provedor de embedding — 7/8 checks PASS (a 1 falha
+    é um warning de React key pré-existente em `/dashboard`, não
+    relacionado a esta fase).
+  - **Fora de escopo, documentado**: `deepseek`/`openrouter`/`ollama`/
+    `vertex_ai` como provedores de embedding (capacidade não confirmada
+    ou auth própria); reindexação em massa do conteúdo privado ao trocar
+    de provedor (tag+filtro já evita resultado errado; "reindexar tudo"
+    fica como possível fase futura); `brain_assistant.py`/
+    `embeddings_compare.py` continuam presos a OpenAI especificamente
+    (fora do escopo pedido, mantidos funcionando via os wrappers de
+    compat retroativa); `TASK_LABELS` ganhar `rag_search`/`rag_ingest`
+    explicitamente na UI de "Ajuste por área" (o fallback-chain já
+    resolve sem precisar disso).
 
 ## Teste geral do sistema (metodologia)
 

@@ -101,11 +101,11 @@ async def test_reprocessar_arquivo_falhou_nao_duplica_chunks_no_qdrant(qdrant_me
     async def _fake_get_qdrant():
         return qdrant_memoria
 
-    async def _fake_embed_batch(texts):
-        return [[0.01] * settings.EMBEDDING_DIMENSIONS for _ in texts]
+    async def _fake_embed_batch_with_meta(texts, force_system_default=False):
+        return [[0.01] * settings.EMBEDDING_DIMENSIONS for _ in texts], "openai", "text-embedding-3-large"
 
     monkeypatch.setattr(ingestion_mod, "get_qdrant", _fake_get_qdrant)
-    monkeypatch.setattr(ingestion_mod, "embed_batch", _fake_embed_batch)
+    monkeypatch.setattr(ingestion_mod, "embed_batch_with_meta", _fake_embed_batch_with_meta)
 
     # Simula o estado "já ingerido uma vez antes de FALHOU" — chunks já
     # existem no Qdrant pro mesmo document_id antes da reconciliação.

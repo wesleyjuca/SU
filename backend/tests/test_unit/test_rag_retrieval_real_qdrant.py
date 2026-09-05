@@ -37,13 +37,13 @@ async def test_retrieve_encontra_resultado_real_via_query_points(qdrant_memoria,
     Exception` por coleção — e este teste falharia com resultados=[]."""
     import app.rag.retrieval as retrieval_mod
 
-    async def _fake_embed_text(query):
-        return [0.0105] * settings.EMBEDDING_DIMENSIONS
+    async def _fake_embed_text_with_meta(query, force_system_default=False):
+        return [0.0105] * settings.EMBEDDING_DIMENSIONS, "openai", "text-embedding-3-large"
 
     async def _no_redis():
         return None
 
-    monkeypatch.setattr(retrieval_mod, "embed_text", _fake_embed_text)
+    monkeypatch.setattr(retrieval_mod, "embed_text_with_meta", _fake_embed_text_with_meta)
     monkeypatch.setattr(retrieval_mod, "get_redis", _no_redis)
 
     resultados = await retrieve(qdrant_memoria, "art. 5º", collections=["legislacao"], score_threshold=0.0)
