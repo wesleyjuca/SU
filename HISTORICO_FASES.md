@@ -5445,3 +5445,161 @@ cross-tenant, flakiness de teste) já tem um padrão de causa conhecido.
     novo `test_auto_ingest_delete_chunks_log.py`) passa limpa isolada.
     `ruff check`/`py_compile` limpos no backend; `tsc --noEmit`/
     `eslint` limpos no frontend.
+
+- **Rodada de teste geral pós-260.5 (audit-only)** — usuário pediu "teste
+  geral de todas as funções do sistema e de toda a lógica + plano
+  consolidado com ajustes, correções e inovações". Escolhas dele via
+  pergunta: audit-only (nenhum código de produto alterado), atacar as 4
+  dívidas acumuladas, e "inovações" = produto/UX. As Fases 256, 257, 258 e
+  toda a série pós-260 nunca tinham passado por rodada nenhuma.
+  - **Correção de escala**: o CLAUDE.md dizia "82 REST endpoints (15
+    routers)". A contagem real, por introspecção do app em execução, é
+    **298 rotas em 32 routers** (135 GET, 98 POST, 33 PUT, 7 PATCH, 21
+    DELETE). Toda rodada anterior dimensionada por "82" cobria ~28% da
+    superfície sem saber.
+  - **Frente nova, nunca feita em 10 rodadas: auditar o próprio aparato de
+    qualidade.** Dois achados, ambos reproduzidos ao vivo:
+    1. **A suíte de backend nunca rodou no CI.** `.github/workflows/
+       deploy.yml:51-58` instala só `pytest pytest-asyncio httpx` — nenhum
+       passo instala `backend/requirements.txt`. Reproduzido num venv
+       idêntico ao do workflow: `ImportError ... ModuleNotFoundError: No
+       module named 'structlog'` na coleção, zero testes executados; e com
+       o pipe exato do workflow (`| head -80 || true`) o passo **retorna
+       exit code 0**. Os ~1.065 testes são decorativos no CI; só `ruff`,
+       `tsc --noEmit` e `next build` são gates reais.
+    2. **Causa-raiz da flakiness (aberta desde a Fase 199) finalmente
+       isolada.** Não é (só) o engine singleton do SQLAlchemy como se
+       supunha desde a Fase 212: `pytest.ini` tem `asyncio_mode = auto`
+       (pytest-asyncio) **e** 38 arquivos usam `pytest.mark.anyio`, sem
+       nenhuma fixture `anyio_backend` — dois plugins async disputando o
+       mesmo teste (o sufixo `[asyncio]` nos IDs é a parametrização do
+       anyio). Experimento decisivo, sem tocar em `pytest.ini`: o mesmo
+       arquivo falha como está, e **passa com qualquer um dos dois plugins
+       desligado** (`-p no:anyio` ou `-p no:asyncio`). Medido na suíte
+       `test_api/` inteira: **102 falhas / 34 passes / 142 erros / 181s**
+       hoje → **20 falhas / 90 passes / 78 erros / 101s** com plugin
+       único. Uma linha de configuração destrava ~56 testes e elimina 82
+       falhas. Restam 20 falhas + 78 erros que exigem diagnóstico próprio
+       (não são do conflito de plugins) — registrado, não investigado.
+  - **Dívida LGPD — varredura de sentinela (responde a pergunta aberta há
+    6 rodadas com artefato executável).** Em vez de auditar o grafo de FK
+    por TABELA (o que as rodadas 219/228/235/246 vinham fazendo), o
+    desenho cria um cliente com um token único em cada campo textual
+    (inclusive dentro do `endereco_json`), semeia linhas ligadas, chama o
+    `DELETE /lgpd/clients/{id}/data` REAL e depois varre o **banco
+    inteiro** via `information_schema` (toda coluna text/varchar/jsonb)
+    procurando o token. É auto-validante: acha os gaps sozinho, sem
+    ninguém apontar onde olhar. Resultado: das 17 colunas semeadas, 12
+    foram corretamente anonimizadas e **5 sobreviveram**:
+    `clients.endereco_json` (o mais grave, já reportado na rodada anterior
+    e nunca corrigido), `process_movements.descricao`,
+    `process_deadlines.descricao` (os dois já na lista dos 8) — e **dois
+    achados NOVOS que 8 ocorrências anteriores nunca viram**:
+    **`documents.titulo`** e **`opportunities.titulo`**. Os dois novos
+    escaparam justamente porque a auditoria anterior raciocinava por
+    tabela, e ambas as tabelas JÁ estão cobertas pelo erase — só as
+    colunas de título ficaram de fora (o erase limpa `conteudo_texto` e
+    `descricao` ao lado delas). É a prova de que a guarda estrutural por
+    tabela (L1) não bastaria, e de que a varredura por sentinela (L2) é o
+    desenho certo.
+  - **Impacto visível do gap de LGPD, provado ponta a ponta**: depois de um
+    esquecimento com HTTP 200, (a) `GET /lgpd/clients/{id}/export` — o
+    próprio endpoint de portabilidade LGPD — devolve o token em
+    `oportunidades_crm[].titulo` e `documentos[].titulo`, com
+    `"descricao":"[Conteúdo removido...]"` na MESMA linha JSON (prova de
+    que o erase passou por ali e limpou um campo e não o outro); (b)
+    `GET /clients/geolocalizacao/auditoria` ainda lista o titular com
+    coordenada exata; (c) `GET /clients` (fonte do `/mapa`) devolve
+    `nome="[ANONIMIZADO-...]"` mas `logradouro` e `lat/lng` intactos — o
+    titular "esquecido" **continua plotado no mapa, no endereço dele**,
+    confirmado por Playwright real. Liga a dívida mais antiga do projeto à
+    superfície mais nova (a Fase 257 elevou a precisão de centro de CEP
+    para rua+número via Nominatim, agravando o dado que sobrevive).
+  - **`RateLimitMiddleware` — causa, impacto e ausência de reparo, os três
+    provados** (achado reportado na rodada anterior e na Fase 257, nunca
+    corrigido): `redis-cli MONITOR` mostra `INCRBY` e `EXPIRE` como **dois
+    round-trips separados**, sem MULTI/EXEC nem EVAL
+    (`core/middleware.py:151-153`); o estado defeituoso (chave com
+    `TTL -1`) é alcançável; e com a chave nesse estado o login legítimo do
+    ADMIN devolve **429, 429, 429** indefinidamente. Grep confirma que
+    **não existe nenhum caminho de `DEL`/`EXPIRE` de reparo** em `app/`.
+    **Segunda instância do mesmo padrão descoberta**: as chaves
+    `login_fail:{ip}:{email}` (`api/v1/auth.py:40`) usam o mesmo
+    `INCR`+`EXPIRE` separado. Nota operacional: a dívida sabota a própria
+    sessão de teste — foi preciso um watchdog limpando `ratelimit:*` a
+    cada 20s para a rodada rodar, e essa necessidade é ela mesma parte da
+    evidência.
+  - **Achado novo — gate de papel que existe só na navegação.** Classe
+    nunca auditada em 10 rodadas. Instrumento novo (H1) faz introspecção
+    do app em execução e extrai, por rota, os **três** mecanismos de gate
+    do projeto: `Depends(require_role)`, checagem inline
+    (`current_user.role not in (...)`) e helper (`_require_admin`).
+    Cruzado com `frontend/src/lib/nav.ts` (H2). Provado ao vivo com um
+    token real de **ASSISTENTE** (papel mais baixo atribuível — o menu
+    esconde `/relatorios` e `/tv` dele): recebe **HTTP 200** em
+    `/system/analytics/financeiro` (receitas, despesas e saldo do
+    escritório), `/system/analytics/agentes`, `/system/analytics/
+    processos`, `/system/metrics`, `/processes/agenda`, `/tenant/billing`,
+    `/integrations/hub` e `/integrations/hub/.../last-sync/arquivos`.
+    **A prova de que é descuido e não política são as contradições
+    internas**: `/financial/summary` e `/financial/monthly` devolvem
+    **403** para o mesmo usuário, e `/tenant/billing/historico` devolve
+    **403** enquanto `/tenant/billing` devolve 200.
+  - **Calibração honesta (o oposto de inflar achado)**: a varredura de
+    contrato das 95 rotas GET sem parâmetro com o token de ASSISTENTE
+    mostrou **49 bloqueando corretamente** (todo `/financial/*`, CRM,
+    auditoria, `/reports/*`, `/billing`, `/portal/*`, `/system/brain/*`,
+    `/tenants`, `/users`) contra 42 liberadas. Ou seja: o problema é um
+    conjunto pequeno e enumerável de endpoints de leitura, não um colapso
+    sistêmico de autorização.
+  - **Quatro hipóteses de leitura de código DESCARTADAS antes de virarem
+    achado falso** — registro deliberado, porque é o principal risco
+    metodológico desta classe de auditoria: (1) `WS /ws/{user_id}` montado
+    sem dependência de router *parecia* permitir escuta cross-user, mas o
+    handler valida `payload["sub"] == user_id`, blacklist de `jti` e
+    `is_active` (`api/v1/ws.py:22-52`); (2) `DELETE /documents/{doc_id}`
+    *parecia* aceitar qualquer papel staff — checa ADMIN/SOCIO/SUPERADMIN
+    no corpo; (3) `GET /system/ai-costs` e `PUT /system/ai-budgets`
+    *pareciam* ter gate só no menu — checam o papel no corpo; (4)
+    `PUT`/`DELETE /petition-templates/{id}` *pareciam* sem escopo de
+    tenant — escopam via helper `_get_owned` (`petition_templates.py:98-102`).
+    Nos 4 casos o sinal estático (decorador/grep) era insuficiente: o
+    projeto usa 3 mecanismos de gate diferentes, e uma auditoria que olhe
+    só um deles produz falso positivo em escala.
+  - **Telas nunca auditadas em 10 rodadas** (`/custos-ia`, `/visual-law`,
+    `/admin/faturamento`, `/admin/plano`, `/admin/escritorios`,
+    `/admin/relatorios-banca`, `/admin/usuarios`): walkthrough Playwright
+    real como ADMIN — **todas as 7 renderizam com dado real**, chamando os
+    endpoints esperados, sem erro visível e sem nenhum bug da classe
+    "placebo" (que o projeto já teve 4 vezes). Zero diálogo nativo
+    (invariante da Fase 241 reconfirmado). Único ruído de console: o
+    warning pré-existente de React `key` em `/dashboard`, não relacionado.
+  - **Reconfirmado sem achado**: enforcement do teto de usuários do plano
+    (bloqueou o 11º usuário com mensagem clara durante a própria rodada);
+    isolamento de tenant nas rotas exercitadas; gates de `/audit`,
+    `/financial/*`, `/reports/*`, `/portal/*` e `/system/brain/*`.
+  - **Limitações declaradas (não escondidas)**: (a) **Qdrant servidor real
+    continua impossível neste sandbox** — Docker indisponível e o download
+    do binário do GitHub Releases dá **403 no proxy** (testado nesta
+    rodada); o `:memory:` não aplica enforcement de índice de payload,
+    então o índice `embedding_provider` criado na Fase pós-260.5 segue sem
+    validação contra servidor real, com risco residual documentado no
+    plano; (b) egress externo bloqueado (Google, Comunica/DJEN, BrasilAPI,
+    Nominatim, Meta, Stripe); (c) das 298 rotas, ~42 foram exercitadas ao
+    vivo com asserção real e 95 varridas por contrato — o restante fica
+    **nominalmente declarado como não coberto**, com a matriz H1 completa
+    salva para a próxima rodada continuar de onde esta parou.
+  - **Instrumentos deixados prontos para a próxima rodada** (scratchpad,
+    não commitados): H1 (matriz de porteiros por introspecção, com os 3
+    mecanismos de gate), H2 (diff `nav.ts` × gate real) e H3 (varredura de
+    sentinela do LGPD — o artefato que a pergunta aberta há 6 rodadas
+    pedia). Recomendação registrada: promover o H3 a teste automatizado.
+  - **O que esta rodada deixou de propósito para a próxima**: diagnóstico
+    das 20 falhas + 78 erros residuais da suíte (não causados pelo
+    conflito de plugins); `portal.py`, `billing.py` e `publications.py`
+    exercitados só por contrato (GET), não pelo fluxo de escrita;
+    `ContractAgent` e `OrchestrationAgent` (zero testes) não exercitados;
+    `process_polling.poll_all_processes` (maior volume de escrita
+    automática, zero testes) não exercitada; e o cache do `retrieve()` sem
+    o provedor na chave, confirmado por leitura mas não reproduzido ao
+    vivo (exigiria 2 usuários com BYOK de provedores distintos).
