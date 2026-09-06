@@ -275,6 +275,40 @@ rediscobertas do zero a cada sessão — contexto completo de cada uma em
   `Depends(require_role(...))`, checagem inline no corpo
   (`if current_user.role not in (...)`) e helper (`_require_admin` em
   `users.py`). Ao avaliar se uma rota está protegida, cheque os três.
+- **Alembic: consertado na fase pós-260.7 depois de nunca ter rodado.** Ficam
+  aqui a causa e as 3 armadilhas que ele deixou. Eram **3 bugs empilhados**:
+  (a) `alembic.ini` declarava `sqlalchemy.url = %(DATABASE_URL)s`, interpolação
+  que o configparser resolve contra a própria seção e nunca contra o ambiente;
+  (b) `env.py` a lia como 2º argumento de `os.getenv`, que o Python avalia
+  SEMPRE — então falhava mesmo com a env var setada; (c) a cadeia de revisões
+  tinha **2 elos errados** (`002.down_revision="001_initial_schema"` vs.
+  `001.revision="001"`; `003.down_revision="002"` vs.
+  `002.revision="002_add_tenant"`), mascarados por (a)+(b). Aparato inteiro
+  nasceu assim no commit `057893b` (Fase 136) e nunca rodou em 182 commits.
+  **Três coisas a não reaprender do zero**:
+  - **Nunca rodar `upgrade head` num banco deste projeto.** As 4 migrações
+    conhecem 26 tabelas; o app tem 58. Medido: `upgrade head` num banco VAZIO
+    produz 27 tabelas + o trigger de `audit_logs` — schema diferente de todo
+    ambiente existente. Quem monta schema aqui é `create_all` +
+    `DDL_IDEMPOTENTE`. Por isso `start.sh` **carimba** (`stamp head`) qualquer
+    banco sem carimbo, vazio ou não, e só faz `upgrade` no que já tem carimbo
+    — aí sim para migrações futuras, que funcionam (provado com uma migração
+    de teste: `004 → 999_probe`, upgrade e downgrade).
+  - **Model fora do `app/models/__init__.py` é armadilha de DROP TABLE.**
+    `push_subscription` e `ai_call_log` só entravam no metadata porque routers
+    os importam em runtime; o `env.py` faz só `import app.models`, então o
+    autogenerate propunha apagar as 2 tabelas. Fechado com registro explícito
+    + guarda em `tests/test_unit/test_schema_metadata_guard.py`, que mede num
+    **interpretador separado** — medir no processo do pytest dá sempre
+    "presente" (o conftest importa `app.main`) e o teste passa com o fix
+    revertido. Foi o 1º desenho, e falhou nessa exata armadilha.
+  - **O passo de schema do CI não era "o mesmo caminho do boot"**, apesar do
+    nome: rodava `create_all` + seed e pulava o DDL idempotente. O banco do CI
+    ficava sem 9 índices que produção tem, 3 deles constraints de integridade —
+    e `test_tenant_user_unique_constraints` **pulava** por ausência do índice
+    em vez de proteger (medido: 2 skipped → 2 passed depois do fix). O bloco
+    virou `events.py::DDL_IDEMPOTENTE` + `aplicar_ddl_idempotente(engine)`,
+    chamado pela `lifespan` E pelo CI.
 - **Egress de rede bloqueado no sandbox de desenvolvimento** (não em
   produção — Railway tem egress irrestrito): domínios externos como
   `brasilapi.com.br`, `googleapis.com`, `graph.facebook.com`,
@@ -721,11 +755,11 @@ de código, por isso ficam só documentados aqui, não implementados:
     verificação acima não confirmou; e a exclusão não cobre `user_agent`/
     `ip_address`. O log é a prova do esquecimento e o último lugar onde o
     esquecido sobrevive.
-  - **Corolário de engenharia, registrado e não corrigido** (não é o débito
-    jurídico, mas nasceu dele): o alembic quebrado significa que **nenhuma
-    migração jamais roda** neste projeto — todo schema vem de `create_all` +
-    os `ALTER TABLE` idempotentes de `events.py`. Vira fase própria se o
-    usuário quiser.
+  - **Corolário de engenharia — RESOLVIDO na fase pós-260.7** (não era o
+    débito jurídico, mas nasceu dele): o alembic estava quebrado e nenhuma
+    migração jamais rodava. Consertado; o trigger **continua deliberadamente
+    não criado** em nenhum caminho (é a pergunta 6 do dossiê, do escritório).
+    Ver a armadilha "Alembic" abaixo.
 - **Termo de Uso da API Pública do CNJ DataJud vs. uso comercial** (achado
   da Fase 217, pesquisa de APIs governamentais) — o sistema já integra o
   DataJud (`integrations/tribunais/cnj.py`) desde antes desta sessão pra

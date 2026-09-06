@@ -5985,3 +5985,93 @@ cross-tenant, flakiness de teste) já tem um padrão de causa conhecido.
     adicionar o débito do DataJud à lista `PENDENCIAS` de `/sobre` (hoje só a
     retenção aparece lá — assimetria conhecida), e a correção do
     `alembic.ini`/migrações que nunca rodam.
+
+- **Fase pós-260.7 — o alembic que nunca rodou, e a deriva de schema que
+  ninguém tinha medido.** Nasceu como corolário do levantamento anterior: ao
+  investigar por que `audit_logs` não tinha a trava de imutabilidade, o achado
+  real foi que o aparato de migração inteiro estava morto. Usuário escolheu,
+  via pergunta, "consertar e carimbar" + "medir a deriva e já aplicar o que
+  for seguro".
+  - **Eram 3 bugs empilhados, não 1.** (a) `alembic.ini:6` declarava
+    `sqlalchemy.url = %(DATABASE_URL)s` — interpolação que o configparser
+    resolve contra a própria seção, nunca contra `os.environ`; (b)
+    `env.py:22` a lia como 2º argumento de `os.getenv`, avaliado SEMPRE, então
+    falhava com a env var setada; (c) a cadeia tinha **2 elos errados**
+    (`002.down_revision="001_initial_schema"` vs. `001.revision="001"`;
+    `003.down_revision="002"` vs. `002.revision="002_add_tenant"`).
+    **Prova limpa dos dois primeiros de uma vez**: `alembic current` (precisa
+    da URL) morria na interpolação, enquanto `alembic history` (não precisa)
+    morria direto em `KeyError: '001_initial_schema'` — o bug (c) estava
+    mascarado por (a)+(b). Depois de corrigir só (a)+(b), `current` avançou e
+    passou a morrer em `Can't locate revision`, confirmando (c) como real.
+  - **Extensão medida no git**: `alembic.ini`, `env.py` e as 4 migrações
+    entraram todas no commit `057893b` (Fase 136, 2026-07-31) já quebradas —
+    182 commits sem nunca rodar. A cadeia conhece 26 tabelas; o metadata tem
+    58 (~45% de cobertura).
+  - **Achado que mudou o desenho, e só apareceu porque testei**: o plano
+    original mandava `upgrade head` em banco vazio. Executado, isso produziu
+    **27 tabelas + o trigger de imutabilidade de `audit_logs` + as extensões
+    `uuid-ossp`/`pgcrypto`** — ou seja, um schema híbrido diferente de todo
+    ambiente existente E respondendo sozinho a pergunta jurídica em aberto do
+    dossiê. Redesenhado: `start.sh` **carimba** (`stamp head`) qualquer banco
+    sem carimbo, vazio ou não, e só faz `upgrade` no que já tem carimbo.
+    Verificado nos 3 caminhos contra bancos descartáveis, com `trigger=(nenhum)`
+    em todos. Quem monta schema neste projeto é `create_all` +
+    `DDL_IDEMPOTENTE`, em todo ambiente.
+  - **Prova de que o conserto vale**: migração de teste `999_probe` aplicou
+    sobre banco carimbado (`004 → 999_probe`), criou a tabela, atualizou o
+    carimbo, e `downgrade -1` desfez — arquivo removido em seguida, nada
+    commitado. É a 1ª vez que uma migração roda neste projeto.
+  - **Deriva medida pela 1ª vez, com 2 ferramentas** (o autogenerate é cego a
+    trigger/função/extensão). Resultado tranquilizador na direção que importa:
+    **nenhuma tabela e nenhuma coluna faltando** no banco real; só 1 índice
+    divergente, e por nome (`ix_financial_entries_grupo_recorrencia` do
+    `events.py` vs. `..._grupo_recorrencia_id` que o model declara). A deriva
+    real estava em outro lugar — nos 2 itens abaixo.
+  - **Armadilha de DROP TABLE desarmada**: `app/models/__init__.py` importava
+    24 módulos e **não** `push_subscription` nem `ai_call_log`. As 2 tabelas só
+    entravam no metadata porque routers as importam em runtime — suficiente
+    pro `create_all`, mas não pro `env.py`, que faz só `import app.models`.
+    Medido: metadata de 56 → 58 tabelas depois do registro explícito. Antes do
+    fix, o autogenerate propunha `DROP TABLE` nas duas.
+  - **O passo de schema do CI não era "o mesmo caminho do boot"**, apesar do
+    nome: rodava `create_all` + seed e pulava o bloco de DDL idempotente.
+    Medido por diff de `pg_indexes` entre um banco do caminho do CI e o banco
+    real: **9 índices a menos**, 3 deles constraints de integridade
+    (`tenants_slug_unique_idx`, `users_email_unique_idx`,
+    `uq_process_movements_dedup`). Consequência concreta: o
+    `test_tenant_user_unique_constraints.py` faz `pytest.skip` quando o índice
+    não existe — ou seja, **era decorativo no CI**. Prova do ganho: contra
+    banco sem o bloco, `2 skipped`; com o bloco, `2 passed`. O bloco virou
+    `events.py::DDL_IDEMPOTENTE` (constante) + `aplicar_ddl_idempotente(engine)`,
+    chamado pela `lifespan` e pelo CI. Refator conferido como movimentação
+    pura: os 146 statements são byte-idênticos, só a linha de abertura mudou.
+  - **Guarda nova** — `tests/test_unit/test_schema_metadata_guard.py`: (1) todo
+    `__tablename__` de `app/models/*.py` tem que estar no metadata de um
+    `import app.models` puro; (2) nenhuma tabela/coluna do metadata pode faltar
+    no banco real. **O 1º desenho caiu na armadilha já documentada**: media no
+    próprio processo do pytest, onde o `conftest` já importou `app.main` (que
+    puxa os routers, que importam os models avulsos) — passava com o fix
+    revertido. Refeito medindo num **interpretador separado** via `subprocess`;
+    aí sim reprova com o fix revertido e passa com ele.
+  - **Deliberadamente NÃO aplicado**, cada um com motivo: o trigger e a função
+    de imutabilidade de `audit_logs` (pergunta 6 do dossiê, decisão do
+    escritório — e ligá-la bloquearia um expurgo futuro); as extensões
+    `uuid-ossp`/`pgcrypto` (exigência morta — nada no código usa
+    `gen_random_uuid`/`crypt`/`digest`; toda criptografia e hash é Python-side);
+    e os 2 índices parciais `idx_deadlines_date`/`idx_approvals_status`, que só
+    existem na migração 001 e que os models nunca declararam — seriam decisão
+    de performance, não correção de deriva.
+  - **Registrado, não corrigido**: existem **dois `railway.toml` divergentes** —
+    o da raiz roda `sh start.sh`, o de `backend/` sobe uvicorn direto e pularia
+    o `start.sh` inteiro (sem watchdog de Celery, sem alembic). Qual governa
+    não se decide pelo código, mas o log de crash-loop que o usuário colou na
+    Fase 249 só existe em `start.sh:142` — logo o da raiz é o ativo e o de
+    `backend/` é config morta. Mexer em deploy merece decisão própria.
+  - **Verificado**: `alembic history`/`heads`/`current`/`upgrade`/`downgrade`
+    funcionando; os 3 caminhos do `start.sh` exercitados contra bancos
+    descartáveis (`sh -n` limpo); guarda nova provada nos dois sentidos;
+    `ruff check app/` limpo; suítes na configuração exata do runner (banco do
+    zero pelo caminho do CI + `REDIS_URL=` vazio) — `tests/test_unit/` **915
+    passed, 4 skipped**, `tests/test_api/` **185 passed, 9 skipped**, zero
+    falhas; zero `migration_warning` ao aplicar os 146 DDL num banco novo.

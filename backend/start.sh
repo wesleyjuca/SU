@@ -44,15 +44,66 @@ if [ -n "$MIGRATE_FROM_URL" ]; then
   rm -f /tmp/legacy_backup.dump
 fi
 
-# Auto-migração best-effort: em bancos legados criados via create_all (sem
-# carimbo do alembic), `upgrade head` falha em "table already exists" — não pode
-# derrubar o boot (set -e). O startup do app aplica create_all + ALTERs de
-# qualquer forma; para alinhar o alembic num banco legado, rode uma única vez:
-#   alembic stamp head
-echo "[AFJ] Auto-migrando banco de dados (alembic upgrade head)…"
-if ! alembic upgrade head; then
-  echo "[AFJ][WARN] alembic falhou (banco legado sem carimbo?) — seguindo; o startup aplica create_all/ALTERs."
-fi
+# Auto-migração best-effort. Até a fase pós-260.7 o alembic NUNCA rodou neste
+# projeto (interpolação quebrada no alembic.ini + 2 elos errados na cadeia de
+# revisões), então todo banco existente foi montado por create_all + o DDL
+# idempotente de events.py e não tem carimbo nenhum. Rodar `upgrade head` nesses
+# bancos falharia em "table already exists" — o certo é CARIMBAR, não migrar.
+# Os 3 casos reais, distinguidos abaixo:
+#   qualquer banco SEM carimbo -> stamp head   (alinha sem tocar no schema)
+#   banco JÁ carimbado         -> upgrade head (aplica migrações FUTURAS)
+#
+# Por que banco vazio também é carimbado, e não migrado: verificado nesta fase
+# que `upgrade head` num banco vazio produz um schema DIFERENTE do de todo
+# ambiente existente — 27 tabelas (a cadeia conhece 45% do schema; o app tem 58)
+# mais o trigger de imutabilidade de audit_logs, cuja criação é decisão jurídica
+# em aberto (docs/juridico/RETENCAO_AUDIT_LOGS.md). Quem monta o schema neste
+# projeto é o create_all + DDL_IDEMPOTENTE, em TODO ambiente; o alembic serve
+# daqui pra frente, para migrações novas.
+# Nada aqui pode derrubar o boot: o app aplica create_all + DDL de qualquer forma.
+echo "[AFJ] Auto-migrando banco de dados (alembic)…"
+ALEMBIC_ESTADO="$(python3 - <<'PYEOF' 2>/dev/null || echo indeterminado
+import asyncio, os, re, sys
+
+url = os.getenv("DATABASE_URL", "")
+if not url:
+    print("indeterminado"); sys.exit(0)
+# asyncpg fala o DSN puro, sem o dialeto do SQLAlchemy
+dsn = re.sub(r"^postgresql\+asyncpg://", "postgresql://", url)
+
+async def main():
+    import asyncpg
+    con = await asyncpg.connect(dsn, timeout=10)
+    try:
+        carimbado = await con.fetchval("SELECT to_regclass('public.alembic_version')")
+        # Uma tabela conhecida basta pra dizer se o schema já existe.
+        montado = await con.fetchval("SELECT to_regclass('public.users')")
+    finally:
+        await con.close()
+    if carimbado: print("carimbado")
+    elif montado: print("montado_sem_carimbo")
+    else: print("vazio")
+
+asyncio.run(main())
+PYEOF
+)"
+
+case "$ALEMBIC_ESTADO" in
+  vazio|montado_sem_carimbo)
+    echo "[AFJ] Banco sem carimbo do alembic — aplicando 'stamp head' (não altera schema)."
+    if ! alembic stamp head; then
+      echo "[AFJ][WARN] alembic stamp falhou — seguindo; o startup aplica create_all/DDL."
+    fi
+    ;;
+  carimbado)
+    if ! alembic upgrade head; then
+      echo "[AFJ][WARN] alembic upgrade falhou — seguindo; o startup aplica create_all/DDL."
+    fi
+    ;;
+  *)
+    echo "[AFJ][WARN] estado do alembic indeterminado — pulando; o startup aplica create_all/DDL."
+    ;;
+esac
 
 CELERY_PID=""
 CELERY_START_TS=0

@@ -89,12 +89,17 @@ jobs:
           from app.db.base import Base
           import app.models  # registra os modelos no metadata
           from app.config import settings
-          from app.core.events import _seed_default_data
+          from app.core.events import _seed_default_data, aplicar_ddl_idempotente
 
           async def main():
               engine = create_async_engine(settings.DATABASE_URL)
               async with engine.begin() as conn:
                   await conn.run_sync(Base.metadata.create_all)
+              # Fase pós-260.7 — sem isto o passo NÃO era 'o mesmo caminho do boot':
+              # faltavam 9 índices que produção tem, 3 deles constraints de
+              # integridade, e test_tenant_user_unique_constraints pulava por
+              # ausência do índice em vez de proteger.
+              await aplicar_ddl_idempotente(engine)
               await _seed_default_data(engine)
               await engine.dispose()
 
