@@ -5900,3 +5900,88 @@ cross-tenant, flakiness de teste) já tem um padrão de causa conhecido.
     `ruff` limpo. Suítes verdes **na configuração exata do runner** (banco
     criado do zero + `REDIS_URL=` vazio): `tests/test_unit/` 911 passes,
     `tests/test_api/` 185 passes, zero falhas.
+
+- **Fase pós-260.6 — levantamento técnico dos 2 débitos que dependem do
+  escritório** (retenção de `audit_logs` e Termo de Uso do CNJ DataJud).
+  Usuário escolheu, via pergunta, os "2 débitos que dependem de você", com o
+  escopo explícito de *preparar o levantamento técnico para embasar a decisão,
+  sem decidir prazo nem conformidade*. Confirmou depois: entregável em
+  **markdown no repo + Artifact**, e **nenhuma mudança em código de produto**
+  (recusou explicitamente o mecanismo de expurgo inerte e a atribuição de
+  fonte na UI — viram fase nova se e quando o parecer pedir).
+  - **Entregáveis**: `docs/juridico/RETENCAO_AUDIT_LOGS.md` e
+    `docs/juridico/DATAJUD_TERMO_DE_USO.md` (pasta nova; o repo não tinha
+    `docs/`), escritos para leitor jurídico — cada afirmação com
+    arquivo:linha, cada seção terminando nas perguntas que só o escritório
+    responde, e uma seção final do que NÃO foi verificável. Mais um Artifact
+    navegável cobrindo os dois, para encaminhar ao advogado.
+  - **O achado que muda a premissa do débito de retenção**: `audit_logs`
+    **não é imutável**. `trg_audit_logs_immutable` só existe na DDL de
+    `alembic/versions/001_initial_schema.py:415-428`, e `alembic upgrade head`
+    **falha incondicionalmente** — `alembic.ini:6` declara
+    `sqlalchemy.url = %(DATABASE_URL)s`, uma interpolação que o configparser
+    não resolve; o erro vem de `get_section_option` no carregamento do
+    config, ANTES de qualquer conexão, e se reproduz com `DATABASE_URL`
+    exportado. Como `start.sh:52-54` roda a migração em best-effort e cai em
+    `create_all` (que não cria trigger), o schema real nunca ganha a trava.
+    Medido no banco local: `pg_trigger` para `audit_logs` **vazio**,
+    `alembic_version` **não existe**, e `UPDATE`/`DELETE` numa linha
+    **executam** (testado dentro de `BEGIN`/`ROLLBACK`; 3.948 linhas conferidas
+    intactas antes e depois). Um banco-sonda criado do zero confirmou que o
+    `alembic upgrade head` falha nele também, e foi descartado ao final.
+    **Consequência dupla, registrada nos dois sentidos**: para a LGPD, o
+    obstáculo ao expurgo pode não existir; para o valor probatório, um
+    registro alterável é prova mais fraca — inclusive da própria execução do
+    esquecimento — e `/sobre` descreve o log como "imutável" ao usuário.
+    Produção não verificada (sem acesso); o dossiê traz o SQL read-only.
+  - **Hipótese do reconhecimento refutada pela medição**: o Explore agent
+    levantou uma possível deriva de schema (a migração 001 cria a tabela sem
+    `user_agent`/`session_id`, e nenhum `ALTER` os adiciona — logo um banco
+    migrado teria INSERT quebrado e auditoria silenciosamente morta). Como a
+    migração nunca roda, o schema vem do model e as colunas existem — as duas
+    "derivas" são na verdade dois lados do mesmo fato, e são mutuamente
+    exclusivas. Ficou o corolário de engenharia: **nenhuma migração alembic
+    jamais rodou neste projeto**; todo schema vem de `create_all` + os
+    `ALTER TABLE` idempotentes de `events.py`. Registrado, não corrigido
+    (fora do escopo autorizado).
+  - **Correção ao próprio CLAUDE.md, para menos**: a superfície de PII de
+    `audit_logs` era superestimada. O middleware (`core/middleware.py:88-115`)
+    grava sempre `ip_address`/`user_agent`/`user_id`, mas **nunca**
+    `old_value`/`new_value`, e nunca corpo de request, query string ou outro
+    header. Esses dois campos só vêm de 3 call sites (`approvals.py:209-210`,
+    `google_integration.py:200`, `financial.py:358-364`) — medido: **40 e 46
+    linhas de 3.948 (~1%)**. Medição de volume (12 dias): 3.948 linhas,
+    ~329/dia, 1.384 kB ⇒ ~0,35 kB/linha; 3.496 (88,6%) do middleware, 452
+    (11,4%) dos call sites — os dois números fecham exatamente com a contagem
+    de linhas que têm `ip_address`, o que serviu de conferência cruzada.
+  - **DataJud — 4 achados que o parecer precisa ter**: (1) **não existe
+    credencial por escritório** — `CNJ_API_KEY` (`config.py:57-61`) tem como
+    default a chave que o próprio CNJ publica na wiki, embutida no código, e
+    não há registro de aceite de termo em lugar nenhum; a pergunta deixa de
+    ser "aceitou ao se credenciar?" e vira "existe aceite?". (2) **o dado
+    derivado sai do escritório** — `GET /portal/processes/{id}`
+    (`portal.py:146-217`) entrega até 30 movimentações **com o resumo por IA**
+    ao cliente final, e é justamente a tela que NÃO atribui a fonte (as 3 que
+    dizem "CNJ DataJud" são internas). (3) **segunda camada de derivação** —
+    `ai_summary` por LLM (`process_agent.py:104-122`), detecção de prazo, e
+    `citacao_check` carimbando "confirmada"/"não verificável" dentro de
+    petições protocoláveis (`documents.py:1012`, `petition_agent.py:131`);
+    verificado que NÃO acontece export CSV/PDF/XLSX, e-mail/WhatsApp, webhook,
+    API pública própria nem ingestão no RAG. (4) **não há kill switch, mas há
+    alternativa desligada** — `registry.py:14-20` instancia `DataJudFonte()`
+    incondicionalmente e `processes.py:762` instancia o cliente direto, sem
+    flag por env ou tenant; em compensação PDPJ/Escavador/Judit/Jusbrasil já
+    implementam `movimentos()` e nenhum caminho de produção as chama pra isso
+    (só pra partes, `oab_capture.py:128-164`) — trocar de fonte é ligar peça
+    existente, o custo real é comercial.
+  - **Verificado**: cada citação dos 2 dossiês relida contra o arquivo antes
+    de publicar (2 off-by-one do reconhecimento corrigidos:
+    `test_lgpd_sentinela.py:31-39`, `system.py:1248-1304`); varredura de
+    linguagem prescritiva nos dois documentos retornou só os próprios avisos
+    de "não decide nada"; aritmética das projeções conferida. Zero mudança em
+    `backend/app` ou `frontend/src`.
+  - **Fora de escopo, registrado**: mecanismo de expurgo/arquivamento
+    (inclusive a versão inerte), atribuição "fonte: CNJ DataJud" no Portal,
+    adicionar o débito do DataJud à lista `PENDENCIAS` de `/sobre` (hoje só a
+    retenção aparece lá — assimetria conhecida), e a correção do
+    `alembic.ini`/migrações que nunca rodam.

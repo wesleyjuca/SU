@@ -685,15 +685,47 @@ de código, por isso ficam só documentados aqui, não implementados:
   `app/config.py`) quando configurado, com fallback automático pro caminho
   legado (base64 inline) sem credenciais. Sem backfill das linhas antigas
   — ficam no caminho legado indefinidamente, não é bug.
-- **Retenção de auditoria (LGPD)** — `audit_logs` é imutável por trigger de
-  banco (`trg_audit_logs_immutable`) e cresce indefinidamente (1 linha por
-  request de escrita, não só por evento de negócio) — sem qualquer rotina de
-  expurgo/arquivamento. A LGPD pede retenção limitada de dados pessoais (o
-  payload pode conter IP, user_agent, `old_value`/`new_value` em JSONB), o
-  que tensiona com esse design. Definir um prazo de retenção e um mecanismo
-  de arquivamento (a tabela não aceita `DELETE` direto por causa do trigger)
-  é uma decisão que precisa de orientação jurídica do escritório antes de
-  qualquer implementação — não decidir um prazo arbitrário sem essa validação.
+- **Retenção de auditoria (LGPD)** — **levantamento técnico pronto em
+  `docs/juridico/RETENCAO_AUDIT_LOGS.md`** (fase pós-260.6); segue travado
+  na decisão do escritório, que é quem define o prazo. `audit_logs` cresce
+  indefinidamente (1 linha por request de escrita autenticado, não por
+  evento de negócio) sem nenhuma rotina de expurgo/arquivamento, e a LGPD
+  pede retenção limitada de dado pessoal. **Duas correções ao que este
+  parágrafo dizia antes, ambas medidas, não deduzidas**:
+  - **A tabela NÃO é imutável.** `trg_audit_logs_immutable` só existe na DDL
+    de `alembic/versions/001_initial_schema.py:415-428`, e `alembic upgrade
+    head` **falha incondicionalmente** — `alembic.ini:6` declara
+    `sqlalchemy.url = %(DATABASE_URL)s`, interpolação que o configparser não
+    resolve, e o erro acontece no carregamento do config, antes de qualquer
+    conexão (reproduzido com `DATABASE_URL` exportado). Como `start.sh:52-54`
+    roda a migração em best-effort e cai em `create_all` (que não cria
+    trigger), o banco real não tem a trava: no banco local desta sessão,
+    `pg_trigger` para `audit_logs` volta **vazio**, não existe
+    `alembic_version`, e `UPDATE`/`DELETE` numa linha **executam** (testado
+    dentro de transação desfeita, 3.948 linhas intactas). **Não confundir
+    com deriva de schema**: a migração 001 cria a tabela sem
+    `user_agent`/`session_id`; como ela nunca roda, o schema vem do model
+    atual e essas colunas existem. Produção não foi verificada (sem acesso);
+    o dossiê traz o SQL read-only.
+  - **A superfície de PII é menor do que se registrava.** O middleware
+    (`core/middleware.py:88-115`) grava sempre `ip_address`/`user_agent`/
+    `user_id`, mas **nunca** `old_value`/`new_value`, e nunca corpo de
+    request, query string ou outro header. `old_value`/`new_value` só vêm de
+    3 call sites (`approvals.py:209-210`, `google_integration.py:200`,
+    `financial.py:358-364`) — medido: 40 e 46 linhas de 3.948 (~1%).
+  - Medição local (12 dias): 3.948 linhas, ~329/dia, 1.384 kB ⇒ ~0,35 kB por
+    linha; 88,6% vêm do middleware, 11,4% dos call sites explícitos.
+  - **Nó a resolver**: `erase_client_data` nunca toca linhas pré-existentes
+    de `audit_logs` e o teste de sentinela exclui 4 colunas dela de propósito
+    (`test_lgpd_sentinela.py:31-39`) — justificando pela imutabilidade que a
+    verificação acima não confirmou; e a exclusão não cobre `user_agent`/
+    `ip_address`. O log é a prova do esquecimento e o último lugar onde o
+    esquecido sobrevive.
+  - **Corolário de engenharia, registrado e não corrigido** (não é o débito
+    jurídico, mas nasceu dele): o alembic quebrado significa que **nenhuma
+    migração jamais roda** neste projeto — todo schema vem de `create_all` +
+    os `ALTER TABLE` idempotentes de `events.py`. Vira fase própria se o
+    usuário quiser.
 - **Termo de Uso da API Pública do CNJ DataJud vs. uso comercial** (achado
   da Fase 217, pesquisa de APIs governamentais) — o sistema já integra o
   DataJud (`integrations/tribunais/cnj.py`) desde antes desta sessão pra
@@ -705,4 +737,29 @@ de código, por isso ficam só documentados aqui, não implementados:
   leitura jurídica do PDF completo do termo pra decidir se o uso atual
   está em conformidade — não decidir unilateralmente sem esse parecer.
   Mesma classe de pendência que a retenção de auditoria acima: registrada,
-  não resolvida arbitrariamente.
+  não resolvida arbitrariamente. **Levantamento técnico pronto em
+  `docs/juridico/DATAJUD_TERMO_DE_USO.md`** (fase pós-260.6), com 4 achados
+  que o parecer precisa ter na mão:
+  - **Não existe credencial por escritório** — `CNJ_API_KEY`
+    (`config.py:57-61`) tem como default a chave que o próprio CNJ publica
+    na wiki, embutida no código. Toda instalação chama com a mesma chave, e
+    não há registro de aceite de termo em lugar nenhum. Muda a pergunta de
+    "o escritório aceitou ao se credenciar?" para "existe aceite?".
+  - **O dado derivado sai do escritório** — `GET /portal/processes/{id}`
+    (`portal.py:146-217`) entrega até 30 movimentações **com o resumo por
+    IA** ao cliente final, e é justamente a tela que **não** atribui a fonte
+    (as 3 telas que dizem "CNJ DataJud" são todas internas). É o ponto
+    central pra leitura de "distribuir informação derivada".
+  - **Segunda camada de derivação**: `ai_summary` gerado por LLM
+    (`process_agent.py:104-122`), detecção de prazo, e `citacao_check`
+    carimbando "confirmada"/"não verificável" dentro de **petições
+    protocoláveis** (`documents.py:1012`, `petition_agent.py:131`).
+    Verificado que NÃO acontece: export CSV/PDF/XLSX, e-mail/WhatsApp,
+    webhook, API pública própria, ingestão no RAG.
+  - **Não há kill switch, mas há alternativa desligada** —
+    `registry.py:14-20` instancia `DataJudFonte()` incondicionalmente e
+    `processes.py:762` instancia o cliente direto; sem flag por env ou por
+    tenant. Em compensação, PDPJ/Escavador/Judit/Jusbrasil **já implementam
+    `movimentos()`** e nenhum caminho de produção as chama pra isso (só pra
+    partes, `oab_capture.py:128-164`) — trocar de fonte é ligar peça
+    existente, o custo real é comercial, não técnico.
