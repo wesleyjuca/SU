@@ -19,6 +19,8 @@ def poll_all_processes(self):
         from app.agents.brain.context import AgentContext
         from app.workers.task_lock import TaskLock
 
+        from app.agents.base.result import AgentStatus
+
         lock = TaskLock("poll_all_processes", ttl_seconds=1800)
         if not await lock.acquire():
             log.info("task_skipped_lock_held", task="poll_all_processes")
@@ -29,6 +31,13 @@ def poll_all_processes(self):
                 ctx = AgentContext(task_type="poll_all", task_input={"action": "poll_all"})
                 result = await agent.run(ctx)
                 log.info("process_poll_complete", status=result.status, output=result.output)
+                # `BaseAgent.run` NUNCA propaga: converte qualquer exceção em
+                # `AgentResult(FAILED)`. Sem checar o status aqui, uma falha
+                # total do lote retornava `None` como se tivesse dado certo —
+                # o `except` abaixo não disparava, o `self.retry` nunca rodava
+                # e o Beat seguia como se o ciclo tivesse acontecido.
+                if result.status == AgentStatus.FAILED:
+                    raise RuntimeError(result.error or "poll_all_processes falhou sem detalhe")
                 return result.output
         finally:
             await lock.release()

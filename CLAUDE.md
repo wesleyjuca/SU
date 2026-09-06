@@ -251,6 +251,25 @@ rediscobertas do zero a cada sessão — contexto completo de cada uma em
   `except Exception` genérico do endpoint e virou **502**, como se o Google
   tivesse falhado. Prefira `**_kwargs` nos fakes e desconfie de 5xx em teste
   com mock.
+- **`BaseAgent.run()` NUNCA propaga exceção** — converte em
+  `AgentResult(status=FAILED)`. Quem chama um agente e só lê `result.output`
+  trata falha total como sucesso: foi assim que `poll_all_processes` rodava a
+  cada 30 min, podia falhar inteiro e retornava `None` sem acionar retry nem
+  registrar `SyncRun`. **Sempre cheque `result.status`.** Cuidado extra em
+  lote: `max_retries = 2` re-executa a chamada inteira até 3× — no polling só
+  é tolerável porque a dedup por hash impede duplicata.
+- **Fail-soft pode engolir o sinal**: `CircuitBreaker.run(..., default=[])`
+  nunca levanta, então "a fonte está fora" e "não há novidade" viravam o mesmo
+  `[]` — um ciclo sem nenhuma consulta bem-sucedida saía `status="OK",
+  errors=0`. Ao usar um default fail-soft, garanta que o chamador consiga
+  distinguir os dois casos (em `datajud_fonte.py` isso virou o parâmetro
+  `sinalizar_falha`).
+- **Teste que substitui a função inteira não prova a correção dela.** O 1º
+  desenho do teste de "falha ao persistir deixa de contar como sucesso"
+  trocava `_save_movements` por um fake que levantava — e passava mesmo com a
+  correção revertida, porque o código corrigido nunca rodava. Injete a falha
+  numa dependência de DENTRO da função. Só se descobre isso rodando o teste
+  com o fix revertido, que por isso é obrigatório aqui.
 - **Três mecanismos de gate de papel coexistem** — auditar só um produz
   falso positivo em escala (aconteceu 4× numa única rodada):
   `Depends(require_role(...))`, checagem inline no corpo
@@ -641,9 +660,10 @@ nunca repetir o mesmo teste do zero.** Antes de planejar uma nova rodada:
   4 restantes: `tests/test_api/` zerado (27 falhas + 75 erros → 0) e promovido
   a gate; rate limiter com TTL garantido e auto-curável; gates de papel que só
   existiam no menu fechados em 10 rotas; e o provedor de embedding na chave de
-  cache do `retrieve()`. **A lista de "deixou pra próxima" está esgotada** —
-  exceto `ContractAgent`/`OrchestrationAgent`/`poll_all_processes`, que
-  seguem sem testes próprios.
+  cache do `retrieve()`. **A lista de "deixou pra próxima" está esgotada**,
+  incluindo `ContractAgent`/`OrchestrationAgent`/`poll_all_processes`, que
+  ganharam 28 testes na fase seguinte — e essa fase achou nos três o mesmo
+  padrão: **falha aparecendo como sucesso**, corrigido em 4 pontos.
 
 Histórico completo (achados, decisões de escopo, correções, verificações
 empíricas de cada fase) fica em `HISTORICO_FASES.md` — movido pra fora

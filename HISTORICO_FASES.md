@@ -5818,3 +5818,85 @@ cross-tenant, flakiness de teste) já tem um padrão de causa conhecido.
     "deixou pra próxima" da rodada pós-260.5 que não foi fechada aqui.
     Registrado também, sem corrigir: `User.role` é `String(50)` livre, sem
     enum, e `app/schemas/user.py::ROLES` é código morto que nem lista GESTOR.
+
+- **Testes para os 3 componentes de maior risco sem cobertura
+  (`ContractAgent`, `OrchestrationAgent`, `poll_all_processes`)** — último item
+  da lista "deixou pra próxima" da rodada pós-260.5. 28 testes novos. O que
+  começou como "cobrir o que não tinha teste" virou correção real: os três
+  compartilhavam o mesmo padrão — **falha aparecendo como sucesso**.
+  - **`ContractAgent` (10 testes)** — é o agente que EMITE o gate HITL que
+    termina em envio ao Clicksign. O outro extremo da cadeia já tinha teste
+    (`test_contract_auto_esign.py`); faltava o passo que produz o
+    `approval_required`. O teste central fixa que `document_id` do
+    `approval_required` e do `output` são o MESMO — se divergirem, a aprovação
+    aprova outro documento. Também: nunca devolve SUCCESS; default
+    `HONORARIOS`; `Document`+`Contract` nascem em RASCUNHO com o
+    `agent_run_id` certo; valor não numérico falha em vez de gravar lixo.
+    **Achado registrado, não corrigido**: sem `db`, o agente devolve um
+    `document_id` que não corresponde a nenhum `Document` (o uuid é gerado
+    antes e fora do `if self.db:`) — risco latente, já que no caminho real a
+    sessão é sempre injetada. Também: `templates_similares` faz uma consulta
+    de RAG cujo resultado nunca é usado.
+  - **`OrchestrationAgent` (9 testes)** — cobre os 4 caminhos de tradução do
+    state do grafo em `AgentResult`, inclusive a precedência de `error` sobre
+    `pending_approval` e o fato de que, quando o grafo para no gate,
+    `final_output` vem `None` (o `node_post_process` não roda) e o `output`
+    sai `{}`. **Dois achados**: (1) a docstring do módulo afirmava que a API e
+    o worker passam por esta classe — não passam; ambos montam o state à mão e
+    chamam `get_orchestrator_graph().ainvoke()` direto (confirmado por grep
+    independente, não só pelo agente de exploração). Docstring corrigida.
+    (2) **recursão latente sem guard**: `get_chain()` cai em
+    `["orchestration_agent"]` para `task_type` não mapeado e
+    `resolve_agent_class("orchestration_agent")` devolve a própria classe —
+    `execute → grafo → execute_chain_step → run → grafo`, com o mesmo
+    `thread_id`. As duas precondições estão fixadas em teste; o comportamento
+    em runtime segue **não confirmado** de propósito (um teste que possa
+    entrar em laço infinito não tem lugar num gate de CI).
+  - **`poll_all_processes` (9 testes) + 4 correções.** A tarefa de maior volume
+    de escrita automática (30 em 30 min, 4 tabelas). Decisão do usuário via
+    pergunta: testar E corrigir, porque escrever teste que afirmasse o
+    comportamento atual carimbaria o bug no contrato.
+    - **(a) Falha total virava sucesso, em dois pontos.** `BaseAgent.run`
+      converte qualquer exceção em `AgentResult(FAILED)`, e a task só lia
+      `result.output` — um lote totalmente falho retornava `None`, o `except`
+      não disparava e o `self.retry` nunca rodava. Além disso, a query que
+      monta o lote fica FORA do try/except do loop: uma exceção ali pulava o
+      bloco que grava os `SyncRun` e o ciclo sumia sem deixar nem "OK" nem
+      "ERRO". Corrigido nos dois: a task checa `result.status`, e o agente
+      grava um `SyncRun` de ERRO antes de propagar.
+    - **(b) Fonte fora do ar indistinguível de "sem novidades".** O
+      `CircuitBreaker` é fail-soft e devolvia `[]`; o processo contava como
+      polled com sucesso e o ciclo saía `status="OK", errors=0`.
+      `fetch_movements_datajud` ganhou `sinalizar_falha=True` (devolve `None`
+      quando a consulta não aconteceu; o default preserva o comportamento de
+      todos os outros chamadores) e o lote passou a contar
+      `fonte_indisponivel` separado de `errors`.
+    - **(c) Falha de persistência engolida.** `_save_movements` capturava
+      tudo, devolvia `novos = 0` e o processo ainda entrava em `polled_ok` —
+      andamento perdido sem sinal. Agora propaga; o loop contabiliza como erro
+      e segue para o próximo processo (o isolamento por processo é preservado).
+    - **Decisão registrada, não alterada**: `BaseAgent.max_retries = 2`
+      re-executa o lote inteiro até 3× com escritas já commitadas. Avaliado
+      durante a implementação e mantido: a dedup por hash torna a re-execução
+      inócua (não duplica movimentação nem notificação), e mudar
+      `max_retries` no `ProcessAgent` afetaria também os outros usos do
+      agente. Fica documentado em vez de alterado por precaução.
+  - **Confirmado como NÃO sendo problema** (para a próxima rodada não
+    reabrir): o isolamento de falha do polling é por PROCESSO, com os
+    processos de tenants diferentes intercalados na mesma lista — falha no
+    tenant A não derruba o B, diferente do bug histórico de
+    `google_drive_sync.py`. E `SyncRun` aqui nunca passa por RUNNING (nasce
+    finalizado), então o bug de "preso em RUNNING" é estruturalmente
+    impossível — o custo simétrico é que um `kill -9` no meio não deixa
+    registro nenhum, o que fica anotado.
+  - **Achado de método, registrado no CLAUDE.md**: o 1º desenho do teste da
+    correção (c) substituía `_save_movements` inteiro por um fake que levantava
+    — e **passava mesmo com a correção revertida**, porque o código corrigido
+    nunca rodava. Só a prova nos dois sentidos revelou isso. O teste foi
+    refeito injetando a falha em `importar_movimentos`, que é chamado de
+    dentro da função real.
+  - **Verificado**: as 4 correções provadas nos DOIS sentidos (cada teste
+    falha com o fix revertido — inclusive a (c), depois do teste corrigido).
+    `ruff` limpo. Suítes verdes **na configuração exata do runner** (banco
+    criado do zero + `REDIS_URL=` vazio): `tests/test_unit/` 911 passes,
+    `tests/test_api/` 185 passes, zero falhas.

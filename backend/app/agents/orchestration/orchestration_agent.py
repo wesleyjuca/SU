@@ -1,7 +1,24 @@
-"""OrchestrationAgent — ponto de entrada standalone para o orquestrador LangGraph.
+"""OrchestrationAgent — adaptador entre um `AgentContext` e o grafo LangGraph.
 
-Recebe um AgentContext com task_type + task_input e delega ao brain/orchestrator.
-Usado tanto pela API (/agents/trigger) quanto pelo Celery worker (agent_tasks).
+Recebe um `AgentContext` com `task_type` + `task_input`, invoca
+`brain/orchestrator` e traduz o state final em `AgentResult`.
+
+QUEM DE FATO USA (corrigido: a versão anterior deste docstring afirmava que a
+API e o worker passavam por aqui, o que o código contradiz):
+- `POST /agents/trigger` (`api/v1/agents.py:295`) e o worker Celery
+  (`workers/tasks/agent_tasks.py:139-141`) **não** instanciam esta classe —
+  os dois montam o state à mão e chamam `get_orchestrator_graph().ainvoke()`
+  direto.
+- Esta classe é alcançada DENTRO do grafo, via
+  `resolve_agent_class("orchestration_agent")`, que é a rota de fallback de
+  `get_chain()` para `task_type` não mapeado (`brain/router.py:93-94`).
+
+Consequência conhecida dessa rota de fallback, sem guard no código: ela aponta
+para esta própria classe, então um `task_type` desconhecido produz
+`execute` → grafo → `execute_chain_step` → `run` → grafo, com o mesmo
+`thread_id`. As precondições estão fixadas em
+`tests/test_unit/test_orchestration_agent.py`; o comportamento em runtime não
+foi confirmado.
 """
 from __future__ import annotations
 
