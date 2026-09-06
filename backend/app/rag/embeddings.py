@@ -25,6 +25,33 @@ class EmbeddingProviderUnavailable(RuntimeError):
     de depender de sniffing de texto no frontend."""
 
 
+# Provedor padrão da plataforma. Fica numa constante porque agora é lido em
+# dois lugares (aqui e na chave de cache do `retrieve()`) e um divergir do
+# outro reintroduz silenciosamente o bug que a chave de cache corrige.
+SYSTEM_DEFAULT_PROVIDER = "openai"
+
+
+def resolve_embedding_provider_name(*, force_system_default: bool = False) -> str:
+    """Nome do provedor que `get_embeddings_client()` usaria AGORA, sem
+    construir client nem fazer chamada de rede.
+
+    Existe para a chave de cache do `retrieve()`: a chave é montada antes de
+    qualquer embedding ser gerado, e sem o provedor nela dois usuários do
+    MESMO tenant com BYOK diferente (ex.: um OpenAI, outro Gemini)
+    compartilhavam a mesma entrada por 300s — o segundo recebia resultado
+    filtrado pelo provedor do primeiro, contradizendo a invariante de
+    `_provider_filter()`. Não é vazamento entre escritórios (`tenant_id` já
+    está na chave), é resultado errado dentro do mesmo.
+
+    Usa exatamente a mesma resolução de `get_embeddings_client()`, de
+    propósito: se as duas divergirem, a chave volta a mentir."""
+    if not force_system_default:
+        provider, api_key, _base_url = _resolve_embedding_credentials()
+        if api_key and provider:
+            return provider
+    return SYSTEM_DEFAULT_PROVIDER
+
+
 def _resolve_embedding_credentials() -> tuple[str | None, str | None, str | None]:
     """Varre a cadeia BYOK do usuário disparador (setada por
     `user_ai_creds()` em `ai_creds_ctx`/`ai_fallback_ctx`, mesmo contextvar
@@ -135,7 +162,7 @@ def get_embeddings_client(*, force_system_default: bool = False) -> tuple[AsyncO
                 f"embeddings hoje: {provedores}) para habilitar a busca."
             )
         _client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
-    return _client, "openai", settings.DEFAULT_EMBEDDING_MODEL, settings.EMBEDDING_DIMENSIONS
+    return _client, SYSTEM_DEFAULT_PROVIDER, settings.DEFAULT_EMBEDDING_MODEL, settings.EMBEDDING_DIMENSIONS
 
 
 def get_openai_client() -> AsyncOpenAI:
