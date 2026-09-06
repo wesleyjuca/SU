@@ -32,6 +32,23 @@ jobs:
   validate:
     name: Validate — Type Check + Lint + Build
     runs-on: ubuntu-latest
+    # Postgres real para os testes de backend. Antes deste passo a suíte
+    # sequer era coletada no CI (ver nota no passo "Backend tests"), então
+    # nenhum serviço era necessário — e nenhum teste rodava.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: afj
+          POSTGRES_PASSWORD: afj
+          POSTGRES_DB: afj_core
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -50,11 +67,67 @@ jobs:
           python-version: '3.12'
       - name: Backend lint (gate real — config em backend/ruff.toml)
         run: cd backend && pip install ruff && ruff check app/
-      - name: Backend tests
+      # ATÉ A RODADA pós-260.5 ESTE PASSO NUNCA EXECUTOU UM TESTE:
+      # instalava só pytest/httpx, sem `requirements.txt`, então a coleção
+      # morria em `ModuleNotFoundError: structlog`; o `| head` mascarava o
+      # código de saída e o `|| true` engolia o resto. ~1.065 testes eram
+      # decorativos. Agora as dependências reais são instaladas e o schema
+      # é criado, para que a suíte de fato rode.
+      - name: Backend install
+        run: cd backend && pip install -r requirements.txt
+      # Schema + seed, exatamente o que a app faz no boot. O seed não é
+      # opcional: sem o ADMIN semeado a fixture `auth_headers` chama
+      # `pytest.skip`, e um gate sobre teste que pula não protege nada
+      # (verificado: contra banco vazio a guarda de LGPD pulava em vez de
+      # rodar).
+      - name: Backend schema + seed (mesmo caminho do boot da app)
         run: |
           cd backend
-          pip install pytest pytest-asyncio httpx 2>/dev/null || true
-          python -m pytest tests/ -v -x 2>&1 | head -80 || true
+          python -c "
+          import asyncio
+          from sqlalchemy.ext.asyncio import create_async_engine
+          from app.db.base import Base
+          import app.models  # registra os modelos no metadata
+          from app.config import settings
+          from app.core.events import _seed_default_data
+
+          async def main():
+              engine = create_async_engine(settings.DATABASE_URL)
+              async with engine.begin() as conn:
+                  await conn.run_sync(Base.metadata.create_all)
+              await _seed_default_data(engine)
+              await engine.dispose()
+
+          asyncio.run(main())
+          "
+        env:
+          DATABASE_URL: postgresql+asyncpg://afj:afj@localhost:5432/afj_core
+      # GATE REAL: 882 testes, verdes contra um Postgres limpo (validado
+      # localmente reproduzindo este ambiente exato). Sem `|| true`: se
+      # quebrar, o CI reprova.
+      - name: Backend unit tests (gate real)
+        run: cd backend && python -m pytest tests/test_unit/ -q
+        env:
+          DATABASE_URL: postgresql+asyncpg://afj:afj@localhost:5432/afj_core
+      # GATE REAL: guarda anti-regressão do direito ao esquecimento. Fica
+      # num passo próprio (e não no informativo abaixo) porque é a única
+      # coisa que impede a 9ª ocorrência da classe de bug mais recorrente
+      # do projeto — 8 vezes uma tabela/coluna com dado de titular ficou
+      # de fora do erase. Ela cria um titular com token único, esquece e
+      # varre o banco inteiro atrás do token.
+      - name: Backend LGPD — guarda de esquecimento (gate real)
+        run: cd backend && python -m pytest tests/test_api/test_lgpd_sentinela.py -q
+        env:
+          DATABASE_URL: postgresql+asyncpg://afj:afj@localhost:5432/afj_core
+      # AINDA NÃO BLOQUEIA: `tests/test_api/` carrega ~20 falhas e ~77 erros
+      # pré-existentes (a metade da flakiness que o fix de plugin não cobre,
+      # mais falhas próprias), diagnosticados e registrados na rodada
+      # pós-260.5 como a fase seguinte. Roda visível para não voltar a ser
+      # invisível; vira gate quando aquele resíduo for zerado.
+      - name: Backend API tests (informativo — ver nota acima)
+        run: cd backend && python -m pytest tests/test_api/ -q || true
+        env:
+          DATABASE_URL: postgresql+asyncpg://afj:afj@localhost:5432/afj_core
       - name: Frontend tests
         run: cd frontend && npm test -- --run 2>&1 | head -60 || true
       - name: Backend dependency vulnerability scan (informativo, não bloqueia)

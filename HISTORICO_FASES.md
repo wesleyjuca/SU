@@ -5603,3 +5603,112 @@ cross-tenant, flakiness de teste) já tem um padrão de causa conhecido.
     automática, zero testes) não exercitada; e o cache do `retrieve()` sem
     o provedor na chave, confirmado por leitura mas não reproduzido ao
     vivo (exigiria 2 usuários com BYOK de provedores distintos).
+
+- **Correção pós-260.5 — plugins do pytest, gate do CI e 5 colunas de PII
+  do esquecimento** — depois do relatório da rodada pós-260.5 (PR #254, já
+  mergeado), o usuário mandou executar os 3 primeiros itens do plano
+  consolidado, nesta ordem: (1) desligar o plugin async duplicado, (2)
+  ligar o gate do CI, (3) fechar as 5 colunas de PII do esquecimento LGPD
+  e promover a varredura de sentinela a teste automatizado. A fase entrega
+  os três, cada um verificado antes do seguinte.
+  - **(1) Flakiness — as DUAS causas, não uma.** O `-p no:anyio` (fim da
+    disputa entre pytest-asyncio e o plugin do `anyio`, causa isolada na
+    rodada anterior) resolveu a maior parte, mas não tudo: sobrou a
+    metade que o `pytest.ini` não alcança — o `engine` singleton de
+    módulo (`app/db/base.py`) reusado entre event loops por teste
+    ("attached to a different loop"). Corrigido com um helper novo,
+    `backend/tests/db_isolada.py::sessao_isolada()`: engine exclusivo do
+    teste, `NullPool`, criado e descartado dentro do próprio loop. Foi
+    aplicado **cirurgicamente** (24 call sites em 3 arquivos —
+    `test_strategy_agent_win_rate_fase208.py`,
+    `test_strategy_agent_playbook_fase216.py`,
+    `test_tenant_user_unique_constraints.py`), não como fixture global.
+    **Duas alternativas globais foram medidas e rejeitadas**, ambas
+    documentadas no docstring do helper pra ninguém retentar às cegas:
+    loop de escopo de sessão (zera os erros mas transforma uma falha de
+    fixture em ~38 pulos silenciosos) e `engine.dispose()` autouse por
+    teste (subiu os pulos de 42 para 78 — medido, revertido).
+    **Números medidos** (Postgres+Redis reais, chaves de rate limit
+    zeradas antes de cada rodada): `test_api/` com os 2 plugins ativos =
+    102 falhas / 34 passes / 142 erros / 181s → com plugin único = 20
+    falhas / 90 passes / 78 erros / 101s. `tests/test_unit/` saiu de **12
+    falhas + 2 erros** para **882 passes, zero falhas**. Suíte inteira:
+    935 → **964 passes**.
+  - **Quatro correções de qualidade de teste** (não de produto), todas de
+    causa própria, achadas quando a suíte finalmente voltou a rodar:
+    `test_custom_agents.py` — a fábrica e o construtor de
+    `CustomAgentVersion` passaram a informar `requires_human_approval`, e
+    o `_FakeDB.flush()` deixou de ter uma **lista ad-hoc de defaults** (que
+    crescia a cada bug novo) para aplicar **todos** os defaults do mapper
+    do SQLAlchemy — mata a classe em vez de remendar a 4ª instância;
+    `test_process_fonte.py` — objeto ORM em memória passou a receber
+    `created_at`/`updated_at`/`situacao`/`monitoring_active`, que só
+    existiriam depois de um flush real.
+  - **Incidente real, com lição registrada**: `test_password_change_success`
+    (`test_api/test_auth.py`) trocava a senha do ADMIN semeado para
+    `NewPass@456` e **nunca restaurava** — enquanto a suíte não rodava,
+    isso passava despercebido; assim que passou a rodar, derrubou o login
+    de toda a sessão de trabalho (sintoma: todo teste dependente de
+    `auth_headers` pulando com "Login failed"). Senha restaurada à mão e o
+    teste corrigido: agora relogga com a senha nova e reverte para a
+    original, ficando repetível. Lição adicionada às armadilhas do
+    `CLAUDE.md`: **teste de API desfaz o que faz, especialmente em dado
+    semeado**.
+  - **(2) CI que executa e reprova — `.github/workflows/deploy.yml`.**
+    Antes: o passo de testes instalava só `pytest pytest-asyncio httpx`
+    (nunca `backend/requirements.txt`), a coleção morria em
+    `ModuleNotFoundError` e o `| head -80 || true` devolvia exit 0 — a
+    suíte inteira era decorativa. Agora o job sobe um **serviço
+    `postgres:16`** (afj/afj/afj_core, com health-check), instala
+    `requirements.txt`, cria schema + roda `_seed_default_data(engine)` —
+    o mesmo caminho do boot da app — e então executa **3 gates reais**:
+    `ruff check app/`, `pytest tests/test_unit/` (~880 testes) e `pytest
+    tests/test_api/test_lgpd_sentinela.py`. `tests/test_api/` inteiro roda
+    depois, visível, mas **informativo** (`|| true`), com comentário
+    nomeando o resíduo e apontando a fase seguinte. **Decisão do usuário
+    via pergunta**: gate em `test_unit` — a alternativa (gate na suíte
+    inteira) deixaria a CI vermelha no dia do merge.
+    **O seed não é opcional**: sem o ADMIN semeado, a fixture
+    `auth_headers` chama `pytest.skip` e o gate de LGPD viraria
+    decorativo — descoberto ao rodar o gate contra um banco novo (o teste
+    de sentinela PULOU), corrigido adicionando o seed ao passo de schema.
+  - **(3) LGPD — as 5 colunas fechadas** (`backend/app/api/v1/lgpd.py`,
+    +70 linhas em `erase_client_data`): `clients.endereco_json` (remove
+    `logradouro/numero/complemento/bairro/cep/latitude/longitude/
+    geocoded_at/geocode_source`, **preservando `cidade`/`uf`** — agregado
+    regional, não identifica o titular, e é o que sustenta os indicadores
+    do `/mapa`); `opportunities.titulo` e `documents.titulo` (placeholder,
+    como os vizinhos `descricao`/`conteudo_texto` já recebiam — a decisão
+    anterior de não apagar o título foi explicitamente revisitada em
+    comentário); e `process_movements` (`descricao`/`raw_html`/
+    `ai_summary`) + `process_deadlines.descricao`, alcançados pelo join
+    com `LegalProcess` (mesmo padrão de `ProcessParty` já usado no
+    arquivo).
+  - **(3b) Varredura de sentinela promovida a teste automatizado** —
+    `backend/tests/test_api/test_lgpd_sentinela.py` (novo), a guarda que a
+    pergunta aberta há 6 rodadas pedia. Semeia um token único em cada
+    campo textual via **endpoints reais**, chama o `DELETE` real e varre o
+    **banco inteiro** por `information_schema.columns` (text/varchar/
+    jsonb), falhando com o nome de `tabela.coluna` de qualquer PII
+    sobrevivente. Tem uma lista explícita de colunas preservadas de
+    propósito (`audit_logs`) e limpa os dados de teste ao final. É o
+    desenho certo justamente porque uma guarda por TABELA não pegaria
+    nenhum dos 3 piores casos — as tabelas já estavam cobertas, faltavam
+    colunas.
+  - **Verificado**: `ruff check app/` limpo. `tests/test_unit/` — **882
+    passes, zero falhas** no banco de desenvolvimento e **880 passes + 2
+    skips** contra um banco novo, criado do zero pelo mesmo caminho do CI.
+    Varredura de sentinela: **5 colunas sobreviventes → 0**, e a guarda
+    provada nos dois sentidos (falha quando o fix é desabilitado, passa
+    quando restaurado) — não é um teste que passa por acidente. A receita
+    do CI foi validada **executando o script shell exato extraído do
+    workflow** contra bancos limpos e descartáveis (`afj_ci_sim`,
+    `afj_ci_sim2`, `afj_ci_sim3`, todos dropados ao final) — não é
+    possível executar o GitHub Actions daqui, e essa é a aproximação mais
+    fiel possível; declarada como limitação, não escondida.
+  - **Resíduo conhecido, deixado de propósito para a próxima fase**:
+    `tests/test_api/` ainda tem ~28 falhas + ~79 erros de causa própria
+    (não do conflito de plugins) — por isso roda no CI como informativo.
+    `test_api/test_auth.py` tem um import `pytest` não usado, pré-
+    existente, que o `ruff` sinalizaria (o CI só roda `ruff check app/`,
+    então não quebra nada).

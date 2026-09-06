@@ -8,6 +8,7 @@ import uuid
 import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
+from sqlalchemy import inspect as sa_inspect
 
 from app.models.custom_agent import CustomAgent, CustomAgentVersion
 from app.api.v1.custom_agents import (
@@ -67,13 +68,35 @@ class _FakeDB:
         self.added.append(obj)
 
     async def flush(self):
+        """Aplica os defaults de coluna como um flush real faria.
+
+        Antes isto era uma lista ad-hoc (`id`, `created_at`,
+        `max_cost_usd_per_run`), que crescia toda vez que um campo novo com
+        default quebrava um teste — a 4ª instância dessa classe de bug no
+        projeto. Percorrer o mapper cobre qualquer coluna com default, agora
+        e no futuro, e mantém o fake fiel ao comportamento real.
+        """
         for obj in self.added:
             if getattr(obj, "id", None) is None:
                 obj.id = uuid.uuid4()
-            if getattr(obj, "created_at", "unset") is None:
-                obj.created_at = datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)
-            if isinstance(obj, CustomAgent) and obj.max_cost_usd_per_run is None:
-                obj.max_cost_usd_per_run = 0.50  # mirrors mapped_column(default=0.50), never applied outside a real flush
+            mapper = sa_inspect(type(obj), raiseerr=False)
+            if mapper is None:
+                continue
+            for coluna in mapper.columns:
+                nome = coluna.key
+                if getattr(obj, nome, None) is not None:
+                    continue
+                default = coluna.default
+                if default is None:
+                    continue
+                valor = default.arg
+                setattr(obj, nome, valor(None) if callable(valor) else valor)
+            # `created_at`/`updated_at` usam server_default (aplicado pelo
+            # banco, não pelo mapper) — o fake precisa preencher explicitamente.
+            for campo in ("created_at", "updated_at"):
+                if getattr(obj, campo, "ausente") is None:
+                    setattr(obj, campo,
+                            datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc))
         self.flushed = True
 
     async def commit(self):
@@ -88,6 +111,11 @@ def _row(status="PENDENTE", rag_collections=None, max_cost=0.50, created_by="u1"
         id=uuid.uuid4(), name="Analisador X", description="desc", system_prompt="prompt fixo",
         rag_collections=rag_collections, status=status, max_cost_usd_per_run=max_cost,
         created_by=created_by, tenant_id="t1",
+        # O default `False` da coluna só é aplicado no flush; um objeto ORM
+        # construído em memória fica com None e quebra o response model, que
+        # exige bool. Mesma classe de bug de teste já documentada no projeto
+        # (`created_at` nunca populado por falta de flush real).
+        requires_human_approval=False,
         created_at=datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc),
         updated_at=datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc),
     )
@@ -294,6 +322,8 @@ async def test_list_custom_agent_versions_devolve_historico():
         id=uuid.uuid4(), agent_id=agent_id, description="d1", system_prompt="p1",
         rag_collections=None, max_cost_usd_per_run=0.5, changed_by="super1",
         change_summary=None, created_at=datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc),
+        # default de coluna, só aplicado num flush real (ver nota em _FakeDB.flush)
+        requires_human_approval=False,
     )
     db = _FakeDB(execute_results=[_FakeResult(items=[v1])])
 

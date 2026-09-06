@@ -8,7 +8,7 @@ import pytest
 from app.agents.base.result import AgentStatus
 from app.agents.brain.context import AgentContext
 from app.agents.strategy.strategy_agent import StrategyAgent
-from app.db.base import AsyncSessionLocal
+from tests.db_isolada import sessao_isolada
 from app.models.process import LegalProcess
 from app.models.tenant import Tenant
 
@@ -17,7 +17,7 @@ pytestmark = pytest.mark.anyio
 
 @pytest.fixture
 async def tenant_com_processos():
-    async with AsyncSessionLocal() as db:
+    async with sessao_isolada() as db:
         tenant = Tenant(name="Tenant 208.1", slug=f"teste-208-1-{uuid.uuid4().hex[:8]}")
         db.add(tenant)
         await db.flush()
@@ -34,7 +34,7 @@ async def tenant_com_processos():
         await db.commit()
         tid = tenant.id
     yield tid
-    async with AsyncSessionLocal() as db:
+    async with sessao_isolada() as db:
         await db.execute(LegalProcess.__table__.delete().where(LegalProcess.tenant_id == tid))
         await db.execute(Tenant.__table__.delete().where(Tenant.id == tid))
         await db.commit()
@@ -50,7 +50,7 @@ async def test_prompt_inclui_e_retorno_expoe_taxa_exito_area(tenant_com_processo
     import app.agents.strategy.strategy_agent as mod
     monkeypatch.setattr(mod, "call_claude", fake_call_claude)
 
-    async with AsyncSessionLocal() as db:
+    async with sessao_isolada() as db:
         agent = StrategyAgent(db=db)
         ctx = AgentContext(
             task_type="strategy", tenant_id=tenant_com_processos,
@@ -73,7 +73,7 @@ async def test_sem_processos_com_desfecho_na_area_sinaliza_ausencia(tenant_com_p
     import app.agents.strategy.strategy_agent as mod
     monkeypatch.setattr(mod, "call_claude", fake_call_claude)
 
-    async with AsyncSessionLocal() as db:
+    async with sessao_isolada() as db:
         agent = StrategyAgent(db=db)
         ctx = AgentContext(
             task_type="strategy", tenant_id=tenant_com_processos,
@@ -92,7 +92,7 @@ async def test_amostra_pequena_sinaliza_cautela_no_prompt(monkeypatch):
     import app.agents.strategy.strategy_agent as mod
     monkeypatch.setattr(mod, "call_claude", fake_call_claude)
 
-    async with AsyncSessionLocal() as db:
+    async with sessao_isolada() as db:
         tenant = Tenant(name="Tenant 208.1b", slug=f"teste-208-1b-{uuid.uuid4().hex[:8]}")
         db.add(tenant)
         await db.flush()
@@ -109,7 +109,7 @@ async def test_amostra_pequena_sinaliza_cautela_no_prompt(monkeypatch):
     monkeypatch.setattr(mod, "call_claude", fake_call_claude_2)
 
     try:
-        async with AsyncSessionLocal() as db:
+        async with sessao_isolada() as db:
             agent = StrategyAgent(db=db)
             ctx = AgentContext(task_type="strategy", tenant_id=tid,
                                 task_input={"fatos": "fatos", "area_direito": "Penal"})
@@ -117,7 +117,7 @@ async def test_amostra_pequena_sinaliza_cautela_no_prompt(monkeypatch):
         assert result.output["total_processos_area"] == 1
         assert "amostra pequena" in prompts_capturados[0]
     finally:
-        async with AsyncSessionLocal() as db:
+        async with sessao_isolada() as db:
             await db.execute(LegalProcess.__table__.delete().where(LegalProcess.tenant_id == tid))
             await db.execute(Tenant.__table__.delete().where(Tenant.id == tid))
             await db.commit()

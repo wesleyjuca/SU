@@ -168,8 +168,16 @@ armadilhas abaixo sobre por que a suíte sozinha não é sempre confiável.
 rediscobertas do zero a cada sessão — contexto completo de cada uma em
 `HISTORICO_FASES.md`, se precisar):
 
-- **Flakiness de pool asyncpg/pytest-asyncio** — **causa-raiz isolada na
-  rodada pós-260.5**: são **dois plugins async disputando o mesmo teste**.
+- **Flakiness de pool asyncpg/pytest-asyncio** — **CORRIGIDA** (fase de
+  correção pós-260.5). Ficam aqui a causa e o que fazer se voltar. Eram
+  **duas** causas somadas: (a) **dois plugins async disputando o mesmo
+  teste** e (b) o engine singleton reusado entre event loops. (a) foi
+  resolvida com `addopts = -p no:anyio` no `pytest.ini`; (b), nos testes
+  que falam com Postgres de verdade, com o helper
+  `tests/db_isolada.py::sessao_isolada()` (engine próprio + `NullPool`,
+  nascendo e morrendo dentro do loop do teste). Resultado: `tests/test_unit/`
+  saiu de 12 falhas + 2 erros para **882 passes, zero falhas**, e é hoje
+  gate real do CI. Detalhes históricos:
   `pytest.ini` tem `asyncio_mode = auto` (pytest-asyncio) *e* 38 arquivos
   usam `pytest.mark.anyio`, sem nenhuma fixture `anyio_backend` — o sufixo
   `[asyncio]` nos IDs de teste é a parametrização de backend do anyio,
@@ -179,17 +187,30 @@ rediscobertas do zero a cada sessão — contexto completo de cada uma em
   o mesmo arquivo falha como está e **passa com qualquer um dos dois
   plugins desligado** (`-p no:anyio` ou `-p no:asyncio`). Medido na
   `test_api/` inteira: 102 falhas/34 passes/142 erros → **20 falhas/90
-  passes/78 erros** com plugin único. Enquanto o `pytest.ini` não for
-  corrigido, a prova real de um fix continua vindo de script standalone
-  (`asyncio.run()` + `AsyncSessionLocal` direto) contra Postgres real; e
-  antes de tratar uma falha como regressão da sua mudança, rode um teste
-  de controle **não tocado** — se ele falhar igual, não é sua mudança.
-- **Os testes não reprovam o CI** (achado da rodada pós-260.5): o passo de
-  testes de `.github/workflows/deploy.yml` não instala
-  `backend/requirements.txt` e ainda usa `| head -80 || true`, então a
-  suíte falha na coleção (`ModuleNotFoundError`) e o passo retorna exit 0.
-  Na prática só `ruff check app/`, `tsc --noEmit` e `next build` são gates
-  reais — não confie em "o CI passou" como sinal de que a suíte está verde.
+  passes/78 erros** com plugin único. **Duas alternativas foram medidas e
+  descartadas** (não retentar às cegas): loop de escopo de sessão
+  (`asyncio_default_*_loop_scope=session`) zera os erros mas faz uma falha
+  de fixture cascatear em ~38 pulos silenciosos; e `engine.dispose()`
+  autouse por teste subiu os pulos de 42 para 78. **Resíduo conhecido**:
+  `tests/test_api/` ainda tem ~28 falhas + ~79 erros de causa própria, por
+  isso roda no CI como informativo, não como gate — é a próxima fase. Antes
+  de tratar uma falha lá como regressão da sua mudança, rode um teste de
+  controle **não tocado**.
+- **O CI hoje tem 3 gates reais de backend** (antes tinha zero: o passo de
+  testes não instalava `requirements.txt`, a suíte morria na coleção e o
+  `| head -80 || true` devolvia exit 0). Agora: `ruff check app/`,
+  `pytest tests/test_unit/` (~882 testes) e `pytest tests/test_api/
+  test_lgpd_sentinela.py` (guarda de esquecimento). `tests/test_api/`
+  inteiro roda como **informativo** até o resíduo acima ser zerado. O job
+  sobe um Postgres de serviço e roda schema + seed pelo mesmo caminho do
+  boot da app — **o seed não é opcional**: sem o ADMIN semeado a fixture
+  `auth_headers` chama `pytest.skip` e o gate viraria decorativo.
+- **Teste de API pode quebrar o seed do seu banco local.** Enquanto a suíte
+  não rodava, isso passava despercebido; assim que voltou a rodar,
+  `test_password_change_success` trocou a senha do ADMIN semeado e derrubou
+  o login de toda a sessão. Foi corrigido (o teste restaura o que muda),
+  mas a lição vale para qualquer teste novo: **desfaça o que você fez**,
+  especialmente em dado semeado.
 - **Três mecanismos de gate de papel coexistem** — auditar só um produz
   falso positivo em escala (aconteceu 4× numa única rodada):
   `Depends(require_role(...))`, checagem inline no corpo
@@ -573,6 +594,11 @@ nunca repetir o mesmo teste do zero.** Antes de planejar uma nova rodada:
   suíte, o fluxo de escrita de `portal`/`billing`/`publications`,
   `ContractAgent`/`OrchestrationAgent`/`poll_all_processes` (zero testes),
   e o cache do `retrieve()` sem provedor na chave.
+  **Correção pós-260.5 (fase seguinte, já aplicada)**: os 3 primeiros itens
+  do plano consolidado foram implementados — plugin async duplicado
+  desligado, gate de CI ligado (3 gates reais de backend) e as 5 colunas de
+  PII do esquecimento fechadas, com a varredura de sentinela promovida a
+  teste automatizado. O resto da lista acima continua aberto.
 
 Histórico completo (achados, decisões de escopo, correções, verificações
 empíricas de cada fase) fica em `HISTORICO_FASES.md` — movido pra fora

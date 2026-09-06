@@ -80,6 +80,22 @@ async def erase_client_data(
     client.observacoes = None
     client.status = "INATIVO"
 
+    # Rodada pós-260.5 (achado da varredura de sentinela) — o endereço do
+    # titular ficava intacto: esta função já abria a linha de `clients` e
+    # anonimizava 8 campos, mas nunca tocava `endereco_json`. Efeito real
+    # reproduzido: depois do esquecimento, `GET /clients` (fonte do /mapa)
+    # ainda devolvia logradouro e lat/lng, e o titular "esquecido"
+    # continuava plotado no mapa, na casa dele — agravado desde a Fase 257,
+    # que elevou a precisão de centro de CEP para rua+número via Nominatim.
+    # `cidade`/`uf` ficam: são agregado regional, não identificam o titular,
+    # e sustentam os indicadores da carteira.
+    if client.endereco_json:
+        endereco = dict(client.endereco_json)
+        for campo in ("logradouro", "numero", "complemento", "bairro", "cep",
+                      "latitude", "longitude", "geocoded_at", "geocode_source"):
+            endereco.pop(campo, None)
+        client.endereco_json = endereco
+
     # Fase 176.3 — achado da Fase 175: o esquecimento só apagava o próprio
     # `Client`. `ClientContact` (contatos de PJ — nome/email/telefone) e
     # `ClientInteraction` (histórico livre, `descricao` pode conter PII em
@@ -129,6 +145,15 @@ async def erase_client_data(
             opportunity.descricao = "[Conteúdo removido — LGPD art. 18 IV]"
         if opportunity.motivo_perda:
             opportunity.motivo_perda = "[Conteúdo removido — LGPD art. 18 IV]"
+        # Rodada pós-260.5 — revisa a decisão registrada acima ("titulo não
+        # é apagado de propósito"). O sistema de fato nunca grava PII aqui
+        # (o campo vem de `body.titulo`, digitado pelo usuário), mas num
+        # escritório é praxe batizar a oportunidade com o nome do cliente
+        # ("Trabalhista — Fulano"), e a varredura de sentinela confirmou que
+        # o que for digitado sobrevive ao esquecimento. Custo aceito: o
+        # funil perde o rótulo desse negócio específico.
+        if opportunity.titulo:
+            opportunity.titulo = "[Conteúdo removido — LGPD art. 18 IV]"
 
     # Fase 220 (achado da Fase 219) — mesma classe de lacuna que 176.3/210
     # fecharam pra ClientContact/ClientInteraction/Opportunity:
@@ -268,6 +293,13 @@ async def erase_client_data(
             doc.conteudo_texto = "[Conteúdo removido — LGPD art. 18 IV]"
         if doc.conteudo_html:
             doc.conteudo_html = "[Conteúdo removido — LGPD art. 18 IV]"
+        # Rodada pós-260.5 — o corpo era limpo e o TÍTULO ficava, ao lado,
+        # na mesma linha. O que o sistema gera sozinho não tem PII
+        # ("Contrato de Honorários"), mas o título é editável e costuma
+        # receber o nome da parte; a varredura de sentinela confirmou a
+        # sobrevivência, inclusive no pacote de `GET /lgpd/.../export`.
+        if doc.titulo:
+            doc.titulo = "[Conteúdo removido — LGPD art. 18 IV]"
 
     # `Contract.assinaturas` (JSONB) pode conter nome/CPF do signatário.
     # Sem tenant_id próprio — escopo pelos Document já filtrados acima
@@ -336,6 +368,44 @@ async def erase_client_data(
     for process in processes_result.scalars().all():
         if process.descricao:
             process.descricao = "[Conteúdo removido — LGPD art. 18 IV]"
+
+    # Rodada pós-260.5 — `ProcessMovement.descricao` (texto real da
+    # movimentação processual, populado pelo pipeline de captura) e
+    # `ProcessDeadline.descricao` (obrigatório, costuma citar a parte)
+    # sobreviviam ao esquecimento. Nenhuma das duas tem `tenant_id`
+    # próprio: escopo pelo mesmo `client_linked_processes_filter` já usado
+    # para `LegalProcess.descricao` logo acima, que cobre os 2 caminhos de
+    # vínculo (client_id direto e via ProcessParty). Campos que identificam
+    # o ANDAMENTO e não o titular (`data`, `tipo`, `data_prazo`) ficam.
+    from app.models.process import ProcessDeadline, ProcessMovement
+
+    movimentos_result = await db.execute(
+        select(ProcessMovement)
+        .join(LegalProcess, LegalProcess.id == ProcessMovement.process_id)
+        .where(
+            client_linked_processes_filter(uuid.UUID(client_id)),
+            LegalProcess.tenant_id == current_user.tenant_id,
+        )
+    )
+    for movimento in movimentos_result.scalars().all():
+        if movimento.descricao:
+            movimento.descricao = "[Conteúdo removido — LGPD art. 18 IV]"
+        if getattr(movimento, "raw_html", None):
+            movimento.raw_html = None
+        if getattr(movimento, "ai_summary", None):
+            movimento.ai_summary = "[Conteúdo removido — LGPD art. 18 IV]"
+
+    prazos_result = await db.execute(
+        select(ProcessDeadline)
+        .join(LegalProcess, LegalProcess.id == ProcessDeadline.process_id)
+        .where(
+            client_linked_processes_filter(uuid.UUID(client_id)),
+            LegalProcess.tenant_id == current_user.tenant_id,
+        )
+    )
+    for prazo in prazos_result.scalars().all():
+        if prazo.descricao:
+            prazo.descricao = "[Conteúdo removido — LGPD art. 18 IV]"
 
     await db.flush()
 

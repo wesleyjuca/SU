@@ -11,7 +11,7 @@ import pytest
 from app.agents.base.result import AgentStatus
 from app.agents.brain.context import AgentContext
 from app.agents.strategy.strategy_agent import StrategyAgent
-from app.db.base import AsyncSessionLocal
+from tests.db_isolada import sessao_isolada
 from app.models.agent_playbook import AgentAreaPlaybook
 from app.models.process import LegalProcess
 from app.models.tenant import Tenant
@@ -21,7 +21,7 @@ pytestmark = pytest.mark.anyio
 
 @pytest.fixture
 async def tenant_com_playbook():
-    async with AsyncSessionLocal() as db:
+    async with sessao_isolada() as db:
         tenant = Tenant(name="Tenant 216", slug=f"teste-216-agent-{uuid.uuid4().hex[:8]}")
         db.add(tenant)
         await db.flush()
@@ -36,7 +36,7 @@ async def tenant_com_playbook():
         await db.commit()
         tid = tenant.id
     yield tid
-    async with AsyncSessionLocal() as db:
+    async with sessao_isolada() as db:
         await db.execute(AgentAreaPlaybook.__table__.delete().where(AgentAreaPlaybook.tenant_id == tid))
         await db.execute(LegalProcess.__table__.delete().where(LegalProcess.tenant_id == tid))
         await db.execute(Tenant.__table__.delete().where(Tenant.id == tid))
@@ -53,7 +53,7 @@ async def test_prompt_inclui_playbook_quando_configurado(tenant_com_playbook, mo
     import app.agents.strategy.strategy_agent as mod
     monkeypatch.setattr(mod, "call_claude", fake_call_claude)
 
-    async with AsyncSessionLocal() as db:
+    async with sessao_isolada() as db:
         agent = StrategyAgent(db=db)
         ctx = AgentContext(
             task_type="strategy", tenant_id=tenant_com_playbook,
@@ -78,7 +78,7 @@ async def test_sem_playbook_nao_quebra_e_usa_fallback(monkeypatch):
     import app.agents.strategy.strategy_agent as mod
     monkeypatch.setattr(mod, "call_claude", fake_call_claude)
 
-    async with AsyncSessionLocal() as db:
+    async with sessao_isolada() as db:
         tenant = Tenant(name="Tenant 216b", slug=f"teste-216-agent-b-{uuid.uuid4().hex[:8]}")
         db.add(tenant)
         await db.commit()
@@ -92,7 +92,7 @@ async def test_sem_playbook_nao_quebra_e_usa_fallback(monkeypatch):
     monkeypatch.setattr(mod, "call_claude", fake_call_claude_2)
 
     try:
-        async with AsyncSessionLocal() as db:
+        async with sessao_isolada() as db:
             agent = StrategyAgent(db=db)
             ctx = AgentContext(task_type="strategy", tenant_id=tid,
                                 task_input={"fatos": "fatos", "area_direito": "Trabalhista"})
@@ -101,6 +101,6 @@ async def test_sem_playbook_nao_quebra_e_usa_fallback(monkeypatch):
         assert result.output["playbook_aplicado"] is False
         assert "Nenhuma orientação específica cadastrada" in prompts_capturados[0]
     finally:
-        async with AsyncSessionLocal() as db:
+        async with sessao_isolada() as db:
             await db.execute(Tenant.__table__.delete().where(Tenant.id == tid))
             await db.commit()
