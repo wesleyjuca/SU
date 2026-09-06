@@ -230,6 +230,15 @@ rediscobertas do zero a cada sessão — contexto completo de cada uma em
   o login de toda a sessão. Foi corrigido (o teste restaura o que muda),
   mas a lição vale para qualquer teste novo: **desfaça o que você fez**,
   especialmente em dado semeado.
+- **O CI não tem Redis — só Postgres.** `/health` responde `degraded` lá (a
+  resposta CERTA), e qualquer teste que exija `operational` reprova por
+  ambiente, não por código. Aconteceu no 1º run com a suíte de API como gate.
+  Ao verificar localmente, rode também **sem Redis e com banco novo**
+  (`REDIS_URL= DATABASE_URL=<banco limpo> pytest ...`) — é a 3ª vez nesta
+  série que a divergência entre o ambiente local e o do runner produz um
+  vermelho que a verificação local não podia prever. E prefira asserção de
+  **coerência** (status × componentes reportados) a asserção de literal: vale
+  em qualquer ambiente e ainda pega "operational" mentiroso.
 - **Teste que chama a função do endpoint DIRETO não resolve os defaults do
   FastAPI.** Um `limit: int = Query(default=50, le=200)` chega como o objeto
   `Query`, não como `50`, e estoura lá dentro (`.limit(Query(...))` →
