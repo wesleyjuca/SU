@@ -1,0 +1,17 @@
+# Dependências SÓ de teste — não entram na imagem de produção.
+#
+# Por que este arquivo existe: até a correção pós-260.5 o CI instalava
+# `pytest pytest-asyncio httpx` soltos no passo de teste e nunca instalava
+# `requirements.txt`, então a suíte morria na coleção. Ao consertar aquilo,
+# o par de teste ficou sem nenhum lugar declarado — o CI passou a instalar
+# só `requirements.txt` (que não tem pytest) e o gate quebrou com
+# "No module named pytest". Um arquivo próprio, versionado e pinado, evita
+# as duas falhas: o ambiente de teste é reprodutível e é explícito que
+# estas libs não são de runtime.
+#
+# Versões pinadas nas mesmas em que a suíte foi verificada.
+# `pytest-asyncio` com `asyncio_mode = auto` (ver `pytest.ini`); o plugin do
+# `anyio` (que vem junto de `requirements.txt`) é desligado lá por
+# `-p no:anyio` — não remova o `anyio`, ele é dependência de runtime.
+pytest==9.1.1
+pytest-asyncio==1.4.0

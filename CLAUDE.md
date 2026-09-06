@@ -204,7 +204,12 @@ rediscobertas do zero a cada sessão — contexto completo de cada uma em
   inteiro roda como **informativo** até o resíduo acima ser zerado. O job
   sobe um Postgres de serviço e roda schema + seed pelo mesmo caminho do
   boot da app — **o seed não é opcional**: sem o ADMIN semeado a fixture
-  `auth_headers` chama `pytest.skip` e o gate viraria decorativo.
+  `auth_headers` chama `pytest.skip` e o gate viraria decorativo. As libs de
+  teste moram em `backend/requirements-dev.txt` (`pytest`/`pytest-asyncio`),
+  não em `requirements.txt` — o primeiro run do CI novo quebrou com "No
+  module named pytest" justamente porque a simulação local rodou dentro de
+  um venv que já os tinha. **Simular o CI num ambiente que já está montado
+  não prova a instalação**; a prova de um passo de install é o run real.
 - **Teste de API pode quebrar o seed do seu banco local.** Enquanto a suíte
   não rodava, isso passava despercebido; assim que voltou a rodar,
   `test_password_change_success` trocou a senha do ADMIN semeado e derrubou

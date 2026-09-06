@@ -45,7 +45,7 @@ jobs:
         ports:
           - 5432:5432
         options: >-
-          --health-cmd pg_isready
+          --health-cmd "pg_isready -U afj -d afj_core"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
@@ -74,7 +74,7 @@ jobs:
       # decorativos. Agora as dependências reais são instaladas e o schema
       # é criado, para que a suíte de fato rode.
       - name: Backend install
-        run: cd backend && pip install -r requirements.txt
+        run: cd backend && pip install -r requirements.txt -r requirements-dev.txt
       # Schema + seed, exatamente o que a app faz no boot. O seed não é
       # opcional: sem o ADMIN semeado a fixture `auth_headers` chama
       # `pytest.skip`, e um gate sobre teste que pula não protege nada
