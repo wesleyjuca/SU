@@ -152,7 +152,13 @@ async def test_cep_nao_encontrado_devolve_campos_nulos_nao_erro(cenario, monkeyp
         clients_mod.ConsultarCepBody(cep="00000000"),
         current_user=_CurrentUser(cenario["tenant"], cenario["user"]),
     )
-    assert resp == {"logradouro": None, "bairro": None, "cidade": None, "uf": None}
+    # Comparação campo a campo, não igualdade de dicionário: a resposta ganhou
+    # `latitude`/`longitude` quando a geocodificação entrou, e o teste antigo
+    # comparava com o formato de 4 chaves — quebrava a cada campo novo, mesmo
+    # correto. O que importa aqui é que CEP inexistente devolve tudo nulo em
+    # vez de erro.
+    for campo in ("logradouro", "bairro", "cidade", "uf", "latitude", "longitude"):
+        assert resp.get(campo) is None, f"{campo} deveria ser nulo para CEP inexistente"
 
 
 async def test_cep_encontrado_devolve_endereco(cenario, monkeypatch):

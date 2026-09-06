@@ -2,7 +2,7 @@
 import hashlib
 import json
 from qdrant_client.models import Filter, FieldCondition, MatchValue, IsEmptyCondition, PayloadField
-from app.rag.embeddings import embed_text_with_meta
+from app.rag.embeddings import embed_text_with_meta, resolve_embedding_provider_name
 from app.rag.collections import COLLECTIONS
 from app.db.redis import get_redis
 import structlog
@@ -21,9 +21,19 @@ PRIVATE_COLLECTIONS = {"peticoes_afj", "memorias_afj", "documentos_clientes", "d
 CACHE_TTL_SECONDS = 300
 
 
-def _cache_key(query, collections, filters, k, score_threshold, tenant_id) -> str:
+def _cache_key(query, collections, filters, k, score_threshold, tenant_id,
+               provider_publico=None, provider_privado=None) -> str:
     # tenant_id entra na chave: cache de collection privada nunca pode vazar
     # entre escritórios diferentes.
+    #
+    # Os provedores de embedding também entram, e por um motivo diferente:
+    # desde o desacoplamento de provedor (pós-260.5) o resultado é filtrado
+    # por `embedding_provider` (`_provider_filter()`). Dois usuários do MESMO
+    # tenant com BYOK diferente (ex.: um OpenAI, outro Gemini) faziam a mesma
+    # pergunta e compartilhavam a entrada por 300s — o segundo recebia o
+    # resultado filtrado pelo provedor do primeiro. Não é vazamento entre
+    # escritórios (tenant_id já estava na chave); é resultado errado dentro
+    # do mesmo escritório, contradizendo a invariante que aquela fase criou.
     payload = {
         "query": query,
         "collections": sorted(collections or []),
@@ -31,6 +41,8 @@ def _cache_key(query, collections, filters, k, score_threshold, tenant_id) -> st
         "k": k,
         "score_threshold": score_threshold,
         "tenant_id": str(tenant_id) if tenant_id else None,
+        "provider_publico": provider_publico,
+        "provider_privado": provider_privado,
     }
     raw = json.dumps(payload, sort_keys=True)
     return f"rag:search:{hashlib.sha256(raw.encode()).hexdigest()}"
@@ -58,10 +70,24 @@ async def retrieve(
 
     collections = collections or DEFAULT_COLLECTIONS
 
+    # Quais collections a busca abrange precisa ser sabido ANTES do cache,
+    # porque decide quais provedores entram na chave.
+    alvo = [c for c in collections if c in COLLECTIONS]
+    tem_publica = any(c not in PRIVATE_COLLECTIONS for c in alvo)
+    tem_privada = any(c in PRIVATE_COLLECTIONS for c in alvo)
+
+    # Resolvido sem chamada de rede — só lê o contextvar de BYOK, a mesma
+    # resolução que `get_embeddings_client()` fará adiante.
+    provider_publico_esperado = resolve_embedding_provider_name(force_system_default=True) if tem_publica else None
+    provider_privado_esperado = resolve_embedding_provider_name(force_system_default=False) if tem_privada else None
+
     redis = await get_redis()
     cache_key = None
     if redis:
-        cache_key = _cache_key(query, collections, filters, k, score_threshold, tenant_id)
+        cache_key = _cache_key(
+            query, collections, filters, k, score_threshold, tenant_id,
+            provider_publico_esperado, provider_privado_esperado,
+        )
         try:
             cached = await redis.get(cache_key)
             if cached:
@@ -78,10 +104,6 @@ async def retrieve(
     # dele, já que o conteúdo público foi indexado com um único provedor.
     # Collections PRIVADAS usam o BYOK já ativo no contexto do chamador
     # (mesmo comportamento de antes desta fase).
-    alvo = [c for c in collections if c in COLLECTIONS]
-    tem_publica = any(c not in PRIVATE_COLLECTIONS for c in alvo)
-    tem_privada = any(c in PRIVATE_COLLECTIONS for c in alvo)
-
     vetor_publico = provider_publico = None
     vetor_privado = provider_privado = None
     if tem_publica:

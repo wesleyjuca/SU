@@ -8,6 +8,15 @@ from app.agents.brain.context import AgentContext
 
 
 def test_run_worker_coro_disposes_engine_and_uses_distinct_loops(monkeypatch):
+    # `loops` guarda os PRÓPRIOS objetos de loop, não `id(...)`. A versão
+    # anterior usava `id()`, que em CPython é o endereço de memória: como o
+    # 1º loop já foi coletado quando o 2º é criado, o alocador pode devolver
+    # o mesmo endereço e o set colapsa para 1 elemento — o teste acusava
+    # "mesmo loop" com dois loops de fato distintos. Falhou assim no 1º run
+    # real do CI (a suíte nunca havia rodado lá) depois de passar localmente.
+    # Guardar a referência resolve nos dois sentidos: mantém os objetos vivos,
+    # então o endereço do 1º não pode ser reciclado, e a comparação passa a
+    # ser por identidade de objeto, que é o que o teste quer afirmar.
     calls = {"dispose": 0, "loops": set()}
 
     class _FakeEngine:
@@ -17,7 +26,7 @@ def test_run_worker_coro_disposes_engine_and_uses_distinct_loops(monkeypatch):
     monkeypatch.setattr(dbbase, "engine", _FakeEngine())
 
     async def work():
-        calls["loops"].add(id(asyncio.get_event_loop()))
+        calls["loops"].add(asyncio.get_running_loop())
         return 42
 
     r1 = run_worker_coro(work())

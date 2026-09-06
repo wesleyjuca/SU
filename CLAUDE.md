@@ -55,7 +55,10 @@ NEXT_PUBLIC_API_URL=http://localhost:8000
 
 ```
 backend/app/
-  api/v1/          — 82 REST endpoints (15 routers)
+  api/v1/          — 298 rotas REST em 32 routers (contagem medida por
+                     introspecção do app na rodada pós-260.5; o número
+                     antigo, "82 endpoints / 15 routers", estava
+                     desatualizado por 3,6× e subdimensionava auditorias)
   agents/          — 19 LangGraph agents + orchestrator
   models/          — SQLAlchemy ORM models
   schemas/         — Pydantic request/response schemas
@@ -165,16 +168,94 @@ armadilhas abaixo sobre por que a suíte sozinha não é sempre confiável.
 rediscobertas do zero a cada sessão — contexto completo de cada uma em
 `HISTORICO_FASES.md`, se precisar):
 
-- **Flakiness de pool asyncpg/pytest-asyncio**: testes que abrem
-  `AsyncClient` HTTP real falham intermitentemente com "attached to a
-  different loop" (causa raiz: engine assíncrono do SQLAlchemy é
-  singleton de módulo, mas `pytest-asyncio` cria um event loop por
-  teste por padrão). Reproduz mesmo isolado às vezes. Antes de tratar
-  como regressão de uma mudança, rodar um teste de controle **não
-  tocado** — se ele falhar do mesmo jeito, não é a sua mudança. A prova
-  real de um fix costuma vir de um script standalone
-  (`asyncio.run()` + `AsyncSessionLocal` direto, fora do pytest) contra
-  Postgres real, não da suíte.
+- **Flakiness de pool asyncpg/pytest-asyncio** — **CORRIGIDA** (fase de
+  correção pós-260.5). Ficam aqui a causa e o que fazer se voltar. Eram
+  **duas** causas somadas: (a) **dois plugins async disputando o mesmo
+  teste** e (b) o engine singleton reusado entre event loops. (a) foi
+  resolvida com `addopts = -p no:anyio` no `pytest.ini`; (b), nos testes
+  que falam com Postgres de verdade, com o helper
+  `tests/db_isolada.py::sessao_isolada()` (engine próprio + `NullPool`,
+  nascendo e morrendo dentro do loop do teste). Resultado: `tests/test_unit/`
+  saiu de 12 falhas + 2 erros para **882 passes, zero falhas**, e é hoje
+  gate real do CI. Detalhes históricos:
+  `pytest.ini` tem `asyncio_mode = auto` (pytest-asyncio) *e* 38 arquivos
+  usam `pytest.mark.anyio`, sem nenhuma fixture `anyio_backend` — o sufixo
+  `[asyncio]` nos IDs de teste é a parametrização de backend do anyio,
+  não do pytest-asyncio. O engine singleton do SQLAlchemy (a explicação
+  anterior, das Fases 199/212) é o que transforma o conflito em erro
+  visível, mas não é o gatilho. Experimento decisivo, sem editar nada:
+  o mesmo arquivo falha como está e **passa com qualquer um dos dois
+  plugins desligado** (`-p no:anyio` ou `-p no:asyncio`). Medido na
+  `test_api/` inteira: 102 falhas/34 passes/142 erros → **20 falhas/90
+  passes/78 erros** com plugin único. **Duas alternativas foram medidas e
+  descartadas** (não retentar às cegas): loop de escopo de sessão
+  (`asyncio_default_*_loop_scope=session`) zera os erros mas faz uma falha
+  de fixture cascatear em ~38 pulos silenciosos; e `engine.dispose()`
+  autouse por teste subiu os pulos de 42 para 78.
+
+  **`tests/test_api/` também está verde** (fase seguinte): saiu de 27 falhas +
+  75 ERROS para **zero**, em duas execuções seguidas contra o mesmo banco, e
+  virou gate do CI. Nenhuma das causas estava em código de produto:
+  (a) o engine da app tinha QueuePool e reusava conexão entre event loops —
+  resolvido com `AFJ_DB_NULLPOOL=1` (ver `app/db/base.py`, ligado só pelo
+  conftest); (b) a suíte estourava o próprio rate limit de login (~180 logins
+  contra teto de 10/min no mesmo IP) — token agora é cacheado por processo e
+  as chaves são limpas entre testes; (c) um teste colocava o token
+  COMPARTILHADO na blacklist e derrubava todos os seguintes com 401;
+  (d) FK fabricada e identificadores fixos (ver `tests/dados.py`);
+  (e) asserções defasadas em relação ao código atual.
+- **O CI hoje tem 4 gates reais de backend** (antes tinha zero: o passo de
+  testes não instalava `requirements.txt`, a suíte morria na coleção e o
+  `| head -80 || true` devolvia exit 0). Agora: `ruff check app/`,
+  `pytest tests/test_unit/` (~889 testes), `pytest tests/test_api/
+  test_lgpd_sentinela.py` (guarda de esquecimento) e **`pytest
+  tests/test_api/` inteiro** (~185 testes). O job
+  sobe um Postgres de serviço e roda schema + seed pelo mesmo caminho do
+  boot da app — **o seed não é opcional**: sem o ADMIN semeado a fixture
+  `auth_headers` chama `pytest.skip` e o gate viraria decorativo. As libs de
+  teste moram em `backend/requirements-dev.txt` (`pytest`/`pytest-asyncio`),
+  não em `requirements.txt` — o primeiro run do CI novo quebrou com "No
+  module named pytest" justamente porque a simulação local rodou dentro de
+  um venv que já os tinha. **Simular o CI num ambiente que já está montado
+  não prova a instalação**; a prova de um passo de install é o run real. O
+  2º run achou outro defeito latente que só um ambiente diferente expõe:
+  `test_worker_reliability.py` comparava event loops por `id()` (endereço de
+  memória em CPython) — com o 1º loop já coletado, o alocador devolveu o
+  mesmo endereço pro 2º e o teste acusou "mesmo loop" com dois loops
+  distintos. **Nunca use `id()` para provar que dois objetos de vida curta
+  são distintos**; guarde as referências.
+- **Teste de API pode quebrar o seed do seu banco local.** Enquanto a suíte
+  não rodava, isso passava despercebido; assim que voltou a rodar,
+  `test_password_change_success` trocou a senha do ADMIN semeado e derrubou
+  o login de toda a sessão. Foi corrigido (o teste restaura o que muda),
+  mas a lição vale para qualquer teste novo: **desfaça o que você fez**,
+  especialmente em dado semeado.
+- **O CI não tem Redis — só Postgres.** `/health` responde `degraded` lá (a
+  resposta CERTA), e qualquer teste que exija `operational` reprova por
+  ambiente, não por código. Aconteceu no 1º run com a suíte de API como gate.
+  Ao verificar localmente, rode também **sem Redis e com banco novo**
+  (`REDIS_URL= DATABASE_URL=<banco limpo> pytest ...`) — é a 3ª vez nesta
+  série que a divergência entre o ambiente local e o do runner produz um
+  vermelho que a verificação local não podia prever. E prefira asserção de
+  **coerência** (status × componentes reportados) a asserção de literal: vale
+  em qualquer ambiente e ainda pega "operational" mentiroso.
+- **Teste que chama a função do endpoint DIRETO não resolve os defaults do
+  FastAPI.** Um `limit: int = Query(default=50, le=200)` chega como o objeto
+  `Query`, não como `50`, e estoura lá dentro (`.limit(Query(...))` →
+  `TypeError`). Vários testes foram escritos quando a assinatura era
+  `limit: int = 50` e quebraram silenciosamente quando ela virou `Query(...)`.
+  Ao chamar um endpoint direto, passe TODOS os parâmetros explicitamente.
+- **Fake de teste com assinatura desatualizada vira "erro do serviço
+  externo".** Um mock de `drive_upload_doc` ficou com 3 parâmetros depois que
+  o endpoint passou a mandar `parent_folder_id=`; o `TypeError` caiu no
+  `except Exception` genérico do endpoint e virou **502**, como se o Google
+  tivesse falhado. Prefira `**_kwargs` nos fakes e desconfie de 5xx em teste
+  com mock.
+- **Três mecanismos de gate de papel coexistem** — auditar só um produz
+  falso positivo em escala (aconteceu 4× numa única rodada):
+  `Depends(require_role(...))`, checagem inline no corpo
+  (`if current_user.role not in (...)`) e helper (`_require_admin` em
+  `users.py`). Ao avaliar se uma rota está protegida, cheque os três.
 - **Egress de rede bloqueado no sandbox de desenvolvimento** (não em
   produção — Railway tem egress irrestrito): domínios externos como
   `brasilapi.com.br`, `googleapis.com`, `graph.facebook.com`,
@@ -540,6 +621,29 @@ nunca repetir o mesmo teste do zero.** Antes de planejar uma nova rodada:
 3. Registre abaixo, em 1-2 linhas por rodada, o que foi coberto e o que
    ficou pra trás de propósito — é o que a PRÓXIMA rodada deve ler antes
    de começar.
+
+**Rodadas registradas** (1-2 linhas cada; detalhe em `HISTORICO_FASES.md`):
+- **pós-255** — reconfirmou as Fases 247-255; achou 8 gaps de LGPD + o bug
+  do `RateLimitMiddleware`. **Nenhum deles foi corrigido até hoje.**
+- **pós-260.5** — auditou pela 1ª vez o próprio aparato de qualidade (a
+  suíte nunca rodou no CI; causa-raiz da flakiness isolada), trocou a
+  auditoria de LGPD por tabela pela **varredura de sentinela** (achou 2
+  colunas novas que 8 rodadas não viram: `documents.titulo` e
+  `opportunities.titulo`), e provou a classe "gate de papel só na
+  navegação". **Deixou pra próxima**: as 20 falhas + 78 erros residuais da
+  suíte, o fluxo de escrita de `portal`/`billing`/`publications`,
+  `ContractAgent`/`OrchestrationAgent`/`poll_all_processes` (zero testes),
+  e o cache do `retrieve()` sem provedor na chave.
+  **Correção pós-260.5 (2 fases seguintes, já aplicadas)**: os 7 itens do
+  plano consolidado foram implementados. Primeiro os 3 aprovados — plugin
+  async duplicado desligado, gate de CI ligado e as 5 colunas de PII do
+  esquecimento fechadas com a varredura de sentinela virando teste. Depois os
+  4 restantes: `tests/test_api/` zerado (27 falhas + 75 erros → 0) e promovido
+  a gate; rate limiter com TTL garantido e auto-curável; gates de papel que só
+  existiam no menu fechados em 10 rotas; e o provedor de embedding na chave de
+  cache do `retrieve()`. **A lista de "deixou pra próxima" está esgotada** —
+  exceto `ContractAgent`/`OrchestrationAgent`/`poll_all_processes`, que
+  seguem sem testes próprios.
 
 Histórico completo (achados, decisões de escopo, correções, verificações
 empíricas de cada fase) fica em `HISTORICO_FASES.md` — movido pra fora

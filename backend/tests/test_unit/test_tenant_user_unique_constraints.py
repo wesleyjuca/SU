@@ -12,7 +12,7 @@ import pytest
 from sqlalchemy import delete, select, text
 from sqlalchemy.exc import IntegrityError
 
-from app.db.base import AsyncSessionLocal
+from tests.db_isolada import sessao_isolada
 from app.models.tenant import Tenant
 from app.models.user import User
 
@@ -27,30 +27,30 @@ async def _indice_existe(db, indexname: str) -> bool:
 
 
 async def test_tenants_slug_tem_constraint_unica_real():
-    async with AsyncSessionLocal() as db:
+    async with sessao_isolada() as db:
         if not await _indice_existe(db, "tenants_slug_unique_idx"):
             pytest.skip("Migração da Fase 202 (tenants_slug_unique_idx) não aplicada neste ambiente")
 
     slug_teste = f"teste-unico-{uuid.uuid4().hex[:10]}"
     tenant_id_a = uuid.uuid4()
     try:
-        async with AsyncSessionLocal() as db:
+        async with sessao_isolada() as db:
             db.add(Tenant(id=tenant_id_a, name="Tenant Teste A", slug=slug_teste, plan="STANDARD", is_active=True))
             await db.commit()
 
-        async with AsyncSessionLocal() as db:
+        async with sessao_isolada() as db:
             db.add(Tenant(id=uuid.uuid4(), name="Tenant Teste B", slug=slug_teste, plan="STANDARD", is_active=True))
             with pytest.raises(IntegrityError):
                 await db.commit()
             await db.rollback()
     finally:
-        async with AsyncSessionLocal() as db:
+        async with sessao_isolada() as db:
             await db.execute(delete(Tenant).where(Tenant.slug == slug_teste))
             await db.commit()
 
 
 async def test_users_email_tem_constraint_unica_real():
-    async with AsyncSessionLocal() as db:
+    async with sessao_isolada() as db:
         if not await _indice_existe(db, "users_email_unique_idx"):
             pytest.skip("Migração da Fase 202 (users_email_unique_idx) não aplicada neste ambiente")
         afj_id = (await db.execute(select(Tenant.id).where(Tenant.slug == "afj"))).scalar_one_or_none()
@@ -59,14 +59,14 @@ async def test_users_email_tem_constraint_unica_real():
 
     email_teste = f"teste-unico-{uuid.uuid4().hex[:10]}@example.com"
     try:
-        async with AsyncSessionLocal() as db:
+        async with sessao_isolada() as db:
             db.add(User(
                 id=uuid.uuid4(), email=email_teste, hashed_password="x",
                 full_name="Usuario Teste A", role="ASSISTENTE", is_active=True, tenant_id=afj_id,
             ))
             await db.commit()
 
-        async with AsyncSessionLocal() as db:
+        async with sessao_isolada() as db:
             db.add(User(
                 id=uuid.uuid4(), email=email_teste, hashed_password="x",
                 full_name="Usuario Teste B", role="ASSISTENTE", is_active=True, tenant_id=afj_id,
@@ -75,6 +75,6 @@ async def test_users_email_tem_constraint_unica_real():
                 await db.commit()
             await db.rollback()
     finally:
-        async with AsyncSessionLocal() as db:
+        async with sessao_isolada() as db:
             await db.execute(delete(User).where(User.email == email_teste))
             await db.commit()

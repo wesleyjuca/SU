@@ -182,7 +182,10 @@ async def test_lgpd_data_export(client: AsyncClient, auth_headers: dict):
         pytest.skip("Could not create client")
     client_id = create_res.json()["id"]
 
-    export_res = await client.get(f"/api/v1/clients/{client_id}/export", headers=auth_headers)
+    # A rota de portabilidade LGPD é `/lgpd/clients/{id}/export`; este teste
+    # apontava para `/clients/{id}/export`, que não existe (404). Só não
+    # aparecia porque o teste nunca chegava a rodar.
+    export_res = await client.get(f"/api/v1/lgpd/clients/{client_id}/export", headers=auth_headers)
     assert export_res.status_code == 200
     data = export_res.json()
     assert "titular" in data

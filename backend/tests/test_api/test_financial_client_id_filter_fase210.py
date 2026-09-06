@@ -61,8 +61,15 @@ async def cenario():
 
 async def test_client_id_filtra_so_os_lancamentos_do_cliente(cenario):
     async with AsyncSessionLocal() as db:
+        # `limit`/`offset` explícitos: chamando a função do endpoint DIRETO
+        # (sem passar pelo FastAPI) os defaults declarados como `Query(...)`
+        # não são resolvidos — `limit` chegaria como o objeto `Query` e
+        # `.limit(...)` do SQLAlchemy estouraria `TypeError`. O teste foi
+        # escrito quando a assinatura era `limit: int = 50`; a troca para
+        # `Query(default=50, le=200)` o quebrou sem ninguém notar, porque a
+        # suíte não rodava no CI.
         resp = await list_entries(
-            client_id=str(cenario["cliente_a"]),
+            client_id=str(cenario["cliente_a"]), limit=50, offset=0,
             current_user=_CurrentUser(cenario["tenant"]), db=db,
         )
     assert len(resp) == 1
@@ -71,5 +78,5 @@ async def test_client_id_filtra_so_os_lancamentos_do_cliente(cenario):
 
 async def test_sem_client_id_devolve_todos_do_tenant(cenario):
     async with AsyncSessionLocal() as db:
-        resp = await list_entries(current_user=_CurrentUser(cenario["tenant"]), db=db)
+        resp = await list_entries(limit=50, offset=0, current_user=_CurrentUser(cenario["tenant"]), db=db)
     assert len(resp) == 3

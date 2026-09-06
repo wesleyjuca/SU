@@ -136,9 +136,16 @@ async def test_stripe_webhook_confirma_pagamento_cria_financial_entry_e_e_idempo
     inv_res = await client.get(f"/api/v1/financial/invoices?client_id={client_id}", headers=auth_headers)
     invs = [i for i in inv_res.json() if i["id"] == invoice_id]
     assert invs and invs[0]["status"] == "PAGA"
+    numero = invs[0]["numero"]
 
+    # O lançamento é identificado pelo NÚMERO da fatura. O filtro anterior
+    # procurava "Fase248" na descrição do lançamento, mas essa string só
+    # existe no ITEM da fatura — a descrição gerada por
+    # `_criar_entrada_financeira` é "Fatura {numero} paga via {provider}".
+    # A lista vinha sempre vazia e o teste acusava "receita não criada"
+    # quando o lançamento existia, correto, no banco.
     fin_res = await client.get(f"/api/v1/financial?client_id={client_id}", headers=auth_headers)
-    entradas = [e for e in fin_res.json() if "Fase248" in (e.get("descricao") or "")]
+    entradas = [e for e in fin_res.json() if numero in (e.get("descricao") or "")]
     assert len(entradas) == 1
     assert entradas[0]["status"] == "PAGO"
 
@@ -148,7 +155,7 @@ async def test_stripe_webhook_confirma_pagamento_cria_financial_entry_e_e_idempo
     assert hook_res2.json()["reason"] == "já estava paga (idempotente)"
 
     fin_res2 = await client.get(f"/api/v1/financial?client_id={client_id}", headers=auth_headers)
-    entradas2 = [e for e in fin_res2.json() if "Fase248" in (e.get("descricao") or "")]
+    entradas2 = [e for e in fin_res2.json() if numero in (e.get("descricao") or "")]
     assert len(entradas2) == 1  # ainda 1, não duplicou
 
     await client.delete("/api/v1/integrations/hub/stripe", headers=auth_headers)

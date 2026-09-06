@@ -642,10 +642,14 @@ class ContractCreate(BaseModel):
     renovacao_auto: bool = False
 
 
+# `/contratos` e `/peticoes` são ADV no menu, mas criar contrato, gerar o
+# conteúdo dele e gerar petição por IA não tinham gate nenhum — só o ENVIO
+# para assinatura exigia papel. Gerar petição gasta orçamento de IA do
+# escritório (decisão do usuário nesta fase: exigir papel).
 @router.post("/contracts/create", status_code=201)
 async def create_contract(
     body: ContractCreate,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role("ADMIN", "SOCIO", "ADVOGADO")),
     db: AsyncSession = Depends(get_db),
 ):
     """Cria um contrato (Document tipo=CONTRATO + Contract associado)."""
@@ -758,7 +762,7 @@ class ContractGenerateRequest(BaseModel):
 async def generate_contract_content(
     doc_id: str,
     body: ContractGenerateRequest | None = None,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role("ADMIN", "SOCIO", "ADVOGADO")),
     db: AsyncSession = Depends(get_db),
 ):
     """Gera a minuta do contrato com IA e grava no documento (usa BYOK do usuário,
@@ -831,7 +835,7 @@ async def generate_contract_content(
 @router.post("/petitions/generate", status_code=202)
 async def generate_petition(
     body: GeneratePetitionRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role("ADMIN", "SOCIO", "ADVOGADO")),
     db: AsyncSession = Depends(get_db),
 ):
     """Dispara o petition_agent para geração de petição (assíncrono)."""

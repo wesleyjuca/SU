@@ -11,6 +11,7 @@ score`, `client_timeline`, `client_dossie_pdf` e nos 3 endpoints de
 `/portal`."""
 import pytest
 from httpx import AsyncClient
+from tests.dados import cnj_unico
 
 
 pytestmark = pytest.mark.anyio
@@ -40,7 +41,7 @@ async def _criar_processo_sem_client_id(client: AsyncClient, auth_headers: dict,
 
 async def test_processo_alcancavel_so_via_parte_aparece_vinculado(client: AsyncClient, auth_headers: dict):
     client_id = await _criar_cliente(client, auth_headers, "Titular Fase222 Reproducao")
-    process_id = await _criar_processo_sem_client_id(client, auth_headers, "5008963-31.2026.8.01.0001")
+    process_id = await _criar_processo_sem_client_id(client, auth_headers, cnj_unico(tribunal="8.01", origem="0001"))
 
     antes = await client.get(f"/api/v1/processes?client_id={client_id}", headers=auth_headers)
     assert antes.status_code == 200
@@ -63,7 +64,7 @@ async def test_processo_com_client_id_direto_continua_aparecendo(client: AsyncCl
     client_id = await _criar_cliente(client, auth_headers, "Titular Fase222 Regressao")
     res = await client.post(
         "/api/v1/processes",
-        json={"numero_cnj": "2222222-22.2026.8.01.0001", "tribunal": "TJAC", "client_id": client_id},
+        json={"numero_cnj": cnj_unico(tribunal="8.01", origem="0001"), "tribunal": "TJAC", "client_id": client_id},
         headers=auth_headers,
     )
     assert res.status_code == 201, res.text
@@ -77,7 +78,7 @@ async def test_processo_com_client_id_direto_continua_aparecendo(client: AsyncCl
 
 async def test_duas_partes_mesmo_cliente_nao_duplica_processo(client: AsyncClient, auth_headers: dict):
     client_id = await _criar_cliente(client, auth_headers, "Titular Fase222 Dedup")
-    process_id = await _criar_processo_sem_client_id(client, auth_headers, "3333333-33.2026.8.01.0001")
+    process_id = await _criar_processo_sem_client_id(client, auth_headers, cnj_unico(tribunal="8.01", origem="0001"))
 
     for tipo, nome in (("REU", "Parte A"), ("AUTOR", "Parte B")):
         r = await client.post(
@@ -95,7 +96,7 @@ async def test_duas_partes_mesmo_cliente_nao_duplica_processo(client: AsyncClien
 
 async def test_processo_via_parte_conta_no_health_score_e_timeline(client: AsyncClient, auth_headers: dict):
     client_id = await _criar_cliente(client, auth_headers, "Titular Fase222 HealthTimeline")
-    process_id = await _criar_processo_sem_client_id(client, auth_headers, "4444444-44.2026.8.01.0001")
+    process_id = await _criar_processo_sem_client_id(client, auth_headers, cnj_unico(tribunal="8.01", origem="0001"))
     r = await client.post(
         f"/api/v1/processes/{process_id}/partes",
         json={"tipo": "REU", "nome": "Titular Fase222 HealthTimeline", "client_id": client_id},

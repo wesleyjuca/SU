@@ -95,3 +95,86 @@ async def _async_return(value):
 
 async def _async_return_meta():
     return [0.1, 0.2, 0.3], "openai", "text-embedding-3-large"
+
+
+@pytest.mark.asyncio
+async def test_provedores_byok_diferentes_no_mesmo_tenant_nao_compartilham_cache(monkeypatch):
+    """Dois usuários do MESMO escritório, com BYOK de provedores diferentes,
+    fazendo a MESMA pergunta na MESMA collection privada.
+
+    Antes desta correção os dois colidiam na mesma entrada de cache por 300s:
+    `_cache_key()` tinha query/collections/filters/k/threshold/tenant_id, mas
+    não o provedor — e a chave era montada ANTES de `embed_text_with_meta()`
+    resolver qual provedor o BYOK ativava. O segundo usuário recebia o
+    resultado já filtrado por `_provider_filter()` para o provedor do
+    primeiro, contradizendo a invariante criada no desacoplamento de
+    provedores. Não é vazamento entre escritórios (tenant_id sempre esteve na
+    chave) — é resultado errado dentro do mesmo escritório.
+
+    O teste exercita a resolução REAL (seta o contextvar de BYOK que
+    `user_ai_creds()` usa em produção), não um monkeypatch do resolvedor:
+    assim ele também quebra se a chave e o embedding passarem a resolver o
+    provedor por caminhos diferentes."""
+    from app.integrations.llm_client import ai_creds_ctx
+
+    fake_redis = _FakeRedis()
+    monkeypatch.setattr(retrieval_mod, "get_redis", lambda: _async_return(fake_redis))
+
+    async def embed_conforme_byok(query, force_system_default=False):
+        creds = ai_creds_ctx.get() or {}
+        provider = "openai" if force_system_default else (creds.get("provider") or "openai")
+        return [0.1, 0.2, 0.3], provider, "modelo-x"
+
+    monkeypatch.setattr(retrieval_mod, "embed_text_with_meta", embed_conforme_byok)
+
+    client = _FakeQdrantClient()
+
+    token = ai_creds_ctx.set({"provider": "openai", "api_key": "sk-teste-openai", "base_url": None})
+    try:
+        await retrieval_mod.retrieve(client, "mesma pergunta", collections=["peticoes_afj"], tenant_id=TENANT_A)
+    finally:
+        ai_creds_ctx.reset(token)
+
+    token = ai_creds_ctx.set({"provider": "gemini", "api_key": "key-teste-gemini", "base_url": "https://g/"})
+    try:
+        await retrieval_mod.retrieve(client, "mesma pergunta", collections=["peticoes_afj"], tenant_id=TENANT_A)
+    finally:
+        ai_creds_ctx.reset(token)
+
+    # Duas buscas reais no Qdrant: o provedor faz parte da chave.
+    assert client.search_calls == 2
+    assert len(fake_redis.store) == 2
+
+    # E o cache continua funcionando para o MESMO provedor (não viramos
+    # "cache que nunca acerta", que seria uma regressão de custo).
+    token = ai_creds_ctx.set({"provider": "gemini", "api_key": "key-teste-gemini", "base_url": "https://g/"})
+    try:
+        await retrieval_mod.retrieve(client, "mesma pergunta", collections=["peticoes_afj"], tenant_id=TENANT_A)
+    finally:
+        ai_creds_ctx.reset(token)
+    assert client.search_calls == 2  # cache-hit, não bateu no Qdrant de novo
+
+
+@pytest.mark.asyncio
+async def test_collection_publica_nao_muda_de_chave_com_byok_do_usuario(monkeypatch):
+    """Busca em collection PÚBLICA sempre resolve para o provedor padrão da
+    plataforma, então o BYOK do usuário não pode fragmentar esse cache — os
+    dois usuários devem compartilhar a mesma entrada (o conteúdo público é
+    idêntico para os dois)."""
+    from app.integrations.llm_client import ai_creds_ctx
+
+    fake_redis = _FakeRedis()
+    monkeypatch.setattr(retrieval_mod, "get_redis", lambda: _async_return(fake_redis))
+    monkeypatch.setattr(retrieval_mod, "embed_text_with_meta",
+                        lambda query, force_system_default=False: _async_return_meta())
+
+    client = _FakeQdrantClient()
+
+    for provider in ("openai", "gemini"):
+        token = ai_creds_ctx.set({"provider": provider, "api_key": f"key-{provider}", "base_url": None})
+        try:
+            await retrieval_mod.retrieve(client, "lei pública", collections=["legislacao"], tenant_id=TENANT_A)
+        finally:
+            ai_creds_ctx.reset(token)
+
+    assert client.search_calls == 1  # mesma entrada de cache para os dois

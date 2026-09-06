@@ -49,6 +49,14 @@ async def test_lgpd_erasure_reaches_opportunity_descricao(client: AsyncClient, a
     assert export_res.status_code == 200
     exported = export_res.json()
     assert "11988887777" not in str(exported)
-    assert any(o["titulo"] == "Consultoria trabalhista" for o in exported.get("oportunidades_crm", []))
+    # CONTRATO ATUALIZADO: `opportunities.titulo` passou a ser anonimizado no
+    # esquecimento — a varredura de sentinela flagrou o título sobrevivendo
+    # com PII enquanto a `descricao` ao lado já era limpa. A oportunidade
+    # continua listada no export (o vínculo é dado de negócio), mas o título
+    # não é mais o original.
+    oportunidades = exported.get("oportunidades_crm", [])
+    assert len(oportunidades) >= 1, "a oportunidade sumiu do export"
+    assert all(o["titulo"] != "Consultoria trabalhista" for o in oportunidades), \
+        "o título original sobreviveu ao esquecimento"
 
     await client.delete(f"/api/v1/crm/opportunities/{opp_id}", headers=auth_headers)

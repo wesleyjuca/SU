@@ -7,7 +7,7 @@ from typing import Any
 import uuid
 
 from app.db.base import get_db
-from app.dependencies import get_current_user
+from app.dependencies import get_current_user, require_role
 from app.models.user import User
 from app.models.agent_run import AgentRun
 from app.models.client import Client
@@ -78,11 +78,15 @@ class AgentRunResponse(BaseModel):
     last_step_status: str | None = None
 
 
+# Gasto de IA passa a exigir papel (decisão do usuário nesta fase): qualquer
+# papel staff — inclusive ASSISTENTE e PARALEGAL — podia disparar chain de
+# agentes e consumir o orçamento de IA do escritório, apesar de `/agentes` e
+# `/visual-law` serem ADV no menu. Menu não protege: bastava chamar a rota.
 @router.post("/trigger", status_code=202)
 async def trigger_agent(
     body: TriggerAgentRequest,
     background_tasks: BackgroundTasks,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role("ADMIN", "SOCIO", "ADVOGADO")),
     db: AsyncSession = Depends(get_db),
 ):
     """

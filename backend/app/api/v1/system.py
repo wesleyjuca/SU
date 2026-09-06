@@ -161,11 +161,18 @@ async def get_metrics(
     return await _cached(cache_key, 60, compute)
 
 
+# Gate de papel alinhado com `/system/analytics/gestao` e com todo o
+# router `financial` — a tela que consome estes três endpoints
+# (`/relatorios`) é restrita a gestão em `nav.ts`, mas menu não protege
+# nada: não há guard de rota por papel fora de `/admin/*`, então bastava
+# digitar a URL. Enquanto `/financial/summary` devolvia 403 para papel
+# baixo, este devolvia 200 com o faturamento do escritório inteiro — a
+# contradição prova descuido, não política.
 @router.get("/analytics/financeiro")
 async def analytics_financeiro(
     meses: int = Query(default=6, ge=1, le=24),
     force_refresh: bool = False,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role("ADMIN", "SOCIO", "GESTOR")),
     db: AsyncSession = Depends(get_db),
 ):
     """Dados financeiros para gráficos (cache 5 min)."""
@@ -266,7 +273,7 @@ async def analytics_financeiro(
 @router.get("/analytics/processos")
 async def analytics_processos(
     force_refresh: bool = False,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role("ADMIN", "SOCIO", "GESTOR")),
     db: AsyncSession = Depends(get_db),
 ):
     """Estatísticas de processos para gráficos (cache 10 min)."""
@@ -334,7 +341,7 @@ async def analytics_processos(
 async def analytics_agentes(
     dias: int = Query(default=30, ge=1, le=90),
     force_refresh: bool = False,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role("ADMIN", "SOCIO", "GESTOR")),
     db: AsyncSession = Depends(get_db),
 ):
     """Métricas de performance e custo dos agentes IA (cache 2 min)."""

@@ -26,10 +26,30 @@ from sqlalchemy import select
 
 from app.db.base import AsyncSessionLocal
 from app.models.agent_run import AgentRun, AgentStep, Approval
+from app.models.user import User
 
 pytestmark = pytest.mark.anyio
 
-AFJ_TENANT = uuid.UUID("982f3011-fa9c-4cdc-8cc3-cf1f3376708c")
+
+@pytest.fixture
+async def tenant_afj():
+    """Tenant REAL do ADMIN semeado, resolvido em tempo de execução.
+
+    Antes isto era um UUID hardcoded
+    (`982f3011-fa9c-4cdc-8cc3-cf1f3376708c`) de um banco antigo — grep no
+    repositório inteiro confirma que ele não existe em nenhum seed nem
+    migration. Contra qualquer outro banco, os INSERTs de `AgentRun`/
+    `Approval` violavam `agent_runs_tenant_id_fkey` (a violação que aparece
+    no log do Postgres do CI), e como os testes resolvem a aprovação via
+    HTTP com o token do ADMIN, o run precisa mesmo ser do tenant DELE para
+    o endpoint encontrá-lo."""
+    async with AsyncSessionLocal() as db:
+        admin = (await db.execute(
+            select(User).where(User.email == "admin@afj.com.br")
+        )).scalar_one_or_none()
+        if admin is None:
+            pytest.skip("ADMIN semeado não disponível neste ambiente")
+        return admin.tenant_id
 
 
 def _patch_orchestrator(monkeypatch):
@@ -56,7 +76,7 @@ def _patch_orchestrator(monkeypatch):
     monkeypatch.setattr(orch, "resolve_agent_class", _resolve)
 
 
-async def test_gate_generico_3_passos_completa_ate_success(client, auth_headers, monkeypatch):
+async def test_gate_generico_3_passos_completa_ate_success(client, auth_headers, monkeypatch, tenant_afj):
     """Fase 183(a) — sem o flush, o 2º gate (GATE2, tipo genérico — não
     PETITION_*/CONTRACT_*) travava a chain em AWAITING_APPROVAL pra
     sempre, sem nenhuma Approval pendente pra resolver."""
@@ -66,13 +86,13 @@ async def test_gate_generico_3_passos_completa_ate_success(client, auth_headers,
         run = AgentRun(
             id=uuid.uuid4(), agent_name="orchestration_agent", trigger_type="CHAINED",
             input_data={}, status="AWAITING_APPROVAL", task_type="new_process_intake",
-            tenant_id=AFJ_TENANT, tokens_used=10, cost_usd=Decimal("0.001"),
+            tenant_id=tenant_afj, tokens_used=10, cost_usd=Decimal("0.001"),
             requires_approval=True,
         )
         db.add(run)
         await db.flush()
         db.add(AgentStep(run_id=run.id, step_number=0, step_name="process_agent", output_json={"_status": "SUCCESS"}))
-        appr1 = Approval(id=uuid.uuid4(), run_id=run.id, tipo="GATE1", titulo="Gate 1", status="PENDENTE", tenant_id=AFJ_TENANT)
+        appr1 = Approval(id=uuid.uuid4(), run_id=run.id, tipo="GATE1", titulo="Gate 1", status="PENDENTE", tenant_id=tenant_afj)
         db.add(appr1)
         await db.commit()
         run_id, approval_id = run.id, appr1.id
@@ -104,7 +124,7 @@ async def test_gate_generico_3_passos_completa_ate_success(client, auth_headers,
             await db.commit()
 
 
-async def test_rejeicao_sobrevive_a_retry_concorrente_do_celery(client, auth_headers):
+async def test_rejeicao_sobrevive_a_retry_concorrente_do_celery(client, auth_headers, tenant_afj):
     """Fase 183(c) — sem o lock `FOR UPDATE` na AgentRun, um retry do
     Celery em voo (aqui simulado: SELECT...FOR UPDATE + sleep + mutação +
     commit, mesma sequência de agent_tasks.py::_run_async) podia commitar
@@ -117,12 +137,12 @@ async def test_rejeicao_sobrevive_a_retry_concorrente_do_celery(client, auth_hea
         run = AgentRun(
             id=uuid.uuid4(), agent_name="orchestration_agent", trigger_type="CHAINED",
             input_data={}, status="AWAITING_APPROVAL", task_type="full_contract_flow",
-            tenant_id=AFJ_TENANT, tokens_used=100, cost_usd=Decimal("0.05"),
+            tenant_id=tenant_afj, tokens_used=100, cost_usd=Decimal("0.05"),
             requires_approval=True,
         )
         db.add(run)
         await db.flush()
-        appr = Approval(id=uuid.uuid4(), run_id=run.id, tipo="TEST_GENERIC_186_LOCK", titulo="Teste lock 186", status="PENDENTE", tenant_id=AFJ_TENANT)
+        appr = Approval(id=uuid.uuid4(), run_id=run.id, tipo="TEST_GENERIC_186_LOCK", titulo="Teste lock 186", status="PENDENTE", tenant_id=tenant_afj)
         db.add(appr)
         await db.commit()
         run_id, approval_id = run.id, appr.id

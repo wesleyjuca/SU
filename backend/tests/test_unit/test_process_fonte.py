@@ -36,8 +36,18 @@ def test_criar_processo_manual_seta_fonte_manual():
 
 
 def test_process_response_expoe_fonte():
+    import datetime
+
     from app.api.v1.processes import ProcessResponse, _to_response
     assert "fonte" in ProcessResponse.model_fields
-    proc = LegalProcess(tribunal="TJCE", fonte="OAB")
+    # `created_at`/`updated_at` têm default no banco, aplicado só no flush —
+    # num objeto ORM construído em memória vêm None e `_to_response` quebra
+    # em `.isoformat()`. Preenchidos aqui para o teste exercitar o que se
+    # propõe a exercitar (a coluna `fonte`), não a ausência de flush.
+    agora = datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)
+    proc = LegalProcess(
+        tribunal="TJCE", fonte="OAB", created_at=agora, updated_at=agora,
+        situacao="ATIVO", monitoring_active=True,
+    )
     resp = _to_response(proc)
     assert resp.fonte == "OAB"

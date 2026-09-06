@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 import uuid
 
 from app.db.base import get_db
-from app.dependencies import get_current_user, require_role
+from app.dependencies import require_role
 from app.models.user import User
 from app.models.agent_run import Approval, AgentRun
 from app.core.exceptions import NotFoundError, ValidationError
@@ -36,11 +36,13 @@ class ResolveApprovalRequest(BaseModel):
     modifications: dict | None = None  # modificações do usuário à sugestão da IA
 
 
+# A ação (`POST /{id}/resolve`) já exigia papel; a LEITURA da fila HITL não,
+# apesar de `/aprovacoes` ser restrita a ADV no menu. Alinhado com o resolve.
 @router.get("", response_model=list[ApprovalResponse])
 async def list_approvals(
     status: str = "PENDENTE",
     limit: int = 50,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role("ADVOGADO", "SOCIO", "ADMIN")),
     db: AsyncSession = Depends(get_db),
 ):
     """Lista aprovações pendentes para o usuário atual."""
@@ -64,7 +66,7 @@ async def list_approvals(
 @router.get("/{approval_id}", response_model=ApprovalResponse)
 async def get_approval(
     approval_id: str,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role("ADVOGADO", "SOCIO", "ADMIN")),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(

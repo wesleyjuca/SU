@@ -6,6 +6,8 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 import structlog
 
+from app.db.redis import incrementar_com_janela
+
 log = structlog.get_logger()
 
 AUDIT_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
@@ -148,9 +150,14 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         try:
             redis = await self._get_redis()
             if redis:
-                count = await redis.incr(redis_key)
-                if count == 1:
-                    await redis.expire(redis_key, window)
+                # `incrementar_com_janela` garante TTL a cada incremento (e
+                # conserta chave já travada sem expiração). Ver a nota em
+                # app/db/redis.py — o padrão anterior (`incr` + `expire` só
+                # quando count==1) podia deixar a chave eterna e trancar o
+                # usuário em 429 para sempre.
+                count = await incrementar_com_janela(redis, redis_key, window)
+                if count is None:
+                    count = 0  # sem informação de Redis: deixa passar
                 remaining = max(0, limit - count)
 
                 if count > limit:
@@ -163,8 +170,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                             "X-RateLimit-Remaining": "0",
                         },
                     )
-        except Exception:
-            pass
+        except Exception as exc:
+            # Fail-open preservado: falha de Redis nunca derruba a requisição.
+            # Mas para de ser invisível — era um `except: pass` mudo.
+            log.warning("rate_limit_middleware_falhou", path=path, erro=str(exc))
 
         response = await call_next(request)
 

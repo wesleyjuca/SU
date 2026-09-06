@@ -19,6 +19,22 @@ export type NavItem = {
 
 export type NavSection = { title: string | null; items: NavItem[] };
 
+/** Papéis permitidos na rota que cobre `pathname`, ou `null` se a rota não
+ *  estiver no registro (nesse caso quem chama decide o padrão).
+ *
+ *  Existe para que o guard de `/admin/*` não mantenha a própria lista de
+ *  papéis: elas divergiram (o menu liberava SOCIO em "Relatórios da Banca",
+ *  o guard redirecionava SOCIO para o dashboard, e o backend daquelas rotas
+ *  aceita SOCIO — o item aparecia no menu e era barrado ao clicar). Fonte
+ *  única evita a próxima divergência. */
+export function rolesPermitidosPara(pathname: string): string[] | null {
+  const itens = navSections.flatMap((s) => s.items);
+  const casa = itens
+    .filter((i) => pathname === i.href || pathname.startsWith(i.href + "/"))
+    .sort((a, b) => b.href.length - a.href.length)[0];  // rota mais específica
+  return casa ? casa.roles : null;
+}
+
 const ADV = ["ADMIN", "SUPERADMIN", "SOCIO", "ADVOGADO"];
 const GESTAO = ["ADMIN", "SUPERADMIN", "SOCIO", "GESTOR"];
 

@@ -43,7 +43,7 @@ async def _login_rl_key(request: Request, email: str) -> str:
 @router.post("/login", response_model=TokenResponse)
 async def login(body: LoginRequest, request: Request, db: AsyncSession = Depends(get_db)):
     # Rate-limit por IP+email (anti brute-force). Sem Redis, vira no-op.
-    from app.db.redis import get_redis
+    from app.db.redis import get_redis, incrementar_com_janela
     from fastapi import HTTPException
     redis = await get_redis()
     rl_key = await _login_rl_key(request, body.email)
@@ -66,12 +66,7 @@ async def login(body: LoginRequest, request: Request, db: AsyncSession = Depends
             ok = False
     if not user or not ok:
         if redis:
-            try:
-                n = await redis.incr(rl_key)
-                if n == 1:
-                    await redis.expire(rl_key, _LOGIN_WINDOW_SEC)
-            except Exception:
-                pass
+            await incrementar_com_janela(redis, rl_key, _LOGIN_WINDOW_SEC)
         # Motivo detalhado só no log (mensagem ao usuário permanece genérica).
         import structlog
         structlog.get_logger().warning(
@@ -128,7 +123,7 @@ async def demo_login(request: Request, db: AsyncSession = Depends(get_db)):
     (app/services/demo_reset.py), tornando estruturalmente impossível
     usar esta rota para entrar em qualquer outro tenant.
     """
-    from app.db.redis import get_redis
+    from app.db.redis import get_redis, incrementar_com_janela
     from fastapi import HTTPException
     from app.models.tenant import Tenant
     from app.services.demo_fixtures import DEMO_ADMIN_EMAIL
@@ -137,12 +132,7 @@ async def demo_login(request: Request, db: AsyncSession = Depends(get_db)):
     redis = await get_redis()
     rl_key = f"demo_login:{ip}"
     if redis:
-        try:
-            n = await redis.incr(rl_key)
-            if n == 1:
-                await redis.expire(rl_key, _DEMO_LOGIN_WINDOW_SEC)
-        except Exception:
-            n = 0
+        n = await incrementar_com_janela(redis, rl_key, _DEMO_LOGIN_WINDOW_SEC) or 0
         if n > _DEMO_LOGIN_MAX:
             raise HTTPException(status_code=429, detail="Muitas tentativas. Aguarde alguns minutos e tente novamente.")
 
@@ -207,19 +197,14 @@ async def portal_redeem(body: PortalRedeemRequest, request: Request, db: AsyncSe
     é o único router sem dependência global, mesmo motivo de `/login`/
     `/demo-login` estarem aqui."""
     from fastapi import HTTPException
-    from app.db.redis import get_redis
+    from app.db.redis import get_redis, incrementar_com_janela
     from app.models.client import ClientPortalAccess
 
     ip = request.client.host if request.client else "?"
     redis = await get_redis()
     rl_key = f"portal_redeem:{ip}"
     if redis:
-        try:
-            n = await redis.incr(rl_key)
-            if n == 1:
-                await redis.expire(rl_key, _PORTAL_REDEEM_WINDOW_SEC)
-        except Exception:
-            n = 0
+        n = await incrementar_com_janela(redis, rl_key, _PORTAL_REDEEM_WINDOW_SEC) or 0
         if n > _PORTAL_REDEEM_MAX:
             raise HTTPException(status_code=429, detail="Muitas tentativas. Aguarde alguns minutos e tente novamente.")
 
