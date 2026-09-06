@@ -209,7 +209,13 @@ rediscobertas do zero a cada sessão — contexto completo de cada uma em
   não em `requirements.txt` — o primeiro run do CI novo quebrou com "No
   module named pytest" justamente porque a simulação local rodou dentro de
   um venv que já os tinha. **Simular o CI num ambiente que já está montado
-  não prova a instalação**; a prova de um passo de install é o run real.
+  não prova a instalação**; a prova de um passo de install é o run real. O
+  2º run achou outro defeito latente que só um ambiente diferente expõe:
+  `test_worker_reliability.py` comparava event loops por `id()` (endereço de
+  memória em CPython) — com o 1º loop já coletado, o alocador devolveu o
+  mesmo endereço pro 2º e o teste acusou "mesmo loop" com dois loops
+  distintos. **Nunca use `id()` para provar que dois objetos de vida curta
+  são distintos**; guarde as referências.
 - **Teste de API pode quebrar o seed do seu banco local.** Enquanto a suíte
   não rodava, isso passava despercebido; assim que voltou a rodar,
   `test_password_change_success` trocou a senha do ADMIN semeado e derrubou
