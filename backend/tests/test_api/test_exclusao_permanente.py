@@ -4,6 +4,7 @@ Usa `superadmin_headers` (conftest.py) — pula graciosamente se o seed
 SUPERADMIN não estiver disponível no ambiente, mesmo espírito de `auth_headers`."""
 import pytest
 from httpx import AsyncClient
+from tests.dados import cnj_unico, email_unico
 
 
 pytestmark = pytest.mark.anyio
@@ -13,7 +14,7 @@ async def test_processo_permanente_recusado_para_nao_superadmin(client: AsyncCli
     """auth_headers é ADMIN (não SUPERADMIN) — deve ser barrado."""
     create_res = await client.post(
         "/api/v1/processes",
-        json={"numero_cnj": "0000009-00.2024.8.26.0100", "tribunal": "TJSP"},
+        json={"numero_cnj": cnj_unico(), "tribunal": "TJSP"},
         headers=auth_headers,
     )
     if create_res.status_code != 201:
@@ -29,7 +30,7 @@ async def test_processo_permanente_superadmin_apaga_de_verdade(
 ):
     create_res = await client.post(
         "/api/v1/processes",
-        json={"numero_cnj": "0000010-00.2024.8.26.0100", "tribunal": "TJSP"},
+        json={"numero_cnj": cnj_unico(), "tribunal": "TJSP"},
         headers=auth_headers,
     )
     if create_res.status_code != 201:
@@ -46,7 +47,7 @@ async def test_processo_permanente_superadmin_apaga_de_verdade(
 async def test_usuario_permanente_recusado_para_nao_superadmin(client: AsyncClient, auth_headers: dict):
     invite_res = await client.post(
         "/api/v1/users/invite",
-        json={"email": "descartavel180a@afjadvogados.com.br", "full_name": "Descartável 180a", "role": "ASSISTENTE"},
+        json={"email": email_unico("descartavel180a"), "full_name": "Descartável 180a", "role": "ASSISTENTE"},
         headers=auth_headers,
     )
     if invite_res.status_code != 201:
@@ -74,7 +75,7 @@ async def test_usuario_permanente_superadmin_apaga_de_verdade(
 ):
     invite_res = await client.post(
         "/api/v1/users/invite",
-        json={"email": "descartavel180b@afjadvogados.com.br", "full_name": "Descartável 180b", "role": "ASSISTENTE"},
+        json={"email": email_unico("descartavel180b"), "full_name": "Descartável 180b", "role": "ASSISTENTE"},
         headers=auth_headers,
     )
     if invite_res.status_code != 201:
@@ -101,7 +102,7 @@ async def test_tenant_em_producao_bloqueia_exclusao_permanente(
 
     create_res = await client.post(
         "/api/v1/processes",
-        json={"numero_cnj": "0000011-00.2024.8.26.0100", "tribunal": "TJSP"},
+        json={"numero_cnj": cnj_unico(), "tribunal": "TJSP"},
         headers=auth_headers,
     )
     if create_res.status_code != 201:

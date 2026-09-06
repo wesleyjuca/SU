@@ -1,6 +1,7 @@
 """Tests for /processes endpoints — CRUD, movements, deadlines, agenda, tenant isolation."""
 import pytest
 from httpx import AsyncClient
+from tests.dados import cnj_unico
 
 
 pytestmark = pytest.mark.anyio
@@ -13,7 +14,7 @@ async def test_list_processes_requires_auth(client: AsyncClient):
 
 async def test_create_process(client: AsyncClient, auth_headers: dict):
     payload = {
-        "numero_cnj": "0000001-00.2024.8.26.0100",
+        "numero_cnj": cnj_unico(),
         "tribunal": "TJSP",
         "area_direito": "CIVIL",
         "tipo_acao": "Cobrança",
@@ -37,7 +38,7 @@ async def test_update_process_situacao_e_campos_antes_sem_editor(client: AsyncCl
     o backend descartava silenciosamente, sem erro nenhum."""
     create_res = await client.post(
         "/api/v1/processes",
-        json={"numero_cnj": "0000005-00.2024.8.26.0100", "tribunal": "TJSP"},
+        json={"numero_cnj": cnj_unico(), "tribunal": "TJSP"},
         headers=auth_headers,
     )
     if create_res.status_code != 201:
@@ -76,7 +77,7 @@ async def test_update_process_situacao_e_campos_antes_sem_editor(client: AsyncCl
 async def test_update_process_situacao_invalida_rejeitada(client: AsyncClient, auth_headers: dict):
     create_res = await client.post(
         "/api/v1/processes",
-        json={"numero_cnj": "0000006-00.2024.8.26.0100", "tribunal": "TJSP"},
+        json={"numero_cnj": cnj_unico(), "tribunal": "TJSP"},
         headers=auth_headers,
     )
     if create_res.status_code != 201:
@@ -101,7 +102,7 @@ async def test_add_movement(client: AsyncClient, auth_headers: dict):
     # Create a process first
     create_res = await client.post(
         "/api/v1/processes",
-        json={"numero_cnj": "0000002-00.2024.8.26.0100", "tribunal": "TJSP"},
+        json={"numero_cnj": cnj_unico(), "tribunal": "TJSP"},
         headers=auth_headers,
     )
     if create_res.status_code != 201:
@@ -128,7 +129,7 @@ async def test_add_movement(client: AsyncClient, auth_headers: dict):
 async def test_partes_manual_crud_e_tenant_isolation(client: AsyncClient, auth_headers: dict, tenant_b_process_id: str):
     create_res = await client.post(
         "/api/v1/processes",
-        json={"numero_cnj": "0000004-00.2024.8.26.0100", "tribunal": "TJSP"},
+        json={"numero_cnj": cnj_unico(), "tribunal": "TJSP"},
         headers=auth_headers,
     )
     if create_res.status_code != 201:
@@ -181,7 +182,7 @@ async def test_parte_vincular_cliente_do_mesmo_tenant(client: AsyncClient, auth_
     """Fase 179 — vincular a parte a um Client existente do mesmo tenant."""
     process_res = await client.post(
         "/api/v1/processes",
-        json={"numero_cnj": "0000007-00.2024.8.26.0100", "tribunal": "TJSP"},
+        json={"numero_cnj": cnj_unico(), "tribunal": "TJSP"},
         headers=auth_headers,
     )
     if process_res.status_code != 201:
@@ -233,7 +234,7 @@ async def test_parte_vincular_cliente_de_outro_tenant_rejeitado(
     não deixar vincular a parte a um cliente que não pertence ao tenant do usuário."""
     process_res = await client.post(
         "/api/v1/processes",
-        json={"numero_cnj": "0000008-00.2024.8.26.0100", "tribunal": "TJSP"},
+        json={"numero_cnj": cnj_unico(), "tribunal": "TJSP"},
         headers=auth_headers,
     )
     if process_res.status_code != 201:
@@ -267,7 +268,7 @@ async def test_parte_vincular_cliente_de_outro_tenant_rejeitado(
 async def test_create_deadline_direct(client: AsyncClient, auth_headers: dict):
     create_res = await client.post(
         "/api/v1/processes",
-        json={"numero_cnj": "0000003-00.2024.8.26.0100", "tribunal": "TJSP"},
+        json={"numero_cnj": cnj_unico(), "tribunal": "TJSP"},
         headers=auth_headers,
     )
     if create_res.status_code != 201:
@@ -293,7 +294,7 @@ async def test_create_deadline_direct(client: AsyncClient, auth_headers: dict):
 async def test_mark_deadline_cumprido(client: AsyncClient, auth_headers: dict):
     create_res = await client.post(
         "/api/v1/processes",
-        json={"numero_cnj": "0000004-00.2024.8.26.0100", "tribunal": "TJSP"},
+        json={"numero_cnj": cnj_unico(), "tribunal": "TJSP"},
         headers=auth_headers,
     )
     if create_res.status_code != 201:
