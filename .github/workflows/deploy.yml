@@ -119,13 +119,15 @@ jobs:
         run: cd backend && python -m pytest tests/test_api/test_lgpd_sentinela.py -q
         env:
           DATABASE_URL: postgresql+asyncpg://afj:afj@localhost:5432/afj_core
-      # AINDA NÃO BLOQUEIA: `tests/test_api/` carrega ~20 falhas e ~77 erros
-      # pré-existentes (a metade da flakiness que o fix de plugin não cobre,
-      # mais falhas próprias), diagnosticados e registrados na rodada
-      # pós-260.5 como a fase seguinte. Roda visível para não voltar a ser
-      # invisível; vira gate quando aquele resíduo for zerado.
-      - name: Backend API tests (informativo — ver nota acima)
-        run: cd backend && python -m pytest tests/test_api/ -q || true
+      # GATE REAL desde a fase que zerou o resíduo. Histórico, porque a conta
+      # importa: esta suíte saiu de 27 falhas + 75 ERROS (medição inicial,
+      # Postgres real) para ZERO falhas, em duas execuções seguidas contra o
+      # mesmo banco. Nenhuma das causas estava no código de produto — eram
+      # pool de conexão atravessando event loops, a própria suíte estourando
+      # o rate limit de login, um teste que colocava o token compartilhado na
+      # blacklist, FK fabricada, identificadores fixos e asserções defasadas.
+      - name: Backend API tests (gate real)
+        run: cd backend && python -m pytest tests/test_api/ -q
         env:
           DATABASE_URL: postgresql+asyncpg://afj:afj@localhost:5432/afj_core
       - name: Frontend tests

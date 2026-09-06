@@ -5712,3 +5712,109 @@ cross-tenant, flakiness de teste) já tem um padrão de causa conhecido.
     `test_api/test_auth.py` tem um import `pytest` não usado, pré-
     existente, que o `ruff` sinalizaria (o CI só roda `ruff check app/`,
     então não quebra nada).
+
+- **Correção pós-260.5 (parte 2) — os 4 itens restantes do plano consolidado**
+  — o usuário mandou atacar os quatro que sobraram: resíduo do `test_api`,
+  `RateLimitMiddleware`, gates de papel que só existiam no menu, e o cache do
+  `retrieve()` sem provedor. Todos entregues, todos com prova nos dois
+  sentidos.
+  - **`tests/test_api/`: de 27 falhas + 80 passes + 75 ERROS para ZERO
+    falhas** (185 passes / 9 skips), confirmado em **duas execuções seguidas
+    contra o mesmo banco** — o critério que o plano fixou, porque uma
+    execução só não distingue defeito de sujeira acumulada. Nenhuma das
+    causas estava em código de produto:
+    - **Os 75 erros eram um só bug**: `RuntimeError: Event loop is closed` no
+      teardown. O engine da app é singleton com QueuePool, então uma conexão
+      criada no loop do teste N era reusada no loop do teste N+1. Resolvido
+      com `AFJ_DB_NULLPOOL=1` (`app/db/base.py`), que só a suíte liga, no
+      conftest, antes de importar a app. **Isso tornou desnecessária a
+      migração manual dos 28 arquivos para `sessao_isolada()`** que o plano
+      previa — uma linha de configuração matou a classe inteira.
+    - **A suíte se autobloqueava**: `auth_headers` logava a cada teste (~180
+      logins) contra um teto de 10/min, e o `ASGITransport` reporta sempre o
+      mesmo IP. A partir do 11º teste todo login voltava 429 e virava "Login
+      failed — seed data not available", que parece falta de seed e não é.
+      **No CI isso nunca aparecia porque lá não há Redis e o rate limit vira
+      no-op** — os dois ambientes davam respostas diferentes pela mesma causa,
+      e a divergência escondia o problema nos dois. Token agora é cacheado por
+      processo; chaves limpas entre testes num `tests/test_api/conftest.py`
+      próprio (quando a fixture era autouse no conftest raiz, introduziu uma
+      falha dependente de ordem em `test_unit` — fixture async autouse não é
+      inócua para quem não precisa dela).
+    - **`test_logout_invalidates_token` punha o token COMPARTILHADO na
+      blacklist**, derrubando todo teste seguinte com 401. Ganhou token
+      descartável próprio: um teste que destrói um recurso destrói o dele.
+    - **FK fabricada** em `test_agent_playbooks_fase216` (uuid inventado
+      gravado em `atualizado_por`, sem nenhum `User` no banco) e
+      `test_hitl_flush_and_lock` (tenant_id hardcoded de um banco antigo — o
+      grep confirma que aquele UUID só existia naquela linha). Vale registrar
+      que esses 2 arquivos são exatamente as **duas perguntas em aberto das
+      Fases 219/228** ("gate genérico completa até SUCCESS", "rejeição
+      sobrevive a retry concorrente"): elas nunca rodavam de verdade.
+    - **Identificadores fixos** → novo `tests/dados.py` (`cnj_unico`,
+      `email_unico`, `cpf_unico`), porque `LegalProcess` tem
+      `UNIQUE(tenant_id, numero_cnj)` e a 2ª execução contra o mesmo banco
+      colidia — com guardas `if != 201: skip` mascarando a falha como skip.
+    - **Asserções defasadas (classe E)**, cada uma auditada contra o código de
+      produção antes de mexer: teste apontando para `/clients/{id}/export`,
+      rota que não existe (é `/lgpd/clients/{id}/export`); comparação de
+      dicionário inteiro que quebrava a cada campo novo (`latitude`/
+      `longitude` entraram na resposta de CEP); `oportunidades_crm[].titulo`
+      esperado intacto após o esquecimento — contrato que a PRÓPRIA fase
+      anterior mudou de propósito, ao fechar o vazamento de PII no título;
+      filtro por `"Fase248" in descricao` que nunca casaria, porque a
+      descrição gerada é `"Fatura {numero} paga via {provider}"` — o teste
+      acusava "receita não criada" com o lançamento correto no banco (checado
+      linha a linha no Postgres antes de concluir que não era bug de produto).
+    - **Promovido a gate real no CI** (`|| true` removido). O CI passa a ter
+      4 gates de backend.
+  - **Rate limiter — o bug se manifestou sozinho durante a medição.** A chave
+    `ratelimit:auth:127.0.0.1` foi encontrada com **valor 463 e TTL=-1**,
+    contra um teto de 10/min: exatamente a falha prevista (INCR sem EXPIRE
+    deixando a chave eterna), trancando todo login em 429 sem caminho de
+    reparo no código. Ela e o teste de senha se realimentavam — o 429 derrubou
+    o relogin de `test_password_change_success`, que por isso não restaurou a
+    senha do ADMIN semeado, gerando mais 429. Novo
+    `incrementar_com_janela()` (`app/db/redis.py`): INCR + TTL num MULTI/EXEC
+    e EXPIRE reaplicado **sempre que o TTL estiver ausente**, não só na
+    primeira chamada — o que o torna **auto-curável** (chave já travada ganha
+    expiração no próximo acesso, sem intervenção manual no Redis). Aplicado
+    nos 4 call sites (middleware + `login_fail`/`demo_login`/`portal_redeem`).
+    5 testes novos numa área que tinha cobertura zero, incluindo o que
+    reproduz o estado observado e um que garante que a janela NÃO é
+    reiniciada a cada acesso (o bug oposto).
+  - **Gates de papel.** Confirmado o pré-requisito que torna o item sério:
+    **não existe guard de rota por papel fora de `/admin/*`** — esconder no
+    menu não protege nada. 10 rotas fechadas com `require_role`, espelhando o
+    papel que o `nav.ts` já declara: os 3 `/system/analytics/*`, `GET
+    /integrations/hub` + os 2 `/last-sync`, as 6 de `/petition-templates`
+    (o arquivo não tinha gate nenhum), `GET /approvals` e `/approvals/{id}`,
+    `contracts/create` e `contracts/{id}/generate`. Mais `POST
+    /agents/trigger` e `POST /documents/petitions/generate` com
+    ADMIN/SOCIO/ADVOGADO — **decisão explícita do usuário**, aceitando que
+    ASSISTENTE e PARALEGAL percam esses dois caminhos, porque disparam gasto
+    de IA do escritório. Verificado com token REAL de cada papel: **72
+    verificações (12 rotas × 6 papéis)**, exigindo as duas direções — papel
+    baixo barrado E papel legítimo passando, mais rotas de controle que devem
+    seguir abertas; promovido a teste automatizado
+    (`test_api/test_gates_de_papel.py`). No frontend, o guard de `/admin/*`
+    mantinha a própria lista e divergia do menu (o item "Relatórios da Banca"
+    aparecia para SOCIO e era barrado ao clicar, embora o backend aceite
+    SOCIO): agora consulta o MESMO registro via `rolesPermitidosPara()`.
+  - **Cache do `retrieve()`.** `_cache_key()` não tinha o provedor e era
+    montada ANTES de o BYOK ser resolvido: dois usuários do mesmo escritório
+    com provedores diferentes colidiam por 300s e o segundo recebia resultado
+    filtrado pelo provedor do primeiro — não é vazamento entre escritórios
+    (`tenant_id` sempre esteve na chave), é resultado errado dentro do mesmo.
+    Novo `resolve_embedding_provider_name()` reusa a MESMA resolução de
+    `get_embeddings_client()` (sem rede), para que chave e embedding não
+    possam divergir. 2 testes novos exercitando o contextvar real de BYOK.
+  - **Verificado**: `ruff`/`tsc`/`eslint` limpos; `test_unit` 889 passes;
+    `test_api` zero falhas em duas execuções seguidas contra banco novo criado
+    pelo mesmo caminho do CI. Todo fix provado nos dois sentidos (o teste
+    falha com a correção revertida).
+  - **Fica para a próxima rodada**: `ContractAgent`, `OrchestrationAgent` e
+    `poll_all_processes` seguem sem testes próprios — a única frente da lista
+    "deixou pra próxima" da rodada pós-260.5 que não foi fechada aqui.
+    Registrado também, sem corrigir: `User.role` é `String(50)` livre, sem
+    enum, e `app/schemas/user.py::ROLES` é código morto que nem lista GESTOR.

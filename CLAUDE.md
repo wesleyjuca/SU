@@ -191,17 +191,25 @@ rediscobertas do zero a cada sessão — contexto completo de cada uma em
   descartadas** (não retentar às cegas): loop de escopo de sessão
   (`asyncio_default_*_loop_scope=session`) zera os erros mas faz uma falha
   de fixture cascatear em ~38 pulos silenciosos; e `engine.dispose()`
-  autouse por teste subiu os pulos de 42 para 78. **Resíduo conhecido**:
-  `tests/test_api/` ainda tem ~28 falhas + ~79 erros de causa própria, por
-  isso roda no CI como informativo, não como gate — é a próxima fase. Antes
-  de tratar uma falha lá como regressão da sua mudança, rode um teste de
-  controle **não tocado**.
-- **O CI hoje tem 3 gates reais de backend** (antes tinha zero: o passo de
+  autouse por teste subiu os pulos de 42 para 78.
+
+  **`tests/test_api/` também está verde** (fase seguinte): saiu de 27 falhas +
+  75 ERROS para **zero**, em duas execuções seguidas contra o mesmo banco, e
+  virou gate do CI. Nenhuma das causas estava em código de produto:
+  (a) o engine da app tinha QueuePool e reusava conexão entre event loops —
+  resolvido com `AFJ_DB_NULLPOOL=1` (ver `app/db/base.py`, ligado só pelo
+  conftest); (b) a suíte estourava o próprio rate limit de login (~180 logins
+  contra teto de 10/min no mesmo IP) — token agora é cacheado por processo e
+  as chaves são limpas entre testes; (c) um teste colocava o token
+  COMPARTILHADO na blacklist e derrubava todos os seguintes com 401;
+  (d) FK fabricada e identificadores fixos (ver `tests/dados.py`);
+  (e) asserções defasadas em relação ao código atual.
+- **O CI hoje tem 4 gates reais de backend** (antes tinha zero: o passo de
   testes não instalava `requirements.txt`, a suíte morria na coleção e o
   `| head -80 || true` devolvia exit 0). Agora: `ruff check app/`,
-  `pytest tests/test_unit/` (~882 testes) e `pytest tests/test_api/
-  test_lgpd_sentinela.py` (guarda de esquecimento). `tests/test_api/`
-  inteiro roda como **informativo** até o resíduo acima ser zerado. O job
+  `pytest tests/test_unit/` (~889 testes), `pytest tests/test_api/
+  test_lgpd_sentinela.py` (guarda de esquecimento) e **`pytest
+  tests/test_api/` inteiro** (~185 testes). O job
   sobe um Postgres de serviço e roda schema + seed pelo mesmo caminho do
   boot da app — **o seed não é opcional**: sem o ADMIN semeado a fixture
   `auth_headers` chama `pytest.skip` e o gate viraria decorativo. As libs de
@@ -222,6 +230,18 @@ rediscobertas do zero a cada sessão — contexto completo de cada uma em
   o login de toda a sessão. Foi corrigido (o teste restaura o que muda),
   mas a lição vale para qualquer teste novo: **desfaça o que você fez**,
   especialmente em dado semeado.
+- **Teste que chama a função do endpoint DIRETO não resolve os defaults do
+  FastAPI.** Um `limit: int = Query(default=50, le=200)` chega como o objeto
+  `Query`, não como `50`, e estoura lá dentro (`.limit(Query(...))` →
+  `TypeError`). Vários testes foram escritos quando a assinatura era
+  `limit: int = 50` e quebraram silenciosamente quando ela virou `Query(...)`.
+  Ao chamar um endpoint direto, passe TODOS os parâmetros explicitamente.
+- **Fake de teste com assinatura desatualizada vira "erro do serviço
+  externo".** Um mock de `drive_upload_doc` ficou com 3 parâmetros depois que
+  o endpoint passou a mandar `parent_folder_id=`; o `TypeError` caiu no
+  `except Exception` genérico do endpoint e virou **502**, como se o Google
+  tivesse falhado. Prefira `**_kwargs` nos fakes e desconfie de 5xx em teste
+  com mock.
 - **Três mecanismos de gate de papel coexistem** — auditar só um produz
   falso positivo em escala (aconteceu 4× numa única rodada):
   `Depends(require_role(...))`, checagem inline no corpo
@@ -605,11 +625,16 @@ nunca repetir o mesmo teste do zero.** Antes de planejar uma nova rodada:
   suíte, o fluxo de escrita de `portal`/`billing`/`publications`,
   `ContractAgent`/`OrchestrationAgent`/`poll_all_processes` (zero testes),
   e o cache do `retrieve()` sem provedor na chave.
-  **Correção pós-260.5 (fase seguinte, já aplicada)**: os 3 primeiros itens
-  do plano consolidado foram implementados — plugin async duplicado
-  desligado, gate de CI ligado (3 gates reais de backend) e as 5 colunas de
-  PII do esquecimento fechadas, com a varredura de sentinela promovida a
-  teste automatizado. O resto da lista acima continua aberto.
+  **Correção pós-260.5 (2 fases seguintes, já aplicadas)**: os 7 itens do
+  plano consolidado foram implementados. Primeiro os 3 aprovados — plugin
+  async duplicado desligado, gate de CI ligado e as 5 colunas de PII do
+  esquecimento fechadas com a varredura de sentinela virando teste. Depois os
+  4 restantes: `tests/test_api/` zerado (27 falhas + 75 erros → 0) e promovido
+  a gate; rate limiter com TTL garantido e auto-curável; gates de papel que só
+  existiam no menu fechados em 10 rotas; e o provedor de embedding na chave de
+  cache do `retrieve()`. **A lista de "deixou pra próxima" está esgotada** —
+  exceto `ContractAgent`/`OrchestrationAgent`/`poll_all_processes`, que
+  seguem sem testes próprios.
 
 Histórico completo (achados, decisões de escopo, correções, verificações
 empíricas de cada fase) fica em `HISTORICO_FASES.md` — movido pra fora

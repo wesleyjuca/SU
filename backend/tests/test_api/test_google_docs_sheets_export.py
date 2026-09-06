@@ -88,10 +88,17 @@ async def google_workspace_habilitado(client, auth_headers, monkeypatch):
     async def _fake_token(db, tid):
         return "token-fake-184"
 
-    async def _fake_upload_doc(token, nome, html):
+    # `parent_folder_id` é obrigatório na assinatura real desde a fase da
+    # pasta configurável do Drive. Os fakes tinham ficado com 3 parâmetros:
+    # a chamada estourava `TypeError`, o `except Exception` genérico do
+    # endpoint transformava isso em 502, e o teste acusava "erro do Google"
+    # quando o defeito era do próprio fake. Passou despercebido enquanto a
+    # suíte não rodava. `**_kwargs` evita que o próximo parâmetro novo
+    # quebre isto de novo.
+    async def _fake_upload_doc(token, nome, html, parent_folder_id=None, **_kwargs):
         return {"id": "gdoc-fake-id", "link": "https://docs.google.com/doc-fake"}
 
-    async def _fake_upload_sheet(token, nome, csv_bytes):
+    async def _fake_upload_sheet(token, nome, csv_bytes, parent_folder_id=None, **_kwargs):
         return {"id": "gsheet-fake-id", "link": "https://sheets.google.com/sheet-fake"}
 
     monkeypatch.setattr(gw, "get_valid_token", _fake_token)

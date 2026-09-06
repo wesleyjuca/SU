@@ -71,6 +71,13 @@ async def test_reset_nao_toca_no_tenant_afj_e_e_idempotente():
 
 
 async def test_reset_manual_restrito_a_superadmin_real(client, auth_headers, superadmin_headers):
+    # Mesma guarda de `_ids_afj_e_demo`: o tenant demo não faz parte do seed
+    # padrão (`_seed_default_data`), então contra um banco limpo — como o do
+    # CI — o endpoint responde 422 "Tenant demo não encontrado". Sem esta
+    # checagem o teste acusava falha onde só faltava o tenant.
+    async with AsyncSessionLocal() as db:
+        await _ids_afj_e_demo(db)
+
     # ADMIN comum (tenant afj) não pode disparar o reset do tenant demo.
     resp = await client.post("/api/v1/tenants/demo/reset", headers=auth_headers)
     assert resp.status_code == 403, resp.text
