@@ -15,7 +15,7 @@ import structlog
 
 from app.config import settings
 from app.db.base import get_db
-from app.dependencies import get_current_user, require_role
+from app.dependencies import require_role
 from app.models.user import User
 from app.services import integration_hub
 
@@ -52,9 +52,13 @@ def _frontend_base_url() -> str:
     return "http://localhost:3000"
 
 
+# A tela `/integracoes` é ADMIN/SUPERADMIN no menu e todas as AÇÕES daqui já
+# exigem `require_role("ADMIN")`. Estes três GETs ficaram de fora e devolviam
+# o inventário de integrações e o histórico de sincronização para qualquer
+# papel staff — inconsistência dentro do mesmo arquivo, não decisão.
 @router.get("")
 async def hub_status(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role("ADMIN")),
     db: AsyncSession = Depends(get_db),
 ):
     """Todos os provedores do hub com o estado de conexão do escritório."""
@@ -216,7 +220,7 @@ async def hub_drive_sync_now(
 
 @router.get("/google_drive_doutrina/last-sync")
 async def hub_drive_doutrina_last_sync(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role("ADMIN")),
     db: AsyncSession = Depends(get_db),
 ):
     """Fase 188.2 — achado da Fase 186: a tela de Integrações não mostrava
@@ -265,7 +269,7 @@ async def hub_drive_doutrina_last_sync(
 
 @router.get("/google_drive_doutrina/last-sync/arquivos")
 async def hub_drive_doutrina_last_sync_arquivos(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role("ADMIN")),
     db: AsyncSession = Depends(get_db),
 ):
     """Achado real (validação da pasta Doutrina): `GET .../last-sync` só

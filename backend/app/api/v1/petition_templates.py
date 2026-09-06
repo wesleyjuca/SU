@@ -7,7 +7,7 @@ from pydantic import BaseModel
 import uuid
 
 from app.db.base import get_db
-from app.dependencies import get_current_user
+from app.dependencies import get_current_user, require_role  # noqa: F401 (get_current_user mantido p/ helpers)
 from app.models.user import User
 from app.models.document import PetitionTemplate
 from app.core.exceptions import NotFoundError
@@ -58,7 +58,7 @@ async def list_templates(
     tipo_peticao: str | None = None,
     ativo: bool | None = None,
     limit: int = Query(default=100, le=200),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role("ADMIN", "SOCIO", "ADVOGADO")),
     db: AsyncSession = Depends(get_db),
 ):
     query = (
@@ -78,7 +78,7 @@ async def list_templates(
 @router.post("", status_code=201, response_model=TemplateResponse)
 async def create_template(
     body: TemplateCreate,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role("ADMIN", "SOCIO", "ADVOGADO")),
     db: AsyncSession = Depends(get_db),
 ):
     tpl = PetitionTemplate(
@@ -112,7 +112,7 @@ async def _get_owned(db: AsyncSession, template_id: str, current_user: User) -> 
 async def update_template(
     template_id: str,
     body: TemplateUpdate,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role("ADMIN", "SOCIO", "ADVOGADO")),
     db: AsyncSession = Depends(get_db),
 ):
     tpl = await _get_owned(db, template_id, current_user)
@@ -125,7 +125,7 @@ async def update_template(
 @router.delete("/{template_id}", status_code=204)
 async def delete_template(
     template_id: str,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role("ADMIN", "SOCIO", "ADVOGADO")),
     db: AsyncSession = Depends(get_db),
 ):
     tpl = await _get_owned(db, template_id, current_user)
@@ -139,7 +139,7 @@ async def upload_template(
     nome: str | None = Form(None),
     tipo_peticao: str | None = Form(None),
     descricao: str | None = Form(None),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role("ADMIN", "SOCIO", "ADVOGADO")),
     db: AsyncSession = Depends(get_db),
 ):
     """Importa um modelo pronto do Word (.docx) ou texto (.txt).
@@ -185,7 +185,7 @@ async def upload_template(
 @router.get("/{template_id}/docx")
 async def download_template_docx(
     template_id: str,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role("ADMIN", "SOCIO", "ADVOGADO")),
     db: AsyncSession = Depends(get_db),
 ):
     """Baixa o modelo como .docx para edição no Word (depois reimporte)."""
