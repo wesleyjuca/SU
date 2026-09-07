@@ -23,7 +23,6 @@ de entrada.
 """
 from typing import TypedDict
 from langgraph.graph import StateGraph, END
-from langgraph.checkpoint.memory import MemorySaver
 import structlog
 
 from app.agents.brain.context import AgentContext
@@ -218,8 +217,9 @@ async def node_awaiting_approval(state: OrchestratorState) -> OrchestratorState:
     resolução humana (`app/api/v1/approvals.py::resolve_approval`) age
     diretamente sobre o registro correspondente (Document/Petition/Contract),
     de forma síncrona — não existe retomada deste grafo LangGraph via
-    checkpoint (o `MemorySaver` configurado em `get_orchestrator_graph` não é
-    usado para isso; ver docstring de `app/services/approval.py`). Numa chain
+    checkpoint (o grafo compila sem checkpointer — ver `get_orchestrator_graph`
+    — porque o estado necessário pra retomada já vive no Postgres via
+    `AgentStep`/`Approval`; ver docstring de `app/services/approval.py`). Numa chain
     com gate no meio, os passos restantes NÃO são executados automaticamente
     após a aprovação — isso é a Fase 169.2.
     """
@@ -372,8 +372,18 @@ _orchestrator_graph = None
 
 
 def get_orchestrator_graph():
+    """Compila (uma vez) e devolve o grafo do orquestrador.
+
+    Sem checkpointer de propósito: `MemorySaver` acumulava 1 checkpoint por
+    run num dict em RAM, sem TTL/LRU, e nunca era liberado — memória crescia
+    linearmente com o número de execuções (>3.6GB após milhares de runs,
+    causando OOM kill em produção). Não há retomada deste grafo via
+    checkpoint do LangGraph: o estado necessário pra resumir uma chain
+    suspensa (HITL) já é persistido em Postgres via `AgentStep`/`Approval`
+    (ver `node_awaiting_approval` acima e `app/services/chain_resume.py`),
+    então o checkpointer era puro overhead sem função nenhuma.
+    """
     global _orchestrator_graph
     if _orchestrator_graph is None:
-        checkpointer = MemorySaver()
-        _orchestrator_graph = build_orchestrator_graph().compile(checkpointer=checkpointer)
+        _orchestrator_graph = build_orchestrator_graph().compile(checkpointer=None)
     return _orchestrator_graph

@@ -171,6 +171,13 @@ async def _run_async(
         # preenchido por BaseAgent.run()/ask_llm(), só faltava persistir.
         output["_trace"] = ctx.audit_events
 
+        # Estado transiente (audit_events/retrieved_memory/state) já foi
+        # persistido acima (output["_trace"]) ou consumido durante o run —
+        # liberar aqui evita reter listas potencialmente grandes na memória
+        # do worker além do necessário (só tokens/cost/flags escalares de
+        # `ctx` ainda são lidos abaixo).
+        ctx.clear_transient()
+
         # Atualizar status no DB
         if agent_run:
             # Fase 183 — achado empírico: SELECT ... FOR UPDATE (não só
