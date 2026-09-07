@@ -78,7 +78,26 @@ class ProcessAgent(BaseAgent):
         # que este agente consome.
         from app.integrations.fontes.registry import obter_fonte
         fonte_dj = obter_fonte("datajud")
-        movimentos = await fonte_dj.fetch_movements_datajud(numero_cnj, tribunal) if fonte_dj else []
+        # `sinalizar_falha=True`: None significa que a consulta NÃO aconteceu
+        # (breaker aberto, rede fora, erro do DataJud). Antes isso voltava `[]`
+        # e era indistinguível de "sem andamento novo" — o processo contava
+        # como polled com sucesso e o ciclo inteiro saía `status="OK"`.
+        movimentos = (
+            await fonte_dj.fetch_movements_datajud(numero_cnj, tribunal, sinalizar_falha=True)
+            if fonte_dj else None
+        )
+        if movimentos is None:
+            return AgentResult(
+                status=AgentStatus.PARTIAL,
+                agent_name=self.name,
+                output={
+                    "numero_cnj": numero_cnj,
+                    "tribunal": tribunal,
+                    "fonte_indisponivel": True,
+                    "polled_at": datetime.now(timezone.utc).isoformat(),
+                },
+                error="fonte de andamentos indisponível (DataJud)",
+            )
 
         # Resumo IA por movimento é caro no polling em lote (1 chamada × movimento ×
         # todos os processos, a cada 30 min) — só quando POLL_AI_SUMMARY está ligado.
@@ -168,16 +187,42 @@ class ProcessAgent(BaseAgent):
             await db.commit()
         except Exception as exc:
             await db.rollback()
-            novos = 0
             log.error("save_movements_failed", process_id=str(process_id), error=str(exc))
+            # Antes esta falha era engolida (`novos = 0`) e o processo ainda
+            # contava como polled com sucesso — andamento perdido sem nenhum
+            # sinal no `SyncRun`. Agora propaga: o loop do lote captura,
+            # incrementa `errors` e segue para o próximo processo.
+            raise
         finally:
             if owned:
                 await db.close()
         return novos
 
+    async def _registrar_sync_run_falha(self, inicio, erro: str) -> None:
+        """Grava um `SyncRun` de ERRO quando o lote nem chegou a rodar.
+
+        Antes, uma exceção na montagem do lote (a query fora do try/except do
+        loop) subia sem deixar rastro nenhum: `BaseAgent.run` a convertia em
+        `AgentResult(FAILED)` e o bloco que cria os `SyncRun` ficava para trás.
+        Resultado: o ciclo simplesmente sumia — nem "OK", nem "ERRO", nada."""
+        try:
+            from sqlalchemy.ext.asyncio import AsyncSession
+            from app.db.base import engine
+            from app.models.sync_run import SyncRun
+            async with AsyncSession(engine) as db_err:
+                db_err.add(SyncRun(
+                    tenant_id=None, fonte="datajud", tipo="POLLING", status="ERRO",
+                    stats={"erro": str(erro)[:300]},
+                    started_at=inicio, finished_at=datetime.now(timezone.utc),
+                ))
+                await db_err.commit()
+        except Exception as exc2:  # nunca mascara o erro original
+            log.warning("poll_batch_registro_falha_falhou", error=str(exc2))
+
     async def _poll_all_active(self, ctx: AgentContext) -> AgentResult:
         """Polling batch de todos os processos com monitoramento ativo."""
         db, owned = await self._get_db()
+        inicio_batch = datetime.now(timezone.utc)
 
         try:
             from sqlalchemy import select, func, and_
@@ -227,15 +272,19 @@ class ProcessAgent(BaseAgent):
                 .limit(batch_size)
             )
             processos = result.scalars().all()
+        except Exception as exc:
+            log.error("poll_batch_query_failed", error=str(exc))
+            await self._registrar_sync_run_falha(inicio_batch, str(exc))
+            raise
         finally:
             if owned:
                 await db.close()
 
         polled = 0
         errors = 0
+        fonte_indisponivel = 0
         novos_movimentos = 0
         polled_ids: list[uuid.UUID] = []
-        inicio_batch = datetime.now(timezone.utc)
         # Fase 152 — o SyncRun agregado abaixo grava tenant_id=None (lote
         # global, todos os tenants do beat numa única passada), mas a página
         # de saúde por tenant (GET /system/health/tenant-infra) filtra por
@@ -245,7 +294,8 @@ class ProcessAgent(BaseAgent):
         # SyncRun por tenant que teve processo no lote.
         from collections import defaultdict
         stats_por_tenant: dict = defaultdict(lambda: {
-            "total_processos": 0, "polled_ok": 0, "errors": 0, "novos_movimentos": 0,
+            "total_processos": 0, "polled_ok": 0, "errors": 0,
+            "fonte_indisponivel": 0, "novos_movimentos": 0,
         })
 
         for processo in processos:
@@ -273,6 +323,12 @@ class ProcessAgent(BaseAgent):
                 else:
                     errors += 1
                     st_tenant["errors"] += 1
+                    # Consulta que nem chegou a acontecer é contabilizada à
+                    # parte: um ciclo com muitos destes é falha de fonte, não
+                    # "escritório sem novidades".
+                    if (result_poll.output or {}).get("fonte_indisponivel"):
+                        fonte_indisponivel += 1
+                        st_tenant["fonte_indisponivel"] += 1
             except Exception as exc:
                 errors += 1
                 st_tenant["errors"] += 1
@@ -284,6 +340,7 @@ class ProcessAgent(BaseAgent):
             "total_processos": len(processos),
             "polled_ok": polled,
             "errors": errors,
+            "fonte_indisponivel": fonte_indisponivel,
             "novos_movimentos": novos_movimentos,
         }
         try:

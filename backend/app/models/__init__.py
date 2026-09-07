@@ -18,6 +18,12 @@ from app.models.billing import BillingAccount, TenantPayment
 from app.models.crm import Opportunity, CrmMeta
 from app.models.intimacao import Intimacao
 from app.models.tribunal import Tribunal
+# Fase pós-260.7 — estes 2 nunca estiveram aqui: só entravam no metadata
+# porque routers/services os importam em runtime. O alembic/env.py faz
+# apenas `import app.models`, então o autogenerate não os via e propunha
+# DROP TABLE nas duas tabelas. Registro explícito fecha essa armadilha.
+from app.models.push_subscription import PushSubscription
+from app.models.ai_call_log import AICallLog
 from app.models.ai_config import AIProviderConfig
 from app.models.jurisprudencia_ingerida import JurisprudenciaIngerida
 from app.models.tese import Tese
@@ -56,4 +62,5 @@ __all__ = [
     "CustomAgent", "CustomAgentVersion",
     "GovRegistryLookup",
     "AgentAreaPlaybook",
+    "PushSubscription", "AICallLog",
 ]

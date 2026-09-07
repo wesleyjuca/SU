@@ -13,6 +13,9 @@ from typing import TYPE_CHECKING
 from app.integrations.fontes.base import Capability, FonteProcessual
 from app.integrations.fontes.circuit_breaker import CircuitBreaker
 
+# Sentinela para distinguir "consulta falhou" de "consulta vazia".
+_FALHA = object()
+
 if TYPE_CHECKING:
     from app.services.movements_import import MovimentoEntrada
 
@@ -72,7 +75,9 @@ class DataJudFonte(FonteProcessual):
         numero_cnj: str,
         tribunal: str | None = None,
         since: datetime | None = None,
-    ) -> list:
+        *,
+        sinalizar_falha: bool = False,
+    ) -> list | None:
         """Andamentos como `MovementData` (tipo/código + raw preservados) sob o
         breaker. Usado pelo polling do ProcessAgent, que consome MovementData
         diretamente — a `movimentos()` canônica devolve MovimentoEntrada (sem
@@ -85,4 +90,15 @@ class DataJudFonte(FonteProcessual):
                 return await cli.fetch_movements(numero_cnj, since=since)
             finally:
                 await self._fechar(cli)
-        return await self._breaker.run(_f, default=[])
+
+        # `sinalizar_falha=True` devolve None quando a consulta NÃO aconteceu
+        # (breaker aberto, rede fora, erro do DataJud), em vez de `[]`.
+        # Sem isso, "consultei e não havia andamento novo" e "não consegui
+        # consultar" são o mesmo valor — e o polling em lote registrava um
+        # ciclo inteiro sem nenhuma consulta bem-sucedida como `status="OK",
+        # errors: 0`. O default (`False`) preserva o comportamento fail-soft
+        # de todos os outros chamadores.
+        resultado = await self._breaker.run(_f, default=_FALHA if sinalizar_falha else [])
+        if resultado is _FALHA:
+            return None
+        return resultado

@@ -18,8 +18,17 @@ if config.config_file_name is not None:
 
 target_metadata = Base.metadata
 
-# Sobrescreve a URL com a variável de ambiente (produção e Docker)
-DATABASE_URL = os.getenv("DATABASE_URL", config.get_main_option("sqlalchemy.url"))
+# Sobrescreve a URL com a variável de ambiente (produção e Docker).
+# `or` em vez de `os.getenv(x, default)`: o 2º argumento de `getenv` é avaliado
+# SEMPRE, e `get_main_option` levantava a exceção de interpolação mesmo com a
+# env var setada — foi o que manteve todo comando alembic quebrado desde a
+# Fase 136. Com `or`, o fallback do .ini só é lido se a env var faltar.
+DATABASE_URL = os.getenv("DATABASE_URL") or config.get_main_option("sqlalchemy.url")
+if not DATABASE_URL:
+    raise RuntimeError(
+        "DATABASE_URL não configurada — defina a variável de ambiente (ou "
+        "sqlalchemy.url no alembic.ini) antes de rodar o alembic."
+    )
 # asyncpg → psycopg2 para alembic (que é síncrono no run_migrations_offline)
 SYNC_URL = DATABASE_URL.replace("postgresql+asyncpg://", "postgresql://") if DATABASE_URL else DATABASE_URL
 

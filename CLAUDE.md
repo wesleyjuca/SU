@@ -251,11 +251,64 @@ rediscobertas do zero a cada sessão — contexto completo de cada uma em
   `except Exception` genérico do endpoint e virou **502**, como se o Google
   tivesse falhado. Prefira `**_kwargs` nos fakes e desconfie de 5xx em teste
   com mock.
+- **`BaseAgent.run()` NUNCA propaga exceção** — converte em
+  `AgentResult(status=FAILED)`. Quem chama um agente e só lê `result.output`
+  trata falha total como sucesso: foi assim que `poll_all_processes` rodava a
+  cada 30 min, podia falhar inteiro e retornava `None` sem acionar retry nem
+  registrar `SyncRun`. **Sempre cheque `result.status`.** Cuidado extra em
+  lote: `max_retries = 2` re-executa a chamada inteira até 3× — no polling só
+  é tolerável porque a dedup por hash impede duplicata.
+- **Fail-soft pode engolir o sinal**: `CircuitBreaker.run(..., default=[])`
+  nunca levanta, então "a fonte está fora" e "não há novidade" viravam o mesmo
+  `[]` — um ciclo sem nenhuma consulta bem-sucedida saía `status="OK",
+  errors=0`. Ao usar um default fail-soft, garanta que o chamador consiga
+  distinguir os dois casos (em `datajud_fonte.py` isso virou o parâmetro
+  `sinalizar_falha`).
+- **Teste que substitui a função inteira não prova a correção dela.** O 1º
+  desenho do teste de "falha ao persistir deixa de contar como sucesso"
+  trocava `_save_movements` por um fake que levantava — e passava mesmo com a
+  correção revertida, porque o código corrigido nunca rodava. Injete a falha
+  numa dependência de DENTRO da função. Só se descobre isso rodando o teste
+  com o fix revertido, que por isso é obrigatório aqui.
 - **Três mecanismos de gate de papel coexistem** — auditar só um produz
   falso positivo em escala (aconteceu 4× numa única rodada):
   `Depends(require_role(...))`, checagem inline no corpo
   (`if current_user.role not in (...)`) e helper (`_require_admin` em
   `users.py`). Ao avaliar se uma rota está protegida, cheque os três.
+- **Alembic: consertado na fase pós-260.7 depois de nunca ter rodado.** Ficam
+  aqui a causa e as 3 armadilhas que ele deixou. Eram **3 bugs empilhados**:
+  (a) `alembic.ini` declarava `sqlalchemy.url = %(DATABASE_URL)s`, interpolação
+  que o configparser resolve contra a própria seção e nunca contra o ambiente;
+  (b) `env.py` a lia como 2º argumento de `os.getenv`, que o Python avalia
+  SEMPRE — então falhava mesmo com a env var setada; (c) a cadeia de revisões
+  tinha **2 elos errados** (`002.down_revision="001_initial_schema"` vs.
+  `001.revision="001"`; `003.down_revision="002"` vs.
+  `002.revision="002_add_tenant"`), mascarados por (a)+(b). Aparato inteiro
+  nasceu assim no commit `057893b` (Fase 136) e nunca rodou em 182 commits.
+  **Três coisas a não reaprender do zero**:
+  - **Nunca rodar `upgrade head` num banco deste projeto.** As 4 migrações
+    conhecem 26 tabelas; o app tem 58. Medido: `upgrade head` num banco VAZIO
+    produz 27 tabelas + o trigger de `audit_logs` — schema diferente de todo
+    ambiente existente. Quem monta schema aqui é `create_all` +
+    `DDL_IDEMPOTENTE`. Por isso `start.sh` **carimba** (`stamp head`) qualquer
+    banco sem carimbo, vazio ou não, e só faz `upgrade` no que já tem carimbo
+    — aí sim para migrações futuras, que funcionam (provado com uma migração
+    de teste: `004 → 999_probe`, upgrade e downgrade).
+  - **Model fora do `app/models/__init__.py` é armadilha de DROP TABLE.**
+    `push_subscription` e `ai_call_log` só entravam no metadata porque routers
+    os importam em runtime; o `env.py` faz só `import app.models`, então o
+    autogenerate propunha apagar as 2 tabelas. Fechado com registro explícito
+    + guarda em `tests/test_unit/test_schema_metadata_guard.py`, que mede num
+    **interpretador separado** — medir no processo do pytest dá sempre
+    "presente" (o conftest importa `app.main`) e o teste passa com o fix
+    revertido. Foi o 1º desenho, e falhou nessa exata armadilha.
+  - **O passo de schema do CI não era "o mesmo caminho do boot"**, apesar do
+    nome: rodava `create_all` + seed e pulava o DDL idempotente. O banco do CI
+    ficava sem 9 índices que produção tem, 3 deles constraints de integridade —
+    e `test_tenant_user_unique_constraints` **pulava** por ausência do índice
+    em vez de proteger (medido: 2 skipped → 2 passed depois do fix). O bloco
+    virou `events.py::DDL_IDEMPOTENTE` + `aplicar_ddl_idempotente(engine)`,
+    chamado pela `lifespan` E pelo CI.
 - **Egress de rede bloqueado no sandbox de desenvolvimento** (não em
   produção — Railway tem egress irrestrito): domínios externos como
   `brasilapi.com.br`, `googleapis.com`, `graph.facebook.com`,
@@ -641,9 +694,10 @@ nunca repetir o mesmo teste do zero.** Antes de planejar uma nova rodada:
   4 restantes: `tests/test_api/` zerado (27 falhas + 75 erros → 0) e promovido
   a gate; rate limiter com TTL garantido e auto-curável; gates de papel que só
   existiam no menu fechados em 10 rotas; e o provedor de embedding na chave de
-  cache do `retrieve()`. **A lista de "deixou pra próxima" está esgotada** —
-  exceto `ContractAgent`/`OrchestrationAgent`/`poll_all_processes`, que
-  seguem sem testes próprios.
+  cache do `retrieve()`. **A lista de "deixou pra próxima" está esgotada**,
+  incluindo `ContractAgent`/`OrchestrationAgent`/`poll_all_processes`, que
+  ganharam 28 testes na fase seguinte — e essa fase achou nos três o mesmo
+  padrão: **falha aparecendo como sucesso**, corrigido em 4 pontos.
 
 Histórico completo (achados, decisões de escopo, correções, verificações
 empíricas de cada fase) fica em `HISTORICO_FASES.md` — movido pra fora
@@ -665,15 +719,47 @@ de código, por isso ficam só documentados aqui, não implementados:
   `app/config.py`) quando configurado, com fallback automático pro caminho
   legado (base64 inline) sem credenciais. Sem backfill das linhas antigas
   — ficam no caminho legado indefinidamente, não é bug.
-- **Retenção de auditoria (LGPD)** — `audit_logs` é imutável por trigger de
-  banco (`trg_audit_logs_immutable`) e cresce indefinidamente (1 linha por
-  request de escrita, não só por evento de negócio) — sem qualquer rotina de
-  expurgo/arquivamento. A LGPD pede retenção limitada de dados pessoais (o
-  payload pode conter IP, user_agent, `old_value`/`new_value` em JSONB), o
-  que tensiona com esse design. Definir um prazo de retenção e um mecanismo
-  de arquivamento (a tabela não aceita `DELETE` direto por causa do trigger)
-  é uma decisão que precisa de orientação jurídica do escritório antes de
-  qualquer implementação — não decidir um prazo arbitrário sem essa validação.
+- **Retenção de auditoria (LGPD)** — **levantamento técnico pronto em
+  `docs/juridico/RETENCAO_AUDIT_LOGS.md`** (fase pós-260.6); segue travado
+  na decisão do escritório, que é quem define o prazo. `audit_logs` cresce
+  indefinidamente (1 linha por request de escrita autenticado, não por
+  evento de negócio) sem nenhuma rotina de expurgo/arquivamento, e a LGPD
+  pede retenção limitada de dado pessoal. **Duas correções ao que este
+  parágrafo dizia antes, ambas medidas, não deduzidas**:
+  - **A tabela NÃO é imutável.** `trg_audit_logs_immutable` só existe na DDL
+    de `alembic/versions/001_initial_schema.py:415-428`, e `alembic upgrade
+    head` **falha incondicionalmente** — `alembic.ini:6` declara
+    `sqlalchemy.url = %(DATABASE_URL)s`, interpolação que o configparser não
+    resolve, e o erro acontece no carregamento do config, antes de qualquer
+    conexão (reproduzido com `DATABASE_URL` exportado). Como `start.sh:52-54`
+    roda a migração em best-effort e cai em `create_all` (que não cria
+    trigger), o banco real não tem a trava: no banco local desta sessão,
+    `pg_trigger` para `audit_logs` volta **vazio**, não existe
+    `alembic_version`, e `UPDATE`/`DELETE` numa linha **executam** (testado
+    dentro de transação desfeita, 3.948 linhas intactas). **Não confundir
+    com deriva de schema**: a migração 001 cria a tabela sem
+    `user_agent`/`session_id`; como ela nunca roda, o schema vem do model
+    atual e essas colunas existem. Produção não foi verificada (sem acesso);
+    o dossiê traz o SQL read-only.
+  - **A superfície de PII é menor do que se registrava.** O middleware
+    (`core/middleware.py:88-115`) grava sempre `ip_address`/`user_agent`/
+    `user_id`, mas **nunca** `old_value`/`new_value`, e nunca corpo de
+    request, query string ou outro header. `old_value`/`new_value` só vêm de
+    3 call sites (`approvals.py:209-210`, `google_integration.py:200`,
+    `financial.py:358-364`) — medido: 40 e 46 linhas de 3.948 (~1%).
+  - Medição local (12 dias): 3.948 linhas, ~329/dia, 1.384 kB ⇒ ~0,35 kB por
+    linha; 88,6% vêm do middleware, 11,4% dos call sites explícitos.
+  - **Nó a resolver**: `erase_client_data` nunca toca linhas pré-existentes
+    de `audit_logs` e o teste de sentinela exclui 4 colunas dela de propósito
+    (`test_lgpd_sentinela.py:31-39`) — justificando pela imutabilidade que a
+    verificação acima não confirmou; e a exclusão não cobre `user_agent`/
+    `ip_address`. O log é a prova do esquecimento e o último lugar onde o
+    esquecido sobrevive.
+  - **Corolário de engenharia — RESOLVIDO na fase pós-260.7** (não era o
+    débito jurídico, mas nasceu dele): o alembic estava quebrado e nenhuma
+    migração jamais rodava. Consertado; o trigger **continua deliberadamente
+    não criado** em nenhum caminho (é a pergunta 6 do dossiê, do escritório).
+    Ver a armadilha "Alembic" abaixo.
 - **Termo de Uso da API Pública do CNJ DataJud vs. uso comercial** (achado
   da Fase 217, pesquisa de APIs governamentais) — o sistema já integra o
   DataJud (`integrations/tribunais/cnj.py`) desde antes desta sessão pra
@@ -685,4 +771,29 @@ de código, por isso ficam só documentados aqui, não implementados:
   leitura jurídica do PDF completo do termo pra decidir se o uso atual
   está em conformidade — não decidir unilateralmente sem esse parecer.
   Mesma classe de pendência que a retenção de auditoria acima: registrada,
-  não resolvida arbitrariamente.
+  não resolvida arbitrariamente. **Levantamento técnico pronto em
+  `docs/juridico/DATAJUD_TERMO_DE_USO.md`** (fase pós-260.6), com 4 achados
+  que o parecer precisa ter na mão:
+  - **Não existe credencial por escritório** — `CNJ_API_KEY`
+    (`config.py:57-61`) tem como default a chave que o próprio CNJ publica
+    na wiki, embutida no código. Toda instalação chama com a mesma chave, e
+    não há registro de aceite de termo em lugar nenhum. Muda a pergunta de
+    "o escritório aceitou ao se credenciar?" para "existe aceite?".
+  - **O dado derivado sai do escritório** — `GET /portal/processes/{id}`
+    (`portal.py:146-217`) entrega até 30 movimentações **com o resumo por
+    IA** ao cliente final, e é justamente a tela que **não** atribui a fonte
+    (as 3 telas que dizem "CNJ DataJud" são todas internas). É o ponto
+    central pra leitura de "distribuir informação derivada".
+  - **Segunda camada de derivação**: `ai_summary` gerado por LLM
+    (`process_agent.py:104-122`), detecção de prazo, e `citacao_check`
+    carimbando "confirmada"/"não verificável" dentro de **petições
+    protocoláveis** (`documents.py:1012`, `petition_agent.py:131`).
+    Verificado que NÃO acontece: export CSV/PDF/XLSX, e-mail/WhatsApp,
+    webhook, API pública própria, ingestão no RAG.
+  - **Não há kill switch, mas há alternativa desligada** —
+    `registry.py:14-20` instancia `DataJudFonte()` incondicionalmente e
+    `processes.py:762` instancia o cliente direto; sem flag por env ou por
+    tenant. Em compensação, PDPJ/Escavador/Judit/Jusbrasil **já implementam
+    `movimentos()`** e nenhum caminho de produção as chama pra isso (só pra
+    partes, `oab_capture.py:128-164`) — trocar de fonte é ligar peça
+    existente, o custo real é comercial, não técnico.

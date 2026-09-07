@@ -9,7 +9,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 
 revision = "002_add_tenant"
-down_revision = "001_initial_schema"
+down_revision = "001"  # a 001 se declara revision="001", não "001_initial_schema"
 branch_labels = None
 depends_on = None
 

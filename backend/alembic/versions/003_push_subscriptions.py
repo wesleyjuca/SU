@@ -4,7 +4,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import UUID
 
 revision = "003"
-down_revision = "002"
+down_revision = "002_add_tenant"  # a 002 se declara revision="002_add_tenant"
 branch_labels = None
 depends_on = None
 

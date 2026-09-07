@@ -5818,3 +5818,260 @@ cross-tenant, flakiness de teste) já tem um padrão de causa conhecido.
     "deixou pra próxima" da rodada pós-260.5 que não foi fechada aqui.
     Registrado também, sem corrigir: `User.role` é `String(50)` livre, sem
     enum, e `app/schemas/user.py::ROLES` é código morto que nem lista GESTOR.
+
+- **Testes para os 3 componentes de maior risco sem cobertura
+  (`ContractAgent`, `OrchestrationAgent`, `poll_all_processes`)** — último item
+  da lista "deixou pra próxima" da rodada pós-260.5. 28 testes novos. O que
+  começou como "cobrir o que não tinha teste" virou correção real: os três
+  compartilhavam o mesmo padrão — **falha aparecendo como sucesso**.
+  - **`ContractAgent` (10 testes)** — é o agente que EMITE o gate HITL que
+    termina em envio ao Clicksign. O outro extremo da cadeia já tinha teste
+    (`test_contract_auto_esign.py`); faltava o passo que produz o
+    `approval_required`. O teste central fixa que `document_id` do
+    `approval_required` e do `output` são o MESMO — se divergirem, a aprovação
+    aprova outro documento. Também: nunca devolve SUCCESS; default
+    `HONORARIOS`; `Document`+`Contract` nascem em RASCUNHO com o
+    `agent_run_id` certo; valor não numérico falha em vez de gravar lixo.
+    **Achado registrado, não corrigido**: sem `db`, o agente devolve um
+    `document_id` que não corresponde a nenhum `Document` (o uuid é gerado
+    antes e fora do `if self.db:`) — risco latente, já que no caminho real a
+    sessão é sempre injetada. Também: `templates_similares` faz uma consulta
+    de RAG cujo resultado nunca é usado.
+  - **`OrchestrationAgent` (9 testes)** — cobre os 4 caminhos de tradução do
+    state do grafo em `AgentResult`, inclusive a precedência de `error` sobre
+    `pending_approval` e o fato de que, quando o grafo para no gate,
+    `final_output` vem `None` (o `node_post_process` não roda) e o `output`
+    sai `{}`. **Dois achados**: (1) a docstring do módulo afirmava que a API e
+    o worker passam por esta classe — não passam; ambos montam o state à mão e
+    chamam `get_orchestrator_graph().ainvoke()` direto (confirmado por grep
+    independente, não só pelo agente de exploração). Docstring corrigida.
+    (2) **recursão latente sem guard**: `get_chain()` cai em
+    `["orchestration_agent"]` para `task_type` não mapeado e
+    `resolve_agent_class("orchestration_agent")` devolve a própria classe —
+    `execute → grafo → execute_chain_step → run → grafo`, com o mesmo
+    `thread_id`. As duas precondições estão fixadas em teste; o comportamento
+    em runtime segue **não confirmado** de propósito (um teste que possa
+    entrar em laço infinito não tem lugar num gate de CI).
+  - **`poll_all_processes` (9 testes) + 4 correções.** A tarefa de maior volume
+    de escrita automática (30 em 30 min, 4 tabelas). Decisão do usuário via
+    pergunta: testar E corrigir, porque escrever teste que afirmasse o
+    comportamento atual carimbaria o bug no contrato.
+    - **(a) Falha total virava sucesso, em dois pontos.** `BaseAgent.run`
+      converte qualquer exceção em `AgentResult(FAILED)`, e a task só lia
+      `result.output` — um lote totalmente falho retornava `None`, o `except`
+      não disparava e o `self.retry` nunca rodava. Além disso, a query que
+      monta o lote fica FORA do try/except do loop: uma exceção ali pulava o
+      bloco que grava os `SyncRun` e o ciclo sumia sem deixar nem "OK" nem
+      "ERRO". Corrigido nos dois: a task checa `result.status`, e o agente
+      grava um `SyncRun` de ERRO antes de propagar.
+    - **(b) Fonte fora do ar indistinguível de "sem novidades".** O
+      `CircuitBreaker` é fail-soft e devolvia `[]`; o processo contava como
+      polled com sucesso e o ciclo saía `status="OK", errors=0`.
+      `fetch_movements_datajud` ganhou `sinalizar_falha=True` (devolve `None`
+      quando a consulta não aconteceu; o default preserva o comportamento de
+      todos os outros chamadores) e o lote passou a contar
+      `fonte_indisponivel` separado de `errors`.
+    - **(c) Falha de persistência engolida.** `_save_movements` capturava
+      tudo, devolvia `novos = 0` e o processo ainda entrava em `polled_ok` —
+      andamento perdido sem sinal. Agora propaga; o loop contabiliza como erro
+      e segue para o próximo processo (o isolamento por processo é preservado).
+    - **Decisão registrada, não alterada**: `BaseAgent.max_retries = 2`
+      re-executa o lote inteiro até 3× com escritas já commitadas. Avaliado
+      durante a implementação e mantido: a dedup por hash torna a re-execução
+      inócua (não duplica movimentação nem notificação), e mudar
+      `max_retries` no `ProcessAgent` afetaria também os outros usos do
+      agente. Fica documentado em vez de alterado por precaução.
+  - **Confirmado como NÃO sendo problema** (para a próxima rodada não
+    reabrir): o isolamento de falha do polling é por PROCESSO, com os
+    processos de tenants diferentes intercalados na mesma lista — falha no
+    tenant A não derruba o B, diferente do bug histórico de
+    `google_drive_sync.py`. E `SyncRun` aqui nunca passa por RUNNING (nasce
+    finalizado), então o bug de "preso em RUNNING" é estruturalmente
+    impossível — o custo simétrico é que um `kill -9` no meio não deixa
+    registro nenhum, o que fica anotado.
+  - **Achado de método, registrado no CLAUDE.md**: o 1º desenho do teste da
+    correção (c) substituía `_save_movements` inteiro por um fake que levantava
+    — e **passava mesmo com a correção revertida**, porque o código corrigido
+    nunca rodava. Só a prova nos dois sentidos revelou isso. O teste foi
+    refeito injetando a falha em `importar_movimentos`, que é chamado de
+    dentro da função real.
+  - **Verificado**: as 4 correções provadas nos DOIS sentidos (cada teste
+    falha com o fix revertido — inclusive a (c), depois do teste corrigido).
+    `ruff` limpo. Suítes verdes **na configuração exata do runner** (banco
+    criado do zero + `REDIS_URL=` vazio): `tests/test_unit/` 911 passes,
+    `tests/test_api/` 185 passes, zero falhas.
+
+- **Fase pós-260.6 — levantamento técnico dos 2 débitos que dependem do
+  escritório** (retenção de `audit_logs` e Termo de Uso do CNJ DataJud).
+  Usuário escolheu, via pergunta, os "2 débitos que dependem de você", com o
+  escopo explícito de *preparar o levantamento técnico para embasar a decisão,
+  sem decidir prazo nem conformidade*. Confirmou depois: entregável em
+  **markdown no repo + Artifact**, e **nenhuma mudança em código de produto**
+  (recusou explicitamente o mecanismo de expurgo inerte e a atribuição de
+  fonte na UI — viram fase nova se e quando o parecer pedir).
+  - **Entregáveis**: `docs/juridico/RETENCAO_AUDIT_LOGS.md` e
+    `docs/juridico/DATAJUD_TERMO_DE_USO.md` (pasta nova; o repo não tinha
+    `docs/`), escritos para leitor jurídico — cada afirmação com
+    arquivo:linha, cada seção terminando nas perguntas que só o escritório
+    responde, e uma seção final do que NÃO foi verificável. Mais um Artifact
+    navegável cobrindo os dois, para encaminhar ao advogado.
+  - **O achado que muda a premissa do débito de retenção**: `audit_logs`
+    **não é imutável**. `trg_audit_logs_immutable` só existe na DDL de
+    `alembic/versions/001_initial_schema.py:415-428`, e `alembic upgrade head`
+    **falha incondicionalmente** — `alembic.ini:6` declara
+    `sqlalchemy.url = %(DATABASE_URL)s`, uma interpolação que o configparser
+    não resolve; o erro vem de `get_section_option` no carregamento do
+    config, ANTES de qualquer conexão, e se reproduz com `DATABASE_URL`
+    exportado. Como `start.sh:52-54` roda a migração em best-effort e cai em
+    `create_all` (que não cria trigger), o schema real nunca ganha a trava.
+    Medido no banco local: `pg_trigger` para `audit_logs` **vazio**,
+    `alembic_version` **não existe**, e `UPDATE`/`DELETE` numa linha
+    **executam** (testado dentro de `BEGIN`/`ROLLBACK`; 3.948 linhas conferidas
+    intactas antes e depois). Um banco-sonda criado do zero confirmou que o
+    `alembic upgrade head` falha nele também, e foi descartado ao final.
+    **Consequência dupla, registrada nos dois sentidos**: para a LGPD, o
+    obstáculo ao expurgo pode não existir; para o valor probatório, um
+    registro alterável é prova mais fraca — inclusive da própria execução do
+    esquecimento — e `/sobre` descreve o log como "imutável" ao usuário.
+    Produção não verificada (sem acesso); o dossiê traz o SQL read-only.
+  - **Hipótese do reconhecimento refutada pela medição**: o Explore agent
+    levantou uma possível deriva de schema (a migração 001 cria a tabela sem
+    `user_agent`/`session_id`, e nenhum `ALTER` os adiciona — logo um banco
+    migrado teria INSERT quebrado e auditoria silenciosamente morta). Como a
+    migração nunca roda, o schema vem do model e as colunas existem — as duas
+    "derivas" são na verdade dois lados do mesmo fato, e são mutuamente
+    exclusivas. Ficou o corolário de engenharia: **nenhuma migração alembic
+    jamais rodou neste projeto**; todo schema vem de `create_all` + os
+    `ALTER TABLE` idempotentes de `events.py`. Registrado, não corrigido
+    (fora do escopo autorizado).
+  - **Correção ao próprio CLAUDE.md, para menos**: a superfície de PII de
+    `audit_logs` era superestimada. O middleware (`core/middleware.py:88-115`)
+    grava sempre `ip_address`/`user_agent`/`user_id`, mas **nunca**
+    `old_value`/`new_value`, e nunca corpo de request, query string ou outro
+    header. Esses dois campos só vêm de 3 call sites (`approvals.py:209-210`,
+    `google_integration.py:200`, `financial.py:358-364`) — medido: **40 e 46
+    linhas de 3.948 (~1%)**. Medição de volume (12 dias): 3.948 linhas,
+    ~329/dia, 1.384 kB ⇒ ~0,35 kB/linha; 3.496 (88,6%) do middleware, 452
+    (11,4%) dos call sites — os dois números fecham exatamente com a contagem
+    de linhas que têm `ip_address`, o que serviu de conferência cruzada.
+  - **DataJud — 4 achados que o parecer precisa ter**: (1) **não existe
+    credencial por escritório** — `CNJ_API_KEY` (`config.py:57-61`) tem como
+    default a chave que o próprio CNJ publica na wiki, embutida no código, e
+    não há registro de aceite de termo em lugar nenhum; a pergunta deixa de
+    ser "aceitou ao se credenciar?" e vira "existe aceite?". (2) **o dado
+    derivado sai do escritório** — `GET /portal/processes/{id}`
+    (`portal.py:146-217`) entrega até 30 movimentações **com o resumo por IA**
+    ao cliente final, e é justamente a tela que NÃO atribui a fonte (as 3 que
+    dizem "CNJ DataJud" são internas). (3) **segunda camada de derivação** —
+    `ai_summary` por LLM (`process_agent.py:104-122`), detecção de prazo, e
+    `citacao_check` carimbando "confirmada"/"não verificável" dentro de
+    petições protocoláveis (`documents.py:1012`, `petition_agent.py:131`);
+    verificado que NÃO acontece export CSV/PDF/XLSX, e-mail/WhatsApp, webhook,
+    API pública própria nem ingestão no RAG. (4) **não há kill switch, mas há
+    alternativa desligada** — `registry.py:14-20` instancia `DataJudFonte()`
+    incondicionalmente e `processes.py:762` instancia o cliente direto, sem
+    flag por env ou tenant; em compensação PDPJ/Escavador/Judit/Jusbrasil já
+    implementam `movimentos()` e nenhum caminho de produção as chama pra isso
+    (só pra partes, `oab_capture.py:128-164`) — trocar de fonte é ligar peça
+    existente, o custo real é comercial.
+  - **Verificado**: cada citação dos 2 dossiês relida contra o arquivo antes
+    de publicar (2 off-by-one do reconhecimento corrigidos:
+    `test_lgpd_sentinela.py:31-39`, `system.py:1248-1304`); varredura de
+    linguagem prescritiva nos dois documentos retornou só os próprios avisos
+    de "não decide nada"; aritmética das projeções conferida. Zero mudança em
+    `backend/app` ou `frontend/src`.
+  - **Fora de escopo, registrado**: mecanismo de expurgo/arquivamento
+    (inclusive a versão inerte), atribuição "fonte: CNJ DataJud" no Portal,
+    adicionar o débito do DataJud à lista `PENDENCIAS` de `/sobre` (hoje só a
+    retenção aparece lá — assimetria conhecida), e a correção do
+    `alembic.ini`/migrações que nunca rodam.
+
+- **Fase pós-260.7 — o alembic que nunca rodou, e a deriva de schema que
+  ninguém tinha medido.** Nasceu como corolário do levantamento anterior: ao
+  investigar por que `audit_logs` não tinha a trava de imutabilidade, o achado
+  real foi que o aparato de migração inteiro estava morto. Usuário escolheu,
+  via pergunta, "consertar e carimbar" + "medir a deriva e já aplicar o que
+  for seguro".
+  - **Eram 3 bugs empilhados, não 1.** (a) `alembic.ini:6` declarava
+    `sqlalchemy.url = %(DATABASE_URL)s` — interpolação que o configparser
+    resolve contra a própria seção, nunca contra `os.environ`; (b)
+    `env.py:22` a lia como 2º argumento de `os.getenv`, avaliado SEMPRE, então
+    falhava com a env var setada; (c) a cadeia tinha **2 elos errados**
+    (`002.down_revision="001_initial_schema"` vs. `001.revision="001"`;
+    `003.down_revision="002"` vs. `002.revision="002_add_tenant"`).
+    **Prova limpa dos dois primeiros de uma vez**: `alembic current` (precisa
+    da URL) morria na interpolação, enquanto `alembic history` (não precisa)
+    morria direto em `KeyError: '001_initial_schema'` — o bug (c) estava
+    mascarado por (a)+(b). Depois de corrigir só (a)+(b), `current` avançou e
+    passou a morrer em `Can't locate revision`, confirmando (c) como real.
+  - **Extensão medida no git**: `alembic.ini`, `env.py` e as 4 migrações
+    entraram todas no commit `057893b` (Fase 136, 2026-07-31) já quebradas —
+    182 commits sem nunca rodar. A cadeia conhece 26 tabelas; o metadata tem
+    58 (~45% de cobertura).
+  - **Achado que mudou o desenho, e só apareceu porque testei**: o plano
+    original mandava `upgrade head` em banco vazio. Executado, isso produziu
+    **27 tabelas + o trigger de imutabilidade de `audit_logs` + as extensões
+    `uuid-ossp`/`pgcrypto`** — ou seja, um schema híbrido diferente de todo
+    ambiente existente E respondendo sozinho a pergunta jurídica em aberto do
+    dossiê. Redesenhado: `start.sh` **carimba** (`stamp head`) qualquer banco
+    sem carimbo, vazio ou não, e só faz `upgrade` no que já tem carimbo.
+    Verificado nos 3 caminhos contra bancos descartáveis, com `trigger=(nenhum)`
+    em todos. Quem monta schema neste projeto é `create_all` +
+    `DDL_IDEMPOTENTE`, em todo ambiente.
+  - **Prova de que o conserto vale**: migração de teste `999_probe` aplicou
+    sobre banco carimbado (`004 → 999_probe`), criou a tabela, atualizou o
+    carimbo, e `downgrade -1` desfez — arquivo removido em seguida, nada
+    commitado. É a 1ª vez que uma migração roda neste projeto.
+  - **Deriva medida pela 1ª vez, com 2 ferramentas** (o autogenerate é cego a
+    trigger/função/extensão). Resultado tranquilizador na direção que importa:
+    **nenhuma tabela e nenhuma coluna faltando** no banco real; só 1 índice
+    divergente, e por nome (`ix_financial_entries_grupo_recorrencia` do
+    `events.py` vs. `..._grupo_recorrencia_id` que o model declara). A deriva
+    real estava em outro lugar — nos 2 itens abaixo.
+  - **Armadilha de DROP TABLE desarmada**: `app/models/__init__.py` importava
+    24 módulos e **não** `push_subscription` nem `ai_call_log`. As 2 tabelas só
+    entravam no metadata porque routers as importam em runtime — suficiente
+    pro `create_all`, mas não pro `env.py`, que faz só `import app.models`.
+    Medido: metadata de 56 → 58 tabelas depois do registro explícito. Antes do
+    fix, o autogenerate propunha `DROP TABLE` nas duas.
+  - **O passo de schema do CI não era "o mesmo caminho do boot"**, apesar do
+    nome: rodava `create_all` + seed e pulava o bloco de DDL idempotente.
+    Medido por diff de `pg_indexes` entre um banco do caminho do CI e o banco
+    real: **9 índices a menos**, 3 deles constraints de integridade
+    (`tenants_slug_unique_idx`, `users_email_unique_idx`,
+    `uq_process_movements_dedup`). Consequência concreta: o
+    `test_tenant_user_unique_constraints.py` faz `pytest.skip` quando o índice
+    não existe — ou seja, **era decorativo no CI**. Prova do ganho: contra
+    banco sem o bloco, `2 skipped`; com o bloco, `2 passed`. O bloco virou
+    `events.py::DDL_IDEMPOTENTE` (constante) + `aplicar_ddl_idempotente(engine)`,
+    chamado pela `lifespan` e pelo CI. Refator conferido como movimentação
+    pura: os 146 statements são byte-idênticos, só a linha de abertura mudou.
+  - **Guarda nova** — `tests/test_unit/test_schema_metadata_guard.py`: (1) todo
+    `__tablename__` de `app/models/*.py` tem que estar no metadata de um
+    `import app.models` puro; (2) nenhuma tabela/coluna do metadata pode faltar
+    no banco real. **O 1º desenho caiu na armadilha já documentada**: media no
+    próprio processo do pytest, onde o `conftest` já importou `app.main` (que
+    puxa os routers, que importam os models avulsos) — passava com o fix
+    revertido. Refeito medindo num **interpretador separado** via `subprocess`;
+    aí sim reprova com o fix revertido e passa com ele.
+  - **Deliberadamente NÃO aplicado**, cada um com motivo: o trigger e a função
+    de imutabilidade de `audit_logs` (pergunta 6 do dossiê, decisão do
+    escritório — e ligá-la bloquearia um expurgo futuro); as extensões
+    `uuid-ossp`/`pgcrypto` (exigência morta — nada no código usa
+    `gen_random_uuid`/`crypt`/`digest`; toda criptografia e hash é Python-side);
+    e os 2 índices parciais `idx_deadlines_date`/`idx_approvals_status`, que só
+    existem na migração 001 e que os models nunca declararam — seriam decisão
+    de performance, não correção de deriva.
+  - **Registrado, não corrigido**: existem **dois `railway.toml` divergentes** —
+    o da raiz roda `sh start.sh`, o de `backend/` sobe uvicorn direto e pularia
+    o `start.sh` inteiro (sem watchdog de Celery, sem alembic). Qual governa
+    não se decide pelo código, mas o log de crash-loop que o usuário colou na
+    Fase 249 só existe em `start.sh:142` — logo o da raiz é o ativo e o de
+    `backend/` é config morta. Mexer em deploy merece decisão própria.
+  - **Verificado**: `alembic history`/`heads`/`current`/`upgrade`/`downgrade`
+    funcionando; os 3 caminhos do `start.sh` exercitados contra bancos
+    descartáveis (`sh -n` limpo); guarda nova provada nos dois sentidos;
+    `ruff check app/` limpo; suítes na configuração exata do runner (banco do
+    zero pelo caminho do CI + `REDIS_URL=` vazio) — `tests/test_unit/` **915
+    passed, 4 skipped**, `tests/test_api/` **185 passed, 9 skipped**, zero
+    falhas; zero `migration_warning` ao aplicar os 146 DDL num banco novo.
