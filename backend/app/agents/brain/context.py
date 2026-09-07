@@ -84,6 +84,19 @@ class AgentContext:
     def get_state(self, key: str, default: Any = None) -> Any:
         return self.state.get(key, default)
 
+    def clear_transient(self):
+        """Libera as listas/dicts acumulados durante o run que não precisam
+        sobreviver além dele — `audit_events` e `retrieved_memory` já foram
+        persistidos/consumidos (AgentStep, logs estruturados) antes deste
+        ponto, então mantê-los no objeto após o run só segura memória (o
+        `AgentContext` de um run pode ficar referenciado por callbacks/
+        closures por mais tempo do que o necessário, ex.: streaming). Chamar
+        depois que o orquestrador finaliza o estado (`node_audit_close` /
+        `_run_async` em `app/workers/tasks/agent_tasks.py`)."""
+        self.audit_events = []
+        self.retrieved_memory = []
+        self.state = {}
+
     def to_dict(self) -> dict:
         return {
             "run_id": str(self.run_id),
