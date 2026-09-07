@@ -1,3 +1,8 @@
+# Dockerfile do DOCKER COMPOSE (dev e VPS). Contexto de build = `backend/`.
+# Usado por docker-compose.yml, docker-compose.prod.yml (serviços backend/
+# worker/scheduler) e `make build-prod` — NÃO apagar como 'duplicata'.
+# Sobe só o uvicorn de propósito: aqui Celery worker/beat são serviços
+# separados do Compose, então não precisa do watchdog embutido do start.sh.
 FROM python:3.12-slim
 
 WORKDIR /app

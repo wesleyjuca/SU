@@ -1,3 +1,8 @@
+# Dockerfile do RAILWAY (produção). Contexto de build = raiz do repo.
+# Roda `start.sh`, que sobe Celery worker+beat em background — por isso
+# instala `postgresql-client` (o `pg_dump` do bloco MIGRATE_FROM_URL).
+# NÃO é o mesmo que `backend/Dockerfile`: aquele serve ao Docker Compose,
+# onde Celery são serviços separados. Os dois divergem de propósito.
 FROM python:3.12-slim
 
 WORKDIR /app

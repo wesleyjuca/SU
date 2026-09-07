@@ -154,9 +154,11 @@ OPENAI_API_KEY=sk-...
 docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
 ```
 
-O primeiro build leva alguns minutos (frontend + backend). O backend roda
-`alembic upgrade head` automaticamente no boot (e o startup do app aplica
-`create_all`/ALTERs como rede de segurança).
+O primeiro build leva alguns minutos (frontend + backend). No boot o backend
+roda `alembic_boot.sh`, que **carimba** (`alembic stamp head`) um banco sem
+carimbo e só aplica `upgrade head` num banco já carimbado — quem monta o
+schema é o `create_all` + o DDL idempotente do startup do app, em todo
+ambiente.
 
 ### 4. Verificar
 

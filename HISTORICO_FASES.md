@@ -6075,3 +6075,67 @@ cross-tenant, flakiness de teste) já tem um padrão de causa conhecido.
     zero pelo caminho do CI + `REDIS_URL=` vazio) — `tests/test_unit/` **915
     passed, 4 skipped**, `tests/test_api/` **185 passed, 9 skipped**, zero
     falhas; zero `migration_warning` ao aplicar os 146 DDL num banco novo.
+
+- **Fase pós-260.8 — os dois `railway.toml` divergentes, e uma regressão que a
+  fase anterior tinha armado.** Último item que a fase do alembic registrou sem
+  corrigir. Usuário escolheu atacá-lo e **confirmou, do painel, que o Root
+  Directory do serviço Railway é a raiz do repositório** — o que fecha a
+  inferência que até então vinha só do log de crash-loop da Fase 249.
+  - **O problema original**: 2 `railway.toml` descrevendo o mesmo serviço de
+    formas incompatíveis. O da raiz roda `sh start.sh` (watchdog de Celery +
+    carimbo do alembic); o de `backend/` rodava uvicorn direto, pulando o
+    `start.sh` inteiro. Enquanto o segundo existisse divergente, uma mudança de
+    Root Directory no painel trocaria silenciosamente o boot de produção por um
+    **sem Celery worker/beat** — o incidente da Fase 249 de novo, mas sem o
+    watchdog e sem o alerta (que vivem dentro do `start.sh` que esse caminho
+    pula), e com o deployment aparecendo saudável, porque o healthcheck só
+    observa o uvicorn. Abordagem escolhida pelo usuário: **alinhar**, não
+    remover — elimina o perigo sem depender de qual arquivo está ativo.
+  - **O achado que dominou a fase, e que é culpa da fase anterior**:
+    `docker-compose.prod.yml:63` fazia `alembic upgrade head || echo …`.
+    Enquanto o alembic estava quebrado isso era inofensivo — falhava sempre.
+    Depois do conserto (`8ed5b20`), passou a ser uma armadilha: **reproduzido
+    aqui** contra um banco vazio, o comando exato daquela linha criou
+    `trg_audit_logs_immutable`, as extensões `uuid-ossp`/`pgcrypto` e 27
+    tabelas — exatamente o schema híbrido que o `start.sh` foi desenhado para
+    evitar, e ligando por conta própria a decisão jurídica em aberto. Não
+    afetava produção (Railway usa `start.sh`), mas afetava o caminho
+    self-hosted documentado em `DEPLOY_VPS.md`. **Lição registrada no
+    CLAUDE.md**: ao consertar algo que estava morto, procure quem dependia de
+    ele estar morto.
+  - **Correção estrutural**: a regra "carimbar, nunca migrar" saiu de dentro do
+    `start.sh` para `backend/alembic_boot.sh`, com os 3 caminhos intactos. O
+    Compose **não pode** chamar o `start.sh` (lá Celery worker/beat são
+    serviços separados; o script subiria um worker duplicado dentro do
+    container do backend), daí o script próprio. Os **4 chamadores** passam a
+    usá-lo: `start.sh`, `docker-compose.prod.yml`, `scripts/migrate.sh` (os 3
+    caminhos dele) e `make migrate` — os dois últimos carregavam a mesma
+    armadilha para quem rodasse manualmente contra um banco sem carimbo.
+    `git grep` confirma zero `alembic upgrade head` cru fora da documentação.
+  - **`make migrate-create` ganhou aviso**: o autogenerate agora funciona, mas
+    ainda propõe `DROP` nos ~9 índices que o `events.py` cria e os models não
+    declaram (o `Base` não tem `naming_convention`) — quem gerar uma migração
+    tem que revisar e apagar os DROP espúrios antes de commitar.
+  - **`backend/Dockerfile` NÃO foi tocado, de propósito** — o reconhecimento
+    mostrou que ele tem consumidores reais (`docker-compose.yml`,
+    `docker-compose.prod.yml` e `Makefile:45`), e que os 2 Dockerfiles divergem
+    por desenho: o da raiz instala `postgresql-client` (o `pg_dump` do bloco
+    `MIGRATE_FROM_URL`) e roda `start.sh`; o de `backend/` serve ao Compose,
+    onde Celery são serviços separados. Os dois ganharam comentário de
+    cabeçalho dizendo qual caminho servem, para a próxima "limpeza de
+    duplicata" não apagar o errado e quebrar os dois compose + o Makefile.
+  - **`DEPLOY_VPS.md` corrigido**: afirmava que o backend roda
+    `alembic upgrade head` automaticamente no boot — deixou de ser verdade.
+  - **Verificado**: regressão do Compose reproduzida ANTES (trigger criado, 27
+    tabelas, extensões) e ausente DEPOIS; os 3 caminhos do `alembic_boot.sh`
+    exercitados contra bancos descartáveis com `trigger=(nenhum)` em todos;
+    resolução de caminho conferida nos 2 Dockerfiles (`WORKDIR /app` + `COPY`
+    põem o script em `/app/alembic_boot.sh` nos dois; não há `.dockerignore` no
+    repo); `sh -n`/`bash -n` nos 3 shells; YAML dos 2 compose e TOML dos 2
+    railway validados por parse; `ruff check app/` limpo; suítes na
+    configuração do runner — `tests/test_unit/` **915 passed**,
+    `tests/test_api/` **185 passed**, zero falhas (nenhum código de aplicação
+    mudou nesta fase; servem como regressão).
+  - **Limitação declarada**: Docker não está disponível neste sandbox, então
+    `docker compose config`/`build` não puderam ser executados — a validação
+    dos compose files foi por parse de YAML e leitura, não por execução real.
