@@ -3,7 +3,21 @@ builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
 
 [deploy]
-startCommand = "sh -c 'uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}'"
+# ESTE ARQUIVO NÃO É A CONFIG ATIVA. O serviço Railway aponta para a RAIZ do
+# repositório (confirmado pelo dono do projeto), então quem governa é o
+# `railway.toml` da raiz. Ele fica aqui só para que uma eventual mudança de
+# "Root Directory" no painel não troque silenciosamente o boot de produção por
+# um sem Celery: antes da fase pós-260.8 este startCommand era um uvicorn
+# direto, que pula o start.sh inteiro — sem watchdog de Celery (Fase 249) e sem
+# o carimbo do alembic. O efeito seria o incidente da Fase 249 (agentes,
+# alertas de prazo e sync enfileirados sem consumidor) com o deployment
+# aparecendo saudável, porque o healthcheck só observa o uvicorn.
+#
+# Ressalva honesta: se este caminho um dia for de fato usado, o build sai do
+# `backend/Dockerfile`, que não instala `postgresql-client` — o bloco
+# MIGRATE_FROM_URL do start.sh (único trecho que usa `pg_dump`) degradaria com
+# o aviso que ele já emite. O resto do start.sh funciona normalmente.
+startCommand = "sh start.sh"
 healthcheckPath = "/ping"
 healthcheckTimeout = 300
 restartPolicyType = "ON_FAILURE"

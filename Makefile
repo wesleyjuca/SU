@@ -15,9 +15,13 @@ restart-backend:
 	docker compose restart backend worker scheduler
 
 # ─── Banco ────────────────────────────────────────────────────────────────────
+# Carimba banco sem carimbo, faz upgrade no que já tem — ver backend/alembic_boot.sh.
 migrate:
-	docker compose exec backend alembic upgrade head
+	docker compose exec backend sh alembic_boot.sh
 
+# ATENÇÃO: o autogenerate ainda propõe DROP nos ~9 índices que o events.py cria
+# e os models não declaram (o Base não tem naming_convention). SEMPRE revise o
+# arquivo gerado e apague os DROP espúrios antes de commitar.
 migrate-create:
 	docker compose exec backend alembic revision --autogenerate -m "$(msg)"
 

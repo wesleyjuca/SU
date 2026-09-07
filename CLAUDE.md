@@ -134,7 +134,8 @@ Push a `main` ou PR → workflow **"✅ CI — Validate"** roda apenas validaç�
 3. Scan de vulnerabilidade de dependências (`pip-audit`/`npm audit`, informativo, não bloqueia)
 
 O deploy de produção em si **não** passa pelo GitHub Actions:
-- **Backend (Railway)** — integração nativa Railway↔GitHub (git-integration), auto-deploy no push para `main`. Configuração em `railway.toml` (raiz) + `Dockerfile` (raiz) + `start.sh`.
+- **Backend (Railway)** — integração nativa Railway↔GitHub (git-integration), auto-deploy no push para `main`. Configuração em `railway.toml` (raiz) + `Dockerfile` (raiz) + `start.sh`. O Root Directory do serviço é a **raiz do repositório** (confirmado pelo dono) — por isso é o `railway.toml` da raiz que governa.
+- **Dois `Dockerfile` e dois `railway.toml`, de propósito** — não são duplicatas a limpar. `Dockerfile` (raiz) + `railway.toml` (raiz) servem ao Railway e rodam `start.sh` (Celery worker+beat embutidos, mais `postgresql-client` para o `pg_dump` do bloco `MIGRATE_FROM_URL`). `backend/Dockerfile` serve ao **Docker Compose** (`docker-compose.yml`, `docker-compose.prod.yml` e `make build-prod`), onde Celery são serviços separados e um watchdog embutido seria duplicação — **apagá-lo quebra os dois compose e o Makefile**. `backend/railway.toml` não é a config ativa; foi alinhado ao da raiz (fase pós-260.8) para que uma mudança de Root Directory no painel não troque silenciosamente o boot por um sem Celery.
 - **Frontend (Vercel)** — workflow separado `deploy-frontend-auto.yml`, dispara no push para `main` que toque `frontend/**`, roda `vercel --prod`.
 
 Secrets do **GitHub Actions** (usados pelos workflows acima): `VERCEL_TOKEN`, `RAILWAY_URL` (não-secreta, só a URL do backend pra build do frontend).
@@ -288,12 +289,23 @@ rediscobertas do zero a cada sessão — contexto completo de cada uma em
   **Três coisas a não reaprender do zero**:
   - **Nunca rodar `upgrade head` num banco deste projeto.** As 4 migrações
     conhecem 26 tabelas; o app tem 58. Medido: `upgrade head` num banco VAZIO
-    produz 27 tabelas + o trigger de `audit_logs` — schema diferente de todo
-    ambiente existente. Quem monta schema aqui é `create_all` +
-    `DDL_IDEMPOTENTE`. Por isso `start.sh` **carimba** (`stamp head`) qualquer
-    banco sem carimbo, vazio ou não, e só faz `upgrade` no que já tem carimbo
-    — aí sim para migrações futuras, que funcionam (provado com uma migração
-    de teste: `004 → 999_probe`, upgrade e downgrade).
+    produz 27 tabelas + as extensões + o trigger de `audit_logs` — schema
+    diferente de todo ambiente existente. Quem monta schema aqui é `create_all`
+    + `DDL_IDEMPOTENTE`. A regra "carimbar, nunca migrar" vive em **um lugar
+    só**, `backend/alembic_boot.sh`: carimba (`stamp head`) qualquer banco sem
+    carimbo, vazio ou não, e só faz `upgrade` no que já tem carimbo — aí sim
+    para migrações futuras, que funcionam (provado com uma migração de teste:
+    `004 → 999_probe`, upgrade e downgrade). **Todos os 4 chamadores passam
+    por ele**: `start.sh`, `docker-compose.prod.yml`, `scripts/migrate.sh` e
+    `make migrate`. Se você escrever um 5º, use o script — não chame
+    `alembic upgrade head` cru.
+  - **Corolário que só apareceu na fase seguinte**: consertar o alembic
+    transformou linhas antes inofensivas em armadilhas. O
+    `docker-compose.prod.yml` fazia `alembic upgrade head || echo …`, que
+    falhava sempre e por isso não fazia mal; com o alembic funcionando, uma
+    instalação NOVA de VPS passaria a ganhar o schema híbrido + o trigger.
+    Ao consertar algo que estava morto, procure quem dependia de ele estar
+    morto.
   - **Model fora do `app/models/__init__.py` é armadilha de DROP TABLE.**
     `push_subscription` e `ai_call_log` só entravam no metadata porque routers
     os importam em runtime; o `env.py` faz só `import app.models`, então o

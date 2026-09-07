@@ -58,9 +58,15 @@ services:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-afj}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-afj_core}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       QDRANT_URL: http://qdrant:6333
-    # Migração best-effort antes do uvicorn (banco legado sem carimbo alembic
-    # não pode derrubar o boot — o startup do app aplica create_all + ALTERs).
-    command: sh -c "alembic upgrade head || echo '[AFJ][WARN] alembic falhou — startup aplica create_all'; exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2"
+    # Decisão do alembic delegada ao mesmo script que o start.sh usa: CARIMBA
+    # banco sem carimbo, só faz upgrade no que já tem. Antes daqui rodava
+    # `alembic upgrade head` cru — inofensivo enquanto o alembic estava
+    # quebrado, mas depois do conserto (fase pós-260.7) isso passaria a criar,
+    # num banco VAZIO, um schema de 27 tabelas mais o trigger de imutabilidade
+    # de audit_logs, cuja criação é decisão jurídica em aberto.
+    # Não chama start.sh de propósito: aqui Celery worker/beat são serviços
+    # separados (abaixo), e o start.sh subiria um worker duplicado.
+    command: sh -c "sh alembic_boot.sh; exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2"
     depends_on:
       db:
         condition: service_healthy
