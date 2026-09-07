@@ -43,11 +43,17 @@ _CELERY_PROBE_TIMEOUT = 8.0
 _celery_probe_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="celery-health-probe")
 
 
-async def _com_timeout(coro, fallback, timeout: float = _PROBE_TIMEOUT):
+async def _com_timeout(coro, fallback, timeout: float = _PROBE_TIMEOUT, *, origem: str = "desconhecida"):
+    """`origem` identifica qual sonda falhou (achado real: as 5 sondas
+    emitiam o mesmo evento `brain_probe_timeout` sem dizer qual, e o
+    resumo enviado ao LLM de insights só via o nome do evento — nunca o
+    `error=` real — fazendo o Cérebro especular causa sem base
+    ("possivelmente relacionado ao Orquestrador ou LLMs" para um timeout
+    de infraestrutura pura). Fase pós-260.9."""
     try:
         return await asyncio.wait_for(coro, timeout=timeout)
     except Exception as exc:
-        log.warning("brain_probe_timeout", error=str(exc))
+        log.warning("brain_probe_timeout", origem=origem, error=str(exc))
         return fallback
 
 
@@ -99,6 +105,7 @@ async def _celery() -> dict:
         loop.run_in_executor(_celery_probe_executor, _inspect_celery_sync),
         {"ok": False, "workers": 0, "detail": "timeout"},
         timeout=_CELERY_PROBE_TIMEOUT,
+        origem="celery",
     )
 
 
@@ -124,7 +131,7 @@ async def _redis() -> dict:
             "total_chaves": (await r.dbsize()),
             "fila_celery": fila,
         }
-    return await _com_timeout(_run(), {"ok": False, "detail": "timeout"})
+    return await _com_timeout(_run(), {"ok": False, "detail": "timeout"}, origem="redis")
 
 
 # ─── Qdrant ───────────────────────────────────────────────────────────────────
@@ -149,7 +156,7 @@ async def _qdrant() -> dict:
             except Exception:
                 colecoes.append({"nome": nome, "pontos": None})
         return {"ok": True, "configured": True, "colecoes": colecoes, "total_colecoes": len(nomes)}
-    return await _com_timeout(_run(), {"ok": False, "detail": "timeout"})
+    return await _com_timeout(_run(), {"ok": False, "detail": "timeout"}, origem="qdrant")
 
 
 # ─── Postgres (pool) ──────────────────────────────────────────────────────────
@@ -194,7 +201,7 @@ async def _jobs() -> dict:
                 for s in syncs
             ]
         return {"ok": True, "agent_runs_24h_por_status": por_status, "sync_runs_recentes": sync_list}
-    return await _com_timeout(_run(), {"ok": False, "detail": "timeout"})
+    return await _com_timeout(_run(), {"ok": False, "detail": "timeout"}, origem="jobs")
 
 
 # ─── Fontes da Captura (registry + circuit breakers + tabela Tribunal) ────────
@@ -238,7 +245,7 @@ async def _fontes() -> dict:
         except Exception:
             pass
         return resultado
-    return await _com_timeout(_run(), {"ok": False, "detail": "timeout"})
+    return await _com_timeout(_run(), {"ok": False, "detail": "timeout"}, origem="fontes")
 
 
 # ─── Agregação ────────────────────────────────────────────────────────────────

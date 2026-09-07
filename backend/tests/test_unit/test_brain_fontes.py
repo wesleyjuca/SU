@@ -19,17 +19,21 @@ async def test_fontes_probe_lista_breakers():
 def test_system_map_reflete_fontes_e_tribunais():
     mapa = system_map.construir_mapa()
     ids = {n["id"] for n in mapa["nos"]}
-    # nós de fonte aparecem no grafo (inclui PDPJ credenciado)
-    assert {"fonte_comunica", "fonte_datajud", "fonte_pdpj"} <= ids
+    # nós de fonte aparecem no grafo. PDPJ (fase pós-260.9) deixou de ser um
+    # nó "fonte_pdpj" separado — é o mesmo "prov_pdpj" já gerado a partir de
+    # PROVIDERS (integration_hub.py), consolidado por representar a mesma
+    # credencial (ver system_map.py).
+    assert {"fonte_comunica", "fonte_datajud", "prov_pdpj"} <= ids
+    assert "fonte_pdpj" not in ids
     captura = next(n for n in mapa["nos"] if n["id"] == "captura")
     assert captura["meta"]["fontes"] == system_map._fontes_captura()
     assert captura["meta"]["tribunais"] == 62
     # resumo carrega as contagens novas
     assert mapa["resumo"]["fontes"] == len(system_map._fontes_captura())
     assert mapa["resumo"]["tribunais"] == 62
-    # arestas captura→fonte
+    # arestas captura→fonte (PDPJ aponta pro nó único "prov_pdpj")
     fonte_edges = [a for a in mapa["arestas"] if a["tipo"] == "fonte"]
-    assert any(a["para"] == "fonte_pdpj" for a in fonte_edges)
+    assert any(a["para"] == "prov_pdpj" for a in fonte_edges)
 
 
 def test_system_map_nos_fonte_tem_meta_capabilities():
@@ -37,5 +41,6 @@ def test_system_map_nos_fonte_tem_meta_capabilities():
     mapa = system_map.construir_mapa()
     dj = next(n for n in mapa["nos"] if n["id"] == "fonte_datajud")
     assert dj["meta"]["capabilities"] == ["detalhar", "movimentos"]
-    pdpj = next(n for n in mapa["nos"] if n["id"] == "fonte_pdpj")
+    # PDPJ (fase pós-260.9): consolidado em "prov_pdpj", não mais "fonte_pdpj".
+    pdpj = next(n for n in mapa["nos"] if n["id"] == "prov_pdpj")
     assert "partes" in pdpj["meta"]["capabilities"] and pdpj["meta"]["credenciado"] is True

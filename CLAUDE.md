@@ -659,6 +659,92 @@ rediscobertas do zero a cada sessão — contexto completo de cada uma em
     compat retroativa); `TASK_LABELS` ganhar `rag_search`/`rag_ingest`
     explicitamente na UI de "Ajuste por área" (o fallback-chain já
     resolve sem precisar disso).
+- **Fase pós-260.9** — usuário reportou "Deploy Ran Out of Memory!" no
+  Railway (print do painel Cérebro → Insights, achado nº1 severidade ALTA
+  especulando "possivelmente relacionado ao Orquestrador ou LLMs").
+  **Causa raiz confirmada nesta sessão, não hipótese**:
+  `get_orchestrator_graph()` (`app/agents/brain/orchestrator.py`) compilava
+  o grafo com `checkpointer=MemorySaver()` — o checkpointer em memória de
+  processo do LangGraph, sem TTL/eviction, guardando pra sempre o estado
+  completo (`agent_results`, saída de LLM inteira) de todo `thread_id`
+  (= todo `agent_run` disparado, 19 agentes nativos + custom). Achado-chave:
+  **era código morto que ninguém desligou** — `chain_resume.py` e
+  `approval.py` já documentavam desde a Fase 169.2/171 que a retomada de
+  HITL foi reconstruída a partir de `AgentRun` justamente porque o
+  checkpointer nunca sobreviveu entre processos; ninguém removeu a
+  instanciação em si. `core/events.py::_background_warmup()` chama
+  `get_orchestrator_graph()` no boot, então o singleton nascia cedo e
+  crescia com o uso normal — em produção, **4 processos por container**
+  (uvicorn + Celery principal + 2 filhos, `start.sh`) cada um com seu
+  próprio `MemorySaver`, competindo pelo mesmo teto de memória do Railway.
+  Datado via `git log -S`: o commit que tornou o checkpointer código morto
+  é de 2026-08-14 — o vazamento rodou silenciosamente por 3+ semanas antes
+  de bater no teto do plano. Diagnóstico confirmado por 5 verificações
+  independentes (nenhum consumidor lê `get_state`/`.checkpointer`; o grafo
+  nunca usa `interrupt_before`/`interrupt_after`; `checkpointer=None` é o
+  próprio default documentado do LangGraph; testado ao vivo que
+  `.ainvoke()` com `thread_id` roda sem checkpointer; é o único
+  `MemorySaver`/`StateGraph` do sistema) e plano aprovado com o usuário.
+  - **Achado de coordenação**: entre o diagnóstico e o push desta sessão,
+    uma segunda sessão (disparada separadamente a partir do mesmo alerta de
+    produção, PR #257 "Fix memory leak in LangGraph checkpointer") já havia
+    corrigido a MESMA causa raiz de forma independente — `compile
+    (checkpointer=None)`, com a mesma conclusão — e foi mergeada primeiro.
+    A versão dela é ligeiramente mais completa: além de remover o
+    `MemorySaver`, `AgentContext` ganhou `clear_transient()` (libera
+    `audit_events`/`retrieved_memory`/`state` ao final do run,
+    `agent_tasks.py::_run_async`), reduzindo retenção de memória residual
+    mesmo sem o checkpointer. Nada nesta fase reabre `orchestrator.py`/
+    `context.py`/`agent_tasks.py` — o fix já está em `main`, reconfirmado
+    ao vivo (`get_orchestrator_graph().checkpointer is None`) e coberto por
+    guarda de regressão nova (`tests/test_unit/
+    test_orchestrator_no_checkpointer.py`, 5 testes: ausência do símbolo
+    `MemorySaver` no módulo, singleton com `checkpointer=None`, `.ainvoke()`
+    com `thread_id` funcionando sem checkpointer, docstring de
+    `node_awaiting_approval` sem citar `MemorySaver` como ativo — prova
+    bidirecional feita antes da coordenação ficar clara).
+  - **Achado secundário 1, corrigido nesta fase (usuário confirmou
+    incluir)**: `_com_timeout()` (`services/brain_infra.py`), usado por 5
+    sondas (Celery/Redis/Qdrant/`_jobs`/`_fontes`), logava sempre o mesmo
+    evento `brain_probe_timeout` sem dizer qual sonda nem a causa real — e
+    o resumo que alimenta o LLM de Insights (`brain_insights.py::
+    _resumo_logs()`) mandava só o *nome* do evento, nunca o `error=`. Foi
+    isso que produziu a especulação sem base do insight nº1 do print (a
+    sonda que falhou é 100% infraestrutura, sem nenhuma relação com
+    LLM/Orquestrador). `_com_timeout` ganhou parâmetro `origem: str` (os 5
+    call sites passam `"celery"|"redis"|"qdrant"|"jobs"|"fontes"`);
+    `_resumo_logs()` ganhou `_formata_evento_log()` incluindo
+    `(origem=...) — erro` na linha enviada ao LLM. Testes novos em
+    `test_brain_infra.py`/`test_brain_insights.py`.
+  - **Achado secundário 2, corrigido nesta fase (usuário confirmou
+    incluir, não relacionado a memória)**: `system_map.py::
+    construir_mapa()` gerava PDPJ como **dois nós** — `prov_pdpj` (do loop
+    sobre `PROVIDERS`, `integration_hub.py`) e um `fonte_pdpj` hardcoded
+    separado. Investigado antes de remover às cegas: são a MESMA
+    credencial — `pdpj_fonte.py::para_tenant()` lê `integration_hub.
+    get_credentials(db, tenant_id, "pdpj")`, a conexão do Hub. Consolidado
+    no único nó `prov_pdpj`, com a metadata (`capabilities`/`credenciado`)
+    preservada e a aresta `captura→pdpj` redirecionada. Teste de guarda
+    `test_pdpj_nao_aparece_duplicado_no_mapa` novo; 1 teste pré-existente
+    (`test_brain_fontes.py`, Fase 77/78) que ainda esperava o nó
+    `fonte_pdpj` duplicado foi atualizado para o novo contrato.
+  - **Fora de escopo, registrado**: separar uvicorn/Celery em serviços
+    Railway distintos (mudança estrutural maior, não necessária); confirmar
+    queda de memória real em produção (só observável pós-deploy, painel
+    Railway/Cérebro→Infraestrutura — não medível deste sandbox).
+  - **Verificado**: branch reiniciada a partir do `main` pós-#257 (PR
+    anterior desta branch, #256, já estava mergeado — histórico não
+    empilhado sobre trabalho já mergeado). Suíte completa na configuração
+    exata do runner (banco do zero via `create_all`+
+    `aplicar_ddl_idempotente`+seed, `REDIS_URL=` vazio) — `tests/test_unit/`
+    926 passed/4 skipped, `tests/test_api/` 185 passed/9 skipped (2ª
+    rodada contra o mesmo banco: 183 passed/11 skipped, mesma classe de
+    skip condicional a rate-limit já documentada — sem regressão de
+    ordem/estado). `ruff check app/` limpo. HTTP real contra `GET
+    /system/brain/map` (SUPERADMIN) confirmando `prov_pdpj` como único nó
+    PDPJ, com metadata e as 2 arestas (`hub→prov_pdpj`, `captura→
+    prov_pdpj`) intactas. Confirmado ao vivo, no processo real da app,
+    `get_orchestrator_graph().checkpointer is None`.
 
 ## Teste geral do sistema (metodologia)
 
