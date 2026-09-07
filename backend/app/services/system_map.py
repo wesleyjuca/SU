@@ -157,16 +157,29 @@ def construir_mapa() -> dict:
     # Nós por agente (compactos) ligados ao orquestrador
     for nome in agentes:
         nos.append({"id": nome, "label": nome.replace("_agent", ""), "grupo": "agentes"})
-    # Nós por provider de integração
+    # Nós por provider de integração.
+    #
+    # Achado (fase pós-260.9): PDPJ existia como DOIS nós — este loop já gera
+    # "prov_pdpj" a partir de PROVIDERS (integration_hub.py), e mais abaixo um
+    # nó hardcoded separado "fonte_pdpj" se dizia "credenciado", como se fosse
+    # outra integração. Não é: `pdpj_fonte.py::para_tenant()` lê a MESMA
+    # credencial via `integration_hub.get_credentials(db, tenant_id, "pdpj")`
+    # — é a mesma conexão, vista por duas abstrações internas (Hub vs. Fonte
+    # processual). A metadata de capabilities do nó removido entra aqui, no
+    # único nó que resta.
+    _META_PROVIDER: dict[str, dict] = {
+        "pdpj": {"capabilities": ["detalhar", "movimentos", "partes"], "credenciado": True},
+    }
     for p in providers:
-        nos.append({"id": f"prov_{p}", "label": p, "grupo": "integracoes"})
-    # Nós por fonte da captura (comunica, datajud, …) + PDPJ credenciado
+        no: dict = {"id": f"prov_{p}", "label": p, "grupo": "integracoes"}
+        if p in _META_PROVIDER:
+            no["meta"] = _META_PROVIDER[p]
+        nos.append(no)
+    # Nós por fonte da captura (comunica, datajud, …)
     caps = _fontes_caps()
     for f in fontes:
         nos.append({"id": f"fonte_{f}", "label": f, "grupo": "integracoes",
                     "meta": {"capabilities": caps.get(f, [])}})
-    nos.append({"id": "fonte_pdpj", "label": "pdpj (credenciado)", "grupo": "integracoes",
-                "meta": {"capabilities": ["detalhar", "movimentos", "partes"], "credenciado": True}})
 
     arestas = [
         {"de": "api", "para": "postgres", "tipo": "dados"},
@@ -185,7 +198,11 @@ def construir_mapa() -> dict:
         arestas.append({"de": "hub", "para": f"prov_{p}", "tipo": "conecta"})
     for f in fontes:
         arestas.append({"de": "captura", "para": f"fonte_{f}", "tipo": "fonte"})
-    arestas.append({"de": "captura", "para": "fonte_pdpj", "tipo": "fonte"})
+    # PDPJ é usado pela Captura Nacional pra descoberta de partes — mesmo nó
+    # "prov_pdpj" que o Hub de Integrações já gerou acima (ver comentário na
+    # criação dos nós), não um nó "fonte_pdpj" separado.
+    if "pdpj" in providers:
+        arestas.append({"de": "captura", "para": "prov_pdpj", "tipo": "fonte"})
 
     # Camada concêntrica + peso (Fase 84) — aditivo, não quebra o schema atual.
     for no in nos:

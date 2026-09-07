@@ -156,3 +156,30 @@ async def test_gerar_insights_llm_falha_nao_levanta(monkeypatch):
 
     r = await bi.gerar_insights(db=None, user_id="u1")
     assert r["ok"] is False and "detail" in r
+
+
+def test_formata_evento_log_inclui_origem_e_error():
+    """Fase pós-260.9 — antes o resumo mandava só o nome do evento pro LLM,
+    e um `brain_probe_timeout` sozinho fazia o Cérebro especular causa sem
+    base ("possivelmente relacionado ao Orquestrador ou LLMs" pra um
+    timeout de infraestrutura pura)."""
+    evento = {
+        "level": "warning",
+        "event": "brain_probe_timeout",
+        "extra": {"origem": "celery", "error": "timeout apos 8.0s"},
+    }
+    linha = bi._formata_evento_log(evento)
+    assert "brain_probe_timeout" in linha
+    assert "origem=celery" in linha
+    assert "timeout apos 8.0s" in linha
+
+
+def test_formata_evento_log_sem_extra_nao_quebra():
+    evento = {"level": "warning", "event": "algo_generico", "extra": {}}
+    assert bi._formata_evento_log(evento) == "- [warning] algo_generico"
+
+
+def test_formata_evento_log_sem_chave_extra_nao_quebra():
+    """`e.get('extra')` — eventos antigos do buffer podem não ter a chave."""
+    evento = {"level": "warning", "event": "algo_generico"}
+    assert bi._formata_evento_log(evento) == "- [warning] algo_generico"

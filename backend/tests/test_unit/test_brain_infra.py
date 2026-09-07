@@ -111,6 +111,47 @@ def test_postgres_pool_retorna_dict():
     assert "ok" in p
 
 
+@pytest.mark.asyncio
+async def test_com_timeout_loga_a_origem_da_sonda(monkeypatch):
+    """Fase pós-260.9: antes as 5 sondas emitiam o mesmo `brain_probe_timeout`
+    sem dizer qual — o LLM de insights via só o nome do evento e especulava
+    causa sem base. `origem=` tem que aparecer no log de warning."""
+    eventos = []
+
+    class _FakeLog:
+        def warning(self, *args, **kwargs):
+            eventos.append((args, kwargs))
+
+    monkeypatch.setattr(bi, "log", _FakeLog())
+
+    async def _sempre_falha():
+        raise TimeoutError("propositalmente quebrado")
+
+    resultado = await bi._com_timeout(_sempre_falha(), {"ok": False}, origem="redis")
+
+    assert resultado == {"ok": False}
+    assert len(eventos) == 1
+    args, kwargs = eventos[0]
+    assert args[0] == "brain_probe_timeout"
+    assert kwargs.get("origem") == "redis"
+    assert "error" in kwargs
+
+
+@pytest.mark.asyncio
+async def test_com_timeout_sem_origem_usa_desconhecida(monkeypatch):
+    """Chamador que esquecer de passar `origem=` não quebra — cai no default,
+    ainda melhor que a ausência total de antes."""
+    eventos = []
+    monkeypatch.setattr(bi.log, "warning", lambda *a, **kw: eventos.append((a, kw)))
+
+    async def _sempre_falha():
+        raise RuntimeError("x")
+
+    await bi._com_timeout(_sempre_falha(), None)
+
+    assert eventos[0][1].get("origem") == "desconhecida"
+
+
 def test_mapa_estrutura():
     m = construir_mapa()
     assert m["nos"] and m["arestas"] and "resumo" in m
@@ -122,3 +163,24 @@ def test_mapa_estrutura():
     ids = {n["id"] for n in m["nos"]}
     for a in m["arestas"]:
         assert a["de"] in ids and a["para"] in ids
+
+
+def test_pdpj_nao_aparece_duplicado_no_mapa():
+    """Fase pós-260.9 — `prov_pdpj` (gerado pelo loop de PROVIDERS) e
+    `fonte_pdpj` (hardcoded) representavam a MESMA credencial
+    (`pdpj_fonte.py::para_tenant()` lê `integration_hub.get_credentials`,
+    a mesma conexão do Hub) — dois nós pra uma integração só."""
+    m = construir_mapa()
+    ids_pdpj = [n["id"] for n in m["nos"] if "pdpj" in n["id"].lower()]
+    assert ids_pdpj == ["prov_pdpj"], (
+        f"esperava só o nó prov_pdpj, achou {ids_pdpj} — o PDPJ voltou a "
+        "aparecer duplicado no mapa"
+    )
+    # a metadata que o nó removido carregava não pode ter se perdido
+    (no_pdpj,) = [n for n in m["nos"] if n["id"] == "prov_pdpj"]
+    assert no_pdpj.get("meta", {}).get("credenciado") is True
+    assert "partes" in no_pdpj.get("meta", {}).get("capabilities", [])
+    # a aresta "captura usa pdpj" precisa apontar pro nó único, não sumir
+    assert any(
+        a["de"] == "captura" and a["para"] == "prov_pdpj" for a in m["arestas"]
+    )

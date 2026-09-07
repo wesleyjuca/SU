@@ -60,13 +60,29 @@ async def _resumo_mapa() -> str:
         return ""
 
 
+def _formata_evento_log(e: dict) -> str:
+    """Achado real (fase pós-260.9): o resumo mandava só o nome do evento
+    pro LLM — `brain_probe_timeout` sozinho, sem `origem=`/`error=`, o
+    fazia especular causa sem base ("possivelmente relacionado ao
+    Orquestrador ou LLMs" pra um timeout de infraestrutura pura, sem
+    nenhuma relação com LLM). `extra` já vem truncado por
+    `log_buffer.capture_processor` — aqui só decide o que entra na linha."""
+    linha = f"- [{e['level']}] {e['event']}"
+    extra = e.get("extra") or {}
+    if extra.get("origem"):
+        linha += f" (origem={extra['origem']})"
+    if extra.get("error"):
+        linha += f" — {extra['error']}"
+    return linha
+
+
 async def _resumo_logs() -> str:
     try:
         from app.core.log_buffer import snapshot
         eventos = snapshot(limit=30, level="warning")
         if not eventos:
             return "LOGS RECENTES: nenhum aviso ou erro no buffer atual."
-        linhas = [f"- [{e['level']}] {e['event']}" for e in eventos]
+        linhas = [_formata_evento_log(e) for e in eventos]
         return "LOGS RECENTES (avisos/erros, mais recentes primeiro):\n" + "\n".join(linhas)
     except Exception as exc:
         log.warning("insights_resumo_logs_falhou", error=str(exc))
