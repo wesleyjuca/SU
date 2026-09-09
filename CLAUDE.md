@@ -851,7 +851,13 @@ nunca repetir o mesmo teste do zero.** Antes de planejar uma nova rodada:
 
 **Rodadas registradas** (1-2 linhas cada; detalhe em `HISTORICO_FASES.md`):
 - **pós-255** — reconfirmou as Fases 247-255; achou 8 gaps de LGPD + o bug
-  do `RateLimitMiddleware`. **Nenhum deles foi corrigido até hoje.**
+  do `RateLimitMiddleware`. ~~Nenhum deles foi corrigido até hoje.~~
+  **Impreciso — corrigido pela rodada pós-260.10**: o `RateLimitMiddleware`
+  e 3 dos 8 gaps de LGPD (`Client.endereco_json`, `ProcessMovement`,
+  `ProcessDeadline`) já tinham sido corrigidos na fase pós-260.5. Os outros
+  5 (`DocumentVersion`, `AgentStep`, `Approval`, `AgentMemory`, `Petition`)
+  nunca foram revisitados — ver pós-260.10 abaixo, que reproduziu os 5 ao
+  vivo e confirma que continuam abertos.
 - **pós-260.5** — auditou pela 1ª vez o próprio aparato de qualidade (a
   suíte nunca rodou no CI; causa-raiz da flakiness isolada), trocou a
   auditoria de LGPD por tabela pela **varredura de sentinela** (achou 2
@@ -872,6 +878,41 @@ nunca repetir o mesmo teste do zero.** Antes de planejar uma nova rodada:
   incluindo `ContractAgent`/`OrchestrationAgent`/`poll_all_processes`, que
   ganharam 28 testes na fase seguinte — e essa fase achou nos três o mesmo
   padrão: **falha aparecendo como sucesso**, corrigido em 4 pontos.
+- **pós-260.10** (audit-only, sem correção nesta rodada) — reconfirmou os 3
+  fixes de código real desde a pós-260.5 (OOM/checkpointer, `curl_cffi`/
+  visibilidade de partes, os 3 achados da pós-260.9), corrigiu a frase
+  imprecisa do CLAUDE.md sobre a pós-255 (acima), e fechou a lacuna
+  mandatória: os 5 gaps de LGPD que a pós-255 achou e nenhuma rodada desde
+  então tinha revisitado — reproduzidos ao vivo, **continuam abertos**
+  (`agent_memory.value_json`, `agent_steps.output_json`, `approvals.
+  {ai_suggestion,descricao,rejection_reason,titulo}`, `document_versions.
+  {conteudo_html,conteudo_texto}`, `petitions.{ai_prompt,review_notes}` —
+  todos sobrevivem a `DELETE /lgpd/clients/{id}/data`). Foi mais fundo em 2
+  frentes novas, nenhuma auditada antes: achou e reproduziu ao vivo um
+  fail-open real em `ws.py` (revogação de usuário desativado cai num
+  `except Exception: pass` que aceita a conexão mesmo se a checagem
+  falhar); e catalogou o raio de alcance do padrão `CircuitBreaker(...,
+  default=[])` que já tinha sido corrigido só pro Comunica/DJEN —
+  reproduziu ao vivo o mesmo padrão em `datajud_fonte.py::movimentos()`
+  (disjuntor aberto e "sem novidade" viram o mesmo `[]`) e catalogou 5
+  integrações `.jus.br` ainda em `httpx` puro sem tratamento de WAF
+  (`lexml/client.py`, `stj_client.py`, `esaj.py`, `pje.py`,
+  `tribunais/base.py`). Fechou pela 1ª vez o fluxo de ESCRITA de `portal`/
+  `billing`/`publications` (gap conhecido desde a pós-260.5, nunca
+  exercitado) — os 3 funcionam corretamente (bloqueio de escrita por
+  inadimplência, triagem/ignorar de intimação, mensagem do portal), sem
+  achado. 2 hipóteses levantadas no reconhecimento não se sustentaram:
+  `enviar-assinatura` de contrato JÁ é auditado pelo `AuditMiddleware`
+  genérico (a suposição de que não era estava errada); e o toast de
+  "nenhuma fonte de partes configurada" não estoura o layout (sem
+  `truncate`/`line-clamp`, o texto quebra linha normalmente dentro do
+  `max-w-sm`). **Deixou pra próxima**: decidir com o usuário quais dos
+  achados acima viram fase de correção (nenhum foi corrigido nesta
+  rodada, é audit-only); a lista completa de integrações `.jus.br` em
+  `httpx` puro não foi 100% exaustiva (só as 5 mais citadas no
+  reconhecimento); Playwright real das telas de Integrações/Publicações/
+  OAB tocadas nas últimas fases não chegou a rodar (settled por leitura de
+  código onde possível, não por navegador real).
 
 Histórico completo (achados, decisões de escopo, correções, verificações
 empíricas de cada fase) fica em `HISTORICO_FASES.md` — movido pra fora

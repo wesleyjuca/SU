@@ -6139,3 +6139,251 @@ cross-tenant, flakiness de teste) já tem um padrão de causa conhecido.
   - **Limitação declarada**: Docker não está disponível neste sandbox, então
     `docker compose config`/`build` não puderam ser executados — a validação
     dos compose files foi por parse de YAML e leitura, não por execução real.
+
+## Rodada pós-260.10 — teste geral do sistema (audit-only)
+
+Usuário pediu uma nova rodada de "teste geral" após 5 fases (pós-260.6 a
+pós-260.10, código real) que nenhuma rodada de teste geral tinha
+reconfirmado ainda. Regra fixa do projeto: reconfirmar o que a rodada
+anterior corrigiu, fechar pelo menos 1 lacuna real deixada pra trás, ir
+mais fundo em pelo menos 1 frente nova. Audit-only — nenhuma correção de
+código nesta rodada, só relatório + esta entrada.
+
+### F0 — Ambiente real
+Postgres + Redis + Celery worker/beat via `backend/start.sh`, uvicorn em
+:8000, `npm run dev` do frontend em :3000 — todos confirmados saudáveis
+via `/health` antes de qualquer teste.
+
+### F1 — Fechar a lacuna mandatória: os 5 gaps de LGPD da pós-255 nunca
+revisitados
+
+A pós-255 achou 8 gaps de LGPD; a pós-260.5 corrigiu 3 (`Client.
+endereco_json`, `ProcessMovement`, `ProcessDeadline`) mas nunca revisitou
+os outros 5, e o CLAUDE.md continuava dizendo "nenhum foi corrigido"
+mesmo depois desses 3 fixes — imprecisão corrigida nesta rodada.
+
+Reproduzido ao vivo (Postgres+Redis+uvicorn reais, script standalone):
+criar um cliente + processo + documento reais via HTTP; inserir
+diretamente (via SQL — não há caminho de produção simples que popule
+essas 6 tabelas) linhas em `agent_runs`, `agent_steps`, `approvals`,
+`agent_memory`, `document_versions`, `petitions`, cada uma contendo um
+token único `ZZGAP5<hex>`; chamar `DELETE /api/v1/lgpd/clients/{id}/data`;
+varrer o banco inteiro via `information_schema` (mesma lógica de
+`test_lgpd_sentinela.py`) procurando o token.
+
+**Resultado: as 5 tabelas (8 colunas) sobrevivem ao esquecimento, sem
+exceção**:
+```
+SOBREVIVENTE: agent_memory.value_json
+SOBREVIVENTE: agent_steps.output_json
+SOBREVIVENTE: approvals.ai_suggestion
+SOBREVIVENTE: approvals.descricao
+SOBREVIVENTE: approvals.rejection_reason
+SOBREVIVENTE: approvals.titulo
+SOBREVIVENTE: document_versions.conteudo_html
+SOBREVIVENTE: document_versions.conteudo_texto
+SOBREVIVENTE: petitions.ai_prompt
+SOBREVIVENTE: petitions.review_notes
+```
+`clients.email`/`clients.nome_completo` desaparecem corretamente
+(confirma que `erase_client_data` funciona pro que já cobre — o gap é
+específico dessas 5 tabelas). Achado real, não corrigido nesta rodada
+(audit-only) — candidato natural a fase de correção, mesmo padrão de fix
+já usado 8+ vezes no projeto (`erase_client_data`/`export_client_data`).
+
+### F2 — Reconfirmar a pós-260.9 mais a fundo: o branch AWAITING_APPROVAL
+de `_run_async` nunca chama `clear_transient()`
+
+A correção da pós-260.9 (OOM do `MemorySaver`) incluiu `ctx.
+clear_transient()` em `agent_tasks.py::_run_async`, mas só **depois** do
+bloco try/except principal (linha ~179). O branch de retry-noop (`if
+last_step_status == "AWAITING_APPROVAL": ...; return`, linhas 112-115)
+sai da função **antes** dessa linha — nunca chama `clear_transient()`.
+
+Investigado a fundo (leitura de `agent_tasks.py` e `agents/brain/
+context.py` completos, sem script — a pergunta é respondível por
+raciocínio de ciclo de vida de objeto Python, não por execução): nesse
+branch específico, o grafo do orquestrador nunca é invocado, então
+`ctx.audit_events`/`ctx.state` (os campos que `clear_transient()`
+libera) **nunca são populados** em primeiro lugar — não há nada a
+liberar. E `AgentContext` é um `@dataclass` puro sem registro global
+guardando instâncias; nada retém uma referência a `ctx` além do escopo
+local da função, que o CPython recicla por refcounting normal assim que
+a função retorna.
+
+**Classificação: achado real de inconsistência de docstring/contrato
+(o comentário do `clear_transient()` diz que ele "libera N/M" mas nesse
+branch N=M=0 sempre), não um vazamento de memória ativo.** Diferente da
+severidade do bug original do `MemorySaver` (que SIM vazava, de verdade,
+por 3+ semanas em produção) — este é só uma inconsistência de contrato,
+baixa severidade, documentada sem correção nesta rodada.
+
+### F3 — Achado novo: fail-open real em `ws.py`
+
+`GET /ws/{user_id}` (`backend/app/api/v1/ws.py:40-53`) checa `User.
+is_active` pra revogar conexão de usuário desativado, mas envolve a
+query inteira num `except Exception: pass` que cai direto em
+`websocket.accept()` se a checagem falhar por qualquer motivo.
+
+Reproduzido ao vivo com instrumentação temporária (padrão já usado na
+Fase 237 — fault injection + revert completo, nunca commitado):
+1. **Baseline** (checagem funcionando normalmente): usuário desativado,
+   token válido → servidor recusa com `close(code=4001)` **antes** do
+   `accept()` — comportamento correto.
+2. **Com a checagem forçada a lançar exceção** (monkeypatch temporário
+   levantando `RuntimeError` no ponto exato da query `is_active`): a
+   MESMA conexão, com o MESMO usuário desativado, é **aceita** — o
+   `except Exception: pass` engole a falha e o fluxo cai direto em
+   `websocket.accept()`.
+
+Achado real: uma falha transitória de banco especificamente durante essa
+checagem (não durante o resto do handler, que tem seus próprios
+try/excepts) derruba silenciosamente o controle de revogação —
+contradiz a defesa em profundidade que o bloco pretende implementar.
+Instrumentação revertida por completo e confirmada byte-idêntica ao
+original via `diff`/`git status` antes de prosseguir. Não corrigido
+nesta rodada (audit-only) — candidato a fase de correção (fix trivial:
+`except Exception: await websocket.close(code=4001); return` em vez de
+`pass`).
+
+### F4 — Catalogar o raio de alcance do padrão `CircuitBreaker(default=[])`
+
+**Reproduzido ao vivo pra `datajud_fonte.py::movimentos()`** (script
+standalone, cliente fake que SEMPRE teria sucesso injetado via
+`fonte._client`): com o disjuntor fechado, o cliente fake retorna 1
+movimento real; forçando 3 falhas consecutivas (`record_failure()`) até
+o disjuntor abrir, o MESMO cliente fake (que continuaria funcionando se
+chamado) nunca é sequer tentado — `movimentos()` devolve `[]`, idêntico
+ao que devolveria se genuinamente não houvesse novidade. Confirma pro
+DataJud especificamente o mesmo padrão já documentado/parcialmente
+corrigido pro Comunica/DJEN (`fetch_movements_datajud()` já tem o
+parâmetro `sinalizar_falha`, mas `movimentos()`/`detalhar()` de
+`DataJudFonte` ainda não).
+
+**Catalogado por leitura de código** (não corrigido nesta rodada): 5
+integrações `.jus.br`/`.gov.br` continuam em `httpx` puro, sem
+`curl_cffi`/TLS impersonation (a técnica que corrigiu o 403 do Comunica/
+DJEN na fase pós-260.10 anterior) — `backend/app/integrations/lexml/
+client.py`, `jurisprudencia/stj_client.py`, `tribunais/esaj.py`,
+`tribunais/pje.py`, `tribunais/base.py`. Risco maior nos portais com
+login (`esaj.py`/`pje.py`, mais propensos a WAF moderno) que nas APIs de
+dado aberto (`lexml`, `stj_client`). Não é uma lista garantidamente
+exaustiva — outras integrações menos óbvias podem existir; próxima
+rodada deve confirmar com um grep dedicado antes de assumir esta lista
+como completa.
+
+### F5 — Reconfirmação de HTTP real do que já foi corrigido
+
+**Rate limiter self-heal** (`incrementar_com_janela()`, correção
+pós-260.5): reproduzido ao vivo — chave travada manualmente em `valor=463,
+TTL=-1` (cenário real medido naquela fase); uma única chamada da função de
+produção cura o TTL (`TTL=60`) no primeiro acesso subsequente, sem
+intervenção manual. Confirmado, sem achado.
+
+**Spot-check dos 10 gates de papel fechados na pós-260.5**: bloqueado
+inicialmente por senha incorreta (o tenant `afjdemo` só tem senha
+conhecida pro papel ADMIN, `demo@afjdemo.com.br`/`Demo@2026` — os outros
+3 papéis nascem com senha aleatória via `secrets.token_urlsafe(24)`,
+achado incidental sobre o próprio mecanismo de seed do tenant demo).
+Contornado gerando JWT diretamente pros 4 usuários reais do tenant demo
+(mesma técnica já usada no F3). HTTP real contra 6 rotas/ações:
+```
+GET /system/analytics/financeiro   ADMIN 200  SOCIO 200  ADVOGADO 403  ASSISTENTE 403
+GET /system/analytics/processos    ADMIN 200  SOCIO 200  ADVOGADO 403  ASSISTENTE 403
+GET /system/analytics/agentes      ADMIN 200  SOCIO 200  ADVOGADO 403  ASSISTENTE 403
+GET /integrations/hub              ADMIN 200  SOCIO 403  ADVOGADO 403  ASSISTENTE 403
+POST /agents/trigger               ADMIN 202  SOCIO 202  ADVOGADO 202  ASSISTENTE 403
+POST /documents/petitions/generate ADMIN 422  SOCIO 422  ADVOGADO 422  ASSISTENTE 403
+```
+(422 nas 2 últimas linhas é validação de payload — passou do gate de
+papel, falhou depois por dado de teste inválido, como esperado.) Todos
+os resultados batem com a matriz de papéis documentada na correção da
+pós-260.5. Confirmado, sem achado.
+
+**Primeiro exercício real do fluxo de ESCRITA de `portal`/`billing`/
+`publications`** (gap conhecido desde a pós-260.5, nunca fechado por
+nenhuma rodada): script standalone com Postgres real, seed de um
+processo/cliente/intimações reais do tenant demo, `ClientPortalAccess`
+real com token JWT.
+- `billing.py`: `PUT /billing/{id}` (config) só SUPERADMIN (403 pro
+  ADMIN do tenant, 200 pro SUPERADMIN); `POST /billing/{id}/suspend` →
+  `require_active_tenant` bloqueia corretamente qualquer `POST /clients`
+  do ADMIN do tenant suspenso (403, mensagem clara) enquanto `GET
+  /clients` continua funcionando (leitura sempre passa); `POST /billing/
+  {id}/reactivate` → escrita volta a funcionar imediatamente. Os 3
+  estados (antes/durante/depois da suspensão) confirmados via `POST
+  /clients` real.
+- `publications.py`: `POST /publicacoes/{id}/triagem` cria um
+  `ProcessDeadline` real e marca a intimação `TRIADA`; `POST
+  /publicacoes/{id}/ignorar` marca `IGNORADA`. Ambos funcionando.
+- `portal.py`: `POST /portal/messages` com token JWT de um `User` técnico
+  de portal (papel CLIENT) grava a mensagem (`ClientInteraction`) com
+  sucesso; o MESMO token tentando `GET /clients` (rota interna) recebe
+  403 — confirma que o isolamento `_STAFF` (fechado na Fase 239) segue
+  bloqueando CLIENT de rotas internas mesmo num teste ponta a ponta novo.
+
+Nenhum achado nos 3 — todos funcionam corretamente na primeira vez que
+foram exercitados de ponta a ponta.
+
+### F6 — Playwright (parcialmente coberto)
+
+A checagem específica pedida no plano (mensagem nova de "nenhuma fonte
+de partes configuradas", ~230 caracteres, risco de estourar o toast de
+4s/`max-w-sm`) foi resolvida por leitura direta de
+`components/ui/Toast.tsx`: o `<span className="flex-1">` que renderiza
+a mensagem não tem `truncate` nem `line-clamp` — o texto quebra linha
+normalmente dentro da caixa de 384px (`max-w-sm`), sem cortar/esconder
+conteúdo. Não é bug de layout. Nota de UX menor, não corrigida: uma
+mensagem de ~230 caracteres em 4 segundos de exibição pode ser difícil
+de ler por completo antes do toast sumir — não avaliado como achado por
+si só, registrado pra quem for revisar UX de toasts de mensagem longa.
+
+**Não coberto nesta rodada** (Playwright real de navegador não chegou a
+rodar): walkthrough das telas de Integrações/Publicações/OAB tocadas nas
+últimas 2 fases — próxima rodada deve cobrir isso se ainda não tiver
+sido feito por outro caminho.
+
+### F7 — Auditoria pontual do endpoint de assinatura de contrato
+
+Hipótese do reconhecimento (que motivou esta frente): `POST /contracts/
+{id}/enviar-assinatura` não grava `AuditLog` nem confere HITL antes de
+enviar ao Clicksign.
+
+**Hipótese descartada, confirmada ao vivo**: chamando o endpoint real
+(com um `doc_id` inexistente, pra não precisar montar um contrato
+completo) e consultando `audit_logs` logo depois, aparece uma linha real:
+`action="POST:/api/v1/documents/contracts/{id}/enviar-assinatura"`,
+`success=False`, timestamp correto. O `AuditMiddleware` genérico
+(`backend/app/core/middleware.py`) já audita QUALQUER rota de escrita
+autenticada que não esteja na `SKIP_AUDIT_PATHS` (só `/auth/login`,
+`/auth/refresh`, `/health`, `/docs`, `/openapi.json`) — `enviar-
+assinatura` nunca esteve nessa lista de exclusão. A suposição do
+reconhecimento de que essa rota "não grava AuditLog" estava errada.
+(A linha não tem `resource_type`/`resource_id`/`old_value`/`new_value`
+preenchidos — mas isso é verdade de quase toda rota do sistema, já
+documentado no dossiê `docs/juridico/RETENCAO_AUDIT_LOGS.md`, não uma
+lacuna específica deste endpoint.)
+
+**HITL: classificado como intencional, não lacuna.** O endpoint já tem
+`require_role("ADVOGADO", "GESTOR", "SOCIO", "ADMIN")` — é uma ação
+humana direta (o advogado clica "enviar"), não uma ação de IA. O
+invariante do projeto ("agentes de IA que executam ações críticas criam
+`Approval`") não se aplica aqui porque não é a IA quem decide enviar —
+é o humano, já com gate de papel, e essa decisão humana JÁ É o
+"humano no circuito". Não há lacuna a fechar.
+
+### Entregável
+
+Nenhuma correção de código nesta rodada — audit-only, conforme
+metodologia padrão do projeto. Achados que sobrevivem verificação viva
+(F1, F3, F4 parcial) ficam para o usuário decidir quais viram fase de
+correção; F2 e F4 (catálogo) são achados reais de baixa severidade,
+documentados; F5, F6, F7 não geraram achado (reconfirmação limpa ou
+hipótese descartada).
+
+**Próxima rodada deve**: (a) reconfirmar os fixes de F1/F3/F4 se o
+usuário decidir corrigi-los nesta sessão ou numa fase seguinte; (b)
+completar o walkthrough Playwright de Integrações/Publicações/OAB que
+ficou de fora desta rodada; (c) confirmar se a lista de integrações
+`.jus.br` em `httpx` puro do F4 é exaustiva (grep dedicado, não só
+memória do reconhecimento).
