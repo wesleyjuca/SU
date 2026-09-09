@@ -2,7 +2,14 @@
 real da fonte de partes credenciada (PDPJ/Escavador/Judit/Jusbrasil): sucesso
 se alguma parte nova foi importada, falha só se `fonte.partes()` de fato
 lançou (resposta vazia sem exceção não é necessariamente erro — o processo
-pode legitimamente não ter partes cadastradas ainda)."""
+pode legitimamente não ter partes cadastradas ainda).
+
+Fase pós-260.10 — `_enriquecer_partes()` passou a devolver
+`{"total": int, "fonte_configurada": bool}` em vez de só `int`: antes, um
+escritório sem NENHUMA das 4 fontes configurada em Integrações via "0
+partes" sem nenhum sinal de que a causa era falta de configuração, não
+erro — `capturar_por_oab()` nem lia o retorno. `fonte_configurada`
+distingue "fonte respondeu vazio" de "nenhuma fonte credenciada"."""
 import asyncio
 import sys
 import types
@@ -88,9 +95,9 @@ def test_partes_importadas_com_sucesso_registra_sucesso(monkeypatch):
     monkeypatch.setattr(partes_import_mod, "importar_partes", _fake_importar_partes)
 
     procs = [(_FakeProc("0001"), "TJSP")]
-    total = asyncio.run(oab_capture._enriquecer_partes(None, "t1", procs))
+    resultado = asyncio.run(oab_capture._enriquecer_partes(None, "t1", procs))
 
-    assert total == 1
+    assert resultado == {"total": 1, "fonte_configurada": True}
     assert chamadas == [{"provider": "pdpj", "sucesso": True}]
 
 
@@ -109,9 +116,9 @@ def test_excecao_sem_nenhuma_parte_importada_registra_falha(monkeypatch):
     monkeypatch.setattr(integration_hub, "registrar_uso", _fake_registrar_uso)
 
     procs = [(_FakeProc("0001"), "TJSP")]
-    total = asyncio.run(oab_capture._enriquecer_partes(None, "t1", procs))
+    resultado = asyncio.run(oab_capture._enriquecer_partes(None, "t1", procs))
 
-    assert total == 0
+    assert resultado == {"total": 0, "fonte_configurada": True}
     assert chamadas == [{"sucesso": False, "detalhe": "401 token expirado"}]
 
 
@@ -132,7 +139,32 @@ def test_resposta_vazia_sem_excecao_nao_registra_nada(monkeypatch):
     monkeypatch.setattr(integration_hub, "registrar_uso", _fake_registrar_uso)
 
     procs = [(_FakeProc("0001"), "TJSP")]
-    total = asyncio.run(oab_capture._enriquecer_partes(None, "t1", procs))
+    resultado = asyncio.run(oab_capture._enriquecer_partes(None, "t1", procs))
 
-    assert total == 0
+    assert resultado == {"total": 0, "fonte_configurada": True}
     assert chamado["registrar_uso"] is False
+
+
+def test_sem_fonte_credenciada_devolve_fonte_configurada_false(monkeypatch):
+    """Fase pós-260.10 — achado real: sem NENHUMA das 4 fontes (PDPJ/
+    Escavador/Judit/Jusbrasil) configurada em Integrações, o retorno era só
+    `0`, indistinguível de "fonte configurada mas sem partes ainda". Agora
+    `fonte_configurada=False` deixa isso explícito pro chamador."""
+    from app.services import oab_capture
+
+    _patch_credenciadas(monkeypatch, None)
+
+    procs = [(_FakeProc("0001"), "TJSP")]
+    resultado = asyncio.run(oab_capture._enriquecer_partes(None, "t1", procs))
+
+    assert resultado == {"total": 0, "fonte_configurada": False}
+
+
+def test_sem_processos_novos_devolve_fonte_configurada_false():
+    """Nenhum processo novo pra enriquecer — nem chega a consultar a fonte
+    credenciada, então não há como saber/afirmar que está configurada."""
+    from app.services import oab_capture
+
+    resultado = asyncio.run(oab_capture._enriquecer_partes(None, "t1", []))
+
+    assert resultado == {"total": 0, "fonte_configurada": False}

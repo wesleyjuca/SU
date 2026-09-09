@@ -121,14 +121,22 @@ async def test_caminho_feliz_finaliza_ok(monkeypatch):
 
     monkeypatch.setattr("app.integrations.fontes.registry.obter_fonte", lambda nome: _FakeFonteComunica())
     monkeypatch.setattr(mod, "_enriquecer_via_datajud", lambda db, novos: _ok())
-    monkeypatch.setattr(mod, "_enriquecer_partes", lambda db, tenant_id, novos: _ok())
+    monkeypatch.setattr(mod, "_enriquecer_partes", lambda db, tenant_id, novos: _ok_partes())
 
     db = _FakeDB([_FakeScalarResult([]), _FakeScalarResult([])])
     resultado = await mod.capturar_por_oab(db, tenant_id, apenas_oab=("12345", "SP"))
 
     assert resultado["processos_criados"] == 1
+    assert resultado["partes_criadas"] == 0
+    assert resultado["partes_fonte_configurada"] is True
     assert chamadas_finalizar[0][0] == "OK"
 
 
 async def _ok():
     return None
+
+
+async def _ok_partes():
+    # Fase pós-260.10 — _enriquecer_partes devolve {"total", "fonte_configurada"},
+    # não mais só o count.
+    return {"total": 0, "fonte_configurada": True}
