@@ -704,6 +704,14 @@ async def capturar_processos_oabs(
     criados = resultado["processos_criados"]
     if criados:
         msg = f"{criados} novo(s) processo(s) capturado(s) de {resultado['oabs']} OAB(s)."
+        # Fase pós-260.10 — achado: a captura de partes (PDPJ/Escavador/Judit/
+        # Jusbrasil, via fonte credenciada) já existia, mas sem nenhuma
+        # credencial configurada o resultado era "0 partes" silencioso, sem
+        # pista de que a causa é falta de configuração, não erro.
+        if not resultado.get("partes_fonte_configurada"):
+            msg += (" Nenhuma fonte de partes configurada — as partes não foram "
+                     "preenchidas. Configure PDPJ, Escavador, Judit ou Jusbrasil em "
+                     "Integrações para capturar partes automaticamente.")
     elif encontrados:
         msg = f"{encontrados} processo(s) encontrado(s) — todos já cadastrados."
     elif not resultado.get("fonte_respondeu"):

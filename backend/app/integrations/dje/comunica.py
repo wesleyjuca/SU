@@ -5,6 +5,12 @@ consultável por OAB. Documentação: https://comunicaapi.pje.jus.br/
 
 À prova de falha: qualquer erro (rede, formato, host inacessível no sandbox)
 retorna lista vazia — a varredura nunca derruba o worker.
+
+Cliente HTTP: `curl_cffi` (não `httpx`) com `impersonate="chrome124"` — o WAF
+deste portal continuou devolvendo 403 mesmo com headers de navegador reais
+(Fase 250) e sem relação com o circuit breaker (Fase 251); `curl_cffi`
+reproduz o fingerprint TLS/JA3 de um Chrome de verdade, não só os headers.
+Ver o comentário dentro de `buscar_comunicacoes()` para o histórico completo.
 """
 from __future__ import annotations
 
@@ -12,8 +18,8 @@ import re
 from dataclasses import dataclass
 from datetime import date
 
-import httpx
 import structlog
+from curl_cffi.requests import AsyncSession
 
 log = structlog.get_logger()
 
@@ -141,26 +147,34 @@ async def buscar_comunicacoes(
 
     out: list[Comunicacao] = []
     try:
-        async with httpx.AsyncClient(
+        async with AsyncSession(
             timeout=_TIMEOUT,
             headers={
                 # Fase 250 — achado real em produção: um User-Agent que se
                 # autoidentifica como bot/sistema ("AFJ-Core/1.0 (...)") leva
                 # 403 do WAF do Comunica/DJEN, mesmo sendo uma API pública
-                # pensada pra consumo por terceiros. O próprio site público
-                # de consulta (comunica.pje.jus.br) chama este mesmo endpoint
-                # via browser — usar um UA/Accept-Language/Referer de
-                # navegador real (não uma técnica de evasão, é o mesmo
-                # formato de requisição que qualquer usuário faria pela
-                # página pública) é o fix documentado pra esse tipo de
-                # bloqueio nesse portal.
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-                "Accept": "application/json, text/plain, */*",
-                "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
+                # pensada pra consumo por terceiros. Headers de navegador
+                # sozinhos (Fase 250) e o fix do circuit breaker (Fase 251)
+                # não resolveram — o 403 persistiu (Fase 252). A causa mais
+                # provável, dado que headers HTTP já foram descartados: o WAF
+                # faz fingerprint na camada TLS (JA3), que o stack TLS puro-
+                # Python do `httpx` nunca reproduz de verdade, não importa o
+                # header enviado. `impersonate="chrome124"` abaixo faz a
+                # libcurl reproduzir o aperto de mão TLS real de um Chrome —
+                # com isso, `User-Agent`/`Accept`/`Accept-Language` saem
+                # daqui e passam a ser gerados automaticamente pelo
+                # `curl_cffi` (`default_headers=True`, o padrão), consistente
+                # com o fingerprint escolhido — misturar um UA manual com um
+                # impersonate diferente seria, ele mesmo, um sinal que um WAF
+                # mais sofisticado pega. `Referer`/`Origin` seguem manuais
+                # (específicos desta chamada, não implícitos em "ser Chrome
+                # 124") — mesmo formato de requisição que o site público
+                # (comunica.pje.jus.br) já faz. Fase pós-260.10.
                 "Referer": "https://comunica.pje.jus.br/consulta",
                 "Origin": "https://comunica.pje.jus.br",
             },
-            follow_redirects=True,
+            impersonate="chrome124",
+            allow_redirects=True,
         ) as client:
             for pagina in range(1, max(1, max_paginas) + 1):
                 params = {

@@ -745,6 +745,82 @@ rediscobertas do zero a cada sessão — contexto completo de cada uma em
     PDPJ, com metadata e as 2 arestas (`hub→prov_pdpj`, `captura→
     prov_pdpj`) intactas. Confirmado ao vivo, no processo real da app,
     `get_orchestrator_graph().checkpointer is None`.
+- **Fase pós-260.10** — usuário reportou "captura de publicações" e "busca
+  de processos por OAB e UF" não funcionando, e pediu fonte alternativa
+  pra "captura das partes do processo". Também pediu pra "informar ao
+  DataJud que o sistema não possui uso comercial" — investigado e
+  **descartado do escopo por decisão do usuário**: confirmado que a API
+  pública do DataJud não tem nenhum mecanismo de registro/declaração de
+  uso (nem no código, nem documentado pelo CNJ), e que a alegação em si
+  seria factualmente incorreta (o AFJ é produto comercial pago) — via
+  correta é contato formal com CNJ/parecer jurídico, fora do que este
+  sandbox consegue fazer (egress bloqueado pros domínios do CNJ/PJe).
+  - **Achado central**: os 2 primeiros sintomas têm a MESMA causa raiz,
+    já diagnosticada e nunca corrigida —
+    `backend/app/integrations/dje/comunica.py::buscar_comunicacoes()`
+    (único ponto de consulta à Comunica/DJEN, usado tanto pela varredura
+    diária de publicações quanto pela descoberta de processos por OAB+UF)
+    recebe HTTP 403 do WAF do portal. Fase 250 (headers de navegador) e
+    Fase 251 (fix não relacionado de circuit breaker) não resolveram; Fase
+    252 confirmou que o 403 persistiu e parou no diagnóstico (captura do
+    corpo da resposta), sem implementar correção. Como headers HTTP já
+    foram descartados como suficientes, a causa mais provável é
+    fingerprint na camada TLS (JA3) — limitação estrutural do stack TLS
+    puro-Python do `httpx`, que nenhum header resolve.
+  - **Correção**: cliente HTTP trocado de `httpx` pra `curl_cffi`
+    (`curl_cffi==0.16.3`, wheel pré-compilada, mesma classe de dependência
+    binária que `cryptography`/`psycopg2-binary` já usadas — sem mudança
+    de Dockerfile necessária, ambos já usam `--prefer-binary`), com
+    `impersonate="chrome124"` — reproduz o fingerprint TLS/JA3 real de um
+    Chrome, técnica padrão da indústria pra esse cenário de WAF. `User-
+    Agent`/`Accept`/`Accept-Language` deixam de ser setados manualmente
+    (o `default_headers=True` padrão do `curl_cffi` já gera esse conjunto,
+    consistente com o fingerprint); `Referer`/`Origin` seguem manuais
+    (específicos deste contexto). Resto do arquivo (parsing, paginação,
+    `stats`, o `except Exception` fail-soft) intocado — o contrato "nunca
+    lança, sempre degrada" já vale automaticamente (exceções do
+    `curl_cffi` também são `Exception`). Testado end-to-end neste sandbox
+    contra `pypi.org` (domínio não-bloqueado) — `AsyncSession` com
+    `impersonate="chrome124"` funciona de ponta a ponta (200, `.json()`).
+    Corrige as 2 features de uma vez, já que ambas dependem do mesmo
+    cliente.
+  - **Achado secundário (não é bug, é lacuna de visibilidade)**: a
+    captura de partes **já** tinha fonte alternativa ao DataJud —
+    `oab_capture.py::_enriquecer_partes()` já busca via
+    `fonte_partes_credenciada()` (PDPJ → Escavador → Judit → Jusbrasil,
+    a que tiver credencial configurada em Integrações) — só que sem
+    nenhuma configurada, devolvia silenciosamente `0`, sem sinal pro
+    usuário de que a causa é falta de configuração, não erro. Corrigido:
+    `_enriquecer_partes()` passa a devolver `{"total", "fonte_configurada"}`
+    em vez de só o count (o chamador antes nem lia o retorno);
+    `capturar_por_oab()` inclui os 2 campos em `resultado` (nos 3 pontos
+    de retorno, pra shape consistente); `POST /tenant/oabs/capturar`
+    apenda uma frase orientando a configurar uma das 4 fontes quando
+    `partes_fonte_configurada` vier `False` — frontend
+    (`JuridicoTab.tsx`) já renderiza `message` como vem, sem mudança
+    necessária.
+  - **Achado ao rodar a suíte, não hipótese**: `test_caminho_feliz_
+    finaliza_ok` (`test_oab_capture_syncrun_erro.py`) mockava
+    `_enriquecer_partes` com um fake devolvendo `None` (formato antigo,
+    int implícito) — quebrou com `TypeError` assim que o retorno virou
+    dict, exatamente o tipo de teste desatualizado que a suíte pega antes
+    do CI. Corrigido pro novo contrato.
+  - **Verificado**: prova bidirecional no fix do cliente HTTP — os 6
+    testes de `test_comunica_diagnostico.py` (reescritos com fake
+    `AsyncSession` monkeypatchada, já que `curl_cffi` não tem equivalente
+    a `httpx.MockTransport`) falham todos ao reverter pra `httpx`, passam
+    com o fix. Suíte completa na configuração exata do runner (banco do
+    zero, `REDIS_URL=` vazio): `tests/test_unit/` 928 passed/4 skipped
+    (+2 vs. antes desta fase), `tests/test_api/` 185 passed/9 skipped,
+    sem regressão. `ruff check app/` limpo.
+  - **O que este sandbox não pode provar**: se `impersonate="chrome124"`
+    de fato derruba o 403 contra o Comunica/DJEN real — impossível testar
+    daqui (egress bloqueado pros domínios `*.pje.jus.br`/`*.cnj.jus.br`,
+    reconfirmado nesta fase). Correção é best-effort, baseada na prática
+    padrão da indústria pra esse tipo de bloqueio — pedir ao usuário pra
+    testar em produção pós-deploy e reportar o resultado (sucesso, ou o
+    novo `body_snippet`, que ajuda a próxima investigação se ainda
+    falhar).
 
 ## Teste geral do sistema (metodologia)
 

@@ -125,19 +125,25 @@ async def _enriquecer_via_datajud(db, procs: list[tuple]) -> None:
         )
 
 
-async def _enriquecer_partes(db, tenant_id, procs: list[tuple]) -> int:
+async def _enriquecer_partes(db, tenant_id, procs: list[tuple]) -> dict:
     """Se o escritório conectou uma fonte de partes credenciada (PDPJ/Escavador/
-    Judit), preenche as PARTES dos processos recém-criados — dado que o DataJud
-    público não expõe. No-op silencioso quando não há credencial. Retorna quantas
-    partes foram gravadas."""
+    Judit/Jusbrasil), preenche as PARTES dos processos recém-criados — dado que
+    o DataJud público não expõe. No-op silencioso quando não há credencial.
+
+    Fase pós-260.10 — achado real: o retorno era só a contagem, e o chamador
+    (`capturar_por_oab`) sequer lia esse valor — um escritório sem NENHUMA das
+    4 fontes configurada via Integrações tinha "0 partes" indistinguível de um
+    erro, sem nenhum sinal de que a causa é falta de configuração, não bug.
+    Retorna `{"total": int, "fonte_configurada": bool}` pra o chamador
+    distinguir os dois casos."""
     if not procs:
-        return 0
+        return {"total": 0, "fonte_configurada": False}
     from app.integrations.fontes.credenciadas import fonte_partes_credenciada
     from app.services.partes_import import importar_partes
 
     fonte = await fonte_partes_credenciada(db, tenant_id)
     if not fonte:
-        return 0
+        return {"total": 0, "fonte_configurada": False}
     from app.services import integration_hub
 
     total = 0
@@ -161,7 +167,7 @@ async def _enriquecer_partes(db, tenant_id, procs: list[tuple]) -> int:
         await integration_hub.registrar_uso(db, tenant_id, fonte.nome, sucesso=True)
     elif teve_erro:
         await integration_hub.registrar_uso(db, tenant_id, fonte.nome, sucesso=False, detalhe=ultimo_erro)
-    return total
+    return {"total": total, "fonte_configurada": True}
 
 
 async def capturar_por_oab(
@@ -252,7 +258,8 @@ async def capturar_por_oab(
             resultado = {"oabs": len(oabs), "comunicacoes_encontradas": total_comunicacoes,
                          "processos_encontrados": 0, "processos_criados": 0,
                          "fonte_respondeu": bool(stats.get("ok")),
-                         "fonte_detalhe": stats.get("error")}
+                         "fonte_detalhe": stats.get("error"),
+                         "partes_criadas": 0, "partes_fonte_configurada": False}
             await finalizar_sync(db, sync, "OK" if stats.get("ok") else "ERRO", resultado)
             await db.commit()
             return resultado
@@ -295,7 +302,7 @@ async def capturar_por_oab(
         # estourar timeout; a busca por OAB NÃO existe no DataJud público (só por número).
         await _enriquecer_via_datajud(db, novos[:40])
         # Partes via fonte credenciada (PDPJ/Escavador/Judit; só com opt-in, senão no-op).
-        await _enriquecer_partes(db, tenant_id, novos[:40])
+        partes_info = await _enriquecer_partes(db, tenant_id, novos[:40])
 
         if triggered_by and criados:
             from app.services.notification import publish_notification_ws
@@ -318,6 +325,8 @@ async def capturar_por_oab(
             "processos_criados": criados,
             "fonte_respondeu": bool(stats.get("ok")),
             "fonte_detalhe": stats.get("error"),
+            "partes_criadas": partes_info["total"],
+            "partes_fonte_configurada": partes_info["fonte_configurada"],
         }
         await finalizar_sync(db, sync, "OK", resultado)
         await db.commit()
@@ -330,6 +339,7 @@ async def capturar_por_oab(
             "oabs": len(oabs), "comunicacoes_encontradas": total_comunicacoes,
             "processos_encontrados": len(achados), "processos_criados": criados,
             "erro": str(exc)[:300],
+            "partes_criadas": 0, "partes_fonte_configurada": False,
         }
         await finalizar_sync(db, sync, "ERRO", resultado)
         await db.commit()
