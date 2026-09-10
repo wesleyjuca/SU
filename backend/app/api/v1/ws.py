@@ -49,8 +49,17 @@ async def websocket_endpoint(
         if not active:
             await websocket.close(code=4001)
             return
-    except Exception:
-        pass
+    except Exception as exc:
+        # Fase pós-260.10 (achado de auditoria) — era `except Exception: pass`,
+        # que caía direto em accept() se esta checagem falhasse por qualquer
+        # motivo (ex.: blip transitório de banco), aceitando a conexão de um
+        # usuário JÁ desativado. Esta é a ÚNICA checagem que revoga acesso de
+        # WS imediatamente na desativação (o access token em si segue válido
+        # até expirar) — fail-closed aqui, consistente com os 3 `close()`
+        # acima (JWTError, sub mismatch, blacklist).
+        log.warning("ws_active_check_failed", user_id=user_id, error=str(exc))
+        await websocket.close(code=4001)
+        return
 
     await websocket.accept()
     _connections.setdefault(user_id, set()).add(websocket)

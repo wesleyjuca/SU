@@ -168,3 +168,44 @@ async def test_datajud_fonte_capabilities_e_detalhar(monkeypatch):
     # fetch_movements_datajud preserva o shape MovementData (código + raw)
     md = await fonte.fetch_movements_datajud("999", "TJSP")
     assert len(md) == 1 and md[0].tipo == "123" and md[0].raw_data == {"x": 1}
+
+
+@pytest.mark.asyncio
+async def test_datajud_fonte_sinalizar_falha_distingue_breaker_aberto(monkeypatch):
+    """Rodada pós-260.10 (achado de auditoria) — sem `sinalizar_falha`,
+    `movimentos()` devolvia `[]` tanto pra "sem novidade" quanto pra
+    "disjuntor aberto", indistinguível pro chamador (mesmo padrão já
+    corrigido pro Comunica/DJEN). Prova nos dois sentidos: com
+    `sinalizar_falha=True`, o disjuntor aberto passa a devolver `None`
+    (nunca `[]`); o default segue devolvendo `[]` (comportamento antigo
+    preservado, nenhum chamador real usa `sinalizar_falha` hoje)."""
+    from app.integrations.fontes.datajud_fonte import DataJudFonte
+
+    fonte = DataJudFonte()
+
+    class _FakeClienteSempreSucesso:
+        tribunal = "TJCE"
+
+        async def fetch_processo(self, numero, tribunal=None):
+            return {"movimentos": [{"nome": "Distribuído", "dataHora": "2026-01-05T10:00:00Z"}]}
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr(fonte, "_client", lambda tribunal=None: _FakeClienteSempreSucesso())
+
+    # Disjuntor fechado: os dois caminhos funcionam normalmente.
+    assert await fonte.movimentos("999", "TJSP", sinalizar_falha=True)
+    assert await fonte.detalhar("999", "TJSP", sinalizar_falha=True)
+
+    for _ in range(3):
+        fonte._breaker.record_failure()
+    assert fonte._breaker.state == OPEN
+
+    # MESMO cliente (que teria sucesso) — o disjuntor aberto nem chega a
+    # chamá-lo. Default preserva `[]`/`None`; sinalizar_falha=True
+    # distingue "não consultei" (`None`) de "consultei e não achei nada".
+    assert await fonte.movimentos("999", "TJSP") == []
+    assert await fonte.movimentos("999", "TJSP", sinalizar_falha=True) is None
+    assert await fonte.detalhar("999", "TJSP") is None
+    assert await fonte.detalhar("999", "TJSP", sinalizar_falha=True) is None
