@@ -11,7 +11,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
-import httpx
+from curl_cffi.requests import AsyncSession
+from curl_cffi.requests.exceptions import HTTPError
 import structlog
 
 log = structlog.get_logger()
@@ -39,15 +40,24 @@ class BaseTribunalClient(ABC):
     base_url: str = ""
 
     def __init__(self):
-        self._http_client: httpx.AsyncClient | None = None
+        self._http_client: AsyncSession | None = None
 
     @property
-    def http(self) -> httpx.AsyncClient:
+    def http(self) -> AsyncSession:
         if not self._http_client:
-            self._http_client = httpx.AsyncClient(
+            # Fase pós-260.10 (rodada de correção do catálogo de integrações
+            # .jus.br) — trocado de httpx pra curl_cffi/impersonate="chrome124",
+            # mesma causa-raiz já comprovada em comunica.py: o WAF de um
+            # portal do CNJ/PJe pode bloquear pelo fingerprint TLS (JA3), que
+            # nenhum header resolve. O User-Agent manual que existia aqui
+            # ("AFJ-Core/1.0 (...)") é EXATAMENTE o tipo de header
+            # autoidentificado que causou o 403 confirmado do Comunica —
+            # removido de propósito: misturar um UA manual com o impersonate
+            # seria, ele mesmo, um sinal que um WAF mais sofisticado pega.
+            self._http_client = AsyncSession(
                 timeout=30.0,
-                headers={"User-Agent": "AFJ-Core/1.0 (Sistema interno de escritorio de advocacia)"},
-                follow_redirects=True,
+                impersonate="chrome124",
+                allow_redirects=True,
             )
         return self._http_client
 
@@ -70,13 +80,13 @@ class BaseTribunalClient(ABC):
         """Retorna lista de números CNJ de processos vinculados à OAB."""
         ...
 
-    async def _safe_get(self, url: str, **kwargs) -> httpx.Response | None:
+    async def _safe_get(self, url: str, **kwargs):
         """GET com tratamento de erro e log."""
         try:
             response = await self.http.get(url, **kwargs)
             response.raise_for_status()
             return response
-        except httpx.HTTPStatusError as exc:
+        except HTTPError as exc:
             log.error("tribunal_http_error", tribunal=self.tribunal_name, url=url, status=exc.response.status_code)
             return None
         except Exception as exc:
@@ -85,4 +95,4 @@ class BaseTribunalClient(ABC):
 
     async def close(self):
         if self._http_client:
-            await self._http_client.aclose()
+            await self._http_client.close()

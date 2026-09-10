@@ -925,6 +925,17 @@ nunca repetir o mesmo teste do zero.** Antes de planejar uma nova rodada:
   de esquecimento/varredura pra LGPD, fault-injection revertida pra
   `ws.py`, cliente fake com breaker forçado pro DataJud) + 2 testes
   unitários novos com prova nos dois sentidos.
+  **Catálogo `.jus.br` fechado (fase seguinte)**: o grep dedicado pedido
+  pelo F4 achou a lista da auditoria original **incompleta** — faltava
+  `tribunais/cnj.py` (DataJud, mesmo User-Agent autoidentificado que
+  causou o 403 do Comunica, usado em produção real) e `fontes/
+  pdpj_fonte.py` (portal nacional do PDPJ, usado ativamente, sem NENHUM
+  header de identificação). Achado que redefiniu o escopo: `esaj.py`/
+  `pje.py` — os 2 arquivos que pareciam maior risco — são código morto
+  (zero chamador em produção). Usuário escolheu corrigir só os 2 arquivos
+  ativos (`cnj.py` via `base.py`, e `pdpj_fonte.py`) com o mesmo
+  `curl_cffi`/`impersonate="chrome124"` do Comunica; os outros 5 ficam
+  catalogados, não corrigidos.
 
 Histórico completo (achados, decisões de escopo, correções, verificações
 empíricas de cada fase) fica em `HISTORICO_FASES.md` — movido pra fora

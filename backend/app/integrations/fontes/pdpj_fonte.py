@@ -17,7 +17,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-import httpx
+from curl_cffi.requests import AsyncSession
 import structlog
 
 from app.integrations.fontes.base import Capability, FonteProcessual
@@ -61,7 +61,13 @@ class PdpjFonte(FonteProcessual):
         async def _f():
             url = f"{self._base}/api/v2/processos/{numero}"
             headers = {"Authorization": f"Bearer {self._token}", "Accept": "application/json"}
-            async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            # Fase pós-260.10 (rodada de correção do catálogo de integrações
+            # .jus.br) — curl_cffi/impersonate="chrome124" em vez de httpx puro
+            # (que nem sequer setava User-Agent próprio, caindo no default
+            # "python-httpx/x.x.x", ainda mais identificável que o
+            # "AFJ-Core/1.0" que causou o 403 do Comunica). Mesma causa-raiz
+            # preventiva já aplicada em comunica.py/tribunais/base.py.
+            async with AsyncSession(timeout=_TIMEOUT, impersonate="chrome124") as client:
                 resp = await client.get(url, headers=headers)
                 if resp.status_code != 200:
                     log.warning("pdpj_http", status=resp.status_code, numero=numero)
@@ -82,7 +88,7 @@ class PdpjFonte(FonteProcessual):
         if not self._token:
             return (False, "sem token")
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            async with AsyncSession(timeout=15.0, impersonate="chrome124") as client:
                 resp = await client.get(
                     f"{self._base}/api/v2/processos/00000000000000000000",
                     headers={"Authorization": f"Bearer {self._token}", "Accept": "application/json"},

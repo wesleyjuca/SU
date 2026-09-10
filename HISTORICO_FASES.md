@@ -6473,3 +6473,109 @@ match de cliente, rate-limit de demo-login, mocks do Google Sheets/Docs)
 fase (`git stash`), não é regressão desta fase, é resíduo de ambiente
 local (banco reutilizado por muitas sessões/scripts no mesmo dia).
 Nenhuma mudança de frontend nesta fase.
+
+## Catálogo completo das integrações .jus.br/.gov.br + TLS impersonation nas 2 ativas de maior risco
+
+O F4 da rodada pós-260.10 catalogou o padrão do `curl_cffi` sem confirmar
+exaustividade. Usuário pediu pra fechar o catálogo e decidir o que
+corrigir. Um grep dedicado (Explore agent + introspecção direta do
+`curl_cffi==0.16.3` já instalado) confirmou que a lista da auditoria
+estava **incompleta**.
+
+### Catálogo final (8 arquivos httpx puro contra domínio `.jus.br`/`.gov.br`, além de `comunica.py` já corrigido)
+
+| Arquivo | Domínio | Uso real em produção? | Ação |
+|---|---|---|---|
+| `tribunais/cnj.py` (DataJud) | `api-publica.datajud.cnj.jus.br` | **Sim** — `processes.py`, `process_agent.py` via `DataJudFonte` | **Corrigido** (via `base.py`) |
+| `fontes/pdpj_fonte.py` | `portaldeservicos.pdpj.jus.br` | **Sim** — `credenciadas.py`, 1ª fonte de preferência | **Corrigido** |
+| `tribunais/esaj.py` | `esaj.tjsp/tjba/tjms.jus.br`, etc. | **Não** — zero chamador em todo o repo | Catalogado, código morto |
+| `tribunais/pje.py` | `pje.tjce/tjba/tjpe...jus.br` | **Não** — zero chamador em todo o repo | Catalogado, código morto |
+| `lexml/client.py` | `www.lexml.gov.br` | Sim — API aberta, sem auth | Catalogado, risco menor |
+| `jurisprudencia/stj_client.py` | `dadosabertos.web.stj.jus.br` | Sim — API aberta (CKAN), sem auth | Catalogado, risco menor |
+| `serpro/consulta_cpf_cnpj.py` | `gateway.apiserpro.serpro.gov.br` | Sim — OAuth2 client-credentials | Catalogado, risco menor |
+
+**Achado que redefiniu o escopo**: os 2 arquivos que o reconhecimento
+original apontava como MAIOR risco — `esaj.py`/`pje.py`, portais de login
+browser-facing — são código morto: nenhum chamador em nenhum lugar do
+repositório (não estão em `fontes/registry.py`, não são importados por
+nenhum serviço/API/worker/teste). Fixá-los não teria nenhum efeito
+mensurável hoje (sem produção real pra testar). Em compensação, o
+reconhecimento original **não tinha achado** `tribunais/cnj.py`
+(DataJud) — que usa o MESMO `User-Agent` autoidentificado
+(`"AFJ-Core/1.0 (...)"`) que causou o 403 confirmado do Comunica/DJEN, e
+é usado em produção real (endpoint direto em `processes.py` + polling
+via `DataJudFonte`/`process_agent.py`) — nem `fontes/pdpj_fonte.py`
+(portal nacional do PDPJ, usado ativamente via `credenciadas.py`, sem
+NENHUM header de identificação, pior que o `AFJ-Core/1.0`).
+
+**Decisão do usuário (via pergunta)**: corrigir só os 2 arquivos
+ativamente usados em produção — `tribunais/cnj.py` (via `tribunais/
+base.py`, que propaga a correção sozinho) e `fontes/pdpj_fonte.py`. Os
+outros 5 ficam catalogados, não tocados nesta fase.
+
+### Correção — `backend/app/integrations/tribunais/base.py`
+
+`CNJDataJudClient` é o único subtipo de `BaseTribunalClient` com chamador
+real (`esaj.py`/`pje.py` constroem `httpx.AsyncClient()` próprio em cada
+método, nunca usam `self.http` — por isso fixar `base.py` não os afeta).
+`http` property trocada de `httpx.AsyncClient` pra
+`curl_cffi.requests.AsyncSession(timeout=30.0, impersonate="chrome124",
+allow_redirects=True)` — **o header manual de `User-Agent` foi removido**
+(era exatamente a string autoidentificada que causou o 403 do Comunica;
+misturar UA manual com impersonate seria, ele mesmo, um sinal que um WAF
+mais sofisticado pega). `_safe_get` trocou `except httpx.HTTPStatusError`
+por `except HTTPError` (do `curl_cffi.requests.exceptions`, confirmado
+por leitura direta do código-fonte da lib que carrega `.response` com o
+mesmo formato — `exc.response.status_code` funciona igual). `close()`
+trocou `.aclose()` por `.close()` (nome diferente no curl_cffi, os dois
+assíncronos).
+
+### Correção — `backend/app/integrations/fontes/pdpj_fonte.py`
+
+2 pontos (`_get_processo`, `testar`) trocaram `httpx.AsyncClient(timeout=X)`
+por `AsyncSession(timeout=X, impersonate="chrome124")` — sem header
+manual algum antes (pior que o `AFJ-Core/1.0`, caía no UA default do
+httpx, `python-httpx/x.x.x`, ainda mais óbvio como cliente automatizado).
+`Authorization`/`Accept` continuam manuais por chamada, mesmo padrão do
+`Referer`/`Origin` do `comunica.py`.
+
+### Testes
+
+`test_tribunais_base_http_client.py` — reescrito por completo: a
+premissa original (UA manual precisa ser ASCII puro) desapareceu com a
+remoção do header. Novo contrato: o client é uma `AsyncSession` com
+`impersonate="chrome124"`, sem headers manuais na construção. Novo
+`test_pdpj_http_client.py` (lacuna real — nenhum teste cobria a
+construção do client HTTP dentro de `pdpj_fonte.py`, nem antes nem
+depois do fix, só mocks em nível mais alto): 2 testes confirmando
+`impersonate="chrome124"` em `_get_processo`/`testar`, via fake
+`AsyncSession` monkeypatchada (mesmo padrão já usado no rewrite de
+`test_comunica_diagnostico.py`).
+
+**Prova nos dois sentidos**: os 4 testes novos/reescritos falham contra
+o código sem o fix (`git stash` temporário) — `AttributeError` (sem
+atributo `AsyncSession` no módulo, sem atributo `impersonate` no
+`httpx.AsyncClient`) — e passam com o fix. `test_tribunais_cache.py`,
+`test_fontes.py`, `test_hub_testar.py`, `test_pdpj_partes.py`,
+`test_oab_capture_*`, `test_brain_fontes.py`, `test_fontes_credenciadas.py`
+(consumidores indiretos, mockam num nível acima do cliente HTTP) — todos
+sem impacto, confirmado.
+
+### Verificado
+
+`ruff check`/`py_compile` limpos nos 4 arquivos tocados. Suíte completa
+(`tests/test_unit/`) — mesmos 7 falhas + 13 erros pré-existentes
+(`test_poll_all_processes.py`, `test_tenant_user_unique_constraints.py`,
+`test_strategy_agent_*`, `test_schema_metadata_guard.py`) confirmados
+idênticos rodando contra o código SEM as mudanças desta fase (`git
+stash`) — não são regressão desta fase, são resíduo de ambiente local
+(banco reutilizado extensivamente no mesmo dia).
+
+**O que este sandbox não pode provar**: egress bloqueado pra
+`api-publica.datajud.cnj.jus.br`/`portaldeservicos.pdpj.jus.br` (mesma
+limitação de sempre) — não dá pra confirmar ao vivo se isso evita algum
+403 real nesses 2 domínios. Diferente do Comunica, **nenhum 403 foi
+reportado** pra DataJud/PDPJ especificamente — esta é uma correção
+preventiva/de consistência (mesma causa-raiz já comprovada em produção
+pro Comunica, aplicada por precaução aos 2 outros pontos ativos que
+compartilham o mesmo padrão de risco), não resposta a um bug relatado.
