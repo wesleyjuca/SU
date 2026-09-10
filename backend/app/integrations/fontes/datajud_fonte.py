@@ -40,21 +40,44 @@ class DataJudFonte(FonteProcessual):
             except Exception:
                 pass
 
-    async def detalhar(self, numero_cnj: str, tribunal: str | None = None) -> dict | None:
+    async def detalhar(
+        self, numero_cnj: str, tribunal: str | None = None, *, sinalizar_falha: bool = False,
+    ) -> dict | None:
+        # Fase pós-260.10 (achado de auditoria, mesmo padrão já usado em
+        # fetch_movements_datajud abaixo) — `sinalizar_falha` deixa disponível
+        # a distinção entre "disjuntor aberto/consulta não aconteceu" e
+        # "consultei e não achei nada" pra um futuro chamador que precise
+        # dela. Hoje devolve `None` nos dois casos de qualquer forma (é o
+        # contrato já documentado da função) — não muda comportamento pros 2
+        # chamadores reais (`oab_capture.py`, `citacao_check.py`), nenhum
+        # passa o parâmetro.
         async def _f():
             cli = self._client(tribunal)
             try:
                 return await cli.fetch_processo(numero_cnj, tribunal=tribunal)
             finally:
                 await self._fechar(cli)
-        return await self._breaker.run(_f, default=None)
+        resultado = await self._breaker.run(_f, default=_FALHA if sinalizar_falha else None)
+        return None if resultado is _FALHA else resultado
 
     async def movimentos(
         self,
         numero_cnj: str,
         tribunal: str | None = None,
         since: datetime | None = None,
-    ) -> "list[MovimentoEntrada]":
+        *,
+        sinalizar_falha: bool = False,
+    ) -> "list[MovimentoEntrada] | None":
+        # Fase pós-260.10 (achado de auditoria, reproduzido ao vivo) —
+        # `self._breaker.run(_f, default=[])` fazia "disjuntor aberto" e
+        # "consultei e não havia andamento novo" virarem o mesmo `[]`,
+        # indistinguível pro chamador — mesma classe de bug já corrigida só
+        # pro Comunica/DJEN (ver `sinalizar_falha` em `fetch_movements_datajud`
+        # abaixo). `movimentos()` não tem chamador em produção hoje (só
+        # `fetch_movements_datajud` é usado, por `process_agent.py`) — o
+        # parâmetro fica disponível pro padrão ficar consistente entre os 3
+        # métodos, sem forçar um consumidor que não existe; default preserva
+        # o comportamento fail-soft atual.
         async def _f():
             from app.services.movements_import import parse_datajud_movimentos
             cli = self._client(tribunal)
@@ -68,7 +91,8 @@ class DataJudFonte(FonteProcessual):
             if since:
                 movs = [m for m in movs if m.data and m.data >= since]
             return movs
-        return await self._breaker.run(_f, default=[])
+        resultado = await self._breaker.run(_f, default=_FALHA if sinalizar_falha else [])
+        return None if resultado is _FALHA else resultado
 
     async def fetch_movements_datajud(
         self,

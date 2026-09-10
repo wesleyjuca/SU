@@ -6387,3 +6387,89 @@ completar o walkthrough Playwright de Integrações/Publicações/OAB que
 ficou de fora desta rodada; (c) confirmar se a lista de integrações
 `.jus.br` em `httpx` puro do F4 é exaustiva (grep dedicado, não só
 memória do reconhecimento).
+
+## Correção dos 3 achados da rodada pós-260.10
+
+Usuário escolheu corrigir 3 dos achados da rodada anterior: os 5 gaps de
+LGPD, o fail-open do `ws.py`, e o `CircuitBreaker(default=[])` no
+DataJud. Deixou de fora o catálogo de integrações `.jus.br` sem TLS
+impersonation (nenhuma delas foi corrigida nesta fase).
+
+### 1. LGPD — `agent_memory`/`agent_steps`/`approvals`/`document_versions`/`petitions`
+
+`backend/app/api/v1/lgpd.py::erase_client_data` ganhou 5 blocos novos,
+mesmo padrão de comentário+`select`+sobrescrever já usado 10+ vezes no
+arquivo:
+- `AgentStep`/`Approval` (via `run_id → agent_runs.id`, reaproveitando a
+  lista de `AgentRun` já computada — só precisou virar variável em vez
+  de iterada direto). `Approval` tem `tenant_id` próprio, filtrado
+  também; `AgentStep` não tem, escopo vem de `run_ids`.
+- `DocumentVersion`/`Petition` (via `document_id → documents.id`,
+  reaproveitando a lista `document_ids` já computada pro `Contract`).
+- `AgentMemory` (sem FK declarada nem `tenant_id` — `context_id` é
+  `ctx.process_id or ctx.client_id`; filtrado por `context_id IN
+  (client_id, *processos_vinculados)`, sem risco de colisão
+  cross-tenant porque UUIDs são globalmente únicos).
+
+`export_client_data` ganhou os mesmos 5 blocos espelhados (sem
+anonimizar — mostra o dado real) e 5 chaves novas na resposta:
+`etapas_agentes_ia`, `aprovacoes_hitl`, `versoes_documento`, `peticoes`,
+`memoria_agentes_ia`.
+
+**Verificado ao vivo**: reexecutado o mesmo script da auditoria (criar
+cliente/processo/documento reais, inserir PII nas 6 tabelas via SQL,
+esquecer, varrer `information_schema` inteiro) — **18 tabela.coluna com
+o token ANTES do esquecimento → 0 DEPOIS** (as 6 tabelas do fix mais as
+já cobertas antes). `pytest tests/test_api/test_lgpd_sentinela.py`
+passa sem editar a lista de exclusões (a varredura é por valor, não por
+tabela — cobre os 5 fixes automaticamente).
+
+### 2. `ws.py` — fail-closed na checagem de `is_active`
+
+`backend/app/api/v1/ws.py` — o `except Exception: pass` (que caía direto
+em `websocket.accept()` se a checagem de `User.is_active` falhasse por
+qualquer motivo) virou `except Exception as exc: log.warning(...); await
+websocket.close(code=4001); return` — mesmo padrão dos 3 `close()` já
+usados acima no handler (JWTError, sub mismatch, blacklist).
+
+**Verificado ao vivo** com a mesma técnica de fault-injection temporária
+da auditoria (instrumentação revertida por completo depois, confirmado
+byte-idêntico via `diff`): com a checagem forçada a lançar exceção, a
+conexão de um usuário desativado agora é **recusada** (HTTP 403 na
+handshake, o mesmo `close(4001)` pré-accept dos outros 3 casos) — antes
+era aceita. Baseline (checagem funcionando normalmente) reconfirmado sem
+regressão. Teste novo `tests/test_unit/test_ws_active_check_fail_closed.py`
+chama `websocket_endpoint` direto com uma `AsyncSessionLocal` fake que
+lança na checagem — prova nos dois sentidos: revertendo o fix pra
+`except Exception: pass`, o teste falha (o código segue até tentar
+`websocket.send_json`, que o fake nem implementa, em vez de fechar a
+conexão).
+
+### 3. `datajud_fonte.py` — `sinalizar_falha` em `movimentos()`/`detalhar()`
+
+Mesmo padrão já usado em `fetch_movements_datajud` (parâmetro opt-in
+`sinalizar_falha: bool = False`, sentinela `_FALHA` já existente no
+módulo) aplicado aos outros 2 métodos. Confirmado por grep que
+`movimentos()` **não tem chamador em produção hoje** (capability
+declarada em 5 fontes, nunca invocada por nenhum caminho real — achado
+já registrado desde a fase pós-260.6) e `detalhar()` tem 2 chamadores
+reais (`oab_capture.py`, `citacao_check.py`), nenhum passa o parâmetro
+novo — o default preserva 100% o comportamento atual dos dois.
+
+**Verificado ao vivo**: script com um cliente fake que sempre teria
+sucesso — breaker fechado funciona normalmente nos 2 métodos; breaker
+aberto (3 falhas) + `sinalizar_falha=True` → `movimentos()` agora
+devolve `None` (antes seria `[]`, indistinguível de "sem novidade");
+default sem o parâmetro continua devolvendo `[]`, sem mudança. Teste
+novo em `test_fontes.py::test_datajud_fonte_sinalizar_falha_distingue_breaker_aberto`.
+
+### Verificado (geral)
+
+`ruff check` limpo nos 3 arquivos + 2 testes novos; `tests/test_unit/`
+930 passed/4 skipped (antes: 928/4 — os 2 testes novos); suíte
+`tests/test_api/` com 5 falhas pré-existentes e não relacionadas (fuzzy
+match de cliente, rate-limit de demo-login, mocks do Google Sheets/Docs)
+— confirmadas idênticas rodando contra o código SEM as mudanças desta
+fase (`git stash`), não é regressão desta fase, é resíduo de ambiente
+local (banco reutilizado por muitas sessões/scripts no mesmo dia).
+Nenhuma mudança de frontend nesta fase.

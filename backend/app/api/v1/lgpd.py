@@ -11,6 +11,7 @@ from app.db.base import get_db
 from app.dependencies import get_current_user, require_role
 from app.models.user import User, Session
 from app.models.client import Client, ClientContact, ClientInteraction, ClientPortalAccess
+from app.models.agent_run import AgentStep, Approval, AgentMemory
 from app.models.gov_registry_lookup import GovRegistryLookup
 from app.core.exceptions import NotFoundError
 from app.core.crypto import decrypt_or_raw
@@ -274,7 +275,7 @@ async def erase_client_data(
     # ex. geocodificação de clientes, Fase 233). Por isso o alcance
     # aqui é por OR: Document.client_id direto OU o Document de um
     # Contract cujo client_id bate — cobre os 2 caminhos de criação.
-    from app.models.document import Document, Contract
+    from app.models.document import Document, Contract, DocumentVersion, Petition
     document_ids_via_contract = select(Contract.document_id).where(
         Contract.client_id == uuid.UUID(client_id)
     )
@@ -313,6 +314,32 @@ async def erase_client_data(
             if contract.assinaturas:
                 contract.assinaturas = None
 
+        # Rodada pós-260.10 (5 gaps da Fase 255 nunca revisitados) —
+        # `DocumentVersion` (histórico de versões anteriores do mesmo
+        # documento, `document_id → documents.id`, cascade) e `Petition`
+        # (metadados de geração por IA de uma petição específica,
+        # `document_id → documents.id`, único por documento) sobreviviam
+        # ao esquecimento mesmo com o `Document` atual já limpo acima —
+        # o corpo de uma versão anterior é o mesmo tipo de PII que
+        # `conteudo_texto`/`conteudo_html` já cobrem na versão corrente.
+        versions_result = await db.execute(
+            select(DocumentVersion).where(DocumentVersion.document_id.in_(document_ids))
+        )
+        for version in versions_result.scalars().all():
+            if version.conteudo_html:
+                version.conteudo_html = "[Conteúdo removido — LGPD art. 18 IV]"
+            if version.conteudo_texto:
+                version.conteudo_texto = "[Conteúdo removido — LGPD art. 18 IV]"
+
+        petitions_result = await db.execute(
+            select(Petition).where(Petition.document_id.in_(document_ids))
+        )
+        for petition in petitions_result.scalars().all():
+            if petition.ai_prompt:
+                petition.ai_prompt = "[Conteúdo removido — LGPD art. 18 IV]"
+            if petition.review_notes:
+                petition.review_notes = "[Conteúdo removido — LGPD art. 18 IV]"
+
     # Fase 247 (achado da Fase 246) — `Intimacao.texto`/`.resumo_ia`
     # (Fase 244, publicação/intimação capturada + resumo por IA) podem
     # conter nome/CPF do titular em texto livre. Sem client_id próprio
@@ -347,12 +374,51 @@ async def erase_client_data(
             AgentRun.tenant_id == current_user.tenant_id,
         )
     )
-    for run in agent_runs_result.scalars().all():
+    agent_runs = agent_runs_result.scalars().all()
+    for run in agent_runs:
         run.input_data = {"removido": "LGPD art. 18 IV"}
         if run.output_data:
             run.output_data = {"removido": "LGPD art. 18 IV"}
         if run.error_message:
             run.error_message = "[Conteúdo removido — LGPD art. 18 IV]"
+
+    # Rodada pós-260.10 (5 gaps da Fase 255 nunca revisitados, reproduzidos
+    # ao vivo numa nova rodada de teste geral) — `AgentStep`/`Approval`
+    # (ligados por `run_id → agent_runs.id`, cascade) sobreviviam intactos
+    # mesmo com o `AgentRun` pai já anonimizado acima: `AgentStep.
+    # output_json` espelha o mesmo texto livre de `AgentRun.output_data`,
+    # e `Approval` (o registro de aprovação humana de uma ação crítica)
+    # carrega `titulo`/`descricao`/`ai_suggestion`/`rejection_reason` em
+    # texto livre — nenhum dos dois tinha um passe próprio aqui.
+    # `AgentStep` não tem `tenant_id` próprio — o escopo já vem de
+    # `run_ids`, que só contém runs do tenant certo (query acima).
+    # `Approval` tem `tenant_id` direto — filtrado também, defesa em
+    # profundidade.
+    run_ids = [run.id for run in agent_runs]
+    if run_ids:
+        steps_result = await db.execute(
+            select(AgentStep).where(AgentStep.run_id.in_(run_ids))
+        )
+        for step in steps_result.scalars().all():
+            if step.input_json:
+                step.input_json = {"removido": "LGPD art. 18 IV"}
+            if step.output_json:
+                step.output_json = {"removido": "LGPD art. 18 IV"}
+
+        approvals_result = await db.execute(
+            select(Approval).where(
+                Approval.run_id.in_(run_ids),
+                Approval.tenant_id == current_user.tenant_id,
+            )
+        )
+        for approval in approvals_result.scalars().all():
+            approval.titulo = "[Conteúdo removido — LGPD art. 18 IV]"
+            if approval.descricao:
+                approval.descricao = "[Conteúdo removido — LGPD art. 18 IV]"
+            if approval.ai_suggestion:
+                approval.ai_suggestion = {"removido": "LGPD art. 18 IV"}
+            if approval.rejection_reason:
+                approval.rejection_reason = "[Conteúdo removido — LGPD art. 18 IV]"
 
     # `LegalProcess.descricao` — só era alcançado indiretamente via
     # ProcessParty acima; o processo em si nunca. Reaproveita
@@ -365,9 +431,27 @@ async def erase_client_data(
             LegalProcess.tenant_id == current_user.tenant_id,
         )
     )
-    for process in processes_result.scalars().all():
+    processes = processes_result.scalars().all()
+    for process in processes:
         if process.descricao:
             process.descricao = "[Conteúdo removido — LGPD art. 18 IV]"
+
+    # Rodada pós-260.10 (5 gaps da Fase 255 nunca revisitados) —
+    # `AgentMemory` não tem FK declarada nem `tenant_id` próprio;
+    # `context_id` é setado a partir de `ctx.process_id or ctx.client_id`
+    # (confirmado em `strategy_agent.py`, guardando resumo de estratégia
+    # gerada por IA). Sem risco de colisão cross-tenant — UUIDs são
+    # globalmente únicos, nunca reusados entre tenants (avaliado numa
+    # rodada de teste geral anterior). Filtra por `context_id` batendo
+    # com o próprio cliente OU qualquer processo já vinculado a ele
+    # (mesmos `processes` computados acima).
+    context_ids = [uuid.UUID(client_id)] + [p.id for p in processes]
+    memory_result = await db.execute(
+        select(AgentMemory).where(AgentMemory.context_id.in_(context_ids))
+    )
+    for memory in memory_result.scalars().all():
+        if memory.value_json:
+            memory.value_json = {"removido": "LGPD art. 18 IV"}
 
     # Rodada pós-260.5 — `ProcessMovement.descricao` (texto real da
     # movimentação processual, populado pelo pipeline de captura) e
@@ -524,7 +608,7 @@ async def export_client_data(
     # erase_client_data acima: Document.client_id direto OU o Document
     # de um Contract cujo client_id bate (caminho manual de criação de
     # contrato, `POST /contracts/create`, não seta Document.client_id).
-    from app.models.document import Document, Contract
+    from app.models.document import Document, Contract, DocumentVersion, Petition
     document_ids_via_contract = select(Contract.document_id).where(
         Contract.client_id == uuid.UUID(client_id)
     )
@@ -540,11 +624,25 @@ async def export_client_data(
     documents = documents_result.scalars().all()
     document_ids = [doc.id for doc in documents]
     contracts = []
+    versions = []
+    petitions = []
     if document_ids:
         contracts_result = await db.execute(
             select(Contract).where(Contract.document_id.in_(document_ids))
         )
         contracts = contracts_result.scalars().all()
+
+        # Rodada pós-260.10 — mesmas 2 tabelas alcançadas em
+        # erase_client_data acima; export mostra o dado real.
+        versions_result = await db.execute(
+            select(DocumentVersion).where(DocumentVersion.document_id.in_(document_ids))
+        )
+        versions = versions_result.scalars().all()
+
+        petitions_result = await db.execute(
+            select(Petition).where(Petition.document_id.in_(document_ids))
+        )
+        petitions = petitions_result.scalars().all()
 
     # Fase 247 (achado da Fase 246) — Intimacao.texto/resumo_ia, mesmo
     # alcance de erase_client_data acima (via process_id →
@@ -569,6 +667,25 @@ async def export_client_data(
     )
     agent_runs = agent_runs_result.scalars().all()
 
+    # Rodada pós-260.10 — mesmas 2 tabelas alcançadas em erase_client_data
+    # acima (via run_id → agent_runs.id); export mostra o dado real.
+    run_ids = [run.id for run in agent_runs]
+    steps = []
+    approvals = []
+    if run_ids:
+        steps_result = await db.execute(
+            select(AgentStep).where(AgentStep.run_id.in_(run_ids))
+        )
+        steps = steps_result.scalars().all()
+
+        approvals_result = await db.execute(
+            select(Approval).where(
+                Approval.run_id.in_(run_ids),
+                Approval.tenant_id == current_user.tenant_id,
+            )
+        )
+        approvals = approvals_result.scalars().all()
+
     processes_result = await db.execute(
         select(LegalProcess).where(
             client_linked_processes_filter(uuid.UUID(client_id)),
@@ -576,6 +693,14 @@ async def export_client_data(
         )
     )
     processes = processes_result.scalars().all()
+
+    # Rodada pós-260.10 — mesmo alcance de erase_client_data acima
+    # (context_id batendo com o próprio cliente ou processo vinculado).
+    context_ids = [uuid.UUID(client_id)] + [p.id for p in processes]
+    memory_result = await db.execute(
+        select(AgentMemory).where(AgentMemory.context_id.in_(context_ids))
+    )
+    memoria_agentes = memory_result.scalars().all()
 
     from app.models.audit_log import AuditLog
     db.add(AuditLog(
@@ -709,6 +834,67 @@ async def export_client_data(
                 "data_disponibilizacao": i.data_disponibilizacao.isoformat() if i.data_disponibilizacao else None,
             }
             for i in intimacoes
+        ],
+        # Rodada pós-260.10 (5 gaps da Fase 255 nunca revisitados) — as 5
+        # seções abaixo espelham os fixes de `erase_client_data` acima;
+        # mostram o dado real porque o export roda antes de qualquer
+        # esquecimento.
+        "etapas_agentes_ia": [
+            {
+                "run_id": str(s.run_id),
+                "step_name": s.step_name,
+                "tool_used": s.tool_used,
+                "input_json": s.input_json,
+                "output_json": s.output_json,
+                "created_at": s.created_at.isoformat(),
+            }
+            for s in steps
+        ],
+        "aprovacoes_hitl": [
+            {
+                "id": str(a.id),
+                "tipo": a.tipo,
+                "titulo": a.titulo,
+                "descricao": a.descricao,
+                "ai_suggestion": a.ai_suggestion,
+                "status": a.status,
+                "rejection_reason": a.rejection_reason,
+                "created_at": a.created_at.isoformat(),
+            }
+            for a in approvals
+        ],
+        "versoes_documento": [
+            {
+                "id": str(v.id),
+                "document_id": str(v.document_id),
+                "versao": v.versao,
+                "conteudo_texto": v.conteudo_texto,
+                "change_summary": v.change_summary,
+                "created_at": v.created_at.isoformat(),
+            }
+            for v in versions
+        ],
+        "peticoes": [
+            {
+                "id": str(p.id),
+                "document_id": str(p.document_id),
+                "tipo_peticao": p.tipo_peticao,
+                "ai_prompt": p.ai_prompt,
+                "review_notes": p.review_notes,
+                "review_status": p.review_status,
+            }
+            for p in petitions
+        ],
+        "memoria_agentes_ia": [
+            {
+                "id": str(m.id),
+                "agent_name": m.agent_name,
+                "memory_type": m.memory_type,
+                "key": m.key,
+                "value_json": m.value_json,
+                "created_at": m.created_at.isoformat(),
+            }
+            for m in memoria_agentes
         ],
     }
 

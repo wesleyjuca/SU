@@ -913,6 +913,18 @@ nunca repetir o mesmo teste do zero.** Antes de planejar uma nova rodada:
   reconhecimento); Playwright real das telas de Integrações/Publicações/
   OAB tocadas nas últimas fases não chegou a rodar (settled por leitura de
   código onde possível, não por navegador real).
+  **Correção (mesma sessão, fase seguinte)**: usuário escolheu corrigir 3
+  dos achados — os 5 gaps de LGPD (`agent_memory`/`agent_steps`/
+  `approvals`/`document_versions`/`petitions`, mesmo padrão de fix já
+  usado 10+ vezes em `lgpd.py`), o fail-open do `ws.py` (fail-closed
+  agora, `except Exception: pass` virou `close(4001)`), e o
+  `sinalizar_falha` em `datajud_fonte.py::movimentos()`/`detalhar()`
+  (mesmo padrão já usado em `fetch_movements_datajud`). Catálogo de
+  integrações `.jus.br` em `httpx` puro fica de fora, não corrigido.
+  Todos os 3 reconfirmados ao vivo (mesma técnica da auditoria — script
+  de esquecimento/varredura pra LGPD, fault-injection revertida pra
+  `ws.py`, cliente fake com breaker forçado pro DataJud) + 2 testes
+  unitários novos com prova nos dois sentidos.
 
 Histórico completo (achados, decisões de escopo, correções, verificações
 empíricas de cada fase) fica em `HISTORICO_FASES.md` — movido pra fora
