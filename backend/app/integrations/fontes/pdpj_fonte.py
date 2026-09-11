@@ -33,6 +33,10 @@ log = structlog.get_logger()
 PDPJ_BASE_DEFAULT = "https://portaldeservicos.pdpj.jus.br"
 _TIMEOUT = 25.0
 
+# Sentinela para distinguir "disjuntor aberto/erro real" de "consulta vazia" —
+# mesmo padrão já usado em datajud_fonte.py.
+_FALHA = object()
+
 
 def parse_pdpj_partes(dados: dict) -> "list[ParteEntrada]":
     """Extrai partes + advogados da resposta do PDPJ (parser compartilhado)."""
@@ -49,8 +53,19 @@ class PdpjFonte(FonteProcessual):
         self._base = (base_url or PDPJ_BASE_DEFAULT).rstrip("/")
         self._breaker = CircuitBreaker(name=self.nome)
 
-    async def _get_processo(self, numero_cnj: str) -> dict | None:
-        """GET do processo no PDPJ (Bearer). Fail-soft sob o breaker."""
+    async def _get_processo(self, numero_cnj: str, *, sinalizar_falha: bool = False):
+        """GET do processo no PDPJ (Bearer). Fail-soft sob o breaker.
+
+        Achado da rodada pós-166a43c: `partes()` é usada ativamente em
+        produção (`oab_capture.py::_enriquecer_partes`), mas o breaker
+        devolvia sempre `None`/`[]` tanto pra "disjuntor aberto/erro real"
+        quanto pra "processo genuinamente sem dado" — o chamador nunca via
+        a diferença, e uma fonte fora do ar era reportada como "0 partes
+        encontradas" (mesma classe de bug já corrigida só pro DataJud,
+        `sinalizar_falha`). Com `sinalizar_falha=True`, devolve o sentinela
+        `_FALHA` (não `None`) quando o breaker está aberto/a chamada falhou —
+        é `partes()` quem faz a tradução final, não aqui, senão a distinção
+        se perderia antes de chegar no chamador."""
         if not self._token:
             return None
         import re
@@ -80,7 +95,7 @@ class PdpjFonte(FonteProcessual):
                 return data["content"][0] if data["content"] else None
             return data if isinstance(data, dict) else None
 
-        return await self._breaker.run(_f, default=None)
+        return await self._breaker.run(_f, default=_FALHA if sinalizar_falha else None)
 
     async def testar(self) -> tuple[bool, str]:
         """Sonda leve p/ validar a credencial (distingue 401/403). Não passa pelo
@@ -104,8 +119,16 @@ class PdpjFonte(FonteProcessual):
     async def detalhar(self, numero_cnj: str, tribunal: str | None = None) -> dict | None:
         return await self._get_processo(numero_cnj)
 
-    async def partes(self, numero_cnj: str, tribunal: str | None = None) -> "list[ParteEntrada]":
-        dados = await self._get_processo(numero_cnj)
+    async def partes(
+        self, numero_cnj: str, tribunal: str | None = None, *, sinalizar_falha: bool = False,
+    ) -> "list[ParteEntrada] | None":
+        # `sinalizar_falha=True` devolve None quando o breaker está aberto ou
+        # a chamada falhou de verdade — nunca confundir com "consultei e o
+        # processo não tem partes" ([]). Default preserva o comportamento
+        # atual (nenhum chamador existente passa o parâmetro).
+        dados = await self._get_processo(numero_cnj, sinalizar_falha=sinalizar_falha)
+        if sinalizar_falha and dados is _FALHA:
+            return None
         if not dados:
             return []
         return parse_pdpj_partes(dados)

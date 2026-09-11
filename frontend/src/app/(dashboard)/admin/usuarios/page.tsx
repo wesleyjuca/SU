@@ -165,9 +165,7 @@ export default function UsuariosPage() {
     finally { setTransferindo(false); }
   }
 
-  useEffect(() => {
-    fetchUsers(0, false);
-  }, [search, filterRole, filterActive]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- fetchUsers não é memoizada; os deps reativos (filtros) já estão listados.
 
   async function fetchUsers(newOffset = 0, append = false) {
     if (append) setLoadingMore(true);

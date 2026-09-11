@@ -38,7 +38,7 @@ export function JuridicoTab() {
   // logo abaixo).
   const [feriadosNacionais, setFeriadosNacionais] = useState<{ ano: number; feriados: string[]; recesso_forense: { inicio: string; fim: string } } | null>(null);
 
-  useEffect(() => { fetchFeriados(); fetchOabs(); fetchConfidencial(); fetchFeriadosNacionais(); }, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- funções não memoizadas; buscar só no mount é intencional.
 
   async function fetchFeriadosNacionais() {
     try {

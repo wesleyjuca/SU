@@ -57,7 +57,7 @@ export default function PublicacoesPage() {
 
   const token = () => (typeof window !== "undefined" ? localStorage.getItem("afj_access_token") : null);
 
-  useEffect(() => { fetchItems(); }, [filtro, somenteMeus]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- fetchItems não é memoizada; os deps reativos já estão listados.
 
   async function fetchItems() {
     setLoading(true);

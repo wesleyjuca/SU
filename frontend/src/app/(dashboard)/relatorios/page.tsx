@@ -136,12 +136,16 @@ export default function RelatoriosPage() {
     }
   }
 
+  // Deps omitidas de propósito: os guards `!gestao`/`!financial`/etc. já são
+  // o cache (busca 1x por aba); incluir o dado ou as funções (não
+  // memoizadas) faria a busca repetir a cada resposta.
   useEffect(() => {
     if (tab === "Gestão" && !gestao) loadGestao();
     if (tab === "Financeiro" && !financial) loadFinancial();
     if (tab === "Processos" && !processos) loadProcessos();
     if (tab === "Agentes IA" && !agentes) loadAgentes();
     if (tab === "Geográfico" && !geografico) loadGeografico();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
 
   function refresh() {

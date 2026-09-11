@@ -53,7 +53,11 @@ class _FakeFonte:
     def __init__(self, respostas):
         self._respostas = list(respostas)
 
-    async def partes(self, numero_cnj, tribunal):
+    async def partes(self, numero_cnj, tribunal=None, **kwargs):
+        # Rodada pós-166a43c — `_enriquecer_partes()` passou a chamar
+        # `partes(..., sinalizar_falha=True)`; `**kwargs` evita que este
+        # fake vire "erro do serviço externo" só por assinatura desatualizada
+        # (mesma armadilha já documentada no CLAUDE.md).
         resp = self._respostas.pop(0)
         if isinstance(resp, Exception):
             raise resp

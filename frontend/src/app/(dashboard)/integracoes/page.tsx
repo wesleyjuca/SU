@@ -44,7 +44,31 @@ interface HubIntegracao {
   // (pode ser null quando não há erro ou quando a mensagem já é amigável).
   last_error_friendly: string | null;
   oauth_disponivel: boolean;
-  extra_data: Record<string, string>;
+  // Fase pós-262 — `google_drive_doutrina` passou a guardar `folders`
+  // (lista de {folder_id, folder_name}), não mais só `folder_id`/
+  // `folder_name` soltos (que `google_workspace`, pasta única, continua
+  // usando) — por isso o tipo é `unknown`, resolvido por `pastasDoutrina()`.
+  extra_data: Record<string, unknown>;
+}
+
+interface PastaDrive { folder_id: string; folder_name: string | null }
+
+// Fase pós-262 — espelha `integration_hub.pastas_drive_doutrina()` do
+// backend: lê a lista nova (`folders`) com fallback pro par legado
+// (`folder_id`/`folder_name` soltos, de antes desta fase) — nunca lança,
+// entrada malformada é ignorada.
+function pastasDoutrina(extraData: Record<string, unknown> | undefined): PastaDrive[] {
+  const extra = extraData || {};
+  const folders = extra.folders;
+  if (Array.isArray(folders)) {
+    return folders.filter(
+      (f): f is PastaDrive => Boolean(f) && typeof f === "object" && typeof (f as PastaDrive).folder_id === "string"
+    );
+  }
+  if (typeof extra.folder_id === "string" && extra.folder_id) {
+    return [{ folder_id: extra.folder_id, folder_name: typeof extra.folder_name === "string" ? extra.folder_name : null }];
+  }
+  return [];
 }
 
 // Fase 117 — nomes curtos pro toast de retorno do OAuth (?hub_oauth=stripe_ok etc.),
@@ -103,6 +127,9 @@ function HubCards() {
   const [pdpjWorking, setPdpjWorking] = useState(false);
   const [modulos, setModulos] = useState<Record<string, boolean>>({});
   const [salvandoPasta, setSalvandoPasta] = useState<string | null>(null);
+  // Fase pós-262 — id da pasta de doutrina sendo removida (desabilita só o
+  // botão daquela pasta, não a tela inteira).
+  const [removendoPasta, setRemovendoPasta] = useState<string | null>(null);
   // Fase 258 — seletor real de pasta (substitui o input de colar link).
   const [pickerAberto, setPickerAberto] = useState<{ provider: string } | null>(null);
   const [sincronizando, setSincronizando] = useState(false);
@@ -185,10 +212,10 @@ function HubCards() {
     setConectando(it);
   }
 
-  async function conectarOAuth(it: HubIntegracao) {
-    setOauthConectando(it.provider);
+  async function conectarOAuth(provider: string) {
+    setOauthConectando(provider);
     try {
-      const res = await fetch(`/api/v1/integrations/hub/${it.provider}/oauth/connect`, { headers: authH() });
+      const res = await fetch(`/api/v1/integrations/hub/${provider}/oauth/connect`, { headers: authH() });
       const d = await res.json().catch(() => ({}));
       if (res.ok && d.auth_url) window.location.href = d.auth_url;
       else toast.error(d.detail || "Login por conta não disponível no momento.");
@@ -260,6 +287,9 @@ function HubCards() {
     finally { setWorking(false); }
   }
 
+  // Pasta ÚNICA de salvamento — só `google_workspace` (Fase pós-262:
+  // `google_drive_doutrina` passou a usar `adicionarPastaDoutrina` abaixo,
+  // múltiplas pastas simultâneas).
   async function salvarPasta(provider: string, folderId: string, folderName: string) {
     setSalvandoPasta(provider);
     try {
@@ -272,6 +302,35 @@ function HubCards() {
       else toast.error(d.detail || "Erro ao configurar a pasta.");
     } catch { toast.error("Falha de conexão."); }
     finally { setSalvandoPasta(null); setPickerAberto(null); }
+  }
+
+  // Fase pós-262 — pastas de pesquisa (google_drive_doutrina), agora
+  // múltiplas: adiciona à lista já configurada, nunca substitui.
+  async function adicionarPastaDoutrina(folderId: string, folderName: string) {
+    setSalvandoPasta("google_drive_doutrina");
+    try {
+      const res = await fetch("/api/v1/integrations/hub/google_drive_doutrina/folders", {
+        method: "POST", headers: authH(),
+        body: JSON.stringify({ folder_id: folderId, folder_name: folderName }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (res.ok) { toast.success(d.message || "Pasta adicionada."); fetchHub(); }
+      else toast.error(d.detail || "Erro ao adicionar a pasta.");
+    } catch { toast.error("Falha de conexão."); }
+    finally { setSalvandoPasta(null); setPickerAberto(null); }
+  }
+
+  async function removerPastaDoutrina(folderId: string) {
+    setRemovendoPasta(folderId);
+    try {
+      const res = await fetch(`/api/v1/integrations/hub/google_drive_doutrina/folders/${encodeURIComponent(folderId)}`, {
+        method: "DELETE", headers: authH(),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (res.ok) { toast.success(d.message || "Pasta removida."); fetchHub(); }
+      else toast.error(d.detail || "Erro ao remover a pasta.");
+    } catch { toast.error("Falha de conexão."); }
+    finally { setRemovendoPasta(null); }
   }
 
   async function sincronizarAgora() {
@@ -394,17 +453,20 @@ function HubCards() {
               <p className="mt-3 text-xs text-afj-black/45">Integração não habilitada pelo administrador deste escritório.</p>
             )}
 
-            {/* Pasta do Drive a sincronizar — só depois de conectado (Fase 138.2).
-                Fase 258 — seletor real via Drive API, substitui o input de
-                colar link/ID (nunca mais exige pasta pública/compartilhada). */}
+            {/* Pasta(s) do Drive a sincronizar — só depois de conectado (Fase
+                138.2). Fase 258 — seletor real via Drive API, substitui o
+                input de colar link/ID. Fase pós-262 — achado real (usuário
+                reportou "a busca não percorre todas as pastas
+                compartilhadas"): 1 pasta só não bastava — múltiplas pastas
+                simultâneas, cada uma removível individualmente. */}
             {it.provider === "google_drive_doutrina" && it.status === "CONECTADA" && (
               <div className="mt-3 pt-3 border-t border-afj-cream-dark">
-                <label className="block text-xs font-medium text-afj-black/70 mb-1">Pasta do Drive a sincronizar</label>
+                <label className="block text-xs font-medium text-afj-black/70 mb-1">Pastas do Drive a sincronizar</label>
                 <div className="flex items-center gap-2">
                   {isAdmin && (
                     <button onClick={() => setPickerAberto({ provider: it.provider })}
                       className="btn-afj-outline text-xs py-1.5 px-3 rounded-sm flex items-center gap-1.5 flex-shrink-0">
-                      <FolderOpen size={12} /> Escolher pasta
+                      <FolderOpen size={12} /> Adicionar pasta
                     </button>
                   )}
                   {isAdmin && (
@@ -414,11 +476,37 @@ function HubCards() {
                     </button>
                   )}
                 </div>
-                {it.extra_data?.folder_id && (
-                  <p className="text-[11px] text-afj-black/40 mt-1">
-                    Pasta atual: <code className="bg-afj-cream px-1 rounded">{it.extra_data.folder_name || it.extra_data.folder_id}</code>
-                  </p>
-                )}
+                {(() => {
+                  const pastas = pastasDoutrina(it.extra_data);
+                  return pastas.length === 0 ? (
+                    <p className="mt-1.5 text-[11px] rounded-sm px-2.5 py-1.5 border bg-amber-50 border-amber-200 text-amber-800">
+                      Nenhuma pasta configurada ainda — a pesquisa não encontra nenhum arquivo do
+                      Drive até que pelo menos uma pasta seja adicionada.
+                    </p>
+                  ) : (
+                    <ul className="mt-1.5 flex flex-wrap gap-1.5">
+                      {pastas.map((p) => (
+                        <li key={p.folder_id}
+                          className="flex items-center gap-1 text-[11px] bg-afj-cream border border-afj-cream-dark rounded-full pl-2.5 pr-1 py-0.5">
+                          <code className="max-w-[160px] truncate" title={p.folder_name || p.folder_id}>
+                            {p.folder_name || p.folder_id}
+                          </code>
+                          {isAdmin && (
+                            <button
+                              type="button"
+                              onClick={() => removerPastaDoutrina(p.folder_id)}
+                              disabled={removendoPasta === p.folder_id}
+                              title="Remover esta pasta"
+                              className="text-afj-black/40 hover:text-red-600 p-0.5 rounded-full disabled:opacity-40"
+                            >
+                              {removendoPasta === p.folder_id ? <Loader2 size={10} className="animate-spin" /> : <X size={10} />}
+                            </button>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  );
+                })()}
                 {driveLastSync && (
                   <div className={`mt-2.5 text-[11px] rounded-sm px-2.5 py-1.5 border ${
                     driveLastSync.status === "ERRO" || driveLastSync.provavelmente_travada
@@ -508,13 +596,24 @@ function HubCards() {
                     <FolderOpen size={12} /> Escolher pasta
                   </button>
                 )}
-                {it.extra_data?.folder_id ? (
+                {typeof it.extra_data?.folder_id === "string" && it.extra_data.folder_id ? (
                   <p className="text-[11px] text-afj-black/40 mt-1">
-                    Pasta atual: <code className="bg-afj-cream px-1 rounded">{it.extra_data.folder_name || it.extra_data.folder_id}</code>
+                    Pasta atual: <code className="bg-afj-cream px-1 rounded">
+                      {String(it.extra_data.folder_name || it.extra_data.folder_id)}
+                    </code>
                   </p>
                 ) : (
-                  <p className="text-[11px] text-afj-black/40 mt-1">
-                    Nenhuma pasta configurada — os arquivos são salvos na raiz (Meu Drive).
+                  // Fase pós-262 — achado real (usuário reportou "arquivos
+                  // não estão sendo salvos nas pastas pré-determinadas"):
+                  // o código já salva na pasta configurada corretamente
+                  // quando ela existe; a causa mais provável era o admin
+                  // nunca ter configurado (ou ter reconectado sem saber que
+                  // precisava escolher a pasta de novo) — aviso vira um
+                  // banner de atenção, não mais texto discreto que passava
+                  // despercebido.
+                  <p className="mt-1.5 text-[11px] rounded-sm px-2.5 py-1.5 border bg-amber-50 border-amber-200 text-amber-800">
+                    Nenhuma pasta configurada — os arquivos gerados estão sendo salvos na raiz
+                    (Meu Drive) do Google conectado. Clique em &quot;Escolher pasta&quot; para direcioná-los.
                   </p>
                 )}
               </div>
@@ -552,7 +651,7 @@ function HubCards() {
                 </p>
               ) : isAdmin && it.oauth_disponivel ? (
                 <>
-                  <button onClick={() => it.provider === "pdpj" ? setPdpjLogin(it) : conectarOAuth(it)} disabled={oauthConectando === it.provider}
+                  <button onClick={() => it.provider === "pdpj" ? setPdpjLogin(it) : conectarOAuth(it.provider)} disabled={oauthConectando === it.provider}
                     className="btn-afj-primary text-sm py-2 px-4 rounded-sm flex items-center gap-2 disabled:opacity-50">
                     {oauthConectando === it.provider ? <Loader2 size={14} className="animate-spin" /> : <Link2 size={14} />}
                     {it.provider === "pdpj" ? "Entrar com CNJ Corporativo" : "Conectar com login"}
@@ -661,7 +760,12 @@ function HubCards() {
       {pickerAberto && (
         <DriveFolderPicker
           provider={pickerAberto.provider as "google_drive_doutrina" | "google_workspace"}
-          onSelect={(folderId, folderName) => salvarPasta(pickerAberto.provider, folderId, folderName)}
+          onSelect={(folderId, folderName) =>
+            pickerAberto.provider === "google_drive_doutrina"
+              ? adicionarPastaDoutrina(folderId, folderName)
+              : salvarPasta(pickerAberto.provider, folderId, folderName)
+          }
+          onReconnect={() => conectarOAuth(pickerAberto.provider)}
           onClose={() => setPickerAberto(null)}
         />
       )}

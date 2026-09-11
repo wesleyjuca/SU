@@ -60,9 +60,14 @@ class _FakeDB:
 
 
 class _FakeInteg:
-    def __init__(self, tenant_id, folder_id):
+    def __init__(self, tenant_id, folder_id, connected_by=None):
         self.tenant_id = tenant_id
         self.extra_data = {"folder_id": folder_id}
+        # Fase pós-262 — usado por `user_ai_creds(db, integ.connected_by, ...)`.
+        # `None` (default) exercita o caminho sem BYOK (chave central), o
+        # mesmo comportamento de antes desta fase — sem regressão nos testes
+        # que não são sobre BYOK especificamente.
+        self.connected_by = connected_by
 
 
 class _FakeCfg:
@@ -432,3 +437,250 @@ async def test_falha_seguida_de_rollback_tambem_falhando_nao_escapa_e_segue_pro_
     assert tenant_a not in por_tenant
     assert por_tenant[tenant_b][0] == "OK"
     assert por_tenant[tenant_b][1]["processados"] == 1
+
+
+# ─── Fase pós-262 — BYOK ativo no worker (achado real: sintoma "a busca não
+# lê os arquivos da pasta compartilhada" em tenants sem chave central) ────────
+
+@pytest.mark.asyncio
+async def test_sync_ativa_byok_do_admin_que_conectou_a_integracao(monkeypatch):
+    """Prova nos 2 sentidos: sem este wrap, `user_ai_creds` nunca é chamado
+    e a ingestão sempre cai na chave central — o teste falha se o fix for
+    revertido (a lista `chamadas` fica vazia)."""
+    import app.workers.tasks.google_drive_sync as mod
+
+    tenant = uuid.uuid4()
+    admin_id = uuid.uuid4()
+    integ = _FakeInteg(tenant, "folder_x", connected_by=admin_id)
+
+    async def _fake_iniciar_sync(db, tenant_id, fonte, tipo):
+        return type("Run", (), {"tenant_id": tenant_id})()
+
+    async def _fake_finalizar_sync(db, run, status, stats):
+        pass
+
+    monkeypatch.setattr("app.services.movements_import.iniciar_sync", _fake_iniciar_sync)
+    monkeypatch.setattr("app.services.movements_import.finalizar_sync", _fake_finalizar_sync)
+
+    async def _fake_get_credentials(db, tenant_id, provider):
+        return {"access_token": "tok"}
+
+    monkeypatch.setattr("app.services.integration_hub.get_credentials", _fake_get_credentials)
+
+    async def _fake_listar_arquivos(access_token, folder_id):
+        return [{"id": "f1", "name": "doutrina.pdf", "mimeType": "application/pdf"}]
+
+    async def _fake_baixar_conteudo(access_token, file_id, mime_type):
+        return b"bytes"
+
+    async def _fake_extrair_texto(mimetype, conteudo):
+        return "texto extraido"
+
+    monkeypatch.setattr("app.integrations.google_drive.client.listar_arquivos", _fake_listar_arquivos)
+    monkeypatch.setattr("app.integrations.google_drive.client.baixar_conteudo", _fake_baixar_conteudo)
+    monkeypatch.setattr("app.integrations.google_drive.client.extrair_texto", _fake_extrair_texto)
+
+    async def _fake_ingest(**kwargs):
+        return None
+
+    async def _fake_delete_chunks(**kwargs):
+        return None
+
+    monkeypatch.setattr("app.rag.ingestion.ingest_document", _fake_ingest)
+    monkeypatch.setattr("app.rag.ingestion.delete_document_chunks", _fake_delete_chunks)
+
+    chamadas = []
+
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def _fake_user_ai_creds(session, user_id, task_type=None):
+        chamadas.append((user_id, task_type))
+        yield
+
+    monkeypatch.setattr("app.integrations.byok.user_ai_creds", _fake_user_ai_creds)
+
+    db = _FakeDB([
+        _FakeScalarsResult([integ]),
+        _FakeScalarResult(_FakeCfg()),
+        _FakeScalarResult(None),  # dedup: arquivo novo
+    ])
+
+    resultado = await mod.executar_sync_drive_doutrina(db)
+
+    assert chamadas == [(admin_id, "rag_ingest")]
+    assert resultado["processados"] == 1
+
+
+@pytest.mark.asyncio
+async def test_sync_percorre_multiplas_pastas_configuradas(monkeypatch):
+    """Fase pós-262 — achado real: 1 pasta só não bastava pra "percorrer
+    todas as pastas compartilhadas". `extra_data.folders` (lista) substitui
+    o `folder_id` singular; o sync acumula processados/pulados de todas."""
+    import app.workers.tasks.google_drive_sync as mod
+
+    tenant = uuid.uuid4()
+    integ = _FakeInteg(tenant, "irrelevante")
+    integ.extra_data = {"folders": [
+        {"folder_id": "civel", "folder_name": "Doutrina Cível"},
+        {"folder_id": "penal", "folder_name": "Doutrina Penal"},
+    ]}
+
+    async def _fake_iniciar_sync(db, tenant_id, fonte, tipo):
+        return type("Run", (), {"tenant_id": tenant_id})()
+
+    chamadas_finalizar = []
+
+    async def _fake_finalizar_sync(db, run, status, stats):
+        chamadas_finalizar.append((status, stats))
+
+    monkeypatch.setattr("app.services.movements_import.iniciar_sync", _fake_iniciar_sync)
+    monkeypatch.setattr("app.services.movements_import.finalizar_sync", _fake_finalizar_sync)
+
+    async def _fake_get_credentials(db, tenant_id, provider):
+        return {"access_token": "tok"}
+
+    monkeypatch.setattr("app.services.integration_hub.get_credentials", _fake_get_credentials)
+
+    async def _fake_listar_arquivos(access_token, folder_id):
+        if folder_id == "civel":
+            return [{"id": "c1", "name": "civel.pdf", "mimeType": "application/pdf"}]
+        return [{"id": "p1", "name": "penal.pdf", "mimeType": "application/pdf"}]
+
+    async def _fake_baixar_conteudo(access_token, file_id, mime_type):
+        return b"bytes"
+
+    async def _fake_extrair_texto(mimetype, conteudo):
+        return "texto extraido"
+
+    monkeypatch.setattr("app.integrations.google_drive.client.listar_arquivos", _fake_listar_arquivos)
+    monkeypatch.setattr("app.integrations.google_drive.client.baixar_conteudo", _fake_baixar_conteudo)
+    monkeypatch.setattr("app.integrations.google_drive.client.extrair_texto", _fake_extrair_texto)
+
+    async def _fake_ingest(**kwargs):
+        return None
+
+    async def _fake_delete_chunks(**kwargs):
+        return None
+
+    monkeypatch.setattr("app.rag.ingestion.ingest_document", _fake_ingest)
+    monkeypatch.setattr("app.rag.ingestion.delete_document_chunks", _fake_delete_chunks)
+
+    db = _FakeDB([
+        _FakeScalarsResult([integ]),
+        _FakeScalarResult(_FakeCfg()),
+        _FakeScalarResult(None),  # dedup c1
+        _FakeScalarResult(None),  # dedup p1
+    ])
+
+    resultado = await mod.executar_sync_drive_doutrina(db)
+
+    assert resultado["processados"] == 2
+    assert chamadas_finalizar[0][0] == "OK"
+    assert chamadas_finalizar[0][1]["processados"] == 2
+
+
+@pytest.mark.asyncio
+async def test_sync_uma_pasta_falha_outra_funciona_nao_aborta(monkeypatch):
+    """1 das N pastas configuradas sem acesso/removida não impede as
+    demais pastas do mesmo tenant de serem sincronizadas."""
+    import app.workers.tasks.google_drive_sync as mod
+
+    tenant = uuid.uuid4()
+    integ = _FakeInteg(tenant, "irrelevante")
+    integ.extra_data = {"folders": [
+        {"folder_id": "sem_acesso", "folder_name": "Removida"},
+        {"folder_id": "ok", "folder_name": "Doutrina"},
+    ]}
+
+    async def _fake_iniciar_sync(db, tenant_id, fonte, tipo):
+        return type("Run", (), {"tenant_id": tenant_id})()
+
+    chamadas_finalizar = []
+
+    async def _fake_finalizar_sync(db, run, status, stats):
+        chamadas_finalizar.append((status, stats))
+
+    monkeypatch.setattr("app.services.movements_import.iniciar_sync", _fake_iniciar_sync)
+    monkeypatch.setattr("app.services.movements_import.finalizar_sync", _fake_finalizar_sync)
+
+    async def _fake_get_credentials(db, tenant_id, provider):
+        return {"access_token": "tok"}
+
+    monkeypatch.setattr("app.services.integration_hub.get_credentials", _fake_get_credentials)
+
+    async def _fake_listar_arquivos(access_token, folder_id):
+        if folder_id == "sem_acesso":
+            return None
+        return [{"id": "ok1", "name": "ok.pdf", "mimeType": "application/pdf"}]
+
+    async def _fake_baixar_conteudo(access_token, file_id, mime_type):
+        return b"bytes"
+
+    async def _fake_extrair_texto(mimetype, conteudo):
+        return "texto extraido"
+
+    monkeypatch.setattr("app.integrations.google_drive.client.listar_arquivos", _fake_listar_arquivos)
+    monkeypatch.setattr("app.integrations.google_drive.client.baixar_conteudo", _fake_baixar_conteudo)
+    monkeypatch.setattr("app.integrations.google_drive.client.extrair_texto", _fake_extrair_texto)
+
+    async def _fake_ingest(**kwargs):
+        return None
+
+    async def _fake_delete_chunks(**kwargs):
+        return None
+
+    monkeypatch.setattr("app.rag.ingestion.ingest_document", _fake_ingest)
+    monkeypatch.setattr("app.rag.ingestion.delete_document_chunks", _fake_delete_chunks)
+
+    db = _FakeDB([
+        _FakeScalarsResult([integ]),
+        _FakeScalarResult(_FakeCfg()),
+        _FakeScalarResult(None),  # dedup ok1
+    ])
+
+    resultado = await mod.executar_sync_drive_doutrina(db)
+
+    assert resultado["processados"] == 1
+    assert chamadas_finalizar[0][0] == "OK"
+    assert chamadas_finalizar[0][1]["pastas_com_erro"] == 1
+
+
+@pytest.mark.asyncio
+async def test_sync_todas_as_pastas_falham_termina_erro(monkeypatch):
+    import app.workers.tasks.google_drive_sync as mod
+
+    tenant = uuid.uuid4()
+    integ = _FakeInteg(tenant, "irrelevante")
+    integ.extra_data = {"folders": [{"folder_id": "a"}, {"folder_id": "b"}]}
+
+    async def _fake_iniciar_sync(db, tenant_id, fonte, tipo):
+        return type("Run", (), {"tenant_id": tenant_id})()
+
+    chamadas_finalizar = []
+
+    async def _fake_finalizar_sync(db, run, status, stats):
+        chamadas_finalizar.append((status, stats))
+
+    monkeypatch.setattr("app.services.movements_import.iniciar_sync", _fake_iniciar_sync)
+    monkeypatch.setattr("app.services.movements_import.finalizar_sync", _fake_finalizar_sync)
+
+    async def _fake_get_credentials(db, tenant_id, provider):
+        return {"access_token": "tok"}
+
+    monkeypatch.setattr("app.services.integration_hub.get_credentials", _fake_get_credentials)
+
+    async def _fake_listar_arquivos(access_token, folder_id):
+        return None
+
+    monkeypatch.setattr("app.integrations.google_drive.client.listar_arquivos", _fake_listar_arquivos)
+
+    db = _FakeDB([
+        _FakeScalarsResult([integ]),
+        _FakeScalarResult(_FakeCfg()),
+    ])
+
+    resultado = await mod.executar_sync_drive_doutrina(db)
+
+    assert resultado["tenants_sincronizados"] == 0
+    assert chamadas_finalizar[0][0] == "ERRO"

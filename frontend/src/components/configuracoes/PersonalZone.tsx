@@ -59,6 +59,7 @@ export function PersonalZone() {
       const stored = localStorage.getItem("afj_user");
       if (stored) setMustChangePassword(Boolean(JSON.parse(stored)?.must_change_password));
     } catch { /* noop */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- perfilLoaded só controla se este efeito de mount já rodou; incluí-lo o faria rodar de novo a cada mudança dele.
   }, []);
 
   async function loadNotifPrefs() {

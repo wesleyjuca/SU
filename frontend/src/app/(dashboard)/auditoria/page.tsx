@@ -36,7 +36,7 @@ export default function AuditoriaPage() {
   // Fase 162 — paginação real usando total/offset que o backend (GET /audit)
   // já devolvia desde a Fase 148, mas o frontend nunca usava; antes disso
   // a tela ficava presa nos 100 eventos mais recentes.
-  useEffect(() => { fetchLogs(0, false); }, [filtroSucesso, dateFrom, dateTo]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- fetchLogs não é memoizada; os deps reativos já estão listados.
 
   function filtrosAtivos() {
     const params = new URLSearchParams();

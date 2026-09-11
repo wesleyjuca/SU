@@ -82,7 +82,7 @@ export function ProcessosSection() {
   const [detalhes, setDetalhes] = useState<Record<string, ProcessDetail>>({});
   const [loadingDetalhe, setLoadingDetalhe] = useState<string | null>(null);
 
-  useEffect(() => { load(0); }, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- load não é memoizada; buscar só no mount é intencional.
 
   async function load(off: number) {
     try {

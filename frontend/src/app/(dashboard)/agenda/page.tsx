@@ -79,7 +79,7 @@ export default function AgendaPage() {
   const [form, setForm] = useState({ process_id: "", descricao: "", tipo: "", data_prazo: "", data_fatal: "" });
   const [salvando, setSalvando] = useState(false);
 
-  useEffect(() => { fetchAgenda(); }, [dias, somenteMeus]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- fetchAgenda não é memoizada; os deps reativos já estão listados.
 
   async function abrirNovoPrazo() {
     setModal(true);

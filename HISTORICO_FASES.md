@@ -6579,3 +6579,425 @@ reportado** pra DataJud/PDPJ especificamente — esta é uma correção
 preventiva/de consistência (mesma causa-raiz já comprovada em produção
 pro Comunica, aplicada por precaução aos 2 outros pontos ativos que
 compartilham o mesmo padrão de risco), não resposta a um bug relatado.
+
+---
+
+## Fase pós-166a43c — verificação real + correção faseada + disposição de telas
+
+### Context
+
+Usuário pediu, após o merge do PR #261 (curl_cffi/TLS impersonation):
+"verifique o que funciona e o que não funciona e elabore um plano de
+correção/aprimoramento de forma que em cada fase algo do sistema passe a
+funcionar corretamente. sugira correções de lógica." — diferente de toda
+rodada de "teste geral" anterior deste projeto (sempre audit-only, correção
+vira fase separada só depois de o usuário confirmar), o pedido já veio
+pedindo correção incremental na mesma rodada. No meio do turno, acrescentou:
+incluir uma frente de aprimoramento de disposição/layout das telas.
+
+### Investigação (3 agentes em paralelo, medição real, não releitura de docs)
+
+1. **Saúde real da suíte de testes** — bloqueado em Plan Mode (só leitura
+   permitida); virou a Fase 0 de execução.
+2. **Saúde real do frontend** — `tsc --noEmit` 0 erros; `npm run build`
+   sucesso completo; `eslint` 0 erros/28 warnings (26 `exhaustive-deps` + 2
+   `no-img-element`); migração de `window.confirm`/`prompt` pra
+   `useConfirmDialog` (Fase 241) reconfirmada 100% completa.
+3. **Varredura de achados conhecidos** — reconfirmou os 5 itens já
+   catalogados (5 integrações `.jus.br` em `httpx` puro, endpoints órfãos,
+   trigger de `audit_logs`) sem mudança de status, e achou 2 instâncias
+   NOVAS dos padrões de risco já documentados no projeto:
+   - `core/security.py::is_token_blacklisted()` — `except Exception: pass`
+     tratava "Redis não configurado" (degradado, documentado) e "Redis
+     configurado mas a chamada falhou de verdade" como o MESMO caso — gate
+     de revogação de token usado por `get_current_user()` (praticamente
+     toda rota autenticada, não só WS) e `ws.py`. Um erro transitório do
+     Redis fazia um token JÁ deslogado continuar aceito, em silêncio.
+   - `CircuitBreaker(default=None)` sem `sinalizar_falha` em
+     `escavador_fonte.py`/`judit_fonte.py`/`jusbrasil_fonte.py`/
+     `pdpj_fonte.py` — mesma classe já corrigida só pro DataJud.
+     `movimentos()` das 4 é código morto (zero chamador, confirmado por
+     grep); `partes()` é usado ativamente via `oab_capture.py::
+     _enriquecer_partes()`, cujo comentário já assumia (incorretamente)
+     que a fonte "levanta" em caso de erro — como o breaker nunca deixa
+     isso acontecer, um provedor credenciado fora do ar era reportado
+     como "0 partes encontradas", sem sinalizar nada pro admin.
+   - `LGPDConsentRecord` (`client_id` FK + `ip_address` PII) não tocada
+     por `erase_client_data`/`export_client_data` — 9ª ocorrência da
+     classe já catalogada 8+ vezes, mas sem risco ativo hoje (nenhum
+     endpoint grava linha nela; só `demo_reset.py` apaga em bulk).
+
+### Fase 0 — baseline real (Postgres novo, sem Redis, boot via lifespan)
+
+`ruff check app/` limpo. `test_unit`: 932 passed/4 skipped, batendo com o
+documentado. `test_api`: 1 falha real —
+`test_demo_login_rate_limit_anti_abuso` fazia 25 tentativas esperando 429,
+mas sem Redis (config exata do CI) o rate-limit inteiro é no-op
+(`get_redis()` devolve `None`), então nunca dispara — o teste não
+distinguia "ambiente degradado, sem enforcement possível" de "bug real",
+mesma classe de armadilha já documentada pra `test_health.py`. Corrigido:
+o teste agora pula honestamente (`pytest.skip`) quando `get_redis()`
+devolve `None`, e continua exercitando o 429 de verdade quando Redis está
+disponível (confirmado nos dois sentidos, ligando/desligando Redis local).
+
+### Fase 1 — `is_token_blacklisted()` para de esconder erro do Redis
+
+`backend/app/core/security.py` — reescrito distinguindo os 2 casos:
+`get_redis()` devolvendo `None` (config degradada, continua silencioso) vs.
+uma exceção real na conexão/`.exists()` (agora `log.warning(
+"blacklist_check_failed", ...)`). **Mantém fail-open** — virar fail-closed
+derrubaria login do sistema inteiro num blip do Redis, regressão de
+disponibilidade pior que o bug original; o objetivo é parar de esconder o
+sinal, não mudar o comportamento default. 4 testes novos em
+`test_security.py` (sem Redis → sem log; erro real do `.exists()` → log +
+fail-open preservado; `get_redis()` em si falhando → log; token
+efetivamente na blacklist → detectado). Prova nos dois sentidos: revertido
+via `git stash`, 3 dos 4 testes novos falham (`AttributeError: module
+'app.core.security' has no attribute 'log'`).
+
+### Fase 2 — `sinalizar_falha` nas 4 fontes credenciadas de partes
+
+Mesmo padrão já provado em `datajud_fonte.py` (sentinela `_FALHA` +
+parâmetro opt-in `sinalizar_falha: bool = False`), aplicado só em
+`partes()` das 4 fontes (`movimentos()` fica de fora — código morto,
+mesma decisão de escopo já usada pro DataJud). Ponto fino: o sentinela
+precisa **escapar** do método interno (`_get`/`_processo`/`_get_processo`)
+sem ser convertido de volta a `None` ali dentro — senão a distinção se
+perde antes de chegar em `partes()` (achado durante a implementação,
+corrigido antes de testar). `oab_capture.py::_enriquecer_partes()`
+atualizado pra chamar com `sinalizar_falha=True` e tratar `None` (erro
+real) separado de `[]` (processo genuinamente sem partes) — só o primeiro
+conta como falha de uso da integração (`registrar_uso(sucesso=False)`).
+
+**Achado ao rodar a suíte, não hipótese**: `test_oab_capture_registrar_uso.py`
+tinha um fake (`_FakeFonte.partes(self, numero_cnj, tribunal)`) sem o
+kwarg novo — a chamada real com `sinalizar_falha=True` batia num
+`TypeError` capturado pelo `except Exception` do código novo, virando
+"erro do serviço externo" nos 3 testes que exercitam esse fake. Mesma
+armadilha documentada no CLAUDE.md ("fake com assinatura desatualizada").
+Corrigido com `**kwargs` no fake, não no código de produção.
+
+Teste novo dedicado (`test_fontes_credenciadas_sinalizar_falha.py`, 5
+casos — 1 por fonte + 1 de ponta a ponta via `_enriquecer_partes`):
+disjuntor fechado + cliente HTTP fake que teria sucesso funciona nos 2
+modos; disjuntor forçado aberto (3 falhas) faz `partes()` devolver `None`
+só com `sinalizar_falha=True`, nunca chamando a rede fake (prova de que o
+disjuntor intercepta antes). Prova nos dois sentidos via `git stash`: os 5
+falham revertido.
+
+### Fase 3 — `LGPDConsentRecord` no ciclo de esquecimento/exportação
+
+`backend/app/api/v1/lgpd.py` — mesmo padrão já usado 10+ vezes no
+arquivo: bloco em `erase_client_data` zerando `ip_address` (preserva
+`consentimento`/`base_legal`/`tipo_dado`/`timestamp`, que são metadado de
+auditoria de consentimento, não PII do titular) + seção espelhada em
+`export_client_data`. Sem migração — tabela já existe, só nunca era
+referenciada. Teste novo (inserção direta via ORM, já que nenhum endpoint
+escreve na tabela): cria cliente → insere `LGPDConsentRecord` com IP
+marcador → confirma no export → esquece → confirma `ip_address is None`
+mas os demais campos sobrevivem. Prova nos dois sentidos via `git stash`.
+
+### Fase 4 — Frontend: `exhaustive-deps` + `no-img-element`
+
+Cada um dos 26 warnings foi lido individualmente antes de decidir — todos
+seguem o mesmo padrão intencional: uma função `fetchX`/`loadX` não
+memoizada (`useCallback`), referenciada dentro de um `useEffect` cujo
+array de deps já lista corretamente os valores reativos (filtros, `id` de
+rota) mas omite a função em si — de propósito, porque incluí-la causaria
+um loop infinito (a função muda de referência a cada render, e chamá-la de
+novo dispara `setState` → novo render → nova referência → efeito dispara
+de novo). Confirmado caso a caso, inclusive o de maior escopo
+(`relatorios/page.tsx`, 10 deps faltando — guard `!gestao`/`!financial`/
+etc. já é o cache "busca 1x por aba"). Documentado com
+`eslint-disable-next-line react-hooks/exhaustive-deps` + comentário
+explicando o motivo em cada um — nunca silenciado sem justificar, e nunca
+um refactor em massa pra `useCallback` (custo/risco desproporcional a
+warnings que já eram comportamento correto). Achado de mecânica do
+ESLint: o disable-next-line precisa estar na linha imediatamente ANTES da
+que tem o array de deps (`}, [...]);`), não antes do `useEffect(() => {`
+de abertura — comentário posicionado errado nos primeiros 21 sites não
+suprimiu nada; corrigido reposicionando. Os 2 `<img>` de
+`(auth)/login/page.tsx` viraram `next/image` (dimensões intrínsecas do
+PNG, 599×880, obtidas via `file`, já que Next exige `width`/`height`
+explícitos sem `fill`). `tsc --noEmit`, `eslint` (0 warnings) e
+`npm run build` limpos ao final.
+
+### Fase 5 — Disposição/layout das telas (pedido do usuário, achado real)
+
+Walkthrough Playwright real (Chromium do sandbox, stack completa —
+Postgres+Redis+uvicorn+`npm run dev`, login como ADMIN) em 9 telas
+(Dashboard, Processos, Clientes, Financeiro, Agenda, Configurações, Mapa,
+Relatórios, Auditoria) em 2 larguras (1440px/390px). Nenhuma tela com
+scroll horizontal; nenhum erro de console atribuível (só 429 esperado de
+rate-limit, do próprio script navegando rápido demais).
+
+**Achado real, root-cause, não cosmético**: o card "Receitas vs Despesas
+— últimos 6 meses" (`/dashboard`, via `MiniFinancialChart`) renderizava
+com a MAIORIA do card em branco — só 1-2 categorias visíveis, cercadas de
+espaço vazio, contradizendo o próprio rótulo "últimos 6 meses". Mesmo
+sintoma reconfirmado de forma independente em `/financeiro` (componente
+`FinanceiroCharts`, chart diferente, mesma causa). Rastreado até 2
+endpoints backend distintos:
+- `GET /system/analytics/financeiro` (`system.py::analytics_financeiro`) —
+  `all_months = sorted(set(receitas_por_mes) | ...)` só incluía meses com
+  ALGUM `FinancialEntry`, nunca preenchia a janela pedida (`meses=6`).
+- `GET /financial/monthly` (`financial.py::monthly_summary`) — mesmo
+  padrão: `months` dict só ganhava entrada pra mês com lançamento `PAGO`.
+
+Um tenant com atividade em só 1 dos 6 meses (caso comum: escritório
+recém-cadastrado, ou dado de teste/demo) devolvia uma série de 1 item — o
+gráfico (largura fixa do card) espalhava essa única categoria com bastante
+espaço em branco ao redor, em vez de mostrar 6 meses proporcionais com os
+5 sem movimento simplesmente zerados. Corrigido nos 2 endpoints:
+preenchimento da janela completa de meses (terminando no mês atual) com
+zero antes de aplicar os valores reais — o rótulo "últimos N meses" passa
+a bater com o que é exibido. Confirmado visualmente antes/depois via
+Playwright (screenshot com 1 bar perdida num mar de espaço em branco →
+screenshot com 6 meses no eixo X, 5 zerados + 1 com dado real,
+proporcionalmente distribuídos). Achado de operação: os 2 endpoints têm
+cache Redis (`_cached`, TTL 300s) — o fix só ficou visível depois de
+`redis-cli DEL` na chave `analytics:fin:{tenant}:{meses}` (reiniciar o
+uvicorn não invalida o cache).
+
+Teste novo (`test_financeiro_serie_mensal_preenchida.py`, 2 casos — 1 por
+endpoint): tenant com 1 único `FinancialEntry` PAGO no mês corrente →
+confirma que a série devolvida tem exatamente 6 itens, em ordem
+cronológica, com só 1 tendo valor não-zero. Prova nos dois sentidos via
+`git stash`: os 2 falham revertido (`len(dados) == 1`, não 6).
+
+### Verificado (todas as 5 fases juntas)
+
+Suíte completa na configuração EXATA do runner (banco criado do zero,
+`REDIS_URL=` vazio, boot via lifespan real — nunca `alembic upgrade head`
+cru): `ruff check app/` limpo; `tests/test_unit/` 941 passed/4 skipped;
+`tests/test_api/` rodado 2× seguidas contra o mesmo banco — 195/2 skip e
+193/4 skip respectivamente (mesma classe de skip condicional a
+rate-limit/seed já documentada, sem regressão de ordem/estado; zero
+falha nas 2 execuções). Frontend: `tsc --noEmit` 0 erros, `eslint` 0
+erros/0 warnings, `npm run build` sucesso completo (46 páginas).
+
+**Achado operacional durante a verificação, não regressão**: uma medição
+intermediária com Redis LIGADO manualmente (pra testar a Fase 1) mostrou
+2 falhas na 2ª execução seguida de `test_api` — `test_demo_login_*`
+recebendo 429 real, porque a suíte de testes com Redis disponível
+consome o próprio orçamento de rate-limit do `demo-login` entre execuções
+rápidas sucessivas. Não é regressão desta sessão — é o comportamento
+correto do rate-limiter funcionando de verdade, só não é a configuração
+de paridade com o CI (que não tem Redis). Banco recriado do zero e Redis
+desligado antes da medição final registrada acima.
+
+### Arquivos principais
+- `backend/app/core/security.py`, `backend/tests/test_unit/test_security.py`
+- `backend/app/integrations/fontes/{base,escavador_fonte,judit_fonte,
+  jusbrasil_fonte,pdpj_fonte}.py`, `backend/app/services/oab_capture.py`,
+  `backend/tests/test_unit/{test_fontes_credenciadas_sinalizar_falha,
+  test_oab_capture_registrar_uso}.py`
+- `backend/app/api/v1/lgpd.py`,
+  `backend/tests/test_api/test_lgpd_erasure_reaches_consent_record_fase_166a43c.py`
+- `backend/app/api/v1/{system,financial}.py`,
+  `backend/tests/test_api/test_financeiro_serie_mensal_preenchida.py`
+- `backend/tests/test_api/test_demo_login.py`
+- 21 arquivos de página/componente do frontend (warnings de
+  `exhaustive-deps`) + `frontend/src/app/(auth)/login/page.tsx`
+  (`next/image`)
+- `CLAUDE.md`, `HISTORICO_FASES.md`
+
+## Fase pós-262
+
+Usuário reportou, após a PR #262 (fim da fase pós-166a43c): "muitas áreas
+do sistema continuam sem funcionar" — 4 sintomas: busca de processos por
+OAB/UF sempre "não encontrado"; arquivos gerados não são salvos nas
+pastas pré-determinadas do Google Workspace; a busca que deveria
+percorrer pastas compartilhadas (ex. Doutrina) não lê os arquivos; e
+publicações não são capturadas. Pediu investigação + plano faseado de
+correção + fases de inovação/aprimoramento.
+
+**Investigação** (3 Explore agents em paralelo, leitura direta de código
++ execução de teste onde possível — nunca só suposição):
+
+1. **OAB/UF + publicações** passam pelo mesmo ponto único,
+   `comunica.py::buscar_comunicacoes()`. Confirmado que o fix de fase
+   anterior (`curl_cffi`/`impersonate="chrome124"`) está de fato no
+   código hoje (não só documentado), os 25 testes relacionados passam, e
+   nenhum bug de lógica foi encontrado em `comunica_fonte.py::
+   descobrir_por_oab` (sincronização de circuit breaker com Redis
+   correta), `oab_capture.py::capturar_por_oab` (validação de UF/OAB,
+   dedup por CNJ, sem descarte espúrio) nem `dje_monitor.py::
+   scan_publicacoes` (mesmo trace, mesmo resultado). Tentativa de
+   chamada real contra `comunicaapi.pje.jus.br` reconfirmou o bloqueio de
+   egress do sandbox (`CONNECT tunnel failed, response 403` do próprio
+   proxy — diferente do 403 do WAF documentado em produção). **Única
+   incerteza real, não resolúvel daqui**: se o fingerprint TLS do
+   `curl_cffi` de fato contorna o WAF real em produção.
+2. **Leitura da pasta Doutrina — bug real confirmado**:
+   `google_drive_sync.py::executar_sync_drive_doutrina` nunca ativava a
+   IA própria (BYOK) do admin antes de ingerir, ao contrário de TODO
+   outro fluxo RAG do sistema (`rag.py`/`documents.py`/
+   `brain_assistant.py`/`brain_insights.py`/`orchestrator.py`, todos
+   envolvidos em `user_ai_creds(...)`). Sem esse wrap,
+   `ai_creds_ctx.get()` sempre levantava `LookupError` nesse fluxo
+   específico → `_resolve_embedding_credentials()` sempre devolvia
+   `(None, None, None)` → caía sempre na chave central
+   (`settings.OPENAI_API_KEY`). Um tenant sem chave central, dependente
+   só do BYOK cadastrado em "Minha IA", tinha **100% dos arquivos
+   falhando** com `EmbeddingProviderUnavailable` — gravado em
+   `JurisprudenciaIngerida.erro` (não silencioso no banco), mas opaco pro
+   usuário final, que só via "não funciona" sem saber a causa. O resto da
+   pipeline (índice Qdrant `document_id`, paginação/recursão de
+   subpastas, chip "Doutrina AFJ" no frontend, isolamento por tenant)
+   estava correto e testado (43 testes passando) — não era a causa.
+3. **Salvamento no Google Workspace — nenhum bug de código encontrado**:
+   `google_workspace.py::_drive_upload`/`drive_upload_pdf`/
+   `drive_upload_doc`/`drive_upload_sheet` aceitam e usam
+   `parent_folder_id` corretamente; `google_integration.py`/
+   `financial.py` resolvem a pasta configurada ANTES do upload nos 3
+   call sites; erros do Google propagam (nunca mascarados,
+   `raise_for_status()` sempre chega ao chamador); `test_google_
+   workspace.py` já confirma `parents` no multipart. **Causa mais
+   provável, não confirmável sem produção**: contas conectadas ANTES do
+   escopo `drive.metadata.readonly` (fase anterior) nunca reconectaram —
+   o picker de pasta falha com 403 `escopo_insuficiente`
+   (`_classificar_erro_drive`), o admin nunca consegue configurar a
+   pasta, e o upload (que usa `drive.file`, escopo antigo, ainda válido)
+   vai pra raiz sem NENHUM erro — não é bug, é ausência de configuração
+   nunca percebida porque o aviso existente era texto discreto.
+
+**Decisões do usuário (via 2 perguntas)**: (1) pra Comunica/DJEN, em vez
+de esperar por evidência de produção, implementar uma cadeia de fallback
+de impersonation + garantir que o diagnóstico já capturado fique visível;
+(2) pra Doutrina, confirmado que o usuário quer suporte a MÚLTIPLAS
+pastas compartilhadas simultâneas (não só corrigir o bug da pasta única
+já existente).
+
+### Fase 1 — BYOK no worker de sincronização Doutrina (bug real corrigido)
+
+`executar_sync_drive_doutrina` passou a rodar a ingestão de cada tenant
+dentro de `async with user_ai_creds(db, integ.connected_by, "rag_ingest"):`
+— `TenantIntegration.connected_by` (o admin que conectou a integração)
+"empresta" a credencial BYOK pro worker em background, mesmo espírito de
+`ingest_document(..., force_system_default=False)` já usado pelo resto
+do RAG. `connected_by` ausente (linha legada) ou sem BYOK cadastrado cai
+no comportamento de sempre (chave central) — zero regressão. Teste novo
+(`test_sync_ativa_byok_do_admin_que_conectou_a_integracao`) prova nos 2
+sentidos: monkeypatcha `user_ai_creds` com um fake que registra os
+argumentos recebidos, confirma `(admin_id, "rag_ingest")`.
+
+### Fase 2 — múltiplas pastas compartilhadas (pedido do usuário)
+
+`TenantIntegration.extra_data` do provider `google_drive_doutrina` passou
+de `{folder_id, folder_name}` (singular) para `{folders: [{folder_id,
+folder_name}, ...]}` (lista) — novo `integration_hub.pastas_drive_
+doutrina(extra_data)` lê a lista nova com fallback pro par legado (um
+`extra_data` de antes desta fase vira lista de 1 item, sem
+migração/backfill). `PUT /integrations/hub/google_drive_doutrina/folder`
+saiu do caminho de escrita da Doutrina — substituído por
+`POST .../google_drive_doutrina/folders` (adiciona, idempotente por
+`folder_id` — repetir só atualiza o nome) e
+`DELETE .../google_drive_doutrina/folders/{folder_id}` (remove); o `PUT`
+antigo passou a valer só pra `google_workspace` (pasta única de
+salvamento, `_PROVIDER_PASTA_UNICA`). `executar_sync_drive_doutrina`
+passou a iterar todas as pastas configuradas do tenant — fail-soft por
+pasta (1 pasta sem acesso/removida não impede as demais; o tenant só
+termina em `ERRO` se TODAS as pastas falharem ao listar, mesma classe de
+erro que valia com 1 pasta só). `SyncRun.stats` ganhou `pastas_com_erro`
+quando aplicável. Frontend (`integracoes/page.tsx`): a seção "Pastas do
+Drive a sincronizar" virou uma lista de chips (nome + botão remover
+individual) + "Adicionar pasta" (reaproveita o `DriveFolderPicker` já
+existente, só troca o handler de `onSelect`).
+
+11 testes novos/reescritos em `test_hub_drive_folder.py` (agora cobrindo
+`pastas_drive_doutrina()`, o `PUT` restrito, e os 2 endpoints novos) + 4
+em `test_google_drive_sync.py` (BYOK, múltiplas pastas com sucesso, 1
+pasta falha/outra funciona, todas falham) — cada um provando o
+comportamento nos 2 sentidos.
+
+### Fase 3 — visibilidade de configuração no Google Workspace
+
+Sem bug de lógica a corrigir (achado confirmado por leitura completa) —
+o gap era de UX/diagnóstico. O aviso "Nenhuma pasta configurada — os
+arquivos são salvos na raiz" (que já existia, mas como texto discreto
+igual ao de "pasta configurada") virou um banner de atenção (mesmo
+padrão visual já usado pro estado de erro de sincronização da Doutrina).
+`DriveFolderPicker.tsx` ganhou um botão "Reconectar conta Google" que
+aparece só quando o erro de listagem é 401/403 (`erroPrecisaReconectar`)
+— antes só havia o texto explicando "pode ser necessário reconectar",
+sem nenhuma ação direta no ponto do erro; dispara o mesmo fluxo OAuth já
+usado pelo card principal (`conectarOAuth`, refatorado pra aceitar
+`provider: string` em vez de um objeto `HubIntegracao` completo, já que
+o picker não tem o objeto inteiro à mão).
+
+### Fase 4 — fallback de impersonation no Comunica/DJEN (mitigação
+best-effort)
+
+`buscar_comunicacoes()` passou a tentar uma cadeia de 3 fingerprints TLS
+conhecidos (`_IMPERSONATE_PROFILES = ("chrome124", "chrome120",
+"safari17")`), parando no primeiro que responder 200 — cada perfil cria
+sua própria `AsyncSession`; se a 1ª página falhar (não-200) ou a sessão
+levantar exceção, tenta o próximo perfil; uma falha em página >1 (já
+dentro de um perfil bem-sucedido) continua truncando o resultado sem
+tentar outro perfil, mesmo comportamento de antes. `stats["impersonate"]`
+registra qual perfil funcionou (sucesso) ou o último tentado (todos
+falharam) — surge automaticamente em `fonte_detalhe`, já exposto nas 2
+telas que disparam a ação (`/publicacoes`, captura por OAB em
+Configurações→Jurídico via `tenant.py`), sem mudança de UI necessária.
+Correção declaradamente best-effort: nenhum dos 3 perfis foi confirmado
+funcionando contra o domínio real (egress bloqueado neste sandbox,
+reconfirmado). 2 testes novos em `test_comunica_diagnostico.py`
+(`test_1o_perfil_falha_2o_funciona`, `test_todos_os_perfis_falham_
+diagnostico_do_ultimo`) — os 6 testes pré-existentes continuaram
+passando sem alteração (o fallback é transparente quando o 1º perfil já
+funciona, comportamento idêntico ao de antes).
+
+### Fases de inovação/aprimoramento propostas (não implementadas nesta
+sessão, registradas pro plano)
+
+- **Central de Diagnóstico de Integrações** — painel único reunindo
+  status + último erro de Comunica/DJEN, Google Drive Doutrina e Google
+  Workspace, reaproveitando os campos já existentes
+  (`last_error_detail`/`last_error_friendly`/diagnóstico por-arquivo),
+  sem exigir que o admin abra 3 telas diferentes.
+- **Fonte alternativa de descoberta de processos por OAB/UF** — se o
+  fallback de impersonation não resolver o WAF do Comunica em produção,
+  investigar se as 4 fontes credenciadas (PDPJ/Escavador/Judit/
+  Jusbrasil) também suportam descoberta de processo por OAB+UF (não só
+  enriquecimento de partes de um processo já conhecido) — precisa de
+  investigação própria antes de desenhar, feature nova.
+
+### Verificado
+
+33 testes novos/estendidos, cada um provando o comportamento nos 2
+sentidos. `ruff check app/` limpo; `python -m py_compile` nos 4 arquivos
+backend tocados; `tsc --noEmit`/`eslint` limpos no frontend (0 erros/0
+warnings nos 2 arquivos tocados). Suíte completa na configuração exata
+do runner (banco `afj_ci` recriado do zero, schema+seed via boot real da
+app — nunca `alembic upgrade head` cru —, `REDIS_URL=` vazio), 2
+execuções seguidas contra o mesmo banco: `tests/test_unit/` 956
+passed/4 skipped; `tests/test_api/` 195 passed/2 skipped na 1ª execução,
+193 passed/4 skipped na 2ª (mesma classe de skip condicional a
+rate-limit já documentada, sem regressão de ordem/estado, zero falha nas
+2 execuções).
+
+**O que este sandbox não pode provar**: se a cadeia de fallback de
+impersonation de fato resolve o bloqueio do WAF do Comunica/DJEN em
+produção, e se o motivo real do sintoma "arquivos não salvos no
+Workspace" é de fato reconexão pendente — os 2 exigem confirmação com
+dado real de produção, fora do alcance deste sandbox (egress bloqueado).
+Pedir ao usuário pra testar após o deploy e reportar: (a) se OAB/UF e
+publicações voltaram a funcionar, com o novo `fonte_detalhe` (agora
+citando qual perfil de impersonation foi tentado) se ainda falharem; (b)
+se reconectar o Google Workspace (Integrações → Google Workspace →
+Escolher pasta, usando o botão "Reconectar" novo caso apareça) resolve o
+salvamento.
+
+### Arquivos principais
+- `backend/app/workers/tasks/google_drive_sync.py`,
+  `backend/tests/test_unit/{test_google_drive_sync,
+  test_google_drive_sync_dedup_real_qdrant}.py`
+- `backend/app/services/integration_hub.py`,
+  `backend/app/api/v1/integrations_hub.py`,
+  `backend/tests/test_unit/test_hub_drive_folder.py`
+- `backend/app/integrations/dje/comunica.py`,
+  `backend/tests/test_unit/test_comunica_diagnostico.py`
+- `frontend/src/app/(dashboard)/integracoes/page.tsx`,
+  `frontend/src/components/integrations/DriveFolderPicker.tsx`
+- `CLAUDE.md`, `HISTORICO_FASES.md`

@@ -62,6 +62,7 @@ class _FakeInteg:
     def __init__(self, tenant_id, folder_id):
         self.tenant_id = tenant_id
         self.extra_data = {"folder_id": folder_id}
+        self.connected_by = None  # Fase pós-262 — user_ai_creds(..., None, ...) é no-op
 
 
 class _FakeCfg:

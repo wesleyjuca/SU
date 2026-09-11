@@ -71,7 +71,9 @@ export default function FunilPage() {
   // travada no mês atual. Navegação simples de mês, sem mudança de schema.
   const [periodoSelecionado, setPeriodoSelecionado] = useState(PERIODO_ATUAL);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- fetchFunil/fetchClientes não são memoizadas; buscar só no mount é intencional.
   useEffect(() => { fetchFunil(); fetchClientes(); }, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- fetchMeta não é memoizada; o dep reativo já está listado.
   useEffect(() => { fetchMeta(); setEditingMeta(false); }, [periodoSelecionado]);
 
   async function fetchMeta() {

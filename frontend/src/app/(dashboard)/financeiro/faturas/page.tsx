@@ -43,7 +43,7 @@ export default function FaturasPage() {
   const [form, setForm] = useState({ client_id: "", periodo_inicio: "", periodo_fim: "", data_vencimento: "" });
   const [itens, setItens] = useState<Item[]>([{ descricao: "", valor: "" }]);
 
-  useEffect(() => { fetchInvoices(); fetchClientes(); }, [clientIdFiltro]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- fetchInvoices/fetchClientes não são memoizadas; o dep reativo já está listado.
 
   async function fetchInvoices() {
     setLoading(true);

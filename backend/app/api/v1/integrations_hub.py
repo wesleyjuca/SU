@@ -113,13 +113,20 @@ async def hub_disconnect(
 
 
 # ─── Pasta do Google Drive — pesquisa (google_drive_doutrina) e salvamento
-# (google_workspace) — Fase 138.2 / Fase 258 ───────────────────────────────────
+# (google_workspace) — Fase 138.2 / Fase 258 / Fase pós-262 ───────────────────
 # Fase 258 — o fluxo antigo (link/ID colado, `DriveFolderBody.folder: str`,
 # parseado por regex via `extrair_folder_id`) exigia implicitamente uma
 # pasta que o usuário já tivesse a URL — substituído por um seletor real
 # (navega pelas pastas de verdade via Drive API, usando só a permissão já
 # concedida na conexão OAuth, nunca pasta pública/compartilhada por link).
-_PROVIDERS_COM_PASTA = ("google_drive_doutrina", "google_workspace")
+# Fase pós-262 — achado real (usuário reportou "a busca não percorre todas
+# as pastas compartilhadas"): 1 pasta só não bastava pra pesquisa jurídica.
+# `google_drive_doutrina` passou a suportar MÚLTIPLAS pastas simultâneas
+# (`POST/DELETE .../google_drive_doutrina/folders`, abaixo) — o `PUT
+# /{provider}/folder` (pasta única) segue existindo só pra `google_workspace`
+# (1 única pasta de salvamento, não é uma lista).
+_PROVIDERS_COM_PASTA = ("google_drive_doutrina", "google_workspace")  # listagem/browse — vale pros 2
+_PROVIDER_PASTA_UNICA = ("google_workspace",)  # `PUT .../folder` — só quem tem 1 pasta só
 
 
 class FolderBody(BaseModel):
@@ -165,12 +172,15 @@ async def hub_set_folder(
     current_user: User = Depends(require_role("ADMIN")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Configura a pasta do provider — pesquisa (google_drive_doutrina) ou
-    salvamento (google_workspace). Recebe o `folder_id` já resolvido pela
-    seleção no picker (nunca mais um link colado). A URL/ID nunca é
-    segredo, fica em `extra_data`, não em `credentials_enc`."""
-    if provider not in _PROVIDERS_COM_PASTA:
-        raise HTTPException(status_code=422, detail="Provedor sem configuração de pasta.")
+    """Configura a ÚNICA pasta do provider — hoje só `google_workspace`
+    (salvamento). `google_drive_doutrina` (pesquisa) passou a suportar
+    múltiplas pastas simultâneas (Fase pós-262) — usa `POST`/`DELETE
+    .../google_drive_doutrina/folders` abaixo, não mais este endpoint.
+    Recebe o `folder_id` já resolvido pela seleção no picker (nunca mais um
+    link colado). A URL/ID nunca é segredo, fica em `extra_data`, não em
+    `credentials_enc`."""
+    if provider not in _PROVIDER_PASTA_UNICA:
+        raise HTTPException(status_code=422, detail="Provedor sem configuração de pasta única — use os endpoints de múltiplas pastas.")
 
     integ = await integration_hub.get_integration(db, current_user.tenant_id, provider)
     if not integ or not integ.credentials_enc:
@@ -186,12 +196,70 @@ async def hub_set_folder(
     integ.extra_data = extra
     await db.commit()
 
-    msg = (
-        "Pasta configurada — a sincronização roda automaticamente todo dia."
-        if provider == "google_drive_doutrina" else
-        "Pasta de salvamento configurada — os próximos arquivos gerados serão salvos nela."
-    )
-    return {"folder_id": folder_id, "folder_name": body.folder_name, "message": msg}
+    return {
+        "folder_id": folder_id, "folder_name": body.folder_name,
+        "message": "Pasta de salvamento configurada — os próximos arquivos gerados serão salvos nela.",
+    }
+
+
+@router.post("/google_drive_doutrina/folders")
+async def hub_add_pasta_doutrina(
+    body: FolderBody,
+    current_user: User = Depends(require_role("ADMIN")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Fase pós-262 — adiciona uma pasta à lista de pastas de pesquisa
+    (achado real: 1 pasta só não bastava pra "percorrer todas as pastas
+    compartilhadas" que o usuário esperava). Idempotente por `folder_id` —
+    adicionar uma pasta já presente só atualiza o nome exibido, nunca
+    duplica. `folders` é a lista real (Fase pós-262);
+    `integration_hub.pastas_drive_doutrina` lê o `extra_data` legado
+    (`folder_id` solto, de antes desta fase) como compatibilidade —
+    igualada aqui pra não deixar as 2 formas divergentes no banco."""
+    integ = await integration_hub.get_integration(db, current_user.tenant_id, "google_drive_doutrina")
+    if not integ or not integ.credentials_enc:
+        raise HTTPException(status_code=422, detail="Conecte a conta Google antes de adicionar uma pasta.")
+
+    folder_id = body.folder_id.strip()
+    if not folder_id:
+        raise HTTPException(status_code=422, detail="Selecione uma pasta.")
+
+    nova = {"folder_id": folder_id, "folder_name": (body.folder_name or "").strip() or None}
+    pastas = [p for p in integration_hub.pastas_drive_doutrina(integ.extra_data) if p["folder_id"] != folder_id]
+    pastas.append(nova)
+
+    extra = {**(integ.extra_data or {}), "folders": pastas}
+    extra.pop("folder_id", None)
+    extra.pop("folder_name", None)
+    integ.extra_data = extra
+    await db.commit()
+
+    return {"pastas": pastas, "message": "Pasta adicionada — a sincronização passa a percorrer todas as pastas configuradas."}
+
+
+@router.delete("/google_drive_doutrina/folders/{folder_id}")
+async def hub_remove_pasta_doutrina(
+    folder_id: str,
+    current_user: User = Depends(require_role("ADMIN")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Fase pós-262 — remove uma pasta da lista de pesquisa. Remover a
+    última pasta deixa a integração conectada mas sem nenhuma pasta
+    configurada — mesmo estado (e mesmo comportamento no worker de sync,
+    que pula o tenant) de antes desta fase, quando nenhuma pasta única
+    tinha sido escolhida ainda."""
+    integ = await integration_hub.get_integration(db, current_user.tenant_id, "google_drive_doutrina")
+    if not integ:
+        raise HTTPException(status_code=404, detail="Integração Google Drive Doutrina não conectada.")
+
+    pastas = [p for p in integration_hub.pastas_drive_doutrina(integ.extra_data) if p["folder_id"] != folder_id]
+    extra = {**(integ.extra_data or {}), "folders": pastas}
+    extra.pop("folder_id", None)
+    extra.pop("folder_name", None)
+    integ.extra_data = extra
+    await db.commit()
+
+    return {"pastas": pastas, "message": "Pasta removida."}
 
 
 @router.post("/google_drive_doutrina/sync-now")
@@ -208,9 +276,9 @@ async def hub_drive_sync_now(
     Necessário pra "salvar arquivo → pesquisar novamente" ser verificável
     sem esperar a rodada diária do Beat."""
     integ = await integration_hub.get_integration(db, current_user.tenant_id, "google_drive_doutrina")
-    if not integ or integ.status != "CONECTADA" or not (integ.extra_data or {}).get("folder_id"):
+    if not integ or integ.status != "CONECTADA" or not integration_hub.pastas_drive_doutrina(integ.extra_data):
         raise HTTPException(
-            status_code=422, detail="Conecte a conta Google e configure a pasta antes de sincronizar."
+            status_code=422, detail="Conecte a conta Google e configure ao menos uma pasta antes de sincronizar."
         )
     from app.workers.tasks.google_drive_sync import executar_sync_drive_doutrina
 

@@ -166,3 +166,67 @@ async def test_sucesso_200_nao_seta_status_code_nem_error(monkeypatch):
     assert stats.get("ok") is True
     assert "error" not in stats
     assert "status_code" not in stats
+
+
+# ─── Fase pós-262 — cadeia de fallback de impersonation ───────────────────────
+
+def _patch_session_sequence(monkeypatch, respostas: list):
+    """Cada item de `respostas` é usado numa sessão (perfil) por vez, na
+    ordem de construção — simula "o 1º perfil falha, o 2º funciona" etc.
+    Devolve a lista de `session_kwargs` capturados, um por sessão criada."""
+    todas_kwargs: list = []
+    chamadas = {"n": 0}
+
+    def _factory(*a, **kwargs):
+        i = chamadas["n"]
+        chamadas["n"] += 1
+        item = respostas[min(i, len(respostas) - 1)]
+        todas_kwargs.append(kwargs)
+        if isinstance(item, Exception):
+            return _FakeAsyncSession(exception=item, captured={}, **kwargs)
+        return _FakeAsyncSession(response=item, captured={}, **kwargs)
+
+    monkeypatch.setattr(comunica_mod, "AsyncSession", _factory)
+    return todas_kwargs
+
+
+@pytest.mark.asyncio
+async def test_1o_perfil_falha_2o_funciona(monkeypatch):
+    """Prova nos 2 sentidos: sem a cadeia de fallback, 1 perfil falhando
+    (403) devolveria [] direto — com ela, o 2º perfil (chrome120) é
+    tentado e o resultado real aparece."""
+    kwargs_por_sessao = _patch_session_sequence(monkeypatch, [
+        _FakeResponse(403, text="Forbidden"),
+        _FakeResponse(200, json_data={"items": [{"id": "1", "texto": "intimação real"}]}),
+    ])
+
+    stats: dict = {}
+    resultado = await buscar_comunicacoes("123456", "CE", date(2026, 1, 1), date(2026, 7, 1), stats=stats)
+
+    assert len(resultado) == 1
+    assert resultado[0].texto == "intimação real"
+    assert stats["ok"] is True
+    assert stats["impersonate"] == "chrome120"
+    # confirma que o 1º perfil tentado foi chrome124, o 2º chrome120 — a
+    # ordem declarada em `_IMPERSONATE_PROFILES`.
+    assert kwargs_por_sessao[0]["impersonate"] == "chrome124"
+    assert kwargs_por_sessao[1]["impersonate"] == "chrome120"
+
+
+@pytest.mark.asyncio
+async def test_todos_os_perfis_falham_diagnostico_do_ultimo(monkeypatch):
+    kwargs_por_sessao = _patch_session_sequence(monkeypatch, [
+        _FakeResponse(403, text="Forbidden 1"),
+        _FakeResponse(403, text="Forbidden 2"),
+        _FakeResponse(403, text="Forbidden 3"),
+    ])
+
+    stats: dict = {}
+    resultado = await buscar_comunicacoes("123456", "CE", date(2026, 1, 1), date(2026, 7, 1), stats=stats)
+
+    assert resultado == []
+    assert stats.get("ok") is None
+    assert stats["impersonate"] == "safari17"  # o último tentado
+    assert stats["status_code"] == 403
+    assert "todos os perfis tentados" in stats["error"]
+    assert len(kwargs_por_sessao) == 3  # os 3 perfis foram de fato tentados

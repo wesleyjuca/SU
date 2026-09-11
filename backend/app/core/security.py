@@ -5,9 +5,12 @@ import secrets
 import uuid
 
 import bcrypt
+import structlog
 from jose import jwt
 
 from app.config import settings
+
+log = structlog.get_logger()
 
 ROLES = {
     "ADMIN": {"level": 100, "permissions": ["*"]},
@@ -60,14 +63,30 @@ def decode_access_token(token: str) -> dict:
 
 
 async def is_token_blacklisted(jti: str) -> bool:
+    """Fail-open de propósito (indisponibilidade do Redis nunca pode travar
+    login/toda a API — mesmo princípio de `task_lock.py`/`incrementar_com_janela`).
+
+    Achado da rodada pós-166a43c: até aqui, "Redis não configurado" (estado
+    degradado documentado, `get_redis()` devolve `None`) e "Redis configurado
+    mas a chamada falhou de verdade" (erro de conexão/timeout num Redis que
+    deveria estar de pé) caíam no MESMO `except Exception: pass` — o 2º caso
+    é logado agora, o 1º continua silencioso (não é uma falha, é config).
+    Sem isso, um erro transitório de Redis fazia um token JÁ deslogado (na
+    blacklist) continuar sendo aceito, em silêncio, por toda a API
+    autenticada (`get_current_user`/`ws.py`), não só WebSocket."""
+    from app.db.redis import get_redis
     try:
-        from app.db.redis import get_redis
         redis = await get_redis()
-        if redis:
-            return bool(await redis.exists(f"blacklist:{jti}"))
-    except Exception:
-        pass
-    return False
+    except Exception as exc:
+        log.warning("blacklist_check_redis_unavailable", jti=jti[:8], error=str(exc))
+        return False
+    if not redis:
+        return False
+    try:
+        return bool(await redis.exists(f"blacklist:{jti}"))
+    except Exception as exc:
+        log.warning("blacklist_check_failed", jti=jti[:8], error=str(exc))
+        return False
 
 
 def hash_token(token: str) -> str:

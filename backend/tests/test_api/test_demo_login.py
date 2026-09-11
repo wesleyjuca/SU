@@ -83,6 +83,16 @@ async def test_demo_login_nao_altera_tenant_afj(client):
 
 
 async def test_demo_login_rate_limit_anti_abuso(client):
+    # Fase de verificação pós-166a43c — sem Redis (ambiente degradado,
+    # documentado no CLAUDE.md: "o CI não tem Redis"), o rate-limit inteiro
+    # vira no-op (`get_redis()` devolve None, `incrementar_com_janela` nunca
+    # roda) — 25 tentativas nunca produzem 429, e o teste falhava por
+    # ambiente, não por bug de produto. Mesmo padrão de degradação honesta
+    # já usado em `test_health.py` para o mesmo cenário.
+    from app.db.redis import get_redis
+    if not await get_redis():
+        pytest.skip("Redis indisponível — rate-limit de anti-abuso é no-op sem ele")
+
     last_status = None
     for _ in range(25):
         resp = await client.post("/api/v1/auth/demo-login")

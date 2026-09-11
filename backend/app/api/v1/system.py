@@ -218,7 +218,23 @@ async def analytics_financeiro(
             else:
                 despesas_por_mes[mes_str] = despesas_por_mes.get(mes_str, 0) + val
 
-        all_months = sorted(set(list(receitas_por_mes) + list(despesas_por_mes)))
+        # Fase pós-166a43c (achado de disposição de tela) — antes, `all_months`
+        # só incluía meses com ALGUM lançamento; um tenant com atividade em só
+        # 1 dos `meses` pedidos devolvia uma série de 1 item, e o gráfico de
+        # barras (largura fixa do card) renderizava essa única categoria com
+        # bastante espaço em branco ao redor — mesmo em `/dashboard` quanto em
+        # `/relatorios`. Preenche a janela cheia de `meses` meses (terminando
+        # no mês atual) com zero nos que não têm lançamento, então o rótulo
+        # "últimos N meses" corresponde ao que é exibido de verdade.
+        janela_meses = []
+        ano_ref, mes_ref = now.year, now.month
+        for _ in range(meses):
+            janela_meses.append(f"{ano_ref:04d}-{mes_ref:02d}")
+            mes_ref -= 1
+            if mes_ref == 0:
+                mes_ref = 12
+                ano_ref -= 1
+        all_months = sorted(set(janela_meses) | set(receitas_por_mes) | set(despesas_por_mes))
         mensal = [
             {
                 "mes": m,

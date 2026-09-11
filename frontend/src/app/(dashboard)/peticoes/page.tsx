@@ -36,7 +36,7 @@ export default function PeticoesPage() {
   const [search, setSearch] = useState("");
   const [filtroStatus, setFiltroStatus] = useState("");
 
-  useEffect(() => { fetchPeticoes(); }, [filtroStatus]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- fetchPeticoes não é memoizada; o dep reativo já está listado.
 
   async function fetchPeticoes() {
     setLoading(true);

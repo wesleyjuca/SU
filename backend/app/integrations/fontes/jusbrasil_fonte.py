@@ -34,6 +34,11 @@ log = structlog.get_logger()
 JUSBRASIL_BASE_DEFAULT = "https://api.jusbrasil.com.br"
 _TIMEOUT = 25.0
 
+# Sentinela para distinguir "disjuntor aberto/erro real" de "consulta vazia" —
+# mesmo padrão já usado em datajud_fonte.py/pdpj_fonte.py/escavador_fonte.py/
+# judit_fonte.py.
+_FALHA = object()
+
 
 def _extrai_lista(data) -> list:
     if isinstance(data, list):
@@ -58,7 +63,11 @@ class JusbrasilFonte(FonteProcessual):
     def _headers(self) -> dict:
         return {"Authorization": f"Bearer {self._token}", "Accept": "application/json"}
 
-    async def _get(self, path: str, params: dict | None = None):
+    async def _get(self, path: str, params: dict | None = None, *, sinalizar_falha: bool = False):
+        # `sinalizar_falha=True` devolve o sentinela `_FALHA` (não `None`)
+        # quando o disjuntor está aberto/a chamada falhou de verdade —
+        # `partes()` traduz isso pro chamador final; achado da rodada
+        # pós-166a43c (mesma classe já corrigida pro DataJud/PDPJ/Escavador/Judit).
         if not self._token:
             return None
 
@@ -69,13 +78,15 @@ class JusbrasilFonte(FonteProcessual):
                     log.warning("jusbrasil_http", status=resp.status_code, path=path)
                     raise RuntimeError(f"jusbrasil status {resp.status_code}")
                 return resp.json()
-        return await self._breaker.run(_f, default=None)
+        return await self._breaker.run(_f, default=_FALHA if sinalizar_falha else None)
 
-    async def _processo(self, numero_cnj: str) -> dict | None:
+    async def _processo(self, numero_cnj: str, *, sinalizar_falha: bool = False):
         numero = re.sub(r"\D", "", numero_cnj or "")
         if not numero:
             return None
-        data = await self._get(f"/api/v1/processos/{numero}")
+        data = await self._get(f"/api/v1/processos/{numero}", sinalizar_falha=sinalizar_falha)
+        if sinalizar_falha and data is _FALHA:
+            return _FALHA
         if isinstance(data, dict):
             if isinstance(data.get("processo"), dict):
                 return data["processo"]
@@ -124,9 +135,13 @@ class JusbrasilFonte(FonteProcessual):
     async def detalhar(self, numero_cnj: str, tribunal: str | None = None) -> dict | None:
         return await self._processo(numero_cnj)
 
-    async def partes(self, numero_cnj: str, tribunal: str | None = None) -> "list[ParteEntrada]":
+    async def partes(
+        self, numero_cnj: str, tribunal: str | None = None, *, sinalizar_falha: bool = False,
+    ) -> "list[ParteEntrada] | None":
         from app.integrations.fontes._partes import extrair_partes
-        dados = await self._processo(numero_cnj)
+        dados = await self._processo(numero_cnj, sinalizar_falha=sinalizar_falha)
+        if sinalizar_falha and dados is _FALHA:
+            return None
         return extrair_partes(dados) if dados else []
 
     async def movimentos(

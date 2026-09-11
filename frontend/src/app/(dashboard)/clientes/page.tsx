@@ -133,6 +133,7 @@ export default function ClientesPage() {
     localStorage.setItem("clientes_view", view);
   }, [view]);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- fetchClientes não é memoizada; o dep reativo já está listado.
   useEffect(() => { fetchClientes(0, false); }, [status]);
 
   useEffect(() => {

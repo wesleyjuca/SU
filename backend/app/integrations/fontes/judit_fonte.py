@@ -26,6 +26,10 @@ log = structlog.get_logger()
 JUDIT_BASE_DEFAULT = "https://requests.prod.judit.io"
 _TIMEOUT = 25.0
 
+# Sentinela para distinguir "disjuntor aberto/erro real" de "consulta vazia" —
+# mesmo padrão já usado em datajud_fonte.py/pdpj_fonte.py/escavador_fonte.py.
+_FALHA = object()
+
 
 class JuditFonte(FonteProcessual):
     nome = "judit"
@@ -36,7 +40,11 @@ class JuditFonte(FonteProcessual):
         self._base = (base_url or JUDIT_BASE_DEFAULT).rstrip("/")
         self._breaker = CircuitBreaker(name=self.nome)
 
-    async def _processo(self, numero_cnj: str) -> dict | None:
+    async def _processo(self, numero_cnj: str, *, sinalizar_falha: bool = False):
+        # `sinalizar_falha=True` devolve o sentinela `_FALHA` (não `None`)
+        # quando o disjuntor está aberto/a chamada falhou de verdade —
+        # `partes()` traduz isso pro chamador final; achado da rodada
+        # pós-166a43c (mesma classe já corrigida pro DataJud/PDPJ/Escavador).
         if not self._token:
             return None
         numero = re.sub(r"\D", "", numero_cnj or "")
@@ -62,7 +70,7 @@ class JuditFonte(FonteProcessual):
             if isinstance(data, list) and data:
                 return data[0] if isinstance(data[0], dict) else None
             return None
-        return await self._breaker.run(_f, default=None)
+        return await self._breaker.run(_f, default=_FALHA if sinalizar_falha else None)
 
     async def testar(self) -> tuple[bool, str]:
         """Sonda leve p/ validar a credencial (distingue 401/403)."""
@@ -84,9 +92,13 @@ class JuditFonte(FonteProcessual):
     async def detalhar(self, numero_cnj: str, tribunal: str | None = None) -> dict | None:
         return await self._processo(numero_cnj)
 
-    async def partes(self, numero_cnj: str, tribunal: str | None = None) -> "list[ParteEntrada]":
+    async def partes(
+        self, numero_cnj: str, tribunal: str | None = None, *, sinalizar_falha: bool = False,
+    ) -> "list[ParteEntrada] | None":
         from app.integrations.fontes._partes import extrair_partes
-        dados = await self._processo(numero_cnj)
+        dados = await self._processo(numero_cnj, sinalizar_falha=sinalizar_falha)
+        if sinalizar_falha and dados is _FALHA:
+            return None
         return extrair_partes(dados) if dados else []
 
     async def movimentos(

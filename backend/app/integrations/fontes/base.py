@@ -75,6 +75,13 @@ class FonteProcessual(ABC):
         """Andamentos do processo (opcionalmente desde `since`). Default: []."""
         return []
 
-    async def partes(self, numero_cnj: str, tribunal: str | None = None) -> list[dict]:
-        """Partes/advogados do processo (só fontes credenciadas). Default: []."""
+    async def partes(
+        self, numero_cnj: str, tribunal: str | None = None, *, sinalizar_falha: bool = False,
+    ) -> list[dict]:
+        """Partes/advogados do processo (só fontes credenciadas). Default: [].
+
+        `sinalizar_falha` aceito por compatibilidade com as 4 fontes
+        credenciadas (PDPJ/Escavador/Judit/Jusbrasil, que o suportam de
+        verdade) — aqui não há disjuntor nem chamada real, então nunca há
+        "falha" a sinalizar; sempre `[]`."""
         return []

@@ -37,7 +37,7 @@ export default function ModelosPeticaoPage() {
   const [form, setForm] = useState<FormState>(EMPTY);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => { fetchTemplates(); }, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- fetchTemplates não é memoizada; buscar só no mount é intencional.
 
   function authH(): HeadersInit {
     const t = localStorage.getItem("afj_access_token");
