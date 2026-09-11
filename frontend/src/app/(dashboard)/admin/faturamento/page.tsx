@@ -62,7 +62,7 @@ export default function FaturamentoPage() {
   const [payForm, setPayForm] = useState({ valor: "", competencia: competenciaAtual() });
   const [saving, setSaving] = useState(false);
 
-  useEffect(() => { fetchBilling(); }, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- fetchBilling não é memoizada; buscar só no mount é intencional.
 
   async function fetchBilling() {
     setLoading(true);

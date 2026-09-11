@@ -211,7 +211,7 @@ export default function DocumentosPage() {
     finally { setDeleting(null); }
   }
 
-  useEffect(() => { fetchDocs(0, false); }, [filtroTipo, filtroStatus, clientIdFiltro]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- fetchDocs não é memoizada; os deps reativos já estão listados.
 
   // Google Workspace: mostra "Salvar no Drive" apenas para quem conectou a conta
   useEffect(() => {

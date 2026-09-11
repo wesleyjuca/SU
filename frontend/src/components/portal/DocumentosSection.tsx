@@ -41,6 +41,7 @@ export function DocumentosSection() {
 
   useEffect(() => {
     if (aberto && !carregado) loadDocs();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- loadDocs não é memoizada; os deps reativos já estão listados.
   }, [aberto, carregado]);
 
   async function loadDocs() {

@@ -150,19 +150,28 @@ async def _enriquecer_partes(db, tenant_id, procs: list[tuple]) -> dict:
     teve_erro = False
     ultimo_erro = None
     for proc, tribunal in procs:
+        # Fase pós-166a43c (achado real) — `fonte.partes()` roda sob um
+        # CircuitBreaker fail-soft que NUNCA levanta (disjuntor aberto ou
+        # erro HTTP viravam `[]` silenciosamente), então o `except` abaixo
+        # nunca disparava na prática — um provedor credenciado fora do ar
+        # era reportado como "processo sem partes", indistinguível do caso
+        # genuíno. `sinalizar_falha=True` faz `partes()` devolver `None`
+        # (não `[]`) quando a causa foi falha real — só aí conta como erro.
         try:
-            partes = await fonte.partes(proc.numero_cnj, tribunal)
+            partes = await fonte.partes(proc.numero_cnj, tribunal, sinalizar_falha=True)
         except Exception as exc:
-            partes = []
-            teve_erro = True
+            partes = None
             ultimo_erro = str(exc)[:400]
+        if partes is None:
+            teve_erro = True
+            continue
         if partes:
             res = await importar_partes(db, proc, partes)
             total += res.get("novas", 0)
     # Fase 165 — registra uso REAL da credencial (não só o clique manual em
     # "Testar conexão"): resposta vazia sem exceção não é necessariamente
     # erro (o processo pode legitimamente não ter partes cadastradas ainda),
-    # então só marca ERRO quando `fonte.partes()` de fato lançou.
+    # então só marca ERRO quando a fonte de fato falhou (exceção ou `None`).
     if total > 0:
         await integration_hub.registrar_uso(db, tenant_id, fonte.nome, sucesso=True)
     elif teve_erro:

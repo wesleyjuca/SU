@@ -428,7 +428,23 @@ async def monthly_summary(
     )
     rows = result.all()
 
+    # Fase pós-166a43c (achado de disposição de tela, mesma causa de
+    # `GET /system/analytics/financeiro`) — `months` só ganhava uma entrada
+    # pra mês com lançamento PAGO; um escritório com atividade em só 1 dos 6
+    # meses devolvia uma série de 1 item, e o gráfico (largura fixa)
+    # renderizava essa única categoria cercada de espaço em branco. Preenche
+    # os 6 meses da janela (terminando no atual) com zero antes de aplicar
+    # os valores reais, pra "últimos 6 meses" corresponder ao que é exibido.
     months: dict[str, dict] = {}
+    ano_ref, mes_ref = date.today().year, date.today().month
+    for _ in range(6):
+        key = f"{ano_ref}-{mes_ref:02d}"
+        months[key] = {"mes": key, "receitas": 0.0, "despesas": 0.0}
+        mes_ref -= 1
+        if mes_ref == 0:
+            mes_ref = 12
+            ano_ref -= 1
+
     for row in rows:
         key = f"{int(row.ano)}-{int(row.mes):02d}"
         if key not in months:
@@ -438,7 +454,7 @@ async def monthly_summary(
         else:
             months[key]["despesas"] = float(row.total)
 
-    return {"data": list(months.values())}
+    return {"data": [months[k] for k in sorted(months)]}
 
 
 @router.get("/summary")

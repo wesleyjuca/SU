@@ -155,7 +155,7 @@ export default function ClienteDetailPage() {
     nome: "", cargo: "", email: "", telefone: "", whatsapp: "", is_primary: false,
   });
 
-  useEffect(() => { if (id) fetchAll(); }, [id]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- fetchAll não é memoizada; o dep reativo (id) já está listado.
 
   // Fase 232: aba Contatos só existe pra cliente PJ (representantes da empresa) —
   // pra PF o telefone/whatsapp do próprio cliente já aparece em Dados Cadastrais.

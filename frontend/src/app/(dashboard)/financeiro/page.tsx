@@ -98,7 +98,9 @@ export default function FinanceiroPage() {
     defaultValues: { tipo: "RECEITA", status: "PENDENTE" },
   });
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- funções não memoizadas; os deps reativos já estão listados.
   useEffect(() => { fetchEntries(0, false); fetchSummary(); }, [filtroTipo, filtroStatus]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- funções não memoizadas; buscar só no mount é intencional.
   useEffect(() => { fetchMonthly(); fetchOverdue(); }, []);
 
   useEffect(() => {

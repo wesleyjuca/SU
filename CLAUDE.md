@@ -936,6 +936,46 @@ nunca repetir o mesmo teste do zero.** Antes de planejar uma nova rodada:
   ativos (`cnj.py` via `base.py`, e `pdpj_fonte.py`) com o mesmo
   `curl_cffi`/`impersonate="chrome124"` do Comunica; os outros 5 ficam
   catalogados, não corrigidos.
+- **pós-166a43c** (verificação + correção faseada, cada fase corrigindo
+  algo real) — pedido explícito do usuário: "verifique o que funciona e o
+  que não funciona" + plano faseado onde cada fase deixa algo funcionando
+  corretamente, mais uma frente de disposição/layout de telas. 3 agentes
+  de auditoria em paralelo (testes backend, saúde do frontend, varredura
+  de achados conhecidos) alimentaram 5 fases de correção, todas com prova
+  bidirecional e suíte completa sem regressão ao final:
+  1. `core/security.py::is_token_blacklisted()` engolia em silêncio
+     qualquer erro do Redis (`except Exception: pass`), idêntico ao caso
+     "Redis não configurado" — corrigido pra logar o erro real (`log.
+     warning`) sem mudar o fail-open (evita regressão de disponibilidade).
+  2. As 4 fontes credenciadas de partes (Escavador/Judit/Jusbrasil/PDPJ)
+     tinham `CircuitBreaker(default=None)` sem `sinalizar_falha` — mesma
+     classe já corrigida só pro DataJud. Fechado em `partes()` (caminho
+     vivo via `oab_capture.py`), não em `movimentos()` (confirmado código
+     morto nas 4). Admin agora vê "fonte fora do ar" em vez de "0 partes".
+  3. `LGPDConsentRecord` (`client_id` + `ip_address`) fechada no
+     esquecimento/exportação — 9ª ocorrência da classe "tabela com PII do
+     titular esquecida pelo erasure", fechada antes de virar dado real
+     (hoje nenhum endpoint escreve nela).
+  4. Frontend: 26 warnings `react-hooks/exhaustive-deps` auditados um a
+     um (todos "fetch não memoizado, deps reativos já corretos" — documentados
+     com `eslint-disable-next-line` + razão, nunca silenciados às cegas) +
+     2 `<img>` de `/login` trocados por `next/image`.
+  5. **Achado de disposição de tela, root-cause, não cosmético**: `GET
+     /system/analytics/financeiro` e `GET /financial/monthly` só incluíam
+     no array retornado os meses com ALGUM lançamento — um tenant com
+     atividade em só 1 dos 6 meses pedidos devolvia uma série de 1 item, e
+     o gráfico de barras (largura fixa do card) renderizava essa única
+     categoria cercada de espaço em branco, tanto em `/dashboard` quanto
+     em `/financeiro`. Confirmado ao vivo via Playwright antes/depois:
+     corrigido preenchendo a janela cheia de 6 meses (zerando os sem
+     lançamento) nos dois endpoints — o rótulo "últimos 6 meses" passa a
+     bater com o que é exibido de verdade.
+  Baseline real medida antes de mexer em código (Fase 0): `ruff` limpo,
+  `test_unit` 932/4 skip batendo com o documentado, `test_api` com 1 falha
+  de ambiente (`test_demo_login_rate_limit_anti_abuso` não degradava
+  quando Redis está ausente — corrigido pra pular honestamente, mesmo
+  padrão de `test_health.py`). Catálogo `.jus.br` em `httpx` puro
+  reconfirmado sem mudança (decisão de fase anterior, fora de escopo).
 
 Histórico completo (achados, decisões de escopo, correções, verificações
 empíricas de cada fase) fica em `HISTORICO_FASES.md` — movido pra fora

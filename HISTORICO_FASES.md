@@ -6579,3 +6579,225 @@ reportado** pra DataJud/PDPJ especificamente — esta é uma correção
 preventiva/de consistência (mesma causa-raiz já comprovada em produção
 pro Comunica, aplicada por precaução aos 2 outros pontos ativos que
 compartilham o mesmo padrão de risco), não resposta a um bug relatado.
+
+---
+
+## Fase pós-166a43c — verificação real + correção faseada + disposição de telas
+
+### Context
+
+Usuário pediu, após o merge do PR #261 (curl_cffi/TLS impersonation):
+"verifique o que funciona e o que não funciona e elabore um plano de
+correção/aprimoramento de forma que em cada fase algo do sistema passe a
+funcionar corretamente. sugira correções de lógica." — diferente de toda
+rodada de "teste geral" anterior deste projeto (sempre audit-only, correção
+vira fase separada só depois de o usuário confirmar), o pedido já veio
+pedindo correção incremental na mesma rodada. No meio do turno, acrescentou:
+incluir uma frente de aprimoramento de disposição/layout das telas.
+
+### Investigação (3 agentes em paralelo, medição real, não releitura de docs)
+
+1. **Saúde real da suíte de testes** — bloqueado em Plan Mode (só leitura
+   permitida); virou a Fase 0 de execução.
+2. **Saúde real do frontend** — `tsc --noEmit` 0 erros; `npm run build`
+   sucesso completo; `eslint` 0 erros/28 warnings (26 `exhaustive-deps` + 2
+   `no-img-element`); migração de `window.confirm`/`prompt` pra
+   `useConfirmDialog` (Fase 241) reconfirmada 100% completa.
+3. **Varredura de achados conhecidos** — reconfirmou os 5 itens já
+   catalogados (5 integrações `.jus.br` em `httpx` puro, endpoints órfãos,
+   trigger de `audit_logs`) sem mudança de status, e achou 2 instâncias
+   NOVAS dos padrões de risco já documentados no projeto:
+   - `core/security.py::is_token_blacklisted()` — `except Exception: pass`
+     tratava "Redis não configurado" (degradado, documentado) e "Redis
+     configurado mas a chamada falhou de verdade" como o MESMO caso — gate
+     de revogação de token usado por `get_current_user()` (praticamente
+     toda rota autenticada, não só WS) e `ws.py`. Um erro transitório do
+     Redis fazia um token JÁ deslogado continuar aceito, em silêncio.
+   - `CircuitBreaker(default=None)` sem `sinalizar_falha` em
+     `escavador_fonte.py`/`judit_fonte.py`/`jusbrasil_fonte.py`/
+     `pdpj_fonte.py` — mesma classe já corrigida só pro DataJud.
+     `movimentos()` das 4 é código morto (zero chamador, confirmado por
+     grep); `partes()` é usado ativamente via `oab_capture.py::
+     _enriquecer_partes()`, cujo comentário já assumia (incorretamente)
+     que a fonte "levanta" em caso de erro — como o breaker nunca deixa
+     isso acontecer, um provedor credenciado fora do ar era reportado
+     como "0 partes encontradas", sem sinalizar nada pro admin.
+   - `LGPDConsentRecord` (`client_id` FK + `ip_address` PII) não tocada
+     por `erase_client_data`/`export_client_data` — 9ª ocorrência da
+     classe já catalogada 8+ vezes, mas sem risco ativo hoje (nenhum
+     endpoint grava linha nela; só `demo_reset.py` apaga em bulk).
+
+### Fase 0 — baseline real (Postgres novo, sem Redis, boot via lifespan)
+
+`ruff check app/` limpo. `test_unit`: 932 passed/4 skipped, batendo com o
+documentado. `test_api`: 1 falha real —
+`test_demo_login_rate_limit_anti_abuso` fazia 25 tentativas esperando 429,
+mas sem Redis (config exata do CI) o rate-limit inteiro é no-op
+(`get_redis()` devolve `None`), então nunca dispara — o teste não
+distinguia "ambiente degradado, sem enforcement possível" de "bug real",
+mesma classe de armadilha já documentada pra `test_health.py`. Corrigido:
+o teste agora pula honestamente (`pytest.skip`) quando `get_redis()`
+devolve `None`, e continua exercitando o 429 de verdade quando Redis está
+disponível (confirmado nos dois sentidos, ligando/desligando Redis local).
+
+### Fase 1 — `is_token_blacklisted()` para de esconder erro do Redis
+
+`backend/app/core/security.py` — reescrito distinguindo os 2 casos:
+`get_redis()` devolvendo `None` (config degradada, continua silencioso) vs.
+uma exceção real na conexão/`.exists()` (agora `log.warning(
+"blacklist_check_failed", ...)`). **Mantém fail-open** — virar fail-closed
+derrubaria login do sistema inteiro num blip do Redis, regressão de
+disponibilidade pior que o bug original; o objetivo é parar de esconder o
+sinal, não mudar o comportamento default. 4 testes novos em
+`test_security.py` (sem Redis → sem log; erro real do `.exists()` → log +
+fail-open preservado; `get_redis()` em si falhando → log; token
+efetivamente na blacklist → detectado). Prova nos dois sentidos: revertido
+via `git stash`, 3 dos 4 testes novos falham (`AttributeError: module
+'app.core.security' has no attribute 'log'`).
+
+### Fase 2 — `sinalizar_falha` nas 4 fontes credenciadas de partes
+
+Mesmo padrão já provado em `datajud_fonte.py` (sentinela `_FALHA` +
+parâmetro opt-in `sinalizar_falha: bool = False`), aplicado só em
+`partes()` das 4 fontes (`movimentos()` fica de fora — código morto,
+mesma decisão de escopo já usada pro DataJud). Ponto fino: o sentinela
+precisa **escapar** do método interno (`_get`/`_processo`/`_get_processo`)
+sem ser convertido de volta a `None` ali dentro — senão a distinção se
+perde antes de chegar em `partes()` (achado durante a implementação,
+corrigido antes de testar). `oab_capture.py::_enriquecer_partes()`
+atualizado pra chamar com `sinalizar_falha=True` e tratar `None` (erro
+real) separado de `[]` (processo genuinamente sem partes) — só o primeiro
+conta como falha de uso da integração (`registrar_uso(sucesso=False)`).
+
+**Achado ao rodar a suíte, não hipótese**: `test_oab_capture_registrar_uso.py`
+tinha um fake (`_FakeFonte.partes(self, numero_cnj, tribunal)`) sem o
+kwarg novo — a chamada real com `sinalizar_falha=True` batia num
+`TypeError` capturado pelo `except Exception` do código novo, virando
+"erro do serviço externo" nos 3 testes que exercitam esse fake. Mesma
+armadilha documentada no CLAUDE.md ("fake com assinatura desatualizada").
+Corrigido com `**kwargs` no fake, não no código de produção.
+
+Teste novo dedicado (`test_fontes_credenciadas_sinalizar_falha.py`, 5
+casos — 1 por fonte + 1 de ponta a ponta via `_enriquecer_partes`):
+disjuntor fechado + cliente HTTP fake que teria sucesso funciona nos 2
+modos; disjuntor forçado aberto (3 falhas) faz `partes()` devolver `None`
+só com `sinalizar_falha=True`, nunca chamando a rede fake (prova de que o
+disjuntor intercepta antes). Prova nos dois sentidos via `git stash`: os 5
+falham revertido.
+
+### Fase 3 — `LGPDConsentRecord` no ciclo de esquecimento/exportação
+
+`backend/app/api/v1/lgpd.py` — mesmo padrão já usado 10+ vezes no
+arquivo: bloco em `erase_client_data` zerando `ip_address` (preserva
+`consentimento`/`base_legal`/`tipo_dado`/`timestamp`, que são metadado de
+auditoria de consentimento, não PII do titular) + seção espelhada em
+`export_client_data`. Sem migração — tabela já existe, só nunca era
+referenciada. Teste novo (inserção direta via ORM, já que nenhum endpoint
+escreve na tabela): cria cliente → insere `LGPDConsentRecord` com IP
+marcador → confirma no export → esquece → confirma `ip_address is None`
+mas os demais campos sobrevivem. Prova nos dois sentidos via `git stash`.
+
+### Fase 4 — Frontend: `exhaustive-deps` + `no-img-element`
+
+Cada um dos 26 warnings foi lido individualmente antes de decidir — todos
+seguem o mesmo padrão intencional: uma função `fetchX`/`loadX` não
+memoizada (`useCallback`), referenciada dentro de um `useEffect` cujo
+array de deps já lista corretamente os valores reativos (filtros, `id` de
+rota) mas omite a função em si — de propósito, porque incluí-la causaria
+um loop infinito (a função muda de referência a cada render, e chamá-la de
+novo dispara `setState` → novo render → nova referência → efeito dispara
+de novo). Confirmado caso a caso, inclusive o de maior escopo
+(`relatorios/page.tsx`, 10 deps faltando — guard `!gestao`/`!financial`/
+etc. já é o cache "busca 1x por aba"). Documentado com
+`eslint-disable-next-line react-hooks/exhaustive-deps` + comentário
+explicando o motivo em cada um — nunca silenciado sem justificar, e nunca
+um refactor em massa pra `useCallback` (custo/risco desproporcional a
+warnings que já eram comportamento correto). Achado de mecânica do
+ESLint: o disable-next-line precisa estar na linha imediatamente ANTES da
+que tem o array de deps (`}, [...]);`), não antes do `useEffect(() => {`
+de abertura — comentário posicionado errado nos primeiros 21 sites não
+suprimiu nada; corrigido reposicionando. Os 2 `<img>` de
+`(auth)/login/page.tsx` viraram `next/image` (dimensões intrínsecas do
+PNG, 599×880, obtidas via `file`, já que Next exige `width`/`height`
+explícitos sem `fill`). `tsc --noEmit`, `eslint` (0 warnings) e
+`npm run build` limpos ao final.
+
+### Fase 5 — Disposição/layout das telas (pedido do usuário, achado real)
+
+Walkthrough Playwright real (Chromium do sandbox, stack completa —
+Postgres+Redis+uvicorn+`npm run dev`, login como ADMIN) em 9 telas
+(Dashboard, Processos, Clientes, Financeiro, Agenda, Configurações, Mapa,
+Relatórios, Auditoria) em 2 larguras (1440px/390px). Nenhuma tela com
+scroll horizontal; nenhum erro de console atribuível (só 429 esperado de
+rate-limit, do próprio script navegando rápido demais).
+
+**Achado real, root-cause, não cosmético**: o card "Receitas vs Despesas
+— últimos 6 meses" (`/dashboard`, via `MiniFinancialChart`) renderizava
+com a MAIORIA do card em branco — só 1-2 categorias visíveis, cercadas de
+espaço vazio, contradizendo o próprio rótulo "últimos 6 meses". Mesmo
+sintoma reconfirmado de forma independente em `/financeiro` (componente
+`FinanceiroCharts`, chart diferente, mesma causa). Rastreado até 2
+endpoints backend distintos:
+- `GET /system/analytics/financeiro` (`system.py::analytics_financeiro`) —
+  `all_months = sorted(set(receitas_por_mes) | ...)` só incluía meses com
+  ALGUM `FinancialEntry`, nunca preenchia a janela pedida (`meses=6`).
+- `GET /financial/monthly` (`financial.py::monthly_summary`) — mesmo
+  padrão: `months` dict só ganhava entrada pra mês com lançamento `PAGO`.
+
+Um tenant com atividade em só 1 dos 6 meses (caso comum: escritório
+recém-cadastrado, ou dado de teste/demo) devolvia uma série de 1 item — o
+gráfico (largura fixa do card) espalhava essa única categoria com bastante
+espaço em branco ao redor, em vez de mostrar 6 meses proporcionais com os
+5 sem movimento simplesmente zerados. Corrigido nos 2 endpoints:
+preenchimento da janela completa de meses (terminando no mês atual) com
+zero antes de aplicar os valores reais — o rótulo "últimos N meses" passa
+a bater com o que é exibido. Confirmado visualmente antes/depois via
+Playwright (screenshot com 1 bar perdida num mar de espaço em branco →
+screenshot com 6 meses no eixo X, 5 zerados + 1 com dado real,
+proporcionalmente distribuídos). Achado de operação: os 2 endpoints têm
+cache Redis (`_cached`, TTL 300s) — o fix só ficou visível depois de
+`redis-cli DEL` na chave `analytics:fin:{tenant}:{meses}` (reiniciar o
+uvicorn não invalida o cache).
+
+Teste novo (`test_financeiro_serie_mensal_preenchida.py`, 2 casos — 1 por
+endpoint): tenant com 1 único `FinancialEntry` PAGO no mês corrente →
+confirma que a série devolvida tem exatamente 6 itens, em ordem
+cronológica, com só 1 tendo valor não-zero. Prova nos dois sentidos via
+`git stash`: os 2 falham revertido (`len(dados) == 1`, não 6).
+
+### Verificado (todas as 5 fases juntas)
+
+Suíte completa na configuração EXATA do runner (banco criado do zero,
+`REDIS_URL=` vazio, boot via lifespan real — nunca `alembic upgrade head`
+cru): `ruff check app/` limpo; `tests/test_unit/` 941 passed/4 skipped;
+`tests/test_api/` rodado 2× seguidas contra o mesmo banco — 195/2 skip e
+193/4 skip respectivamente (mesma classe de skip condicional a
+rate-limit/seed já documentada, sem regressão de ordem/estado; zero
+falha nas 2 execuções). Frontend: `tsc --noEmit` 0 erros, `eslint` 0
+erros/0 warnings, `npm run build` sucesso completo (46 páginas).
+
+**Achado operacional durante a verificação, não regressão**: uma medição
+intermediária com Redis LIGADO manualmente (pra testar a Fase 1) mostrou
+2 falhas na 2ª execução seguida de `test_api` — `test_demo_login_*`
+recebendo 429 real, porque a suíte de testes com Redis disponível
+consome o próprio orçamento de rate-limit do `demo-login` entre execuções
+rápidas sucessivas. Não é regressão desta sessão — é o comportamento
+correto do rate-limiter funcionando de verdade, só não é a configuração
+de paridade com o CI (que não tem Redis). Banco recriado do zero e Redis
+desligado antes da medição final registrada acima.
+
+### Arquivos principais
+- `backend/app/core/security.py`, `backend/tests/test_unit/test_security.py`
+- `backend/app/integrations/fontes/{base,escavador_fonte,judit_fonte,
+  jusbrasil_fonte,pdpj_fonte}.py`, `backend/app/services/oab_capture.py`,
+  `backend/tests/test_unit/{test_fontes_credenciadas_sinalizar_falha,
+  test_oab_capture_registrar_uso}.py`
+- `backend/app/api/v1/lgpd.py`,
+  `backend/tests/test_api/test_lgpd_erasure_reaches_consent_record_fase_166a43c.py`
+- `backend/app/api/v1/{system,financial}.py`,
+  `backend/tests/test_api/test_financeiro_serie_mensal_preenchida.py`
+- `backend/tests/test_api/test_demo_login.py`
+- 21 arquivos de página/componente do frontend (warnings de
+  `exhaustive-deps`) + `frontend/src/app/(auth)/login/page.tsx`
+  (`next/image`)
+- `CLAUDE.md`, `HISTORICO_FASES.md`

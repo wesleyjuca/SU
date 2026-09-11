@@ -48,7 +48,7 @@ export function ClientPortalAccessPanel() {
   const [linkGerado, setLinkGerado] = useState<{ nome: string; url: string; expires_at: string } | null>(null);
   const [copiado, setCopiado] = useState(false);
 
-  useEffect(() => { fetchRows(); }, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- fetchRows não é memoizada; buscar só no mount é intencional.
 
   async function fetchRows() {
     setLoading(true);

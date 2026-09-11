@@ -491,6 +491,23 @@ async def erase_client_data(
         if prazo.descricao:
             prazo.descricao = "[Conteúdo removido — LGPD art. 18 IV]"
 
+    # Rodada pós-166a43c (achado real de auditoria) — `LGPDConsentRecord`
+    # tem `client_id` (FK) e `ip_address` (PII), mas nunca era tocada pelo
+    # esquecimento. Hoje nenhum endpoint grava linha nela (só
+    # `demo_reset.py` apaga em bulk pro tenant demo) — sem risco ativo, mas
+    # é a mesma classe de bug já catalogada 8+ vezes neste projeto (tabela
+    # com PII do titular esquecida pelo erasure), com o schema já pronto
+    # pra um dia ser usada. `consentimento`/`base_legal`/`tipo_dado`/
+    # `timestamp` não identificam o titular — ficam, é metadado de
+    # auditoria de consentimento, não PII.
+    from app.models.audit_log import LGPDConsentRecord
+
+    consentimentos_result = await db.execute(
+        select(LGPDConsentRecord).where(LGPDConsentRecord.client_id == uuid.UUID(client_id))
+    )
+    for registro in consentimentos_result.scalars().all():
+        registro.ip_address = None
+
     await db.flush()
 
     # Registra auditoria (tenant-scoped — antes nascia sem tenant_id e sumia do
@@ -702,6 +719,14 @@ async def export_client_data(
     )
     memoria_agentes = memory_result.scalars().all()
 
+    # Rodada pós-166a43c — mesmo alcance de erase_client_data acima
+    # (LGPDConsentRecord.client_id); export mostra o dado real.
+    from app.models.audit_log import LGPDConsentRecord
+    consentimentos_result = await db.execute(
+        select(LGPDConsentRecord).where(LGPDConsentRecord.client_id == uuid.UUID(client_id))
+    )
+    consentimentos = consentimentos_result.scalars().all()
+
     from app.models.audit_log import AuditLog
     db.add(AuditLog(
         user_id=current_user.id,
@@ -895,6 +920,17 @@ async def export_client_data(
                 "created_at": m.created_at.isoformat(),
             }
             for m in memoria_agentes
+        ],
+        "consentimentos_lgpd": [
+            {
+                "id": str(c.id),
+                "tipo_dado": c.tipo_dado,
+                "consentimento": c.consentimento,
+                "base_legal": c.base_legal,
+                "ip_address": c.ip_address,
+                "timestamp": c.timestamp.isoformat(),
+            }
+            for c in consentimentos
         ],
     }
 

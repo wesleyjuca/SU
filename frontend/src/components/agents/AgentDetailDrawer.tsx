@@ -84,6 +84,7 @@ export function AgentDetailDrawer({ agentName, onClose }: AgentDetailDrawerProps
         setChangeSummary("");
       })
       .catch(() => toast.error("Erro ao carregar prompt."));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- toast (useToast) muda de referência a cada render; os deps reativos já estão listados.
   }, [agentName, activeSlot]);
 
   async function salvar(restaurarPadrao = false) {

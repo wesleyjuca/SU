@@ -106,6 +106,7 @@ export default function ProcessosPage() {
 
   useEffect(() => {
     fetchProcessos(0, false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fetchProcessos não é memoizada; os deps reativos já estão listados.
   }, [filtroArea, somenteMeus]);
 
   // Fase 160 — busca server-side (numero_cnj/tribunal via GET /processes?q=),

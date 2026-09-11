@@ -367,6 +367,7 @@ export default function ProcessoDetailPage() {
   useEffect(() => {
     if (id) fetchAll();
     fetchTeses();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fetchAll/fetchTeses não são memoizadas; o dep reativo (id) já está listado.
   }, [id]);
 
   async function fetchAll() {

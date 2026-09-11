@@ -1,5 +1,6 @@
 "use client";
 import { useState } from "react";
+import Image from "next/image";
 import { AlertCircle, Eye, EyeOff } from "lucide-react";
 
 // Sempre relativo (mesma origem): o rewrite do Next proxya para o backend
@@ -104,9 +105,12 @@ export default function LoginPage() {
         <div className="absolute right-0 top-0 bottom-0 w-px bg-gradient-to-b from-transparent via-afj-gold/40 to-transparent" />
 
         <div className="relative z-10 flex flex-col items-center text-center">
-          <img
+          <Image
             src="/logo-afj-mark.png"
             alt="Almeida, Freire & Jucá Advogados"
+            width={599}
+            height={880}
+            priority
             className="h-28 w-auto mb-8"
           />
 
@@ -138,9 +142,11 @@ export default function LoginPage() {
         <div className="w-full max-w-sm">
           {/* Logo mobile */}
           <div className="lg:hidden flex flex-col items-center mb-8">
-            <img
+            <Image
               src="/logo-afj-mark.png"
               alt="Almeida, Freire & Jucá Advogados"
+              width={599}
+              height={880}
               className="h-16 w-auto mb-4"
             />
             <p className="font-display text-afj-black font-semibold tracking-[0.1em] uppercase text-lg">

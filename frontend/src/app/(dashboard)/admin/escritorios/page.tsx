@@ -56,7 +56,7 @@ export default function EscritoriosPage() {
   const [copied, setCopied] = useState(false);
   const [toggling, setToggling] = useState<string | null>(null);
 
-  useEffect(() => { fetchTenants(); }, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- fetchTenants não é memoizada; incluí-la reexecutaria o efeito a cada render (ela sempre muda de referência).
 
   async function fetchTenants() {
     setLoading(true);

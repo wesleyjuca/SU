@@ -70,10 +70,12 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         if (stored) setUser(JSON.parse(stored));
       } catch {}
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- hidrata só uma vez no mount; `user`/`setUser` mudando não deve reexecutar isto.
   }, []);
 
   useEffect(() => {
     fetchAndApplyTheme().then((t) => setTheme(t)).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- setTheme (Zustand) é estável; aplicar o tema só no mount é intencional.
   }, []);
 
   return (
