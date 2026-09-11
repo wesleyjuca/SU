@@ -6801,3 +6801,203 @@ desligado antes da medição final registrada acima.
   `exhaustive-deps`) + `frontend/src/app/(auth)/login/page.tsx`
   (`next/image`)
 - `CLAUDE.md`, `HISTORICO_FASES.md`
+
+## Fase pós-262
+
+Usuário reportou, após a PR #262 (fim da fase pós-166a43c): "muitas áreas
+do sistema continuam sem funcionar" — 4 sintomas: busca de processos por
+OAB/UF sempre "não encontrado"; arquivos gerados não são salvos nas
+pastas pré-determinadas do Google Workspace; a busca que deveria
+percorrer pastas compartilhadas (ex. Doutrina) não lê os arquivos; e
+publicações não são capturadas. Pediu investigação + plano faseado de
+correção + fases de inovação/aprimoramento.
+
+**Investigação** (3 Explore agents em paralelo, leitura direta de código
++ execução de teste onde possível — nunca só suposição):
+
+1. **OAB/UF + publicações** passam pelo mesmo ponto único,
+   `comunica.py::buscar_comunicacoes()`. Confirmado que o fix de fase
+   anterior (`curl_cffi`/`impersonate="chrome124"`) está de fato no
+   código hoje (não só documentado), os 25 testes relacionados passam, e
+   nenhum bug de lógica foi encontrado em `comunica_fonte.py::
+   descobrir_por_oab` (sincronização de circuit breaker com Redis
+   correta), `oab_capture.py::capturar_por_oab` (validação de UF/OAB,
+   dedup por CNJ, sem descarte espúrio) nem `dje_monitor.py::
+   scan_publicacoes` (mesmo trace, mesmo resultado). Tentativa de
+   chamada real contra `comunicaapi.pje.jus.br` reconfirmou o bloqueio de
+   egress do sandbox (`CONNECT tunnel failed, response 403` do próprio
+   proxy — diferente do 403 do WAF documentado em produção). **Única
+   incerteza real, não resolúvel daqui**: se o fingerprint TLS do
+   `curl_cffi` de fato contorna o WAF real em produção.
+2. **Leitura da pasta Doutrina — bug real confirmado**:
+   `google_drive_sync.py::executar_sync_drive_doutrina` nunca ativava a
+   IA própria (BYOK) do admin antes de ingerir, ao contrário de TODO
+   outro fluxo RAG do sistema (`rag.py`/`documents.py`/
+   `brain_assistant.py`/`brain_insights.py`/`orchestrator.py`, todos
+   envolvidos em `user_ai_creds(...)`). Sem esse wrap,
+   `ai_creds_ctx.get()` sempre levantava `LookupError` nesse fluxo
+   específico → `_resolve_embedding_credentials()` sempre devolvia
+   `(None, None, None)` → caía sempre na chave central
+   (`settings.OPENAI_API_KEY`). Um tenant sem chave central, dependente
+   só do BYOK cadastrado em "Minha IA", tinha **100% dos arquivos
+   falhando** com `EmbeddingProviderUnavailable` — gravado em
+   `JurisprudenciaIngerida.erro` (não silencioso no banco), mas opaco pro
+   usuário final, que só via "não funciona" sem saber a causa. O resto da
+   pipeline (índice Qdrant `document_id`, paginação/recursão de
+   subpastas, chip "Doutrina AFJ" no frontend, isolamento por tenant)
+   estava correto e testado (43 testes passando) — não era a causa.
+3. **Salvamento no Google Workspace — nenhum bug de código encontrado**:
+   `google_workspace.py::_drive_upload`/`drive_upload_pdf`/
+   `drive_upload_doc`/`drive_upload_sheet` aceitam e usam
+   `parent_folder_id` corretamente; `google_integration.py`/
+   `financial.py` resolvem a pasta configurada ANTES do upload nos 3
+   call sites; erros do Google propagam (nunca mascarados,
+   `raise_for_status()` sempre chega ao chamador); `test_google_
+   workspace.py` já confirma `parents` no multipart. **Causa mais
+   provável, não confirmável sem produção**: contas conectadas ANTES do
+   escopo `drive.metadata.readonly` (fase anterior) nunca reconectaram —
+   o picker de pasta falha com 403 `escopo_insuficiente`
+   (`_classificar_erro_drive`), o admin nunca consegue configurar a
+   pasta, e o upload (que usa `drive.file`, escopo antigo, ainda válido)
+   vai pra raiz sem NENHUM erro — não é bug, é ausência de configuração
+   nunca percebida porque o aviso existente era texto discreto.
+
+**Decisões do usuário (via 2 perguntas)**: (1) pra Comunica/DJEN, em vez
+de esperar por evidência de produção, implementar uma cadeia de fallback
+de impersonation + garantir que o diagnóstico já capturado fique visível;
+(2) pra Doutrina, confirmado que o usuário quer suporte a MÚLTIPLAS
+pastas compartilhadas simultâneas (não só corrigir o bug da pasta única
+já existente).
+
+### Fase 1 — BYOK no worker de sincronização Doutrina (bug real corrigido)
+
+`executar_sync_drive_doutrina` passou a rodar a ingestão de cada tenant
+dentro de `async with user_ai_creds(db, integ.connected_by, "rag_ingest"):`
+— `TenantIntegration.connected_by` (o admin que conectou a integração)
+"empresta" a credencial BYOK pro worker em background, mesmo espírito de
+`ingest_document(..., force_system_default=False)` já usado pelo resto
+do RAG. `connected_by` ausente (linha legada) ou sem BYOK cadastrado cai
+no comportamento de sempre (chave central) — zero regressão. Teste novo
+(`test_sync_ativa_byok_do_admin_que_conectou_a_integracao`) prova nos 2
+sentidos: monkeypatcha `user_ai_creds` com um fake que registra os
+argumentos recebidos, confirma `(admin_id, "rag_ingest")`.
+
+### Fase 2 — múltiplas pastas compartilhadas (pedido do usuário)
+
+`TenantIntegration.extra_data` do provider `google_drive_doutrina` passou
+de `{folder_id, folder_name}` (singular) para `{folders: [{folder_id,
+folder_name}, ...]}` (lista) — novo `integration_hub.pastas_drive_
+doutrina(extra_data)` lê a lista nova com fallback pro par legado (um
+`extra_data` de antes desta fase vira lista de 1 item, sem
+migração/backfill). `PUT /integrations/hub/google_drive_doutrina/folder`
+saiu do caminho de escrita da Doutrina — substituído por
+`POST .../google_drive_doutrina/folders` (adiciona, idempotente por
+`folder_id` — repetir só atualiza o nome) e
+`DELETE .../google_drive_doutrina/folders/{folder_id}` (remove); o `PUT`
+antigo passou a valer só pra `google_workspace` (pasta única de
+salvamento, `_PROVIDER_PASTA_UNICA`). `executar_sync_drive_doutrina`
+passou a iterar todas as pastas configuradas do tenant — fail-soft por
+pasta (1 pasta sem acesso/removida não impede as demais; o tenant só
+termina em `ERRO` se TODAS as pastas falharem ao listar, mesma classe de
+erro que valia com 1 pasta só). `SyncRun.stats` ganhou `pastas_com_erro`
+quando aplicável. Frontend (`integracoes/page.tsx`): a seção "Pastas do
+Drive a sincronizar" virou uma lista de chips (nome + botão remover
+individual) + "Adicionar pasta" (reaproveita o `DriveFolderPicker` já
+existente, só troca o handler de `onSelect`).
+
+11 testes novos/reescritos em `test_hub_drive_folder.py` (agora cobrindo
+`pastas_drive_doutrina()`, o `PUT` restrito, e os 2 endpoints novos) + 4
+em `test_google_drive_sync.py` (BYOK, múltiplas pastas com sucesso, 1
+pasta falha/outra funciona, todas falham) — cada um provando o
+comportamento nos 2 sentidos.
+
+### Fase 3 — visibilidade de configuração no Google Workspace
+
+Sem bug de lógica a corrigir (achado confirmado por leitura completa) —
+o gap era de UX/diagnóstico. O aviso "Nenhuma pasta configurada — os
+arquivos são salvos na raiz" (que já existia, mas como texto discreto
+igual ao de "pasta configurada") virou um banner de atenção (mesmo
+padrão visual já usado pro estado de erro de sincronização da Doutrina).
+`DriveFolderPicker.tsx` ganhou um botão "Reconectar conta Google" que
+aparece só quando o erro de listagem é 401/403 (`erroPrecisaReconectar`)
+— antes só havia o texto explicando "pode ser necessário reconectar",
+sem nenhuma ação direta no ponto do erro; dispara o mesmo fluxo OAuth já
+usado pelo card principal (`conectarOAuth`, refatorado pra aceitar
+`provider: string` em vez de um objeto `HubIntegracao` completo, já que
+o picker não tem o objeto inteiro à mão).
+
+### Fase 4 — fallback de impersonation no Comunica/DJEN (mitigação
+best-effort)
+
+`buscar_comunicacoes()` passou a tentar uma cadeia de 3 fingerprints TLS
+conhecidos (`_IMPERSONATE_PROFILES = ("chrome124", "chrome120",
+"safari17")`), parando no primeiro que responder 200 — cada perfil cria
+sua própria `AsyncSession`; se a 1ª página falhar (não-200) ou a sessão
+levantar exceção, tenta o próximo perfil; uma falha em página >1 (já
+dentro de um perfil bem-sucedido) continua truncando o resultado sem
+tentar outro perfil, mesmo comportamento de antes. `stats["impersonate"]`
+registra qual perfil funcionou (sucesso) ou o último tentado (todos
+falharam) — surge automaticamente em `fonte_detalhe`, já exposto nas 2
+telas que disparam a ação (`/publicacoes`, captura por OAB em
+Configurações→Jurídico via `tenant.py`), sem mudança de UI necessária.
+Correção declaradamente best-effort: nenhum dos 3 perfis foi confirmado
+funcionando contra o domínio real (egress bloqueado neste sandbox,
+reconfirmado). 2 testes novos em `test_comunica_diagnostico.py`
+(`test_1o_perfil_falha_2o_funciona`, `test_todos_os_perfis_falham_
+diagnostico_do_ultimo`) — os 6 testes pré-existentes continuaram
+passando sem alteração (o fallback é transparente quando o 1º perfil já
+funciona, comportamento idêntico ao de antes).
+
+### Fases de inovação/aprimoramento propostas (não implementadas nesta
+sessão, registradas pro plano)
+
+- **Central de Diagnóstico de Integrações** — painel único reunindo
+  status + último erro de Comunica/DJEN, Google Drive Doutrina e Google
+  Workspace, reaproveitando os campos já existentes
+  (`last_error_detail`/`last_error_friendly`/diagnóstico por-arquivo),
+  sem exigir que o admin abra 3 telas diferentes.
+- **Fonte alternativa de descoberta de processos por OAB/UF** — se o
+  fallback de impersonation não resolver o WAF do Comunica em produção,
+  investigar se as 4 fontes credenciadas (PDPJ/Escavador/Judit/
+  Jusbrasil) também suportam descoberta de processo por OAB+UF (não só
+  enriquecimento de partes de um processo já conhecido) — precisa de
+  investigação própria antes de desenhar, feature nova.
+
+### Verificado
+
+33 testes novos/estendidos, cada um provando o comportamento nos 2
+sentidos. `ruff check app/` limpo; `python -m py_compile` nos 4 arquivos
+backend tocados; `tsc --noEmit`/`eslint` limpos no frontend (0 erros/0
+warnings nos 2 arquivos tocados). Suíte completa na configuração exata
+do runner (banco `afj_ci` recriado do zero, schema+seed via boot real da
+app — nunca `alembic upgrade head` cru —, `REDIS_URL=` vazio), 2
+execuções seguidas contra o mesmo banco: `tests/test_unit/` 956
+passed/4 skipped; `tests/test_api/` 195 passed/2 skipped na 1ª execução,
+193 passed/4 skipped na 2ª (mesma classe de skip condicional a
+rate-limit já documentada, sem regressão de ordem/estado, zero falha nas
+2 execuções).
+
+**O que este sandbox não pode provar**: se a cadeia de fallback de
+impersonation de fato resolve o bloqueio do WAF do Comunica/DJEN em
+produção, e se o motivo real do sintoma "arquivos não salvos no
+Workspace" é de fato reconexão pendente — os 2 exigem confirmação com
+dado real de produção, fora do alcance deste sandbox (egress bloqueado).
+Pedir ao usuário pra testar após o deploy e reportar: (a) se OAB/UF e
+publicações voltaram a funcionar, com o novo `fonte_detalhe` (agora
+citando qual perfil de impersonation foi tentado) se ainda falharem; (b)
+se reconectar o Google Workspace (Integrações → Google Workspace →
+Escolher pasta, usando o botão "Reconectar" novo caso apareça) resolve o
+salvamento.
+
+### Arquivos principais
+- `backend/app/workers/tasks/google_drive_sync.py`,
+  `backend/tests/test_unit/{test_google_drive_sync,
+  test_google_drive_sync_dedup_real_qdrant}.py`
+- `backend/app/services/integration_hub.py`,
+  `backend/app/api/v1/integrations_hub.py`,
+  `backend/tests/test_unit/test_hub_drive_folder.py`
+- `backend/app/integrations/dje/comunica.py`,
+  `backend/tests/test_unit/test_comunica_diagnostico.py`
+- `frontend/src/app/(dashboard)/integracoes/page.tsx`,
+  `frontend/src/components/integrations/DriveFolderPicker.tsx`
+- `CLAUDE.md`, `HISTORICO_FASES.md`

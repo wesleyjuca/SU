@@ -821,6 +821,96 @@ rediscobertas do zero a cada sessão — contexto completo de cada uma em
     testar em produção pós-deploy e reportar o resultado (sucesso, ou o
     novo `body_snippet`, que ajuda a próxima investigação se ainda
     falhar).
+- **Fase pós-262** — usuário reportou (após a PR #262, pós-260.10) que
+  "muitas áreas continuam sem funcionar": busca de processos por OAB/UF
+  sempre "não encontrado", arquivos gerados não salvos nas pastas do
+  Google Workspace, busca não lê arquivos das pastas compartilhadas
+  (ex. Doutrina), publicações não capturadas. Investigação (3 Explore
+  agents em paralelo, leitura direta + execução de teste onde possível)
+  achou **1 bug real e confirmado**, **2 áreas sem bug de código** (causa
+  mais provável é operacional/produção, não corrigível daqui) e aplicou
+  **1 mitigação best-effort** — nenhuma das 4 é "conserta e garante", os
+  achados e limites de cada uma estão registrados abaixo, sem inflar
+  confiança:
+  - **BUG REAL, corrigido — Doutrina nunca ativava o BYOK do admin.**
+    `google_drive_sync.py::executar_sync_drive_doutrina` nunca envolvia a
+    ingestão em `user_ai_creds(...)`, ao contrário de TODO outro fluxo RAG
+    do sistema (`rag.py`/`documents.py`/`brain_assistant.py`/
+    `brain_insights.py`/`orchestrator.py`). Um tenant sem `OPENAI_API_KEY`
+    central, dependente só do BYOK cadastrado em "Minha IA", tinha 100%
+    dos arquivos falhando com `EmbeddingProviderUnavailable` — visível em
+    `entrada.erro`/`GET .../last-sync/arquivos`, mas opaco pro usuário
+    final ("não funciona", sem saber por quê). Corrigido envolvendo a
+    sincronização de cada tenant em `user_ai_creds(db, integ.connected_by,
+    "rag_ingest")` — o admin que conectou a integração empresta a
+    credencial BYOK pro worker em background; `connected_by` ausente ou
+    sem BYOK cadastrado cai no comportamento de sempre (chave central),
+    sem regressão.
+  - **PEDIDO DO USUÁRIO, implementado — múltiplas pastas compartilhadas
+    na Doutrina.** 1 pasta só (`extra_data.folder_id`) não bastava pra
+    "percorrer todas as pastas compartilhadas" que o usuário esperava.
+    `extra_data.folders` (lista de `{folder_id, folder_name}`) substitui
+    o campo singular, com leitura retrocompatível
+    (`integration_hub.pastas_drive_doutrina()`, um `extra_data` legado
+    vira lista de 1 item sem migração). Novos `POST`/`DELETE
+    .../google_drive_doutrina/folders` (adicionar/remover pasta
+    individualmente — o antigo `PUT .../folder`, pasta única, passou a
+    valer só pra `google_workspace`). O worker de sync itera todas as
+    pastas do tenant, fail-soft por pasta (1 pasta sem acesso não impede
+    as demais). Frontend: lista de chips com remover individual +
+    "Adicionar pasta" (reaproveita o `DriveFolderPicker` já existente).
+  - **SEM bug de código encontrado — salvamento no Google Workspace.**
+    `google_workspace.py`/`google_integration.py`/`financial.py`/
+    `integrations_hub.py`/`DriveFolderPicker.tsx` implementam o fluxo
+    completo e correto: `parent_folder_id` é resolvido e passado no
+    upload, erros propagam (nunca mascarados), testes confirmam `parents`
+    no multipart. **Causa mais provável, não confirmável sem produção**:
+    contas conectadas antes do escopo `drive.metadata.readonly` (fase
+    anterior) nunca reconectaram — o picker de pasta falha com 403
+    `escopo_insuficiente`, o admin nunca consegue configurar a pasta, e o
+    upload (usando o escopo antigo) vai pra raiz sem erro nenhum — não é
+    silencioso no código, é a ausência de configuração nunca percebida.
+    Reforçado: aviso "Nenhuma pasta configurada" virou banner de atenção
+    (antes era texto discreto que passava despercebido) e o picker ganhou
+    um botão "Reconectar conta Google" direto no erro 401/403 (antes só
+    tinha o texto explicando, sem ação).
+  - **MITIGAÇÃO BEST-EFFORT, não confirmável neste sandbox — Comunica/
+    DJEN (OAB/UF + publicações).** `curl_cffi`/`impersonate="chrome124"`
+    (fase anterior) já está de fato em produção no código — confirmado
+    lendo o arquivo, não só histórico —, os 25 testes relacionados
+    passam, e nenhum bug de lógica foi encontrado em `comunica_fonte.py`/
+    `oab_capture.py`/`dje_monitor.py` (circuit breaker, dedup, UF, parsing
+    — tudo conferido). Este sandbox segue sem alcançar o domínio real
+    (egress bloqueado, reconfirmado: `CONNECT tunnel failed, 403` no
+    próprio proxy) — não dá pra saber se o WAF ainda resiste a esse
+    fingerprint específico. `buscar_comunicacoes()` passou a tentar uma
+    cadeia de 3 fingerprints TLS (`chrome124` → `chrome120` → `safari17`),
+    parando no 1º que responder 200 — correção honestamente best-effort,
+    nenhum dos 3 confirmado funcionando contra o domínio real.
+    `stats["impersonate"]` registra qual perfil funcionou (ou o último
+    tentado) — o diagnóstico (`status_code`/`body_snippet`/perfis
+    tentados) já chega ao usuário via `fonte_detalhe` nas 2 telas que
+    disparam a ação (`/publicacoes`, captura por OAB em
+    Configurações→Jurídico), sem mudança de UI necessária.
+  - **Verificado**: 33 testes novos/estendidos (BYOK no worker, múltiplas
+    pastas — sucesso/pasta com erro/todas falham, endpoints add/remove de
+    pasta, fallback de impersonation — 1º falha e 2º funciona, todos
+    falham) provando cada fix nos 2 sentidos. `ruff check app/` limpo;
+    `tsc --noEmit`/`eslint` limpos no frontend. Suíte completa na
+    configuração exata do runner (banco `afj_ci` do zero via boot real da
+    app, `REDIS_URL=` vazio), 2 execuções seguidas contra o mesmo banco:
+    `tests/test_unit/` 956 passed/4 skipped, `tests/test_api/` 195
+    passed/2 skipped na 1ª e 193 passed/4 skipped na 2ª (mesma classe de
+    skip condicional a rate-limit já documentada, sem regressão de ordem/
+    estado).
+  - **O que este sandbox não pode provar**: se o fallback de impersonation
+    resolve o WAF real, e se o motivo real de "arquivos não salvos no
+    Workspace" é de fato reconexão pendente — ambos exigem confirmação em
+    produção. Pedir ao usuário pra testar após o deploy e reportar: (a)
+    se OAB/UF e publicações voltaram a funcionar, com o novo
+    `fonte_detalhe` se ainda falharem; (b) se reconectar o Google
+    Workspace (Integrações → Google Workspace → Escolher pasta) resolve o
+    salvamento.
 
 ## Teste geral do sistema (metodologia)
 

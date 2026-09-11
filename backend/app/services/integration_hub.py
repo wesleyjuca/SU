@@ -21,6 +21,25 @@ from app.models.integrations import TenantIntegration
 
 log = structlog.get_logger()
 
+
+def pastas_drive_doutrina(extra_data: dict | None) -> list[dict]:
+    """Lê as pastas de pesquisa configuradas para `google_drive_doutrina` de
+    forma retrocompatível. Fase pós-262 — a pasta única deixou de bastar
+    ("percorrer todas as pastas compartilhadas"); `extra_data` novo guarda
+    `folders: [{"folder_id","folder_name"}, ...]`. Um `extra_data` legado
+    (só `folder_id`/`folder_name` soltos, de antes desta fase) é lido como
+    lista de 1 item — sem migração/backfill, mesmo padrão já usado neste
+    projeto pra todo campo JSONB novo. Nunca lança; entrada malformada é
+    silenciosamente ignorada (fail-soft, mesmo espírito do resto do hub)."""
+    extra = extra_data or {}
+    folders = extra.get("folders")
+    if isinstance(folders, list):
+        return [f for f in folders if isinstance(f, dict) and f.get("folder_id")]
+    if extra.get("folder_id"):
+        return [{"folder_id": extra["folder_id"], "folder_name": extra.get("folder_name")}]
+    return []
+
+
 # Fase 248.3 — camada de tradução de erro amigável. `last_error_detail`
 # (exceção httpx/mensagem técnica truncada) chega até o admin não-técnico
 # em 2 lugares hoje (toast de conectar/testar/desconectar, banner de erro

@@ -15,6 +15,12 @@ interface DriveFolderPickerProps {
   provider: "google_drive_doutrina" | "google_workspace";
   onSelect: (folderId: string, folderName: string) => void;
   onClose: () => void;
+  // Fase pós-262 — dispara o mesmo fluxo OAuth do card principal (abre a
+  // tela de consentimento do Google). A causa mais provável do sintoma
+  // "erro ao listar pastas" é conta conectada antes do escopo de leitura
+  // de pasta existir — reconectar é a ação que resolve, então vira um
+  // botão de verdade no ponto do erro, não só texto explicando o porquê.
+  onReconnect?: () => void;
 }
 
 interface DrivePasta {
@@ -28,12 +34,16 @@ function authH(): HeadersInit {
   return { "Content-Type": "application/json", ...(t ? { Authorization: `Bearer ${t}` } : {}) };
 }
 
-export function DriveFolderPicker({ provider, onSelect, onClose }: DriveFolderPickerProps) {
+export function DriveFolderPicker({ provider, onSelect, onClose, onReconnect }: DriveFolderPickerProps) {
   const [pastas, setPastas] = useState<DrivePasta[]>([]);
   // breadcrumb: pilha de pastas visitadas — vazia = raiz ("Meu Drive").
   const [caminho, setCaminho] = useState<{ id: string; name: string }[]>([]);
   const [carregando, setCarregando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
+  // Fase pós-262 — só 401/403 justificam o botão "Reconectar" (token
+  // expirado/escopo insuficiente); 404/indisponível não têm nada a ver com
+  // a conexão em si.
+  const [erroPrecisaReconectar, setErroPrecisaReconectar] = useState(false);
 
   const parentAtual = caminho.length ? caminho[caminho.length - 1].id : undefined;
 
@@ -45,6 +55,7 @@ export function DriveFolderPicker({ provider, onSelect, onClose }: DriveFolderPi
   async function carregar(parentId?: string) {
     setCarregando(true);
     setErro(null);
+    setErroPrecisaReconectar(false);
     try {
       const qs = parentId ? `?parent_id=${encodeURIComponent(parentId)}` : "";
       const res = await fetch(`/api/v1/integrations/hub/${provider}/folders${qs}`, { headers: authH() });
@@ -53,8 +64,10 @@ export function DriveFolderPicker({ provider, onSelect, onClose }: DriveFolderPi
         setPastas(d.pastas || []);
       } else if (res.status === 401) {
         setErro("O token expirou ou foi revogado — reconecte a integração antes de escolher a pasta.");
+        setErroPrecisaReconectar(true);
       } else if (res.status === 403) {
         setErro(d.detail || "Permissão negada — pode ser necessário reconectar para conceder acesso a pastas.");
+        setErroPrecisaReconectar(true);
       } else if (res.status === 404) {
         setErro(d.detail || "Pasta não encontrada — pode ter sido removida.");
       } else {
@@ -117,7 +130,18 @@ export function DriveFolderPicker({ provider, onSelect, onClose }: DriveFolderPi
               <Loader2 size={16} className="animate-spin text-afj-gold" />
             </div>
           ) : erro ? (
-            <p className="p-4 text-xs text-red-600">{erro}</p>
+            <div className="p-4">
+              <p className="text-xs text-red-600">{erro}</p>
+              {erroPrecisaReconectar && onReconnect && (
+                <button
+                  type="button"
+                  onClick={onReconnect}
+                  className="btn-afj-outline text-xs py-1.5 px-3 rounded-sm mt-2.5"
+                >
+                  Reconectar conta Google
+                </button>
+              )}
+            </div>
           ) : pastas.length === 0 ? (
             <p className="p-4 text-xs text-afj-black/45">Nenhuma subpasta aqui.</p>
           ) : (
