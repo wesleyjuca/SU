@@ -187,12 +187,32 @@ async def embed_text_with_meta(
 async def embed_batch_with_meta(
     texts: list[str], *, force_system_default: bool = False
 ) -> tuple[list[list[float]], str, str]:
-    """Retorna `(vetores, provider, model)` para um batch de textos."""
+    """Retorna `(vetores, provider, model)` para um batch de textos.
+
+    Achado real de produção: a API do Gemini rejeita
+    (`BatchEmbedContentsRequest.requests: at most 100 requests can be in
+    one batch`, HTTP 400) qualquer chamada com mais de 100 itens — teto
+    ausente na API da OpenAI, que aceita a lista inteira de uma vez sem
+    fatiar. Diplomas legais inteiros (chunking por artigo, `chunker.py`)
+    facilmente passam de 100 chunks. Fatiamento por provedor
+    (`embedding_max_batch`, `ai_providers.py`) — `None` preserva o
+    comportamento de sempre (1 chamada), um inteiro fatia em lotes
+    sequenciais, concatenando os vetores na ordem original de entrada.
+    """
     client, provider, model, dimensions = get_embeddings_client(force_system_default=force_system_default)
     cleaned = [t.replace("\n", " ").strip() or " " for t in texts]
 
-    response = await client.embeddings.create(input=cleaned, model=model, dimensions=dimensions)
-    vetores = [item.embedding for item in sorted(response.data, key=lambda x: x.index)]
+    max_batch = (get_provider(provider) or {}).get("embedding_max_batch")
+    lotes = (
+        [cleaned]
+        if not max_batch or len(cleaned) <= max_batch
+        else [cleaned[i:i + max_batch] for i in range(0, len(cleaned), max_batch)]
+    )
+
+    vetores: list[list[float]] = []
+    for lote in lotes:
+        response = await client.embeddings.create(input=lote, model=model, dimensions=dimensions)
+        vetores.extend(item.embedding for item in sorted(response.data, key=lambda x: x.index))
     return vetores, provider, model
 
 

@@ -27,3 +27,31 @@ async def test_oauth_callback_nao_exige_autenticacao(client: AsyncClient):
     # state inválido (não assinado por nós) -> redirect de erro, não 401/500
     assert res.status_code in (302, 307)
     assert "hub_oauth=google_workspace_erro" in res.headers.get("location", "")
+
+
+async def test_oauth_callback_sem_code_redireciona_gracioso(client: AsyncClient):
+    """Achado real de produção (auditoria pós-262.2): quando o Google nega a
+    autorização (usuário cancela, política de admin bloqueia o escopo), ele
+    redireciona com `?error=...` e SEM `code`. Antes do fix, `code` era
+    `Query(...)` obrigatório — o FastAPI devolvia um 422 cru (JSON de erro de
+    validação) direto no navegador, em vez do redirect gracioso que os
+    outros branches de erro do callback já implementam."""
+    res = await client.get(
+        "/api/v1/integrations/hub/google_workspace/oauth/callback",
+        params={"error": "access_denied", "state": "fake-state"},
+        follow_redirects=False,
+    )
+    assert res.status_code in (302, 307)
+    assert "hub_oauth=google_workspace_erro" in res.headers.get("location", "")
+
+
+async def test_oauth_callback_sem_code_nem_error_redireciona_gracioso(client: AsyncClient):
+    """Mesmo cenário, sem nenhum `error=` explícito — só `code` ausente já
+    precisa bastar para não estourar 422."""
+    res = await client.get(
+        "/api/v1/integrations/hub/google_workspace/oauth/callback",
+        params={"state": "fake-state"},
+        follow_redirects=False,
+    )
+    assert res.status_code in (302, 307)
+    assert "hub_oauth=google_workspace_erro" in res.headers.get("location", "")

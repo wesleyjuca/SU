@@ -102,6 +102,13 @@ async def scan_publicacoes(db, tenant_id: uuid.UUID | None = None, dias_retro: i
     # poder distinguir os dois casos na mensagem ao usuário.
     fonte_respondeu = False
     ultimo_erro: str | None = None
+    # Achado real (auditoria pós-262.2): `stats["impersonate"]`/
+    # `perfis_rejeitados_localmente`/`status_code` (comunica.py) só
+    # chegavam à resposta HTTP quando o usuário disparava a varredura
+    # manualmente — a varredura AUTOMÁTICA diária (Celery Beat) gravava só
+    # `fonte_detalhe` (texto) no SyncRun, sem esse detalhe estruturado.
+    # Fecha a lacuna sem exigir ação manual pra diagnosticar produção.
+    ultimo_diagnostico: dict | None = None
     # Fase 167 — sem este try/except em volta do loop inteiro, uma exceção
     # não tratada no meio da lista de OABs (o circuit breaker da Fase 142
     # só evita chamadas REPETIDAS após falhas consecutivas, não intercepta
@@ -120,6 +127,10 @@ async def scan_publicacoes(db, tenant_id: uuid.UUID | None = None, dias_retro: i
                 breaker.record_failure()
                 if st.get("error"):
                     ultimo_erro = st["error"]
+                    ultimo_diagnostico = {
+                        k: st[k] for k in ("impersonate", "perfis_rejeitados_localmente", "status_code")
+                        if k in st
+                    }
             else:
                 breaker.record_success()
                 if st.get("ok"):
@@ -252,6 +263,7 @@ async def scan_publicacoes(db, tenant_id: uuid.UUID | None = None, dias_retro: i
             "comunica_bloqueada": breaker.state != "closed", "oabs_puladas_circuito": puladas_circuito,
             "erro": str(exc)[:300],
             "fonte_respondeu": fonte_respondeu, "fonte_detalhe": ultimo_erro,
+            "ultimo_diagnostico": ultimo_diagnostico,
         }
         await finalizar_sync(db, sync, "ERRO", resultado)
         await db.commit()
@@ -269,6 +281,11 @@ async def scan_publicacoes(db, tenant_id: uuid.UUID | None = None, dias_retro: i
         "oabs_puladas_circuito": puladas_circuito,
         "fonte_respondeu": fonte_respondeu,
         "fonte_detalhe": ultimo_erro,
+        # Diagnóstico estruturado da última falha real de rede (qual
+        # fingerprint TLS venceu/foi recusado, status HTTP) — antes só
+        # disponível no retorno de uma varredura MANUAL, agora também no
+        # SyncRun da varredura automática diária.
+        "ultimo_diagnostico": ultimo_diagnostico,
     }
     await finalizar_sync(db, sync, "OK", resultado)
     await db.commit()
