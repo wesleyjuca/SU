@@ -238,16 +238,38 @@ async def capturar_por_oab(
     total_comunicacoes = 0
     achados: dict[str, dict] = {}
     criados = 0
+    fontes_utilizadas: set[str] = set()
     try:
         # Diagnóstico da fonte (distingue "inalcançável" de "0 no período").
         # `stats["itens"]` acumula o total bruto de comunicações (a fonte preenche).
         fonte_comunica = obter_fonte("comunica")
 
+        # Fase pós-262 — achado real (usuário reportou "busca por OAB/UF
+        # não funciona"): o Comunica público é a ÚNICA fonte consultada
+        # aqui, mesmo já existindo 2 fontes credenciadas (Escavador/Judit)
+        # com suporte oficial a descoberta por OAB, nunca ligadas a este
+        # fluxo. Mais fontes = mais cobertura — todas são consultadas e os
+        # achados se mesclam (dedup já existe por CNJ), não é substituição.
+        from app.integrations.fontes.credenciadas import fontes_descoberta_credenciadas
+        fontes_credenciadas = await fontes_descoberta_credenciadas(db, tenant_id)
+
         # numero_cnj (dígitos) -> dados do processo a criar
         for numero, uf, owner in oabs:
-            descobertos = await fonte_comunica.descobrir_por_oab(
+            descobertos = list(await fonte_comunica.descobrir_por_oab(
                 numero, uf, inicio, hoje, max_paginas=20, stats=stats,
-            ) if fonte_comunica else []
+            ) if fonte_comunica else [])
+            if descobertos:
+                fontes_utilizadas.add("comunica")
+            for fonte_cred in fontes_credenciadas:
+                try:
+                    extra = await fonte_cred.descobrir_por_oab(numero, uf, inicio, hoje)
+                except Exception as exc:
+                    log.warning("oab_capture_fonte_credenciada_falhou", fonte=fonte_cred.nome,
+                               tenant=str(tenant_id), error=str(exc)[:300])
+                    extra = []
+                if extra:
+                    fontes_utilizadas.add(fonte_cred.nome)
+                descobertos += extra
             for p in descobertos:
                 cnj = p.numero_cnj
                 if not cnj or cnj in achados:
@@ -268,6 +290,7 @@ async def capturar_por_oab(
                          "processos_encontrados": 0, "processos_criados": 0,
                          "fonte_respondeu": bool(stats.get("ok")),
                          "fonte_detalhe": stats.get("error"),
+                         "fontes_utilizadas": sorted(fontes_utilizadas),
                          "partes_criadas": 0, "partes_fonte_configurada": False}
             await finalizar_sync(db, sync, "OK" if stats.get("ok") else "ERRO", resultado)
             await db.commit()
@@ -334,6 +357,11 @@ async def capturar_por_oab(
             "processos_criados": criados,
             "fonte_respondeu": bool(stats.get("ok")),
             "fonte_detalhe": stats.get("error"),
+            # Fase pós-262 — quais fontes de DESCOBERTA (não confundir com
+            # a fonte de partes, `partes_fonte_configurada` abaixo) de fato
+            # contribuíram com algum processo achado, pra visibilidade real
+            # sem precisar abrir banco/logs.
+            "fontes_utilizadas": sorted(fontes_utilizadas),
             "partes_criadas": partes_info["total"],
             "partes_fonte_configurada": partes_info["fonte_configurada"],
         }

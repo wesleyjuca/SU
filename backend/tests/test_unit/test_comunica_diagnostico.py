@@ -193,7 +193,7 @@ def _patch_session_sequence(monkeypatch, respostas: list):
 @pytest.mark.asyncio
 async def test_1o_perfil_falha_2o_funciona(monkeypatch):
     """Prova nos 2 sentidos: sem a cadeia de fallback, 1 perfil falhando
-    (403) devolveria [] direto — com ela, o 2º perfil (chrome120) é
+    (403) devolveria [] direto — com ela, o 2º perfil (safari184) é
     tentado e o resultado real aparece."""
     kwargs_por_sessao = _patch_session_sequence(monkeypatch, [
         _FakeResponse(403, text="Forbidden"),
@@ -206,11 +206,11 @@ async def test_1o_perfil_falha_2o_funciona(monkeypatch):
     assert len(resultado) == 1
     assert resultado[0].texto == "intimação real"
     assert stats["ok"] is True
-    assert stats["impersonate"] == "chrome120"
-    # confirma que o 1º perfil tentado foi chrome124, o 2º chrome120 — a
+    assert stats["impersonate"] == "safari184"
+    # confirma que o 1º perfil tentado foi chrome124, o 2º safari184 — a
     # ordem declarada em `_IMPERSONATE_PROFILES`.
     assert kwargs_por_sessao[0]["impersonate"] == "chrome124"
-    assert kwargs_por_sessao[1]["impersonate"] == "chrome120"
+    assert kwargs_por_sessao[1]["impersonate"] == "safari184"
 
 
 @pytest.mark.asyncio
@@ -226,7 +226,68 @@ async def test_todos_os_perfis_falham_diagnostico_do_ultimo(monkeypatch):
 
     assert resultado == []
     assert stats.get("ok") is None
-    assert stats["impersonate"] == "safari17"  # o último tentado
+    assert stats["impersonate"] == "firefox135"  # o último tentado
     assert stats["status_code"] == 403
-    assert "todos os perfis tentados" in stats["error"]
+    assert "testados contra o WAF" in stats["error"]
+    assert "chrome124" in stats["error"] and "safari184" in stats["error"] and "firefox135" in stats["error"]
     assert len(kwargs_por_sessao) == 3  # os 3 perfis foram de fato tentados
+
+
+class _RaiseNaConstrucao(Exception):
+    """Simula `curl_cffi.requests.impersonate.ImpersonateError` — levantada
+    dentro de `AsyncSession.__init__`, ANTES de qualquer requisição de
+    rede. Achado real desta fase: o valor antigo `"safari17"` (inválido na
+    lib instalada) causava exatamente isso, e o diagnóstico antigo
+    afirmava incorretamente que esse perfil tinha sido "tentado" contra o
+    WAF."""
+
+
+def _patch_session_com_falha_de_construcao(monkeypatch, perfis_que_falham_na_construcao: set):
+    """Perfis em `perfis_que_falham_na_construcao` levantam ao CONSTRUIR a
+    sessão (nunca chegam a `.get()`); os demais usam `_FakeResponse(403)`."""
+    todas_kwargs: list = []
+
+    def _factory(*a, **kwargs):
+        todas_kwargs.append(kwargs)
+        if kwargs.get("impersonate") in perfis_que_falham_na_construcao:
+            raise _RaiseNaConstrucao(f"Impersonating {kwargs.get('impersonate')} is not supported")
+        return _FakeAsyncSession(response=_FakeResponse(403, text="Forbidden"), captured={}, **kwargs)
+
+    monkeypatch.setattr(comunica_mod, "AsyncSession", _factory)
+    return todas_kwargs
+
+
+@pytest.mark.asyncio
+async def test_perfil_invalido_nao_e_contado_como_tentado_contra_o_waf(monkeypatch):
+    """Achado real desta fase (bug no próprio fallback da fase anterior):
+    um perfil rejeitado na CONSTRUÇÃO da sessão (nunca tocou rede) não
+    pode aparecer na mensagem final como "testado contra o WAF" — só quem
+    de fato fez uma requisição e foi recusado entra nessa lista. Prova nos
+    2 sentidos: com o bug antigo (sem a distinção), este teste falharia
+    porque o perfil inválido apareceria em `stats["error"]`."""
+    _patch_session_com_falha_de_construcao(monkeypatch, {"safari184"})
+
+    stats: dict = {}
+    resultado = await buscar_comunicacoes("123456", "CE", date(2026, 1, 1), date(2026, 7, 1), stats=stats)
+
+    assert resultado == []
+    assert stats["perfis_rejeitados_localmente"] == ["safari184"]
+    assert "safari184" not in stats["error"]
+    assert "chrome124" in stats["error"] and "firefox135" in stats["error"]
+    assert stats["impersonate"] == "firefox135"  # o último tentado (mesmo rejeitado)
+
+
+@pytest.mark.asyncio
+async def test_todos_os_perfis_rejeitados_na_construcao_nao_afirma_teste_contra_waf(monkeypatch):
+    """Se NENHUM perfil chegar a tocar a rede, a mensagem de erro não pode
+    citar "testados contra o WAF" (seria falso) — cai no ramo de exceção
+    pura, sem status_code."""
+    _patch_session_com_falha_de_construcao(monkeypatch, {"chrome124", "safari184", "firefox135"})
+
+    stats: dict = {}
+    resultado = await buscar_comunicacoes("123456", "CE", date(2026, 1, 1), date(2026, 7, 1), stats=stats)
+
+    assert resultado == []
+    assert set(stats["perfis_rejeitados_localmente"]) == {"chrome124", "safari184", "firefox135"}
+    assert "status_code" not in stats
+    assert "testados contra o WAF" not in stats["error"]

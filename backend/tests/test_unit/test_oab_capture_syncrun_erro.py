@@ -46,6 +46,12 @@ class _FakeProcessoDescoberto:
     raw = _FakeRaw()
 
 
+async def _sem_fontes_credenciadas(db, tenant_id):
+    """Fase pós-262 — nenhuma fonte credenciada de descoberta (Escavador/
+    Judit) configurada; mesmo comportamento de antes desta fase."""
+    return []
+
+
 @pytest.mark.asyncio
 async def test_falha_no_enriquecimento_finaliza_run_como_erro_e_relanca(monkeypatch):
     import app.services.oab_capture as mod
@@ -70,6 +76,11 @@ async def test_falha_no_enriquecimento_finaliza_run_como_erro_e_relanca(monkeypa
             return [_FakeProcessoDescoberto()]
 
     monkeypatch.setattr("app.integrations.fontes.registry.obter_fonte", lambda nome: _FakeFonteComunica())
+    # Fase pós-262 — capturar_por_oab agora também consulta fontes
+    # credenciadas de descoberta (Escavador/Judit); sem nenhuma
+    # configurada nestes testes, mesmo comportamento de antes.
+    monkeypatch.setattr("app.integrations.fontes.credenciadas.fontes_descoberta_credenciadas",
+                        _sem_fontes_credenciadas)
 
     async def _fake_enriquecer_via_datajud(db, novos):
         return None
@@ -120,6 +131,8 @@ async def test_caminho_feliz_finaliza_ok(monkeypatch):
             return [_FakeProcessoDescoberto()]
 
     monkeypatch.setattr("app.integrations.fontes.registry.obter_fonte", lambda nome: _FakeFonteComunica())
+    monkeypatch.setattr("app.integrations.fontes.credenciadas.fontes_descoberta_credenciadas",
+                        _sem_fontes_credenciadas)
     monkeypatch.setattr(mod, "_enriquecer_via_datajud", lambda db, novos: _ok())
     monkeypatch.setattr(mod, "_enriquecer_partes", lambda db, tenant_id, novos: _ok_partes())
 

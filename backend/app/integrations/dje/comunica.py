@@ -25,6 +25,20 @@ funcionando contra o domínio real), documentada como tal. `stats[
 "impersonate"]` registra qual perfil funcionou (ou o último tentado, se
 nenhum funcionou) — pedir esse dado ao usuário depois do próximo deploy é
 o próximo passo de diagnóstico se o sintoma persistir.
+
+Achado real (mesma fase, ao reler o próprio fallback): o 3º perfil da
+cadeia original, `"safari17"`, **não é um valor reconhecido pela versão
+instalada do `curl_cffi`** (`BrowserType` só tem variantes com sufixo —
+`safari170`, `safari184`, etc.) — a tentativa levantava `ImpersonateError`
+ANTES de qualquer requisição de rede, silenciosamente absorvida pelo
+`except` (fail-soft), mas o diagnóstico final ainda afirmava "todos os
+perfis tentados" incluindo esse, o que teria feito qualquer investigação
+futura concluir erroneamente que um perfil Safari também bateu no WAF.
+Trocado por 3 perfis confirmados válidos e de motores DIFERENTES —
+`chrome124` (Blink), `safari184` (WebKit), `firefox135` (Gecko), mais
+diversidade real de fingerprint que 2 variantes de Chrome — e o
+diagnóstico agora só lista, na mensagem de erro, os perfis que de fato
+chegaram a fazer uma requisição real.
 """
 from __future__ import annotations
 
@@ -40,11 +54,15 @@ log = structlog.get_logger()
 COMUNICA_URL = "https://comunicaapi.pje.jus.br/api/v1/comunicacao"
 _TIMEOUT = 20.0
 # Fase pós-262 — ordem de tentativa: chrome124 é o que já estava em
-# produção (fase anterior); chrome120/safari17 são fallbacks de baixo
-# custo (cada um reproduz o fingerprint TLS de um navegador real distinto,
-# sem downside — só mais 1-2 tentativas na pior hipótese de o WAF
-# continuar bloqueando todos).
-_IMPERSONATE_PROFILES = ("chrome124", "chrome120", "safari17")
+# produção (fase anterior); safari184/firefox135 são fallbacks de baixo
+# custo, cada um de um motor de navegador DIFERENTE (WebKit/Gecko, não só
+# outra versão de Chrome/Blink) — mais diversidade real de fingerprint TLS
+# contra o WAF. Os 3 confirmados válidos em
+# `curl_cffi.requests.impersonate.BrowserType` na versão instalada
+# (0.16.3) — o valor anterior, `"safari17"`, não existia nessa lista
+# (só variantes com sufixo, ex. `safari184`) e nunca chegava a fazer uma
+# requisição real, mascarado pelo fail-soft.
+_IMPERSONATE_PROFILES = ("chrome124", "safari184", "firefox135")
 
 
 @dataclass
@@ -166,15 +184,25 @@ async def buscar_comunicacoes(
         return []
 
     # Fase pós-262 — diagnóstico do ÚLTIMO perfil tentado, usado só se
-    # NENHUM perfil da cadeia conseguir 200 na 1ª página.
+    # NENHUM perfil da cadeia conseguir 200 na 1ª página. `perfis_via_rede`
+    # só ganha um perfil DEPOIS que ele conseguiu fazer uma requisição HTTP
+    # de verdade (`resp = await client.get(...)` retornou, não importa o
+    # status) — distingue "o WAF recusou este perfil" de "este perfil nem
+    # chegou a tocar a rede" (ex.: `ImpersonateError` de config, achado
+    # real que o valor antigo `"safari17"` causava). A mensagem final só
+    # cita perfis do 1º grupo — nunca afirma que o WAF recusou um perfil
+    # que nunca chegou a ser testado contra ele.
     ultimo_perfil: str | None = None
     ultimo_status: int | None = None
     ultimo_corpo = ""
     ultimo_exc: Exception | None = None
+    perfis_via_rede: list[str] = []
+    perfis_rejeitados_localmente: list[str] = []
 
     for perfil in _IMPERSONATE_PROFILES:
         out: list[Comunicacao] = []
         sucesso_neste_perfil = False
+        tocou_rede_neste_perfil = False
         ultimo_perfil = perfil
         try:
             async with AsyncSession(
@@ -216,6 +244,7 @@ async def buscar_comunicacoes(
                         "pagina": pagina,
                     }
                     resp = await client.get(COMUNICA_URL, params=params)
+                    tocou_rede_neste_perfil = True
                     if stats is not None:
                         stats["requests"] = stats.get("requests", 0) + 1
                     if resp.status_code != 200:
@@ -258,7 +287,17 @@ async def buscar_comunicacoes(
                             break
         except Exception as exc:
             ultimo_exc = exc
-            log.warning("comunica_falhou", error=str(exc), oab=numero, uf=oab_uf, perfil=perfil)
+            if tocou_rede_neste_perfil:
+                perfis_via_rede.append(perfil)
+                log.warning("comunica_falhou", error=str(exc), oab=numero, uf=oab_uf, perfil=perfil)
+            else:
+                # Achado real: `"safari17"` (valor antigo) levantava
+                # `ImpersonateError` aqui, ANTES de qualquer requisição —
+                # bug de configuração, não sinal do WAF. Logado com evento
+                # próprio pra nunca ser confundido com um 403/timeout real.
+                perfis_rejeitados_localmente.append(perfil)
+                log.warning("comunica_perfil_rejeitado_localmente", error=str(exc),
+                            oab=numero, uf=oab_uf, perfil=perfil)
             continue
 
         if sucesso_neste_perfil:
@@ -266,17 +305,26 @@ async def buscar_comunicacoes(
             return out
         # 1ª página deste perfil não respondeu 200 — tenta o próximo perfil
         # da cadeia antes de desistir.
+        perfis_via_rede.append(perfil)
 
     # Nenhum perfil da cadeia conseguiu 200 — devolve vazio (fail-soft, como
     # sempre) com o diagnóstico do ÚLTIMO perfil tentado.
     if stats is not None:
         stats["impersonate"] = ultimo_perfil
+        if perfis_rejeitados_localmente:
+            # Sinal de bug de configuração (perfil inválido pra versão
+            # instalada do curl_cffi) — nunca deveria acontecer com a lista
+            # atual, mas o código não assume isso silenciosamente.
+            stats["perfis_rejeitados_localmente"] = perfis_rejeitados_localmente
         if ultimo_status is not None:
             stats["status_code"] = ultimo_status
-            stats["error"] = (
-                f"HTTP {ultimo_status} da Comunica/DJEN em todos os perfis tentados "
-                f"({', '.join(_IMPERSONATE_PROFILES)})"
-            )
+            if perfis_via_rede:
+                stats["error"] = (
+                    f"HTTP {ultimo_status} da Comunica/DJEN em todos os perfis testados contra "
+                    f"o WAF ({', '.join(perfis_via_rede)})"
+                )
+            else:
+                stats["error"] = f"HTTP {ultimo_status} da Comunica/DJEN"
             stats["body_snippet"] = ultimo_corpo
         elif ultimo_exc is not None:
             stats["error"] = str(ultimo_exc)
