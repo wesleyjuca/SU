@@ -91,11 +91,18 @@ class EscavadorFonte(FonteProcessual):
     async def descobrir_por_oab(
         self, oab_numero: str, oab_uf: str, data_inicio, data_fim, **kwargs: Any,
     ) -> list[ProcessoDescoberto]:
+        # Fase pós-262 — achado real: o path/params abaixo estavam
+        # desatualizados em relação à doc oficial atual (endpoint plural,
+        # `oab_numero`/`oab_estado`) — confirmado via suporte-api.escavador.com
+        # e a doc pública v2 (`GET /api/v2/advogado/processos`, singular,
+        # params `numero`/`estado`). Como o método nunca era chamado por
+        # `oab_capture.py` (só nesta fase passa a ser ligado), esse
+        # descompasso nunca foi exercitado em produção.
         num = re.sub(r"\D", "", oab_numero or "")
         if not num or not oab_uf:
             return []
-        data = await self._get("/api/v2/advogados/processos",
-                               params={"oab_numero": num, "oab_estado": oab_uf.upper()})
+        data = await self._get("/api/v2/advogado/processos",
+                               params={"numero": num, "estado": oab_uf.upper()})
         out: list[ProcessoDescoberto] = []
         vistos: set[str] = set()
         for it in _extrai_lista(data):

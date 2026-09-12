@@ -415,10 +415,11 @@ function HubCards() {
             {it.provider === "google_workspace" && !temCredencial && (
               <p className="mt-2 text-[11px] text-afj-black/45 leading-relaxed">
                 A conexão concede ao AFJ CORE permissão para: enviar e-mails em nome dessa conta
-                (Gmail), criar/editar eventos na Agenda do Google, salvar arquivos no Drive dessa
-                conta, e ler os nomes/IDs das pastas existentes no Drive dessa conta (sem acessar
-                o conteúdo de nenhum arquivo) — só para permitir escolher onde salvar. Nenhum
-                e-mail ou conteúdo de arquivo existente é lido.
+                (Gmail), criar/editar eventos na Agenda do Google, e ver/criar/editar arquivos e
+                pastas no Google Drive dessa conta — necessário pra escolher uma pasta existente e
+                salvar os documentos gerados nela (o escopo `drive.file`, mais restrito, não
+                permite gravar em pastas que o app não criou, só nas que o próprio app já criou —
+                por isso o acesso ao Drive é mais amplo que o mínimo). Nenhum e-mail é lido.
               </p>
             )}
 

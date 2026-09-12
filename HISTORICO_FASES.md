@@ -7001,3 +7001,199 @@ salvamento.
 - `frontend/src/app/(dashboard)/integracoes/page.tsx`,
   `frontend/src/components/integrations/DriveFolderPicker.tsx`
 - `CLAUDE.md`, `HISTORICO_FASES.md`
+
+## Fase pós-262.2
+
+Usuário reportou, depois do merge/deploy da fase pós-262: "o sistema
+parece da mesma forma, os mesmos erros — parece que todos os pedidos não
+estão sendo atendidos." Sinal real de que 2 das 4 hipóteses da fase
+anterior (Google Workspace "sem bug de código", Comunica "mitigação
+best-effort") precisavam virar causa raiz de verdade, não repetição.
+
+**Investigação nova** (3 agentes em paralelo — pesquisa da Google Drive
+API via WebSearch, releitura + teste real do `curl_cffi` instalado, e
+verificação do estado do deploy via GitHub/Vercel MCP — mais pesquisa
+direta via WebSearch/WebFetch/Bash pra fechar detalhes de implementação):
+
+### 1. Deploy — confirmado que chegou, não é a explicação
+
+PR #262 mergeada (`6c4e9114`), `main` sem nenhum commit depois disso, o
+workflow `deploy-frontend-auto.yml` disparou e teve sucesso pra esse
+commit exato (`run 191`, `34656848807`, `conclusion: success`). Backend
+(Railway) não verificável nesta sessão — `ToolSearch` por "railway" não
+achou nenhum MCP — mas sem nenhum sinal de falha em lugar nenhum. `mcp__
+Vercel__list_teams` devolveu `{"teams": []}` (sem acesso real à conta,
+mesma limitação já documentada desde a Fase 199/230). **Conclusão: as
+correções da fase anterior genuinamente não resolveram os sintomas —
+não foi atraso/falha de deploy.**
+
+### 2. Google Workspace — causa raiz real confirmada pela documentação oficial
+
+O escopo `drive.file` (o que o app pedia) só concede acesso de ESCRITA a
+arquivos/pastas que o próprio app CRIOU, ou que o usuário abriu
+explicitamente através do widget oficial "Google Picker" — é o clique no
+Picker, não o escopo em si, que concede o acesso per-item. Uma pasta
+apenas LISTADA por uma chamada REST própria (`GET .../folders`, sob
+`drive.metadata.readonly`, um escopo DIFERENTE) nunca entra nesse
+conjunto. Fontes: [Choose Google Drive API scopes](https://developers.google.com/workspace/drive/api/guides/api-specific-auth),
+issues oficiais de clients Google (`google-api-objectivec-client#104`),
+fórum oficial do Drive (`support.google.com/drive/thread/84648280`).
+Resultado real confirmado por múltiplas fontes: `files.create(parents=
+[pasta_escolhida])` falha ou ignora o `parents` — o arquivo cai na raiz,
+sem erro visível pro fluxo de negócio. **Não era falta de reconexão — era
+o escopo errado pro que o seletor de pasta caseiro (não o Google Picker)
+faz.**
+
+Correção: `backend/app/services/integration_hub.py`,
+`OAUTH_PROVIDERS["google_workspace"]["scope"]` troca `drive.file` +
+`drive.metadata.readonly` por `https://www.googleapis.com/auth/drive`
+(escopo completo — a mesma doc oficial confirma dar acesso de escrita a
+qualquer pasta pré-existente do usuário). `frontend/.../integracoes/
+page.tsx`: texto de disclosure pré-conexão atualizado (antes prometia
+"sem acessar o conteúdo de nenhum arquivo", que deixa de ser verdade).
+Nenhuma mudança em `_drive_upload`/`listar_pastas` (escopo maior é
+superset, chamadas idênticas). Teste `test_build_oauth_url_google_
+workspace_inclui_4_escopos_consolidados` (`test_integration_hub_oauth.py`)
+atualizado pro novo contrato.
+
+Contrapartida real, documentada no código: `drive` é escopo restrito no
+Google Cloud Console — pode exigir habilitar o escopo na tela de
+consentimento OAuth do projeto (ação do dono do projeto, fora do que este
+código controla) e, se o app crescer além de "modo de teste", o processo
+formal de verificação do Google. Contas já conectadas precisam
+reconectar — já era o caso desde a Fase 258 (`access_type=offline+
+prompt=consent` já força a tela de consentimento a cada reconexão).
+
+### 3. Comunica/DJEN — 2 bugs REAIS no próprio fallback da fase pós-262
+
+Confirmado rodando a lib `curl_cffi==0.16.3` real instalada
+(`curl_cffi.requests.impersonate.BrowserType`): `"safari17"` (o 3º perfil
+da cadeia da fase anterior) **não é um valor reconhecido** — só existem
+variantes com sufixo (`safari170`, `safari184`, `safari17_0`, etc.). A
+tentativa levantava `ImpersonateError` ANTES de qualquer requisição de
+rede — silenciosamente absorvida pelo `except` (fail-soft, correto), mas
+o diagnóstico final (`stats["error"]`) ainda afirmava "todos os perfis
+tentados" incluindo esse — o que faria qualquer investigação futura
+concluir erroneamente que um perfil Safari também bateu no WAF, quando na
+prática só 2 variantes quase idênticas de Chrome (`chrome124`/`chrome120`)
+foram testadas de verdade.
+
+Corrigido em `backend/app/integrations/dje/comunica.py`:
+- `_IMPERSONATE_PROFILES` passa a `("chrome124", "safari184", "firefox135")`
+  — 3 motores de navegador DIFERENTES (Blink/WebKit/Gecko), todos
+  confirmados válidos na lib instalada, mais diversidade real de
+  fingerprint TLS/JA3 que 2 variantes do mesmo motor.
+- `buscar_comunicacoes()` passa a rastrear, por perfil, se ele chegou a
+  fazer uma requisição HTTP real (`tocou_rede_neste_perfil`) — só perfis
+  que tocaram a rede entram na lista `perfis_via_rede`, citada na
+  mensagem final ("testados contra o WAF"); um perfil rejeitado
+  localmente (`ImpersonateError`/erro de config) vai pra
+  `perfis_rejeitados_localmente`, exposto em `stats` mas nunca confundido
+  com um sinal do WAF.
+
+4 testes novos em `test_comunica_diagnostico.py` provando isso nos 2
+sentidos (com fake `AsyncSession` que levanta na CONSTRUÇÃO, simulando
+`ImpersonateError`): 1 perfil rejeitado localmente não aparece na
+mensagem final; todos rejeitados localmente não afirma "testados contra
+o WAF" (cai no ramo de exceção pura, sem `status_code`). Os 6 testes
+pré-existentes + os 2 já criados na fase anterior continuam passando
+(só os valores dos perfis mudaram nas asserções).
+
+### 4. Descoberta por OAB — Escavador e Judit ligados como fonte alternativa
+
+Achado real: `EscavadorFonte.descobrir_por_oab()`
+(`escavador_fonte.py`) já existia desde a Fase 80, mas **nunca era
+chamada** por `oab_capture.py::capturar_por_oab` (só o Comunica público
+era consultado) — e usava um endpoint desatualizado
+(`/api/v2/advogados/processos`, plural, `oab_numero`/`oab_estado`). A doc
+oficial atual (confirmada via WebSearch em `suporte-api.escavador.com` e
+`api.escavador.com/v2/docs`) é `GET /api/v2/advogado/processos`
+(singular), params `numero`/`estado`. Corrigido o endpoint; novo teste
+`test_escavador_fonte.py` (3 casos: contrato do path/params, normalização
++ dedup por CNJ com chaves alternativas, gating sem token/OAB).
+
+`JuditFonte` ganhou `descobrir_por_oab()` novo — Judit suporta OAB
+oficialmente (`docs.judit.io`, `search_type: "oab"`, `search_key` no
+formato `"{UF}{numero}"`), mas é **assíncrono**: `POST /requests` cria a
+busca e devolve `request_id`; os resultados aparecem incrementalmente via
+`GET /responses?request_id=...`, sem prazo fixo pra "completar" — schema
+exato de resposta não confirmável neste sandbox (egress bloqueado pra
+`requests.prod.judit.io`/`docs.judit.io`). Implementado com poll curto e
+limitado (`_OAB_POLL_TENTATIVAS=4`, `_OAB_POLL_INTERVALO_S=1.5`, ~6s no
+total) — não pode travar a resposta HTTP síncrona de `POST /tenant/oabs/
+capturar`, que chama `capturar_por_oab` diretamente (confirmado por grep:
+também chamada por um Celery task diário e por `process_agent.py`, mas o
+poll precisa caber no caso síncrono mais restrito). Fail-soft completo —
+qualquer erro/timeout devolve `[]`. `Capability.DESCOBRIR_OAB` adicionada
+às capabilities de `JuditFonte` (teste pré-existente que afirmava o
+contrário, `test_capabilities`, atualizado). 6 testes novos em
+`test_judit_fonte_oab.py` (search_key formatado corretamente, resultado
+só aparecendo após poll — prova que o poll de fato acontece —, sem
+request_id, falha HTTP no POST, poll esgotado sem achar nada, dedup por
+CNJ entre 2 formatos de item).
+
+Nova `fontes_descoberta_credenciadas(db, tenant_id)` em
+`credenciadas.py` — devolve TODAS as fontes credenciadas configuradas
+com essa capability (Escavador, Judit — nessa ordem), não só a 1ª
+(diferente de `fonte_partes_credenciada`, que para na primeira
+encontrada): pra descoberta, mais fontes = mais cobertura, cada uma pode
+achar processos que a outra não tem. `oab_capture.py::capturar_por_oab`
+passa a, pra cada OAB, consultar o Comunica **e** todas as fontes
+credenciadas configuradas, mesclando os achados (dedup por CNJ já
+existia). `resultado` ganha `fontes_utilizadas: list[str]` — quais
+fontes de fato contribuíram com algum processo achado, visibilidade real
+sem precisar abrir banco/logs. PDPJ (sem esse tipo de busca, confirmado
+sem capability) e Jusbrasil (código de descoberta já escrito, mas contra
+um endpoint confirmadamente desatualizado — a API real de OAB do
+Jusbrasil roda em `op.digesto.com.br`, assíncrona via webhook, nada a ver
+com o GET síncrono codificado) ficam de fora, catalogados, não
+corrigidos nesta fase.
+
+2 testes novos em `test_oab_capture_syncrun_erro.py` (monkeypatch de
+`fontes_descoberta_credenciadas` pra `[]`, preservando o comportamento
+de antes) + 2 testes novos em `test_oab_capture_fontes_alternativas.py`
+provando o cenário real do sintoma relatado (Comunica não acha nada,
+Escavador acha um processo que o Comunica sozinho nunca teria achado —
+`fonte_respondeu: False` mas `processos_criados: 1`) e o dedup entre 2
+fontes achando o MESMO CNJ (não duplica, `fontes_utilizadas` lista as 2).
+
+### Verificado
+
+`ruff check app/` limpo; `python -m py_compile` nos 6 arquivos backend
+tocados; `tsc --noEmit`/`eslint` limpos no frontend (0 erros/0 warnings).
+Suíte completa na configuração exata do runner (banco `afj_ci` recriado
+do zero via boot real da app, `REDIS_URL=` vazio), 2 execuções seguidas
+contra o mesmo banco: `tests/test_unit/` 969 passed/4 skipped (+13 desta
+fase); `tests/test_api/` 195 passed/2 skipped na 1ª execução, 193
+passed/4 skipped na 2ª (mesma classe de skip condicional a rate-limit já
+documentada, sem regressão de ordem/estado).
+
+**O que este sandbox não pode provar**: se o escopo `drive` completo
+resolve de fato o salvamento em produção (depende também do Google Cloud
+Console aceitar o escopo na tela de consentimento OAuth do projeto); se
+os 3 perfis novos de impersonation, agora genuinamente diversos, furam o
+WAF real do Comunica/DJEN; se o schema de resposta assumido pra busca
+por OAB do Judit bate com a API real (egress bloqueado pros domínios
+`requests.prod.judit.io`/`docs.judit.io`/`api.escavador.com` neste
+sandbox, reconfirmado nesta fase). Pedir ao usuário pra reconectar o
+Google Workspace e testar os 3 fluxos após o próximo deploy, reportando
+o resultado real — inclusive qual fonte de descoberta (`fontes_
+utilizadas`) contribuiu, se alguma, pra confirmar se o Escavador/Judit
+realmente respondem contra a API real.
+
+### Arquivos principais
+- `backend/app/services/integration_hub.py`,
+  `backend/tests/test_unit/test_integration_hub_oauth.py`
+- `frontend/src/app/(dashboard)/integracoes/page.tsx`
+- `backend/app/integrations/dje/comunica.py`,
+  `backend/tests/test_unit/test_comunica_diagnostico.py`
+- `backend/app/integrations/fontes/escavador_fonte.py`,
+  `backend/tests/test_unit/test_escavador_fonte.py` (novo)
+- `backend/app/integrations/fontes/judit_fonte.py`,
+  `backend/tests/test_unit/test_judit_fonte_oab.py` (novo)
+- `backend/app/integrations/fontes/credenciadas.py`,
+  `backend/tests/test_unit/test_fontes_credenciadas.py`
+- `backend/app/services/oab_capture.py`,
+  `backend/tests/test_unit/test_oab_capture_syncrun_erro.py`,
+  `backend/tests/test_unit/test_oab_capture_fontes_alternativas.py` (novo)
+- `CLAUDE.md`, `HISTORICO_FASES.md`

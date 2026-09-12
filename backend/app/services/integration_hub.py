@@ -680,23 +680,37 @@ OAUTH_PROVIDERS: dict[str, dict] = {
     "google_workspace": {
         "authorize_url": "https://accounts.google.com/o/oauth2/v2/auth",
         "token_url": "https://oauth2.googleapis.com/token",
-        # Fase 258 — `drive.metadata.readonly` adicionado pra permitir listar
-        # pastas pré-existentes do Drive do usuário (seletor real de pasta de
-        # salvamento, substituindo o fluxo antigo sem pasta configurável
-        # nenhuma). `drive.file` sozinho NÃO permite listar — só ver/criar
-        # arquivos que a própria app criou; `drive.metadata.readonly` é o
-        # escopo de menor privilégio que resolve isso (lê só nome/id/
-        # mimeType, nunca conteúdo de arquivo — `drive.readonly`, usado por
-        # google_drive_doutrina, seria mais amplo do que necessário aqui).
-        # Contas já conectadas continuam funcionando pras 3 permissões
-        # antigas; só a listagem de pasta falha (escopo_insuficiente, ver
-        # client.py::_classificar_erro_drive) até o ADMIN clicar "Conectar
-        # com login" de novo — access_type=offline+prompt=consent (abaixo)
-        # já força a tela de consentimento a cada reconexão.
+        # Fase pós-262 — achado real (usuário reportou "arquivos gerados não
+        # são salvos na pasta configurada", persistente mesmo depois da Fase
+        # 258 ter dado um jeito de ESCOLHER a pasta): `drive.file` nunca
+        # concede acesso de ESCRITA a uma pasta pré-existente do usuário que
+        # foi só LISTADA por uma chamada REST própria (`GET .../folders`,
+        # sob `drive.metadata.readonly`) — esse escopo só reconhece arquivos/
+        # pastas que o próprio app criou, ou que o usuário abriu
+        # explicitamente através do widget oficial "Google Picker" (é o
+        # clique no Picker, não o escopo em si, que concede o acesso
+        # per-item). Confirmado pela documentação oficial do Google
+        # (developers.google.com/workspace/drive/api/guides/api-specific-auth)
+        # e por issues oficiais dos clients (google-api-*-client) — o padrão
+        # relatado é `parents` rejeitado/ignorado, nunca sucesso. Como este
+        # projeto não integra o Google Picker (exigiria SDK JS + API key
+        # extra), a correção de causa raiz é o escopo completo `drive`, que
+        # a mesma doc oficial confirma dar acesso de escrita a qualquer
+        # pasta pré-existente do usuário. `drive.metadata.readonly` sai —
+        # `drive` já cobre listagem de sobra.
+        #
+        # Contrapartida real, não escondida: `drive` é escopo restrito/
+        # sensível no Google Cloud Console — pode exigir habilitar o escopo
+        # na tela de consentimento OAuth do projeto (ação do dono do
+        # projeto, fora do que este código controla) e, se o app crescer
+        # além de "modo de teste" (poucos usuários), o processo formal de
+        # verificação do Google. Contas já conectadas precisam reconectar
+        # (já era o caso desde a Fase 258) — `access_type=offline+
+        # prompt=consent` (abaixo) já força a tela de consentimento a cada
+        # reconexão.
         "scope": (
             "https://www.googleapis.com/auth/calendar.events "
-            "https://www.googleapis.com/auth/drive.file "
-            "https://www.googleapis.com/auth/drive.metadata.readonly "
+            "https://www.googleapis.com/auth/drive "
             "https://www.googleapis.com/auth/gmail.send "
             "https://www.googleapis.com/auth/userinfo.email"
         ),

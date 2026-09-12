@@ -44,7 +44,9 @@ def test_capabilities():
     assert EscavadorFonte("t").suporta(Capability.DESCOBRIR_OAB)
     assert EscavadorFonte("t").suporta(Capability.PARTES)
     assert JuditFonte("t").suporta(Capability.PARTES)
-    assert not JuditFonte("t").suporta(Capability.DESCOBRIR_OAB)
+    # Fase pós-262 — Judit também suporta busca por OAB oficialmente
+    # (docs.judit.io, search_type="oab"), antes não implementado.
+    assert JuditFonte("t").suporta(Capability.DESCOBRIR_OAB)
 
 
 @pytest.mark.asyncio
@@ -53,6 +55,8 @@ async def test_gating_sem_token():
     assert await EscavadorFonte("").descobrir_por_oab("123", "CE", None, None) == []
     assert await JuditFonte("").partes("0001234-56.2026.8.06.0001") == []
     assert await JuditFonte("tok").partes("sem-digitos") == []
+    assert await JuditFonte("").descobrir_por_oab("123", "CE", None, None) == []
+    assert await JuditFonte("tok").descobrir_por_oab("", "CE", None, None) == []
 
 
 # ─── ordem de fallback pdpj → escavador → judit ──────────────────────────────

@@ -151,13 +151,16 @@ def test_build_oauth_url_google_drive_doutrina_inclui_access_type_offline_e_cons
     _limpar_settings_oauth()
 
 
-def test_build_oauth_url_google_workspace_inclui_5_escopos_consolidados():
+def test_build_oauth_url_google_workspace_inclui_4_escopos_consolidados():
     """Fase 139 — antes eram 4 fluxos por usuário (1 escopo por vez, na
     prática sempre os mesmos 4); agora é 1 tela só com os escopos juntos.
-    Fase 258 — `drive.metadata.readonly` somado aos 4 originais: permite
-    listar pastas pré-existentes do Drive (`drive.file` sozinho só vê
-    arquivos que a própria app criou) — necessário pro seletor real de
-    pasta de salvamento, sem exigir pasta pública/compartilhada por link."""
+    Fase 258 — `drive.metadata.readonly` somado aos originais, pro seletor
+    real de pasta de salvamento. Fase pós-262 — achado real (usuário
+    reportou "arquivos não salvos na pasta configurada", persistente):
+    `drive.file` nunca concede escrita numa pasta pré-existente só LISTADA
+    via REST (não aberta pelo Google Picker) — confirmado pela documentação
+    oficial do Google. `drive.metadata.readonly`+`drive.file` voltam a ser 1
+    escopo só, `drive` (completo), que a mesma doc confirma resolver."""
     from app.services import integration_hub as ih
     from app.config import settings
     _limpar_settings_oauth()
@@ -170,8 +173,13 @@ def test_build_oauth_url_google_workspace_inclui_5_escopos_consolidados():
     assert "prompt=consent" in url
     from urllib.parse import unquote
     url_decoded = unquote(url)
-    for escopo in ("calendar.events", "drive.file", "drive.metadata.readonly", "gmail.send", "userinfo.email"):
+    for escopo in ("calendar.events", "drive", "gmail.send", "userinfo.email"):
         assert escopo in url_decoded
+    # `drive.file`/`drive.metadata.readonly` saíram — só o escopo completo
+    # `drive` (achado da Fase pós-262: os 2 escopos antigos não concediam
+    # escrita numa pasta pré-existente escolhida fora do Google Picker).
+    assert "drive.file" not in url_decoded
+    assert "drive.metadata.readonly" not in url_decoded
     _limpar_settings_oauth()
 
 
