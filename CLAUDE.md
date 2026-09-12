@@ -987,6 +987,130 @@ rediscobertas do zero a cada sessão — contexto completo de cada uma em
     pra reconectar o Google Workspace e testar os 3 fluxos após o próximo
     deploy, reportando o resultado real — inclusive qual fonte de
     descoberta (`fontes_utilizadas`) contribuiu, se alguma.
+- **Fase pós-263** — usuário reportou (com prints reais de produção) 6
+  sintomas: Publicações sem chegar, OAuth do Google terminando em página de
+  erro, Pesquisa Jurídica com "· 0" em todas as bases, arquivos não lidos,
+  OABs monitoradas cadastradas nunca aparecendo na tela, e pediu auditoria
+  geral. 3 agentes de investigação (Explore, só leitura) mapearam cada
+  fluxo do zero, achando **4 bugs reais confirmados por leitura direta**
+  (2 deles regressões determinísticas, 1 por `git log -p`) — todos
+  corrigidos e reverificados nesta fase:
+  - **BUG 1, regressão real — OABs monitoradas nunca apareciam.**
+    `frontend/src/components/configuracoes/JuridicoTab.tsx:41` — o commit
+    `f1a6fa0` (fase que dizia só estar "documentando 26 warnings de
+    exhaustive-deps") **removeu por engano** a chamada
+    `useEffect(() => { fetchFeriados(); fetchOabs(); fetchConfidencial();
+    fetchFeriadosNacionais(); }, [])`, deixando só o comentário
+    `eslint-disable-next-line` órfão — confirmado comparando com o commit
+    anterior (`167940e`). `loadingOabs`/`loading` nasciam `true` e nunca
+    saíam desse estado (só o fetch os zeraria) — a tela sempre renderizava
+    os placeholders de skeleton, nunca a lista real, mesmo com OABs
+    persistidas com sucesso no backend (`PUT /tenant/oabs` sempre
+    funcionou — o bug era 100% de leitura/estado no frontend). Mesmo bug
+    apagava silenciosamente "Feriados forenses" e o toggle de "Modo
+    confidencial" na mesma aba. Corrigido restaurando a chamada.
+  - **BUG 2, real — OAuth do Google terminava em página de erro crua.**
+    `backend/app/api/v1/integrations_hub.py::hub_oauth_callback` declarava
+    `code: str = Query(...)` obrigatório e nunca capturava `error=`. Quando
+    o Google nega a autorização (usuário cancela, política de admin do
+    Workspace bloqueia o escopo), ele redireciona com `?error=...&state=...`
+    **sem** `code` — o FastAPI rejeitava a requisição com um 422 cru
+    (JSON de erro de validação) direto no navegador, em vez do
+    `RedirectResponse` gracioso pra `/integracoes?hub_oauth={provider}_erro`
+    que os outros branches de erro da mesma função já implementavam.
+    Corrigido: `code` virou opcional, novo `error` opcional, e qualquer um
+    dos dois (erro presente OU code ausente) já redireciona gracioso antes
+    de qualquer outra lógica. **Confirmado, sem bug**: não há divergência
+    de `redirect_uri` entre a URL de autorização e a troca de token (os
+    dois leem o mesmo atributo de `settings`) — se ainda houver bloqueio,
+    é configuração externa (env var de produção divergente do cadastrado
+    no Google Cloud Console, ou o escopo `drive` completo — fase
+    pós-262.2 — exigindo allowlist/verificação de app no Console), não
+    corrigível por código.
+  - **BUG 3, real, achado de produção — limite de batch do Gemini nunca
+    respeitado.** `backend/app/rag/embeddings.py::embed_batch_with_meta`
+    mandava a lista completa de chunks pra API do provedor de uma vez, sem
+    fatiamento — funciona pra OpenAI (aceita milhares por batch) mas o
+    Gemini (`gemini-embedding-001`, endpoint OpenAI-compatible) tem um
+    teto real de 100 itens por `BatchEmbedContentsRequest` — exatamente o
+    erro 400 real que apareceu sincronizando a Doutrina (`eca-2025.pdf`,
+    diploma legal chunkeado por artigo facilmente passa de 100 chunks).
+    Corrigido: novo campo `embedding_max_batch` por provedor
+    (`backend/app/services/ai_providers.py` — `gemini: 100`, `openai:
+    None`, preserva comportamento de sempre pra quem não tem teto
+    conhecido); `embed_batch_with_meta` fatia em lotes sequenciais quando o
+    provedor resolvido tiver um teto, concatenando os vetores na ordem
+    original — transparente pra todo chamador (`ingest_document` e as 3
+    pipelines automáticas), sem mudança de assinatura.
+  - **ACHADO 4, lacuna de diagnóstico (não bug funcional) — Publicações.**
+    Nenhum bug de lógica encontrado no fluxo completo (captura →
+    orquestração → agendamento → persistência/leitura de OABs → circuit
+    breaker → SyncRun) — a cadeia de 3 fingerprints TLS da fase pós-262.2
+    está de fato presente e ativa. Única lacuna real: `stats["impersonate"]`/
+    `perfis_rejeitados_localmente` (diagnóstico de qual perfil venceu/foi
+    recusado pelo WAF) só chegava à resposta HTTP quando o usuário
+    disparava a varredura MANUALMENTE — a varredura automática diária
+    (Celery Beat, 7h30) gravava um `SyncRun` sem esse detalhe estruturado.
+    Fechado: `dje_monitor.py::scan_publicacoes` agora agrega
+    `ultimo_diagnostico` (status_code/impersonate/perfis_rejeitados_localmente
+    da última falha real) no `stats` final, tanto no caminho OK quanto no
+    ERRO — sem exigir ação manual do usuário pra diagnosticar produção.
+    **Confirmado também, sem bug**: Pesquisa Jurídica com "· 0" em todas as
+    bases não é bug de contagem (`rag_coverage` conta pontos reais,
+    corretamente escopados por tenant) nem de collections ausentes
+    (`ensure_collections()` roda no boot) — as pipelines automáticas
+    (STJ 4h, Drive Doutrina 5h, Legislação 6h) existem e estão agendadas;
+    combinado com o BUG 3 acima, isso já explica boa parte do "zero
+    resultados" sem precisar de mais hipótese, mas confirmar se o Celery
+    Beat está de fato ativo em produção e se `OPENAI_API_KEY` central está
+    configurada só é possível olhando o ambiente real.
+  - **Achado extra de robustez, log real de produção colado pelo usuário**:
+    `task_lock_acquire_failed error=Event loop is closed
+    key=task_lock:checar_infra_periodico` — mesma classe de bug já
+    corrigida só para o engine asyncpg (`run_worker_coro`,
+    `backend/app/workers/async_utils.py`, chama `engine.dispose()` ao fim
+    de cada task Celery) também afetava o cliente Redis global
+    (`app/db/redis.py::_redis_pool`, singleton reaproveitado entre
+    execuções de task, cada uma com seu próprio event loop via
+    `asyncio.run()`). A task ainda terminava com sucesso (fail-open em
+    `TaskLock.acquire()`), mas o warning era ruído evitável a cada
+    execução seguinte no mesmo processo worker. Corrigido: `run_worker_coro`
+    também fecha o pool Redis (`close_redis()`) ao final de cada task, com
+    fail-soft próprio (uma falha ao fechar — conexão já rompida pelo loop
+    anterior — nunca mascara o resultado real da task).
+  - **Verificado**: branch reiniciada a partir do `main` pós-#263 (PR
+    anterior desta branch já mergeada — histórico não empilhado sobre
+    trabalho já mergeado). 6 testes novos/estendidos com prova nos dois
+    sentidos (2 pro callback OAuth tolerante a `error=`/`code` ausente, 3
+    pra o fatiamento de batch do Gemini vs. OpenAI sem regressão, 2 pro
+    `ultimo_diagnostico` no `SyncRun`, 3 pro `run_worker_coro` fechando
+    Redis sem mascarar resultado/exceção real). Suíte completa na
+    configuração exata do runner (banco `afj_core` do zero via boot real
+    da app, `REDIS_URL=` vazio), 2 execuções seguidas contra o mesmo
+    banco: `tests/test_unit/` 977 passed/4 skipped, `tests/test_api/` 197
+    passed/2 skipped na 1ª e 195 passed/4 skipped na 2ª (mesma classe de
+    skip condicional a rate-limit já documentada, sem regressão de
+    ordem/estado). `ruff check app/` limpo; `tsc --noEmit`/`eslint`
+    limpos no frontend. Prova real do fix de OABs: Playwright real
+    (Chromium do sandbox, stack completa Postgres+uvicorn+`npm run dev`)
+    confirmando as 3 chamadas `GET /tenant/oabs`/`/feriados`/
+    `/confidencial` disparando no mount (antes do fix, nenhuma disparava)
+    e uma OAB cadastrada sobrevivendo a um reload completo da página —
+    zero erro de console, zero regressão visual nas demais abas.
+  - **O que este sandbox não pode provar**: se o WAF do Comunica/DJEN
+    ainda recusa os 3 fingerprints TLS atuais (egress bloqueado pra
+    `*.pje.jus.br`); se o Celery Beat está de fato ativo em produção e se
+    `OPENAI_API_KEY` central está configurada (decide se
+    jurisprudência/legislação/doutrina pública já foram ingeridas); se o
+    escopo `drive` completo do Google Workspace está habilitado/allowlisted
+    no Google Cloud Console. Pedido ao usuário: (1) testar reconectar
+    Google Workspace/Drive Doutrina e, se ainda cair em erro, reportar a
+    URL exata na barra de endereço no momento da falha (distingue bug de
+    código restante de bloqueio do próprio Google); (2) disparar "Varrer
+    agora" em Publicações e reportar `fonte_detalhe`/`ultimo_diagnostico`;
+    (3) confirmar nas variáveis de ambiente do Railway se `OPENAI_API_KEY`
+    está setada; (4) reconectar a pasta do Google Drive Doutrina e
+    verificar se `eca-2025.pdf` agora ingere sem o erro de batch do Gemini.
 
 ## Teste geral do sistema (metodologia)
 

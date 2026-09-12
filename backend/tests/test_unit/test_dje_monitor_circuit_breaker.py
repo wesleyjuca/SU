@@ -138,6 +138,54 @@ async def test_sucesso_expoe_fonte_respondeu_true(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_falha_propaga_diagnostico_estruturado_pro_syncrun(monkeypatch):
+    """Achado real (auditoria pós-262.2): `stats["impersonate"]`/
+    `perfis_rejeitados_localmente`/`status_code` (comunica.py) só chegavam
+    à resposta HTTP quando o usuário disparava a varredura MANUALMENTE — a
+    varredura automática diária gravava só `fonte_detalhe` (texto) no
+    SyncRun, sem esse diagnóstico estruturado. Confirma que ele agora
+    sobrevive até o `resultado` final."""
+    async def _fake_buscar_falha_sempre(oab_numero, oab_uf, data_inicio, data_fim, stats=None, **kwargs):
+        if stats is not None:
+            stats["requests"] = 1
+            stats["ok"] = False
+            stats["status_code"] = 403
+            stats["impersonate"] = "firefox135"
+            stats["perfis_rejeitados_localmente"] = ["safari17"]
+            stats["error"] = "HTTP 403 da Comunica/DJEN em todos os perfis testados"
+        return []
+
+    monkeypatch.setattr("app.integrations.dje.comunica.buscar_comunicacoes", _fake_buscar_falha_sempre)
+    monkeypatch.setattr(dje_monitor.asyncio, "sleep", _fake_sleep)
+
+    db = _FakeDB(_oabs(1))
+    resultado = await dje_monitor.scan_publicacoes(db, tenant_id=None, dias_retro=1)
+
+    assert resultado["ultimo_diagnostico"] == {
+        "status_code": 403,
+        "impersonate": "firefox135",
+        "perfis_rejeitados_localmente": ["safari17"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_sucesso_sem_diagnostico_de_falha(monkeypatch):
+    async def _fake_buscar_sucesso(oab_numero, oab_uf, data_inicio, data_fim, stats=None, **kwargs):
+        if stats is not None:
+            stats["requests"] = 1
+            stats["ok"] = True
+        return []
+
+    monkeypatch.setattr("app.integrations.dje.comunica.buscar_comunicacoes", _fake_buscar_sucesso)
+    monkeypatch.setattr(dje_monitor.asyncio, "sleep", _fake_sleep)
+
+    db = _FakeDB(_oabs(1))
+    resultado = await dje_monitor.scan_publicacoes(db, tenant_id=None, dias_retro=1)
+
+    assert resultado["ultimo_diagnostico"] is None
+
+
+@pytest.mark.asyncio
 async def test_intervalo_entre_requisicoes_e_respeitado(monkeypatch):
     """Regressão: cada OAB deve passar por um pequeno sleep — confirma que o
     reforço (rajada sem pausa) foi de fato aplicado, sem depender de medir

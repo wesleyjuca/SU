@@ -20,6 +20,7 @@ AI_PROVIDERS: dict[str, dict] = {
         "obter": "console.anthropic.com → API Keys.",
         "embedding_model": None,  # sem API pública de embeddings, confirmado
         "embedding_dimensions": None,
+        "embedding_max_batch": None,
     },
     "openai": {
         "nome": "OpenAI (ChatGPT)",
@@ -31,6 +32,9 @@ AI_PROVIDERS: dict[str, dict] = {
         "obter": "platform.openai.com → API keys.",
         "embedding_model": "text-embedding-3-large",
         "embedding_dimensions": 3072,
+        # Sem teto prático conhecido/documentado para o volume que este
+        # sistema envia por chamada — não fatiar.
+        "embedding_max_batch": None,
     },
     "gemini": {
         "nome": "Google Gemini",
@@ -44,6 +48,12 @@ AI_PROVIDERS: dict[str, dict] = {
         # padrão 3072 (Matryoshka Representation Learning), igual à da OpenAI.
         "embedding_model": "gemini-embedding-001",
         "embedding_dimensions": 3072,
+        # Achado real de produção: `BatchEmbedContentsRequest.requests: at
+        # most 100 requests can be in one batch` (HTTP 400) — teto real e
+        # documentado da API do Gemini, ausente de qualquer outro registro
+        # aqui. `embed_batch_with_meta` (rag/embeddings.py) fatia por este
+        # valor quando presente.
+        "embedding_max_batch": 100,
     },
     "grok": {
         "nome": "xAI Grok",
@@ -55,6 +65,7 @@ AI_PROVIDERS: dict[str, dict] = {
         "obter": "console.x.ai → API Keys.",
         "embedding_model": None,  # sem API pública de embeddings, confirmado
         "embedding_dimensions": None,
+        "embedding_max_batch": None,
     },
     "deepseek": {
         "nome": "DeepSeek",
@@ -69,6 +80,7 @@ AI_PROVIDERS: dict[str, dict] = {
         # indisponível nesta fase, não assumido.
         "embedding_model": None,
         "embedding_dimensions": None,
+        "embedding_max_batch": None,
     },
     "openrouter": {
         "nome": "OpenRouter",
@@ -81,6 +93,7 @@ AI_PROVIDERS: dict[str, dict] = {
         # Não confirmado nesta fase — fica de fora até validação futura.
         "embedding_model": None,
         "embedding_dimensions": None,
+        "embedding_max_batch": None,
     },
     "ollama": {
         "nome": "Ollama (modelo local)",
@@ -95,6 +108,7 @@ AI_PROVIDERS: dict[str, dict] = {
         # pela arquitetura.
         "embedding_model": None,
         "embedding_dimensions": None,
+        "embedding_max_batch": None,
     },
     # Fase 195 — diferente do Gemini (chave simples via AI Studio), Vertex AI
     # é o mesmo modelo Gemini servido pela infra do projeto GCP do PRÓPRIO
@@ -116,6 +130,7 @@ AI_PROVIDERS: dict[str, dict] = {
         # generalização de embeddings desta fase.
         "embedding_model": None,
         "embedding_dimensions": None,
+        "embedding_max_batch": None,
     },
 }
 

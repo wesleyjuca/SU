@@ -417,13 +417,26 @@ async def hub_oauth_connect(
 @callback_router.get("/{provider}/oauth/callback")
 async def hub_oauth_callback(
     provider: str,
-    code: str = Query(...),
+    code: str | None = Query(default=None),
+    error: str | None = Query(default=None),
     state: str = Query(...),
     db: AsyncSession = Depends(get_db),
 ):
-    """Retorno do provedor: troca o code por tokens e salva cifrado."""
+    """Retorno do provedor: troca o code por tokens e salva cifrado.
+
+    Achado real de produção: quando o usuário nega a autorização (ou uma
+    política de admin do Workspace bloqueia o escopo), o Google redireciona
+    com `?error=...` e SEM `code`. Antes desta checagem, `code` era
+    obrigatório (`Query(...)`) — o FastAPI rejeitava a requisição com um
+    422 cru antes mesmo de o corpo da função rodar, expondo JSON de erro de
+    validação no navegador em vez do redirect gracioso que os outros
+    branches de erro abaixo já implementam.
+    """
     base = _frontend_base_url()
     if provider not in integration_hub.OAUTH_PROVIDERS:
+        return RedirectResponse(url=f"{base}/integracoes?hub_oauth={provider}_erro")
+    if error or not code:
+        log.warning("hub_oauth_callback_negado", provider=provider, error=error)
         return RedirectResponse(url=f"{base}/integracoes?hub_oauth={provider}_erro")
     try:
         user_id = uuid.UUID(integration_hub.verify_oauth_state(state, provider))

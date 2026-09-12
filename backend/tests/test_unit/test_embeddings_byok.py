@@ -10,7 +10,12 @@ o problema do jeito certo (cadastrando uma chave OpenAI em "Minha IA")."""
 import pytest
 
 from app.integrations.llm_client import ai_creds_ctx, ai_fallback_ctx
-from app.rag.embeddings import _resolve_byok_openai_key, _resolve_embedding_credentials, get_embeddings_client
+from app.rag.embeddings import (
+    _resolve_byok_openai_key,
+    _resolve_embedding_credentials,
+    embed_batch_with_meta,
+    get_embeddings_client,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -203,3 +208,92 @@ async def test_get_embeddings_client_dispatch_anthropic_cai_no_padrao_do_sistema
     client, provider, model, dimensions = get_embeddings_client()
     assert provider == "openai"
     assert client.api_key == "sk-central"
+
+
+# Achado real de produção (auditoria pós-262.2): `BatchEmbedContentsRequest.
+# requests: at most 100 requests can be in one batch` (HTTP 400) — a API do
+# Gemini rejeita qualquer chamada com mais de 100 itens; `embed_batch_with_meta`
+# nunca fatiava a lista, funcionava só por acidente com OpenAI (sem teto
+# conhecido). Testado com um fake client que grava o tamanho de cada chamada.
+
+
+class _FakeItem:
+    def __init__(self, index, value):
+        self.index = index
+        self.embedding = value
+
+
+class _FakeResponse:
+    def __init__(self, data):
+        self.data = data
+
+
+class _FakeEmbeddingsAPIRecorder:
+    def __init__(self):
+        self.chamadas: list[list[str]] = []
+
+    async def create(self, input, model, dimensions):
+        self.chamadas.append(list(input))
+        # Devolve na ordem embaralhada de propósito, pra provar que o
+        # reordenamento por `.index` dentro de CADA lote continua correto.
+        itens = [_FakeItem(i, [float(i)]) for i in range(len(input))]
+        return _FakeResponse(list(reversed(itens)))
+
+
+@pytest.fixture
+def _fake_recorder(monkeypatch):
+    import app.rag.embeddings as embeddings_mod
+
+    recorder = _FakeEmbeddingsAPIRecorder()
+
+    class _FakeAsyncOpenAI:
+        def __init__(self, api_key=None, base_url=None):
+            self.embeddings = recorder
+
+    monkeypatch.setattr(embeddings_mod, "AsyncOpenAI", _FakeAsyncOpenAI)
+    embeddings_mod._client = None
+    yield recorder
+    embeddings_mod._client = None
+
+
+@pytest.mark.asyncio
+async def test_embed_batch_gemini_fatia_em_lotes_de_100(_fake_recorder):
+    ai_creds_ctx.set({"provider": "gemini", "api_key": "gm-key", "base_url": None})
+    textos = [f"texto {i}" for i in range(250)]
+
+    vetores, provider, model = await embed_batch_with_meta(textos)
+
+    assert provider == "gemini"
+    assert len(_fake_recorder.chamadas) == 3
+    assert [len(c) for c in _fake_recorder.chamadas] == [100, 100, 50]
+    assert len(vetores) == 250
+    # Ordem preservada apesar do embaralhamento dentro de cada lote.
+    assert vetores == [[float(i)] for i in range(100)] + [[float(i)] for i in range(100)] + [[float(i)] for i in range(50)]
+
+
+@pytest.mark.asyncio
+async def test_embed_batch_openai_nao_fatia_mesmo_com_muitos_itens(_fake_recorder):
+    """Prova nos dois sentidos: reverter o fix (remover `embedding_max_batch`
+    do registro do Gemini, ou remover o fatiamento) faria o teste acima
+    falhar; este aqui confirma que a OpenAI (sem teto conhecido) continua
+    recebendo 1 chamada só, sem regressão de comportamento."""
+    ai_creds_ctx.set({"provider": "openai", "api_key": "sk-key", "base_url": None})
+    textos = [f"texto {i}" for i in range(250)]
+
+    vetores, provider, model = await embed_batch_with_meta(textos)
+
+    assert provider == "openai"
+    assert len(_fake_recorder.chamadas) == 1
+    assert len(_fake_recorder.chamadas[0]) == 250
+    assert len(vetores) == 250
+
+
+@pytest.mark.asyncio
+async def test_embed_batch_gemini_com_poucos_itens_nao_fatia(_fake_recorder):
+    ai_creds_ctx.set({"provider": "gemini", "api_key": "gm-key", "base_url": None})
+    textos = [f"texto {i}" for i in range(30)]
+
+    vetores, provider, model = await embed_batch_with_meta(textos)
+
+    assert len(_fake_recorder.chamadas) == 1
+    assert len(vetores) == 30

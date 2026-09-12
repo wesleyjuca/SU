@@ -7197,3 +7197,271 @@ realmente respondem contra a API real.
   `backend/tests/test_unit/test_oab_capture_syncrun_erro.py`,
   `backend/tests/test_unit/test_oab_capture_fontes_alternativas.py` (novo)
 - `CLAUDE.md`, `HISTORICO_FASES.md`
+
+## Fase pós-263 — auditoria técnica/funcional completa (6 sintomas relatados) + 4 bugs corrigidos
+
+### Context
+
+Usuário reportou 6 sintomas com prints reais de produção (telas de
+Publicações, sincronização do Google Drive Doutrina com 3 erros por
+arquivo, Pesquisa Jurídica com "· 0" em todas as bases, e OABs monitoradas)
+e pediu auditoria técnica/funcional/de integração completa, testando o
+fluxo real como usuário final, com correção implementada e reteste — não
+apenas relatório. Também colou um log real do Railway (produção) mostrando
+um warning de infraestrutura não relacionado aos 6 sintomas relatados.
+
+3 agentes de investigação (Explore, só leitura) foram lançados em paralelo,
+cada um mapeando um fluxo do zero com arquivo:linha, sem assumir nada por
+histórico:
+
+### Investigação 1 — Publicações + OABs monitoradas
+
+**Fluxo de Publicações mapeado ponta a ponta**: captura
+(`backend/app/integrations/dje/comunica.py::buscar_comunicacoes`, via
+`curl_cffi` com a cadeia de 3 fingerprints TLS `chrome124`/`safari184`/
+`firefox135` da fase pós-262.2, confirmado presente e ativo) → orquestração
+(`backend/app/services/dje_monitor.py::scan_publicacoes`, une OABs de
+usuários ativos + `TenantConfig.extra_data["oabs_monitoradas"]`, dedup por
+hash, cria `Intimacao`/`ProcessMovement`/`Notification`/WhatsApp) →
+agendamento (Celery Beat, `crontab(hour=7, minute=30)`, uma vez ao dia) →
+`SyncRun` como registro. **Nenhum bug de lógica encontrado** — bate com a
+conclusão já registrada no CLAUDE.md pra essa área. Confirmado que o
+circuit breaker da varredura diária (`name="comunica_scan_diario"`) é
+propositalmente LOCAL e desacoplado do breaker `"comunica"` usado pela
+descoberta de processo por OAB — não haveria como um bloquear o outro.
+**Lacuna real, não bug**: `stats["impersonate"]`/`perfis_rejeitados_
+localmente`/`status_code` (diagnóstico de qual fingerprint TLS venceu/foi
+recusado pelo WAF, já existente em `comunica.py`) só chegavam à resposta
+HTTP quando o usuário disparava a varredura MANUALMENTE
+(`POST /publicacoes/varrer`) — a varredura automática diária gravava só
+`fonte_detalhe` (texto simples) no `SyncRun`, sem esse diagnóstico
+estruturado, dificultando investigar produção sem pedir ação ao usuário.
+
+**Bug real confirmado, com `git log -p`, não suposição** —
+`frontend/src/components/configuracoes/JuridicoTab.tsx:41`: o commit
+`f1a6fa0` (uma fase anterior desta mesma sessão, que dizia estar só
+"documentando 26 warnings de `exhaustive-deps`") **removeu por engano** a
+linha `useEffect(() => { fetchFeriados(); fetchOabs(); fetchConfidencial();
+fetchFeriadosNacionais(); }, [])`, deixando só o comentário
+`eslint-disable-next-line react-hooks/exhaustive-deps` órfão, sem o
+`useEffect` que ele deveria decorar. Confirmado comparando o diff exato
+contra o commit anterior (`167940e`), onde a linha ainda existia.
+Consequência: `loadingOabs`/`loading` nasciam `true` (estado inicial) e
+NUNCA saíam desse estado, porque só `fetchOabs()`/`fetchFeriados()`
+(nunca chamadas) os zerariam no `finally` — a tela sempre renderizava os
+placeholders de skeleton (`Array.from({length: 2})`/`{length: 3}`), nunca
+a lista real, mesmo com OABs/feriados persistidos com sucesso no backend.
+O mesmo bug apagava silenciosamente o toggle de "Modo confidencial" (nunca
+refletia o valor real salvo). `PUT /tenant/oabs` (salvar) sempre funcionou
+— confirmado lendo `backend/app/api/v1/tenant.py:642-668` byte a byte
+contra o formato usado no frontend, sem incompatibilidade de campo — o bug
+era 100% de leitura/estado no frontend, nunca disparava o `GET` no mount.
+
+### Investigação 2 — OAuth do Google terminando em página de erro
+
+**Bug real confirmado** —
+`backend/app/api/v1/integrations_hub.py:417-422`
+(`hub_oauth_callback`, o endpoint `GET /integrations/hub/{provider}/
+oauth/callback`): declarava `code: str = Query(...)` obrigatório e nunca
+capturava um parâmetro `error`. Quando o Google **nega** a autorização
+(usuário clica "Cancelar", uma política de admin do Google Workspace
+bloqueia o escopo pedido, erro de consentimento granular), ele redireciona
+o navegador de volta com `?error=access_denied&state=...` — **sem**
+`code`. Sem esse parâmetro obrigatório, o FastAPI nunca chega a executar o
+corpo da função: a validação de query params falha primeiro, e o
+framework devolve um **HTTP 422 com JSON bruto de erro de validação**
+direto no navegador do usuário, em vez do `RedirectResponse` gracioso pra
+`/integracoes?hub_oauth={provider}_erro` que os outros 4 branches de erro
+da mesma função já implementavam (`state` inválido, provider desconhecido,
+usuário não encontrado, exceção na troca de token). Confirmado que não há
+`@app.exception_handler(RequestValidationError)` customizado em
+`backend/app/main.py` que pudesse interceptar isso (só existe um handler
+genérico pra `Exception`, que o FastAPI não aciona nesse caso — o handler
+próprio dele pra `RequestValidationError` tem precedência). Isso reproduz
+literalmente o sintoma relatado: "redirecionado para uma página de erro, e
+não retorna corretamente ao sistema" — o usuário veria a resposta JSON
+crua do backend em vez da SPA.
+
+**Confirmado, sem bug de código**: não há divergência de `redirect_uri`
+entre a URL de autorização (`build_oauth_url`, linha 760) e a troca de
+token (`exchange_oauth_code`, linha 787) — as duas leem exatamente o mesmo
+atributo de `settings` (`GOOGLE_WORKSPACE_OAUTH_REDIRECT_URI`/
+`GOOGLE_DRIVE_OAUTH_REDIRECT_URI`). Se ainda houver `redirect_uri_
+mismatch`/bloqueio do Google em produção depois deste fix, só pode ser
+configuração externa: (a) o valor dessas env vars em produção divergindo,
+byte a byte, do redirect URI cadastrado no Google Cloud Console; ou (b) o
+escopo `drive` completo (trocado na fase pós-262.2, é um escopo
+"restrito/sensível" do Google) exigindo que a conta usada esteja na lista
+de testers do projeto OAuth, ou que o app já tenha passado pelo processo
+formal de verificação de escopos sensíveis — nenhum dos dois é visível
+nem corrigível só pelo código.
+
+### Investigação 3 — Pesquisa Jurídica zerada + arquivos não lidos
+
+**Bug real confirmado, achado de produção** —
+`backend/app/rag/embeddings.py::embed_batch_with_meta` (a função que gera
+embeddings em lote pra indexação) mandava a lista COMPLETA de chunks de
+texto pra API do provedor de uma vez, sem nenhum fatiamento — funciona pra
+OpenAI (aceita batches de milhares de itens) mas o Gemini
+(`gemini-embedding-001`, servido via endpoint OpenAI-compatible) tem um
+teto real e documentado de **100 itens por `BatchEmbedContentsRequest`**
+— exatamente o erro 400 real que apareceu na sincronização da Doutrina
+pro arquivo `eca-2025.pdf`: `Error code: 400 - {'error': {'code': 400,
+'message': '* BatchEmbedContentsRequest.requests: at most 100 requests
+can be in one batch\n', 'status': 'INVALID_ARGUMENT'}}`. Não é coincidência
+nem caso raro — `backend/app/rag/chunker.py` (`CHUNK_SIZE=1200` palavras +
+split por seções jurídicas, incluindo `Art.`/`Artigo`) faz um diploma
+legal inteiro (ECA, Código Penal, CPC) gerar facilmente **mais de 100
+chunks** — um por artigo. Não existia, em nenhum lugar do registro central
+`AI_PROVIDERS` (`backend/app/services/ai_providers.py`), nenhum campo de
+"tamanho máximo de batch" por provedor.
+
+**Confirmado, sem bug de código, pra Pesquisa Jurídica zerada**:
+`rag_coverage` (`backend/app/api/v1/rag.py`) conta pontos REAIS no Qdrant,
+coleção por coleção, corretamente escopados por tenant nas coleções
+privadas — não é bug de agregação, é reflexo fiel do dado real (ou
+ausência dele). `ensure_collections()` roda no boot e cria as 8 coleções
+corretamente, mesmo se ainda não existirem — não é bug de coleção nunca
+criada. As pipelines automáticas que deveriam popular jurisprudência
+(STJ, 4h)/legislação (6h)/doutrina pública (Google Drive, 5h) EXISTEM e
+estão agendadas no Celery Beat — mas a leitura de código não decide
+sozinha se elas já rodaram com sucesso em produção (depende do Celery
+Beat estar de fato ativo e de `OPENAI_API_KEY` central estar configurada)
+— isso só um log/banco de produção real confirma. Combinado com o bug do
+batch do Gemini acima (que bloqueava a ingestão de conteúdo com BYOK
+Gemini bater no limite), já dá uma explicação concreta pra parte do "zero
+resultados" sem precisar inventar mais hipótese.
+
+Também investigado e não confirmável só por código: por que um arquivo da
+"mesma sincronização" da Doutrina teria usado Gemini (bateu no limite de
+batch) enquanto outro, supostamente da mesma execução, falhou por "nenhuma
+chave OpenAI configurada" — leitura de `google_drive_sync.py:119`
+confirmou que `user_ai_creds(db, integ.connected_by, "rag_ingest")`
+envolve o loop INTEIRO de arquivos de um tenant numa única resolução de
+credencial (não há re-resolução por arquivo) — ou seja, os 2 erros do
+print quase certamente vêm de EXECUÇÕES DIÁRIAS DIFERENTES (dias em que o
+estado de credencial BYOK do tenant mudou), não da mesma rodada — só
+confirmável olhando `JurisprudenciaIngerida.processed_at` no banco real.
+
+### Correções aplicadas (as 4, todas verificadas nos dois sentidos)
+
+1. **`frontend/src/components/configuracoes/JuridicoTab.tsx`** — restaurada
+   a chamada `useEffect(() => { fetchFeriados(); fetchOabs();
+   fetchConfidencial(); fetchFeriadosNacionais(); }, [])` removida por
+   engano na fase anterior.
+2. **`backend/app/api/v1/integrations_hub.py::hub_oauth_callback`** —
+   `code` virou `str | None = None`, novo `error: str | None = None`; se
+   `error` vier presente OU `code` vier ausente, redireciona gracioso pra
+   `..._erro` (mesmo padrão dos outros branches), antes de qualquer outra
+   lógica — nunca mais um 422 cru no navegador.
+3. **`backend/app/services/ai_providers.py` + `backend/app/rag/
+   embeddings.py`** — novo campo `embedding_max_batch` por provedor
+   (`gemini: 100`, `openai: None`, demais sem capacidade de embedding
+   continuam `None`); `embed_batch_with_meta` fatia a lista de textos em
+   lotes desse tamanho quando o provedor resolvido tiver um teto conhecido
+   (chamadas sequenciais, concatenando os vetores na ordem original de
+   entrada) — `None` preserva o comportamento de sempre (1 chamada só).
+   Transparente pra `ingest_document` e as 3 pipelines automáticas, sem
+   mudança de assinatura em nenhum chamador.
+4. **`backend/app/services/dje_monitor.py::scan_publicacoes`** — novo
+   `ultimo_diagnostico` (dict com `status_code`/`impersonate`/
+   `perfis_rejeitados_localmente` da última falha real de rede) agregado
+   no `stats` final do `SyncRun`, tanto no caminho `OK` quanto no `ERRO`
+   — fecha a lacuna de diagnóstico da varredura automática diária, sem
+   exigir ação manual do usuário.
+
+### Achado extra de robustez (log real de produção, não um dos 6 sintomas)
+
+Usuário colou um trecho de log real do Railway mostrando
+`task_lock_acquire_failed error=Event loop is closed
+key=task_lock:checar_infra_periodico` (warning na task periódica de
+infra-check, `backend/app/workers/tasks/infra_check.py`) — a task ainda
+terminava com sucesso logo depois (fail-open já existente em
+`TaskLock.acquire()`, `backend/app/workers/task_lock.py`), mas o padrão é
+exatamente a mesma classe de bug já corrigida só para o engine asyncpg:
+`run_worker_coro` (`backend/app/workers/async_utils.py`) já chama
+`engine.dispose()` ao fim de CADA task Celery, porque cada task cria um
+novo event loop via `asyncio.run()` e uma conexão asyncpg reutilizada na
+task seguinte fica presa ao loop anterior (já fechado). O cliente Redis
+global (`app/db/redis.py::_redis_pool`, singleton reaproveitado entre
+execuções de task no mesmo processo worker) sofre exatamente o mesmo
+problema, e nunca era fechado nesse ponto. Corrigido: `run_worker_coro`
+também chama `close_redis()` (já existente em `app/db/redis.py`) no mesmo
+`finally`, com proteção própria (`try/except` + log de warning) — uma
+falha ao fechar o Redis (conexão já rompida pelo loop de uma task
+anterior) nunca mascara o resultado real, nem uma exceção real, da task
+que acabou de rodar. Confirmado com teste dedicado provando os dois
+cenários (resultado normal sobrevive; exceção real da task sobrevive).
+
+### Verificado
+
+Branch reiniciada a partir do `main` pós-#263 (PR anterior desta branch já
+mergeada — histórico não empilhado sobre trabalho já mergeado). 6 testes
+novos/estendidos, cada um com prova nos dois sentidos (falha se a correção
+for revertida):
+- 2 em `backend/tests/test_api/test_hub_oauth_callback_public.py`
+  (callback sem `code` com/sem `error=` — confirma redirect gracioso, não
+  mais 422).
+- 3 em `backend/tests/test_unit/test_embeddings_byok.py` (Gemini fatia em
+  lotes de 100 — 250 itens → 3 chamadas [100,100,50], ordem preservada;
+  OpenAI não fatia, 1 chamada só; Gemini com poucos itens também não
+  fatia).
+- 2 em `backend/tests/test_unit/test_dje_monitor_circuit_breaker.py`
+  (`ultimo_diagnostico` presente numa falha real, `None` num sucesso).
+- 3 em `backend/tests/test_unit/test_run_worker_coro_redis_cleanup.py`
+  (novo arquivo — fecha engine+Redis no caminho feliz; falha ao fechar o
+  Redis não mascara o resultado da task; nem mascara uma exceção real da
+  task).
+
+Suíte completa na configuração exata do runner (banco `afj_core` do zero
+via boot real da app — `service postgresql start` + seed via
+`uvicorn app.main:app` brevemente até `seed_complete`/`demo_tenant_seed_
+complete`/`seed_tribunais_complete` nos logs —, `REDIS_URL=` vazio), 2
+execuções seguidas contra o mesmo banco: `tests/test_unit/` 977 passed/4
+skipped, `tests/test_api/` 197 passed/2 skipped na 1ª e 195 passed/4
+skipped na 2ª (mesma classe de skip condicional a rate-limit já
+documentada, sem regressão de ordem/estado). `ruff check app/` limpo;
+`tsc --noEmit`/`eslint` limpos no frontend.
+
+**Prova real do fix de OABs monitoradas** — Playwright real (Chromium do
+sandbox, stack completa: Postgres real + `uvicorn` real na porta 8000 +
+`npm run dev` real na porta 3000, login real como ADMIN
+`admin@afj.com.br`): confirmado que `GET /tenant/oabs`/`/tenant/feriados`/
+`/tenant/confidencial`/`/tenant/feriados-nacionais` disparam no mount da
+aba Jurídico (as 4 requisições reais capturadas pelo listener de rede do
+Playwright — antes do fix, NENHUMA disparava); cadastrada uma OAB nova
+(`999999`) via UI, salva, e confirmada sobrevivendo a um RELOAD COMPLETO
+da página (prova de que é persistência real, não só estado React em
+memória) — 7/7 checks PASS, zero erro de console, zero regressão visual
+nas demais seções da aba (Feriados forenses renderizou corretamente
+"Nenhum feriado local cadastrado" em vez do skeleton travado).
+
+**O que este sandbox não pode provar** (declarado, não escondido): se o
+WAF do Comunica/DJEN ainda recusa os 3 fingerprints TLS atuais em
+produção (egress bloqueado pra `*.pje.jus.br` neste sandbox); se o Celery
+Beat está de fato ativo em produção e se `OPENAI_API_KEY` central está
+configurada (decide se as 3 pipelines automáticas de RAG público já
+rodaram com sucesso); se o escopo `drive` completo do Google Workspace já
+está habilitado/allowlisted na tela de consentimento OAuth do projeto no
+Google Cloud Console. Pedido ao usuário, explicitamente: (1) testar
+reconectar Google Workspace/Drive Doutrina após o deploy e, se ainda cair
+em erro, reportar a URL exata que aparece na barra de endereço no momento
+da falha (distingue definitivamente bug de código restante de bloqueio do
+próprio Google); (2) disparar "Varrer agora" em Publicações e reportar o
+`fonte_detalhe`/`ultimo_diagnostico` da resposta; (3) confirmar nas
+variáveis de ambiente do Railway se `OPENAI_API_KEY` está setada; (4)
+reconectar/re-sincronizar a pasta do Google Drive Doutrina e verificar se
+`eca-2025.pdf` agora ingere sem o erro de batch do Gemini.
+
+### Arquivos principais
+- `frontend/src/components/configuracoes/JuridicoTab.tsx`
+- `backend/app/api/v1/integrations_hub.py`,
+  `backend/tests/test_api/test_hub_oauth_callback_public.py`
+- `backend/app/services/ai_providers.py`
+- `backend/app/rag/embeddings.py`,
+  `backend/tests/test_unit/test_embeddings_byok.py`
+- `backend/app/services/dje_monitor.py`,
+  `backend/tests/test_unit/test_dje_monitor_circuit_breaker.py`
+- `backend/app/workers/async_utils.py`,
+  `backend/tests/test_unit/test_run_worker_coro_redis_cleanup.py` (novo)
+- `CLAUDE.md`, `HISTORICO_FASES.md`
