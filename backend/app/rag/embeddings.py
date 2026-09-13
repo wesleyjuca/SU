@@ -16,6 +16,15 @@ from app.services.ai_providers import embedding_capable_providers, get_provider
 
 _client: AsyncOpenAI | None = None
 
+# Achado real de produção (fase pós-264): sem timeout explícito, um lote de
+# embedding lento/rate-limitado podia consumir tempo suficiente pra colidir
+# com o soft_time_limit da task Celery de sincronização — o sinal
+# interrompendo uma chamada de rede assíncrona no meio corrompe o event loop
+# ("Event loop is closed" em chamadas seguintes no mesmo processo). Falhar
+# rápido e de forma capturável (já existe fail-soft por arquivo no chamador)
+# é mais seguro do que depender do timeout implícito (~600s) do SDK.
+_EMBEDDING_TIMEOUT_SECONDS = 120.0
+
 
 class EmbeddingProviderUnavailable(RuntimeError):
     """Nenhum provedor com suporte a embeddings disponível (nem chave
@@ -133,7 +142,7 @@ def get_embeddings_client(*, force_system_default: bool = False) -> tuple[AsyncO
             # Credencial BYOK varia por usuário — nunca cacheada no
             # singleton global (mesmo padrão de `_call_openai_compatible`
             # em llm_client.py).
-            client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+            client = AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=_EMBEDDING_TIMEOUT_SECONDS)
             return client, provider, model, dimensions
 
     global _client
@@ -149,7 +158,7 @@ def get_embeddings_client(*, force_system_default: bool = False) -> tuple[AsyncO
             fallback_key, fallback_base_url = _resolve_byok_openai_key()
             if fallback_key:
                 return (
-                    AsyncOpenAI(api_key=fallback_key, base_url=fallback_base_url),
+                    AsyncOpenAI(api_key=fallback_key, base_url=fallback_base_url, timeout=_EMBEDDING_TIMEOUT_SECONDS),
                     "openai",
                     settings.DEFAULT_EMBEDDING_MODEL,
                     settings.EMBEDDING_DIMENSIONS,
@@ -161,7 +170,7 @@ def get_embeddings_client(*, force_system_default: bool = False) -> tuple[AsyncO
                 f"própria chave em \"Minha IA\" (provedores com suporte a "
                 f"embeddings hoje: {provedores}) para habilitar a busca."
             )
-        _client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+        _client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY, timeout=_EMBEDDING_TIMEOUT_SECONDS)
     return _client, SYSTEM_DEFAULT_PROVIDER, settings.DEFAULT_EMBEDDING_MODEL, settings.EMBEDDING_DIMENSIONS
 
 
@@ -180,7 +189,17 @@ async def embed_text_with_meta(
     if not text:
         return [0.0] * dimensions, provider, model
 
-    response = await client.embeddings.create(input=text, model=model, dimensions=dimensions)
+    # Client BYOK é criado do zero a cada chamada (nunca o singleton
+    # `_client`) — fecha-lo aqui evita o vazamento de recurso; o singleton
+    # do provedor padrão NUNCA é fechado aqui (precisa sobreviver entre
+    # chamadas do mesmo processo — ver `run_worker_coro`, que o fecha/reseta
+    # no fim de cada task, não aqui).
+    owns_client = client is not _client
+    try:
+        response = await client.embeddings.create(input=text, model=model, dimensions=dimensions)
+    finally:
+        if owns_client:
+            await client.close()
     return response.data[0].embedding, provider, model
 
 
@@ -209,10 +228,34 @@ async def embed_batch_with_meta(
         else [cleaned[i:i + max_batch] for i in range(0, len(cleaned), max_batch)]
     )
 
+    # Mesmo raciocínio de `embed_text_with_meta` — só fecha o client se ele
+    # não for o singleton compartilhado do provedor padrão.
+    owns_client = client is not _client
     vetores: list[list[float]] = []
-    for lote in lotes:
-        response = await client.embeddings.create(input=lote, model=model, dimensions=dimensions)
-        vetores.extend(item.embedding for item in sorted(response.data, key=lambda x: x.index))
+    try:
+        for lote in lotes:
+            response = await client.embeddings.create(input=lote, model=model, dimensions=dimensions)
+            # Achado real de produção: o SDK da OpenAI desserializa a
+            # resposta sem validação (`BaseModel.construct()`) — se a API
+            # do provedor (a camada de compatibilidade OpenAI do Gemini,
+            # confirmado) omitir "index" em algum item, o campo vira `None`
+            # em silêncio em vez de erro. `sorted(..., key=lambda x:
+            # x.index)` usa `__lt__` internamente e explode com
+            # "'<' not supported between instances of 'int' and 'NoneType'"
+            # — mensagem críptica que não diz o que aconteceu. Falha alta e
+            # explícita aqui: casar um vetor com o chunk de texto errado
+            # (se a ordem fosse só presumida) é pior num sistema jurídico
+            # do que o arquivo falhar com uma causa clara.
+            if any(item.index is None for item in response.data):
+                raise RuntimeError(
+                    f"Resposta de embedding do provedor '{provider}' veio sem "
+                    f"'index' em pelo menos 1 item do lote ({len(response.data)} "
+                    "itens) — não é seguro reordenar."
+                )
+            vetores.extend(item.embedding for item in sorted(response.data, key=lambda x: x.index))
+    finally:
+        if owns_client:
+            await client.close()
     return vetores, provider, model
 
 

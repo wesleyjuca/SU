@@ -7465,3 +7465,214 @@ reconectar/re-sincronizar a pasta do Google Drive Doutrina e verificar se
 - `backend/app/workers/async_utils.py`,
   `backend/tests/test_unit/test_run_worker_coro_redis_cleanup.py` (novo)
 - `CLAUDE.md`, `HISTORICO_FASES.md`
+
+## Fase pós-264 — 2 bugs novos expostos pelo fix de batch do Gemini (sync da Doutrina)
+
+### Context
+
+Usuário testou em produção, pós-deploy da PR #264 (fase pós-263), a
+sincronização da Doutrina no Google Drive, e compartilhou 2 pares de
+prints reais:
+
+1. Uma tela de OAuth do Google (consentimento concedido) seguida de um
+   erro de conexão do navegador na URL `http://localhost:3000/
+   integracoes?hub_oauth=google_drive_doutrina_ok`.
+2. A tela de sincronização da Doutrina mostrando "com erro — marcado
+   como travado pelo reaper" e 5 arquivos com erro, incluindo `eca-2025.
+   pdf` com "Event loop is closed" e 2 arquivos de "BASE DE CONHECIMENTO
+   IA" com `'<' not supported between instances of 'int' and 'NoneType'`.
+
+Cada achado foi investigado antes de qualquer correção — nenhum foi
+tratado como suposição.
+
+### Achado 1 — `PUBLIC_BASE_URL` ausente em produção (configuração, não bug)
+
+O redirect da URL 1 confirma: o backend processou o OAuth com sucesso
+(`hub_oauth=..._ok`, não `_erro`) — o problema é o DESTINO do redirect.
+`backend/app/config.py:41,45` — `CORS_ORIGINS` tem default
+`["http://localhost:3000"]` e `PUBLIC_BASE_URL` default `""`
+(`_frontend_base_url()`, `integrations_hub.py`, cai no primeiro CORS
+origin quando `PUBLIC_BASE_URL` está vazio). O usuário confirmou (via 2
+perguntas) que testou DIRETO em produção (não frontend local apontando
+pro backend real) — ou seja, essa variável genuinamente não está
+configurada no Railway. Explica de forma mais direta o sintoma original
+"OAuth termina sem voltar ao sistema" do que o bug do 422 já corrigido
+na fase anterior. Usuário confirmou o domínio real
+(`afj-core.vercel.app`, domínio padrão do Vercel) e decidiu **não**
+adicionar guarda de código (avisar/impedir boot em produção com esse
+valor ainda no default) — só a instrução de configurar
+`PUBLIC_BASE_URL=https://afj-core.vercel.app` no painel do Railway.
+Nenhuma mudança de código para este achado.
+
+### Achado 2 — "Event loop is closed" no `eca-2025.pdf`
+
+Investigação (1 Explore agent, leitura completa de `rag/embeddings.py`,
+`workers/async_utils.py`, `workers/tasks/google_drive_sync.py`,
+`workers/worker.py`, `workers/tasks/sync_reaper.py`,
+`workers/task_lock.py`, `rag/chunker.py`, `rag/ingestion.py`) confirmou:
+
+- `sync_google_drive_doutrina` (`google_drive_sync.py:285-288`):
+  `@celery_app.task(..., time_limit=7200, soft_time_limit=6900)` — 2h/
+  115min, sem override global em `worker.py`. A task processa TODOS os
+  tenants/pastas/arquivos numa única invocação (loop aninhado sem
+  checkpoint), rodando 1x/dia às 5h.
+- `embed_batch_with_meta` (fix da fase anterior) agora faz N chamadas
+  SEQUENCIAIS de `client.embeddings.create(...)` por documento grande —
+  o chunker (`CHUNK_SIZE=1200` chars, split por `Art.`/`Artigo`) faz um
+  diploma com ~267 artigos gerar plausivelmente 250-350+ chunks, ou
+  seja, 3-4 chamadas HTTP sequenciais ao Gemini só pra esse arquivo.
+- `get_embeddings_client()` cria `AsyncOpenAI(...)` sem `timeout=` (usa
+  o default implícito do SDK, ~600s + retries automáticos) e **nunca
+  fecha** esses clients — diferente de TODO outro cliente HTTP do
+  projeto (`db/qdrant.py`, `db/redis.py`, `tribunais/base.py`, etc.),
+  confirmado por grep completo.
+- `sync_reaper.py:22-46`: `LIMITE_HORAS_PADRAO=4` horas (folga acima do
+  `time_limit`), grava literalmente `"marcado como travado pelo reaper —
+  processo provavelmente morto sem sinalizar"` — bate exatamente com a
+  mensagem vista na tela. `task_lock.py:53-56` já antecipa em comentário
+  esse cenário ("esta execução travou além do próprio time_limit do
+  Celery").
+
+**Causa mais provável**: o processo Celery morreu sem desenrolar a
+pilha (SIGKILL do `time_limit` duro, ou `SIGALRM` do `soft_time_limit`
+atingindo a maquinaria interna do asyncio/httpx num ponto não seguro,
+no meio de um `await` de rede dentro do loop de fatiamento) — ficando
+preso em RUNNING até o reaper marcá-lo ~4h depois. O client
+`AsyncOpenAI` nunca fechado é sintoma colateral consistente (mesma
+classe de bug já documentada pro engine asyncpg/Redis em
+`async_utils.py`, só sem cobertura pro client de embeddings).
+
+**Decisão do usuário (via pergunta)**: só o fix mínimo e seguro agora —
+sem mexer no `time_limit` da task nem redesenhar pra subtasks por
+arquivo (fica registrado como opção futura).
+
+**Correção**:
+1. Nova constante `_EMBEDDING_TIMEOUT_SECONDS = 120.0` em
+   `rag/embeddings.py`, passada em toda construção de `AsyncOpenAI`
+   (BYOK, singleton do provedor padrão, e o fallback BYOK-openai da
+   Fase 255) — falha rápido e de forma capturável (já existe fail-soft
+   por arquivo no chamador) em vez de depender do timeout implícito.
+2. `embed_text_with_meta`/`embed_batch_with_meta`: identifica se o
+   client obtido é o singleton compartilhado (`client is not _client`)
+   e, se NÃO for (client descartável do BYOK, criado a cada chamada),
+   fecha explicitamente com `await client.close()` num `finally` ao
+   redor da chamada de API — fecha o vazamento de recurso real, sem
+   tocar no singleton do provedor padrão (que precisa continuar vivo
+   entre chamadas do mesmo processo).
+3. `run_worker_coro` (`async_utils.py`) — mesmo padrão já usado pro
+   engine/Redis: no `finally` de cada execução de task Celery, também
+   fecha e reseta `app.rag.embeddings._client` se não for `None`. Fecha
+   a 2ª metade do problema: o singleton é module-level e sobrevive
+   entre execuções de task no mesmo processo worker — se ficar preso a
+   um loop de uma task anterior já fechado, a PRÓXIMA task que o reusar
+   bate no mesmo "Event loop is closed". Fail-soft (try/except +
+   log.warning), igual aos outros 2 já existentes no mesmo `finally`.
+
+### Achado 3 — TypeError `'<' not supported between instances of 'int' and 'NoneType'`
+
+Investigação (1 Explore agent, leitura completa de `google_drive_sync.
+py`, `google_drive/client.py`, `chunker.py`, `embeddings.py`, `OCRAgent`,
+`docx_text.py`, `circuit_breaker.py`, `integration_hub.py`, mais
+varredura ampla por comparações de ordem em todo `backend/app`)
+localizou o bug com precisão:
+
+`rag/embeddings.py::embed_batch_with_meta`, linha
+`sorted(response.data, key=lambda x: x.index)` — `sorted()` (Timsort)
+usa sempre `__lt__` internamente pra QUALQUER operador de comparação de
+ordem, daí a mensagem genérica bater exatamente com essa linha mesmo
+sem nenhum `<`/`>` explícito no código-fonte. `response.data` é uma
+lista de `openai.types.embedding.Embedding`, com `index: int` declarado
+como campo obrigatório sem default — mas o SDK da OpenAI desserializa
+respostas via `BaseModel.construct()` (`openai/_models.py`), que é
+reconstrução SEM validação: um campo ausente no JSON do servidor vira
+`None` em silêncio, nunca erro de validação. Se a camada de
+compatibilidade OpenAI do Gemini omitir `"index"` em algum item do
+lote (plausível, camadas de compatibilidade de terceiros não replicam
+100% o contrato real da API), o SDK cria o objeto com `index=None` sem
+avisar, e `sorted()` explode na comparação. Bug LATENTE pré-existente
+(a linha já existia antes da fase anterior), mas o fatiamento em lotes
+introduzido nela aumentou a exposição — mais chamadas ao Gemini = mais
+chance de um lote vir com esse defeito. Explica por que 2 arquivos
+DIFERENTES falharam com a mensagem IDÊNTICA: mesmo código, mesma
+credencial BYOK do admin, qualquer doc que precise de múltiplos lotes
+contra esse provedor está exposto.
+
+**Outros candidatos considerados e descartados** (grep amplo, sem
+achado): `dimensions` resolvido via `or` (nunca comparação); o
+fatiamento de `max_batch` já é protegido por curto-circuito (`if not
+max_batch or ...`); `chunker.py` sempre compara `str`/`int`, nunca
+`None`; `OCRAgent`/`google_drive/client.py` não fazem nenhuma
+comparação envolvendo tamanho/página (a API nem é consultada por esse
+campo); `circuit_breaker.py` teria mensagem diferente (`>=`, não `<`) e
+nada grava `null` no campo relevante hoje.
+
+**Decisão do usuário (via pergunta)**: falhar alto com mensagem clara
+— não tentar preservar a ordem original e continuar (risco real de
+casar um chunk de texto com o vetor errado, pior num sistema jurídico
+que o arquivo falhar com causa diagnosticável).
+
+**Correção**: antes do `sorted()`, checa `any(item.index is None for
+item in response.data)` — se algum item vier sem índice, levanta
+`RuntimeError` explicativo (citando o provedor e a contagem de itens)
+em vez do TypeError críptico. Capturado pelo `try/except` fail-soft já
+existente por arquivo em `google_drive_sync.py` (e qualquer outro call
+site de `ingest_document`), produzindo um `entrada.erro` diagnosticável.
+
+### Verificado
+
+Branch reiniciada a partir do `main` pós-#264 (histórico não empilhado
+sobre trabalho já mergeado). 10 testes novos/estendidos, cada um com
+prova nos dois sentidos:
+- 2 em `test_embeddings_byok.py` confirmando o `timeout` explícito
+  passado na construção do client (BYOK e singleton).
+- 3 em `test_embeddings_byok.py` confirmando: client BYOK fechado após
+  `embed_text_with_meta`/`embed_batch_with_meta` (2 formas de prova —
+  indireta via o singleton continuar `None`, e direta via um fake que
+  expõe `.closed`); singleton do provedor padrão NUNCA fechado dentro
+  dessas funções (só `run_worker_coro` o fecha, no fim da task).
+- 3 em `test_run_worker_coro_redis_cleanup.py` (arquivo já existente da
+  fase anterior): `run_worker_coro` fecha e reseta
+  `app.rag.embeddings._client` no `finally`; não quebra quando já é
+  `None` (caminho comum); uma falha ao fechar não mascara o resultado
+  real da task (mesmo padrão de fail-soft já usado pro Redis).
+- 2 em `test_embeddings_byok.py` pro guard do `index=None`: resposta
+  com 1 item sem índice → `RuntimeError` claro; resposta normal (todos
+  os índices presentes, fora de ordem) → `sorted()` continua
+  reordenando corretamente, sem regressão.
+
+**Achado ao rodar a suíte completa, não hipótese**: 2 arquivos de teste
+pré-existentes com fakes de `AsyncOpenAI` (`test_embeddings_byok.py` —
+o fixture `_fake_asyncopenai` e o `_fake_recorder` já existentes da
+fase anterior — e `test_rag_search_byok_fase255.py`) quebraram ao rodar
+a suíte inteira: seus fakes não aceitavam o novo kwarg `timeout=` nem
+tinham `.close()`. Corrigidos junto (adicionado `timeout=None` e
+`async def close()` a cada fake) — exatamente a classe de "teste
+desatualizado" que a suíte completa pega antes do CI, mesmo já
+documentada nas armadilhas conhecidas deste projeto.
+
+Suíte completa na configuração exata do runner (banco `afj_core` do
+zero via boot real da app — `service postgresql start` + seed via
+`uvicorn app.main:app` brevemente —, `REDIS_URL=` vazio), 2 execuções
+seguidas contra o mesmo banco: `tests/test_unit/` 987 passed/4 skipped
+(+10 desta fase), `tests/test_api/` 195 passed/4 skipped nas 2 rodadas
+(sem regressão de ordem/estado). `ruff check app/` limpo.
+
+**O que este sandbox não pode provar**: se o timeout de 120s é
+suficiente pra lotes reais de 100 itens contra o Gemini em produção
+(egress bloqueado neste sandbox pra `generativelanguage.googleapis.
+com`); se isso sozinho evita todo cenário de `soft_time_limit`
+estourando pra documentos MUITO grandes ou múltiplos arquivos grandes
+na mesma pasta somando mais que 115min; se `PUBLIC_BASE_URL`
+configurado corretamente no Railway resolve de fato o redirect em
+produção. Pedir ao usuário pra: (1) configurar `PUBLIC_BASE_URL` no
+Railway; (2) re-testar a sincronização da Doutrina após o deploy e
+reportar se `eca-2025.pdf` e os arquivos de "BASE DE CONHECIMENTO IA"
+completam ou falham agora com uma mensagem clara.
+
+### Arquivos principais
+- `backend/app/rag/embeddings.py`
+- `backend/app/workers/async_utils.py`
+- `backend/tests/test_unit/test_embeddings_byok.py`
+- `backend/tests/test_unit/test_run_worker_coro_redis_cleanup.py`
+- `backend/tests/test_api/test_rag_search_byok_fase255.py` (fake corrigido)
+- `CLAUDE.md`, `HISTORICO_FASES.md`

@@ -1111,6 +1111,99 @@ rediscobertas do zero a cada sessão — contexto completo de cada uma em
     (3) confirmar nas variáveis de ambiente do Railway se `OPENAI_API_KEY`
     está setada; (4) reconectar a pasta do Google Drive Doutrina e
     verificar se `eca-2025.pdf` agora ingere sem o erro de batch do Gemini.
+- **Fase pós-264** — usuário testou em produção, pós-deploy da fase
+  anterior, a sincronização da Doutrina no Google Drive. O fix do limite
+  de batch do Gemini funcionou no sentido de que os arquivos passaram a
+  tentar de verdade, mas isso expôs **2 bugs novos**, ambos confirmados
+  por investigação (não hipótese) e corrigidos nesta fase:
+  - **PUBLIC_BASE_URL — achado de configuração, não bug de código.**
+    Usuário testou o OAuth do Google Drive Doutrina direto em produção: o
+    consentimento do Google funcionou e o backend redirecionou com
+    sucesso (`hub_oauth=google_drive_doutrina_ok`), mas para
+    `http://localhost:3000` — o valor padrão de desenvolvimento hardcoded
+    em `backend/app/config.py` (`CORS_ORIGINS`/`PUBLIC_BASE_URL`), porque
+    essa variável não estava configurada no Railway de produção. Não é
+    corrigível por código — é configuração de plataforma. Usuário
+    confirmou o domínio real (`afj-core.vercel.app`) e decidiu não
+    adicionar guarda de boot (fica registrado como opção se o problema
+    voltar num deploy futuro).
+  - **BUG A, real — "Event loop is closed" no `eca-2025.pdf` + sync
+    marcada como travada pelo reaper.**
+    `backend/app/rag/embeddings.py::get_embeddings_client()` criava um
+    `AsyncOpenAI` sem `timeout=` explícito e nunca fechava esses clients
+    — diferente de todo outro cliente HTTP do projeto.
+    `sync_google_drive_doutrina` tem `time_limit=7200`/
+    `soft_time_limit=6900` (2h/115min) compartilhado entre todos os
+    tenants/arquivos de uma execução diária; o fix do batch fez um
+    documento grande como o ECA (chunking por artigo, ~267 artigos →
+    250-350+ chunks ÷ 100 por lote) precisar de ~3-4 chamadas SEQUENCIAIS
+    ao Gemini em vez de 1 falha rápida. Sem timeout próprio, um lote
+    lento/rate-limitado podia consumir bastante tempo, e se o
+    `soft_time_limit` interrompesse a execução no meio de uma chamada de
+    rede assíncrona (`SIGALRM` atingindo a maquinaria interna do
+    asyncio/httpx num ponto não seguro), o processo era kill-ado (o
+    reaper marcava o `SyncRun` como "travado" ~4h depois) — bate
+    exatamente com o sintoma relatado. Corrigido com o fix mínimo e
+    seguro (decisão do usuário, sem mexer no `time_limit` da task nem
+    redesenhar pra subtasks por arquivo): nova constante
+    `_EMBEDDING_TIMEOUT_SECONDS=120.0` passada em toda construção de
+    `AsyncOpenAI`; client BYOK (descartável, criado a cada chamada) agora
+    é fechado explicitamente após uso; `run_worker_coro`
+    (`backend/app/workers/async_utils.py`) passou a também fechar e
+    resetar o singleton `app.rag.embeddings._client` no `finally` de cada
+    task Celery — mesmo padrão já usado ali pro engine asyncpg e pro pool
+    Redis (o singleton é module-level e sobrevive entre execuções de task
+    no mesmo processo worker; se ficar preso a um loop de uma task
+    anterior já fechado, a PRÓXIMA task que o reusar bate no mesmo "Event
+    loop is closed").
+  - **BUG B, real — TypeError `'<' not supported between instances of
+    'int' and 'NoneType'`** em arquivos da pasta "BASE DE CONHECIMENTO
+    IA". `embed_batch_with_meta`, `sorted(response.data, key=lambda x:
+    x.index)` — `sorted()` usa sempre `__lt__` internamente (Timsort),
+    então qualquer item de `response.data` com `x.index is None` explode
+    nessa comparação. O SDK da OpenAI desserializa respostas via
+    `BaseModel.construct()` (sem validação Pydantic) — se a camada de
+    compatibilidade OpenAI do Gemini omitir a chave `"index"` em algum
+    item do lote, o SDK silenciosamente cria o objeto com `index=None`
+    em vez de lançar erro. Bug LATENTE pré-existente (a linha já existia
+    antes da fase pós-263), mas o fatiamento em lotes aumentou a
+    exposição — mais chamadas ao Gemini = mais chance de um lote vir com
+    esse defeito da camada de compatibilidade. Corrigido (decisão do
+    usuário: falhar alto, não tentar preservar ordem e continuar): antes
+    de `sorted()`, checa `any(item.index is None for item in
+    response.data)` e levanta `RuntimeError` explicativo — capturado pelo
+    fail-soft já existente por arquivo em `google_drive_sync.py`,
+    produzindo um `entrada.erro` diagnosticável em vez do TypeError
+    críptico. Evita o risco de casar um chunk de texto com o vetor
+    errado (pior num sistema jurídico do que o arquivo simplesmente
+    falhar com causa clara).
+  - **Verificado**: branch reiniciada a partir do `main` pós-#264. 10
+    testes novos/estendidos com prova nos dois sentidos (timeout passado
+    na construção do client BYOK e singleton; client BYOK fechado após
+    uso, singleton nunca fechado dentro de
+    `embed_text_with_meta`/`embed_batch_with_meta`; `run_worker_coro`
+    fecha e reseta o singleton de embeddings, com fail-soft se o close
+    falhar; o guard de `index=None` levanta `RuntimeError` claro, e o
+    caminho normal — sem índice ausente — continua ordenando
+    corretamente). 2 arquivos de teste pré-existentes com fakes de
+    `AsyncOpenAI` desatualizados (`test_embeddings_byok.py`,
+    `test_rag_search_byok_fase255.py`) quebraram ao rodar a suíte
+    completa (não aceitavam o novo kwarg `timeout=`) — corrigidos junto,
+    exatamente o tipo de teste desatualizado que a suíte pega antes do
+    CI. Suíte completa na configuração exata do runner (banco `afj_core`
+    do zero via boot real da app, `REDIS_URL=` vazio), 2 execuções
+    seguidas contra o mesmo banco: `tests/test_unit/` 987 passed/4
+    skipped (+10 desta fase), `tests/test_api/` 195 passed/4 skipped nas
+    2 rodadas (sem regressão). `ruff check app/` limpo.
+  - **O que este sandbox não pode provar**: se o timeout de 120s é
+    suficiente pra lotes reais de 100 itens contra o Gemini em produção
+    (egress bloqueado neste sandbox); se isso sozinho evita todo cenário
+    de `soft_time_limit` estourando pra documentos MUITO grandes (múltiplos
+    arquivos grandes na mesma pasta poderiam ainda somar mais que 115min).
+    Pedir ao usuário pra configurar `PUBLIC_BASE_URL` no Railway e
+    re-testar a sincronização da Doutrina após o deploy, reportando se
+    `eca-2025.pdf` e os arquivos de "BASE DE CONHECIMENTO IA" completam
+    ou falham agora com uma mensagem clara.
 
 ## Teste geral do sistema (metodologia)
 

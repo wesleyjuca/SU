@@ -140,7 +140,11 @@ def test_resolve_generico_ignora_grok_sem_suporte_a_embeddings():
 
 class _FakeEmbeddingsAPI:
     async def create(self, input, model, dimensions):
-        return None
+        from types import SimpleNamespace
+
+        n = len(input) if isinstance(input, list) else 1
+        itens = [SimpleNamespace(index=i, embedding=[0.0]) for i in range(n)]
+        return SimpleNamespace(data=itens)
 
 
 @pytest.fixture(autouse=True)
@@ -150,10 +154,15 @@ def _fake_asyncopenai(monkeypatch):
     import app.rag.embeddings as embeddings_mod
 
     class _FakeAsyncOpenAI:
-        def __init__(self, api_key=None, base_url=None):
+        def __init__(self, api_key=None, base_url=None, timeout=None):
             self.api_key = api_key
             self.base_url = base_url
+            self.timeout = timeout
             self.embeddings = _FakeEmbeddingsAPI()
+            self.closed = False
+
+        async def close(self):
+            self.closed = True
 
     monkeypatch.setattr(embeddings_mod, "AsyncOpenAI", _FakeAsyncOpenAI)
     embeddings_mod._client = None
@@ -210,6 +219,91 @@ async def test_get_embeddings_client_dispatch_anthropic_cai_no_padrao_do_sistema
     assert client.api_key == "sk-central"
 
 
+# Achado real de produção (fase pós-264, sync da Doutrina): sem timeout
+# explícito, um lote de embedding lento/rate-limitado podia consumir tempo
+# suficiente pra colidir com o soft_time_limit da task Celery, e a
+# interrupção no meio de uma chamada de rede corrompia o event loop
+# ("Event loop is closed" em chamadas seguintes no mesmo processo).
+
+
+@pytest.mark.asyncio
+async def test_get_embeddings_client_byok_passa_timeout_explicito():
+    from app.rag.embeddings import _EMBEDDING_TIMEOUT_SECONDS
+
+    ai_creds_ctx.set({"provider": "gemini", "api_key": "gm-key", "base_url": None})
+    client, _provider, _model, _dimensions = get_embeddings_client()
+    assert client.timeout == _EMBEDDING_TIMEOUT_SECONDS
+
+
+@pytest.mark.asyncio
+async def test_get_embeddings_client_singleton_passa_timeout_explicito(monkeypatch):
+    from app.config import settings
+    from app.rag.embeddings import _EMBEDDING_TIMEOUT_SECONDS
+
+    monkeypatch.setattr(settings, "OPENAI_API_KEY", "sk-central")
+    client, _provider, _model, _dimensions = get_embeddings_client()
+    assert client.timeout == _EMBEDDING_TIMEOUT_SECONDS
+
+
+# Achado real de produção (fase pós-264, sync da Doutrina): o client BYOK
+# (criado do zero a cada chamada) nunca era fechado — vazamento de recurso
+# real, diferente de todo outro client HTTP do projeto. O singleton do
+# provedor padrão precisa continuar VIVO entre chamadas do mesmo processo
+# (fechado só por `run_worker_coro`, no fim de cada task Celery).
+
+
+@pytest.mark.asyncio
+async def test_embed_text_fecha_client_byok_apos_uso():
+    import app.rag.embeddings as embeddings_mod
+
+    ai_creds_ctx.set({"provider": "gemini", "api_key": "gm-key", "base_url": None})
+    await embeddings_mod.embed_text_with_meta("um texto qualquer")
+    # O client usado nessa chamada nunca fica acessível fora da função —
+    # a prova indireta é que o singleton continua None (BYOK nunca o toca).
+    assert embeddings_mod._client is None
+
+
+@pytest.mark.asyncio
+async def test_embed_text_nao_fecha_singleton_do_provedor_padrao(monkeypatch):
+    import app.rag.embeddings as embeddings_mod
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "OPENAI_API_KEY", "sk-central")
+    await embeddings_mod.embed_text_with_meta("um texto qualquer")
+    # Prova real: o singleton sobrevive à chamada e não foi fechado —
+    # se o fix fechasse o singleton por engano, esta asserção falharia.
+    assert embeddings_mod._client is not None
+    assert embeddings_mod._client.closed is False
+
+
+@pytest.mark.asyncio
+async def test_embed_batch_fecha_client_byok_apos_uso(monkeypatch):
+    """Mesma prova acima, via um fake que expõe o client construído pra
+    conseguir inspecionar `.closed` diretamente (o teste anterior só prova
+    indiretamente via o singleton continuar None)."""
+    import app.rag.embeddings as embeddings_mod
+
+    clients_criados = []
+
+    class _FakeAsyncOpenAIRastreado:
+        def __init__(self, api_key=None, base_url=None, timeout=None):
+            self.api_key = api_key
+            self.embeddings = _FakeEmbeddingsAPI()
+            self.closed = False
+            clients_criados.append(self)
+
+        async def close(self):
+            self.closed = True
+
+    monkeypatch.setattr(embeddings_mod, "AsyncOpenAI", _FakeAsyncOpenAIRastreado)
+    ai_creds_ctx.set({"provider": "gemini", "api_key": "gm-key", "base_url": None})
+
+    await embeddings_mod.embed_batch_with_meta(["texto 1", "texto 2"])
+
+    assert len(clients_criados) == 1
+    assert clients_criados[0].closed is True
+
+
 # Achado real de produção (auditoria pós-262.2): `BatchEmbedContentsRequest.
 # requests: at most 100 requests can be in one batch` (HTTP 400) — a API do
 # Gemini rejeita qualquer chamada com mais de 100 itens; `embed_batch_with_meta`
@@ -247,8 +341,11 @@ def _fake_recorder(monkeypatch):
     recorder = _FakeEmbeddingsAPIRecorder()
 
     class _FakeAsyncOpenAI:
-        def __init__(self, api_key=None, base_url=None):
+        def __init__(self, api_key=None, base_url=None, timeout=None):
             self.embeddings = recorder
+
+        async def close(self):
+            pass
 
     monkeypatch.setattr(embeddings_mod, "AsyncOpenAI", _FakeAsyncOpenAI)
     embeddings_mod._client = None
@@ -297,3 +394,59 @@ async def test_embed_batch_gemini_com_poucos_itens_nao_fatia(_fake_recorder):
 
     assert len(_fake_recorder.chamadas) == 1
     assert len(vetores) == 30
+
+
+# Achado real de produção (fase pós-264): o SDK da OpenAI desserializa a
+# resposta sem validação (`BaseModel.construct()`) — se a camada de
+# compatibilidade OpenAI do Gemini omitir "index" em algum item do lote, o
+# campo vira `None` em silêncio, e `sorted(..., key=lambda x: x.index)`
+# explode com "'<' not supported between instances of 'int' and 'NoneType'"
+# (Timsort usa `__lt__` internamente pra qualquer comparação de ordem).
+# Falha alta e explícita é mais segura que presumir a ordem de entrada.
+
+
+class _FakeEmbeddingsAPIIndiceAusente:
+    """Devolve 1 item com `index=None` entre os demais — reproduz o defeito
+    real observado na camada de compatibilidade do Gemini."""
+
+    async def create(self, input, model, dimensions):
+        itens = [_FakeItem(i, [float(i)]) for i in range(len(input))]
+        itens[1].index = None
+        return _FakeResponse(itens)
+
+
+@pytest.fixture
+def _fake_indice_ausente(monkeypatch):
+    import app.rag.embeddings as embeddings_mod
+
+    class _FakeAsyncOpenAI:
+        def __init__(self, api_key=None, base_url=None, timeout=None):
+            self.embeddings = _FakeEmbeddingsAPIIndiceAusente()
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr(embeddings_mod, "AsyncOpenAI", _FakeAsyncOpenAI)
+    embeddings_mod._client = None
+    yield
+    embeddings_mod._client = None
+
+
+@pytest.mark.asyncio
+async def test_embed_batch_com_index_ausente_falha_alto_com_mensagem_clara(_fake_indice_ausente):
+    ai_creds_ctx.set({"provider": "gemini", "api_key": "gm-key", "base_url": None})
+
+    with pytest.raises(RuntimeError, match="sem 'index'"):
+        await embed_batch_with_meta(["texto 0", "texto 1", "texto 2"])
+
+
+@pytest.mark.asyncio
+async def test_embed_batch_sem_index_ausente_continua_ordenando_normalmente(_fake_recorder):
+    """Prova nos dois sentidos: sem o guard, este teste continuaria
+    passando (nenhum índice é None aqui) — é o teste acima que prova que o
+    guard dispara exatamente quando deveria, e só então."""
+    ai_creds_ctx.set({"provider": "gemini", "api_key": "gm-key", "base_url": None})
+
+    vetores, _provider, _model = await embed_batch_with_meta(["a", "b", "c"])
+
+    assert vetores == [[0.0], [1.0], [2.0]]

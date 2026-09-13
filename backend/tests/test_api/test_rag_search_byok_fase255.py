@@ -54,9 +54,12 @@ class _FakeEmbeddingsAPI:
 
 
 class _FakeAsyncOpenAI:
-    def __init__(self, api_key=None, base_url=None):
+    def __init__(self, api_key=None, base_url=None, timeout=None):
         _FakeEmbeddingsAPI.last_construct_key = api_key
         self.embeddings = _FakeEmbeddingsAPI()
+
+    async def close(self):
+        pass
 
 
 @pytest.fixture
