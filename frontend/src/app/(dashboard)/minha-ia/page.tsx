@@ -77,6 +77,13 @@ export default function MinhaIAPage() {
   const [configs, setConfigs] = useState<AIConfig[]>([]);
   const [stats, setStats] = useState<Record<string, AIConfigStats>>({});
   const [providers, setProviders] = useState<Record<string, ProviderInfo>>({});
+  // Fase pós-265 — as bases compartilhadas (jurisprudência/legislação/doutrina
+  // pública) só funcionam com o provedor PADRÃO do sistema; sem saber se a
+  // plataforma tem essa chave, a tela nunca avisava quem mais precisa do aviso
+  // (um tenant configurado só com Gemini, que TEM embeddings mas não serve
+  // pras bases públicas).
+  const [sistemaTemEmbeddingPadrao, setSistemaTemEmbeddingPadrao] = useState(true);
+  const [embeddingProviderPadrao, setEmbeddingProviderPadrao] = useState("openai");
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [testingId, setTestingId] = useState<string | null>(null);
@@ -109,7 +116,15 @@ export default function MinhaIAPage() {
         }
         return;
       }
-      if (rProv.ok) setProviders((await rProv.json()).providers || {});
+      if (rProv.ok) {
+        const prov = await rProv.json();
+        setProviders(prov.providers || {});
+        // Fase pós-265 — booleano (nunca a chave) dizendo se a plataforma tem
+        // o provedor padrão de embeddings configurado; sem ele, as bases
+        // compartilhadas só funcionam com uma chave DESSE provedor.
+        setSistemaTemEmbeddingPadrao(prov.sistema_tem_embedding_padrao !== false);
+        setEmbeddingProviderPadrao(prov.embedding_provider_padrao || "openai");
+      }
       if (rCfg.ok) setConfigs((await rCfg.json()).configs || []);
       if (rStats.ok) setStats((await rStats.json()).stats || {});
       if (rBalance.ok) setModoBalanceamento((await rBalance.json()).mode || "padrao");
@@ -280,6 +295,29 @@ export default function MinhaIAPage() {
               .map(([, info]) => info.nome)
               .join(" ou ") || "um provedor compatível"}
             {" "}aqui, mesmo sem torná-la a IA padrão, pra habilitar a busca.
+          </p>
+        </div>
+      )}
+
+      {/* Fase pós-265 — segundo aviso, distinto do de cima e para um público
+          diferente: as bases COMPARTILHADAS (jurisprudência, legislação e
+          doutrina pública) são indexadas com o provedor padrão do sistema, e
+          um vetor de outro provedor não é comparável com elas. O banner acima
+          se esconde de quem tem Gemini (Gemini TEM embeddings) — exatamente
+          quem precisa deste aviso. Só aparece quando a plataforma não tem a
+          chave central, senão seria ruído. */}
+      {!sistemaTemEmbeddingPadrao
+        && !configs.some((c) => c.provider === embeddingProviderPadrao && c.enabled) && (
+        <div className="flex items-start gap-2.5 text-xs rounded-sm px-3.5 py-3 mb-4 bg-amber-50 border border-amber-200 text-amber-900">
+          <Scale size={15} className="flex-shrink-0 mt-0.5" />
+          <p className="leading-relaxed">
+            As bases <strong>compartilhadas</strong> da Pesquisa Jurídica (jurisprudência,
+            legislação e doutrina pública) são indexadas com{" "}
+            <strong>{providers[embeddingProviderPadrao]?.nome || embeddingProviderPadrao}</strong>{" "}
+            e só podem ser pesquisadas com uma chave desse provedor — uma chave de outro
+            provedor gera vetores incompatíveis com o conteúdo já indexado. Suas bases
+            privadas (petições, memórias, documentos e Doutrina AFJ) funcionam normalmente
+            com qualquer IA com suporte a embeddings.
           </p>
         </div>
       )}

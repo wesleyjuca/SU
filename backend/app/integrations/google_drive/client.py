@@ -322,48 +322,84 @@ async def baixar_conteudo(access_token: str, file_id: str, mime_type: str | None
     return await baixar_arquivo(access_token, file_id)
 
 
-async def extrair_texto(mime_type: str | None, conteudo: bytes) -> str | None:
-    """Extrai texto indexável do arquivo, conforme o `mimeType` que o Drive
-    já devolve na listagem. `None` (não exceção) pra tipo não suportado ou
-    extração vazia — o chamador loga e pula, fail-soft."""
+async def extrair_texto(mime_type: str | None, conteudo: bytes) -> tuple[str | None, str | None]:
+    """Extrai texto indexável do arquivo, conforme o `mimeType` que o Drive já
+    devolve na listagem. Devolve `(texto, aviso)`.
+
+    Achado real de produção (fase pós-265): esta função devolvia `None` pra
+    QUATRO causas distintas — OCR falhou, OCR indisponível no servidor,
+    extração de DOCX estourou, e documento genuinamente sem texto. O chamador
+    só podia escrever uma mensagem genérica, e o usuário ficava sem saber o que
+    corrigir. Agora:
+
+    - **falha dura** (as 3 primeiras) levanta `RuntimeError` com a causa real
+      — o único chamador de produção (`workers/tasks/google_drive_sync.py`) já
+      envolve a chamada num `try/except` que grava a mensagem em
+      `JurisprudenciaIngerida.erro`, então a causa chega à tela sem estrutura
+      nova;
+    - **`texto=None`** fica reservado pro único caso em que é honesto: tipo
+      suportado, parsing OK, documento sem texto nenhum;
+    - **`aviso`** carrega sucesso parcial (ex.: OCR que falhou em algumas
+      páginas de um PDF grande) — o arquivo é indexado com o que deu, e o
+      chamador reporta o resto em vez de descartar tudo.
+
+    Tipo não suportado continua devolvendo `(None, None)` (defensivo): o
+    chamador já barra isso antes, com `tipo_suportado()` e mensagem própria.
+    """
     if not mime_type or not conteudo:
-        return None
+        return None, None
     if mime_type == _MIME_GDOC:
         # `conteudo` já chega como texto plano (exportado via `/export?
         # mimeType=text/plain` por `baixar_conteudo`) — só decodificar.
         texto = conteudo.decode("utf-8", errors="replace").strip()
-        return texto or None
+        return (texto or None), None
     if mime_type == _MIME_DOCX:
         try:
             from app.utils.docx_text import extract_docx_text
             texto = extract_docx_text(conteudo)
-            return texto or None
         except Exception as exc:
             log.warning("drive_extract_docx_falhou", error=str(exc))
-            return None
+            raise RuntimeError(f"falha ao ler o DOCX: {exc}") from exc
+        return (texto or None), None
     if mime_type == _MIME_PDF:
-        try:
-            from app.agents.ocr.ocr_agent import OCRAgent
-            from app.agents.brain.context import AgentContext
-            from app.agents.base.result import AgentStatus
-            import base64
+        from app.agents.ocr.ocr_agent import OCRAgent
+        from app.agents.brain.context import AgentContext
+        from app.agents.base.result import AgentStatus
+        import base64
 
-            ctx = AgentContext(
-                task_type="ocr_document",
-                task_input={
-                    "file_bytes_b64": base64.b64encode(conteudo).decode(),
-                    "content_type": _MIME_PDF,
-                },
-            )
+        ctx = AgentContext(
+            task_type="ocr_document",
+            task_input={
+                "file_bytes_b64": base64.b64encode(conteudo).decode(),
+                "content_type": _MIME_PDF,
+            },
+        )
+        try:
             result = await OCRAgent(db=None).execute(ctx)
-            if result.status != AgentStatus.SUCCESS:
-                return None
-            texto = (result.output or {}).get("texto_extraido") or ""
-            if texto == OCRAgent.UNAVAILABLE or not texto.strip():
-                return None
-            return texto
         except Exception as exc:
             log.warning("drive_extract_pdf_falhou", error=str(exc))
-            return None
+            raise RuntimeError(f"falha ao processar o PDF: {exc}") from exc
+        if result.status != AgentStatus.SUCCESS:
+            raise RuntimeError(f"OCR do PDF falhou: {result.error or 'causa não informada'}")
+        saida = result.output or {}
+        texto = saida.get("texto_extraido") or ""
+        if texto == OCRAgent.UNAVAILABLE:
+            raise RuntimeError(
+                "OCR indisponível no servidor (pdfplumber/pytesseract ou o binário "
+                "do tesseract não estão instalados) — PDFs escaneados não podem ser lidos."
+            )
+        falhas = int(saida.get("paginas_falhas") or 0)
+        total = int(saida.get("paginas_total") or 0)
+        if not texto.strip():
+            if falhas:
+                raise RuntimeError(
+                    f"OCR falhou em todas as {falhas} página(s) do PDF — nenhum texto extraído."
+                )
+            return None, None
+        aviso = (
+            f"{falhas} de {total} página(s) falharam no OCR — o arquivo foi indexado "
+            "com o texto das demais."
+        ) if falhas else None
+        return texto, aviso
     log.info("drive_tipo_nao_suportado", mime_type=mime_type)
-    return None
+    return None, None

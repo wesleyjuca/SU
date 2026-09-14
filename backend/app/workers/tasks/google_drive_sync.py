@@ -198,10 +198,22 @@ async def executar_sync_drive_doutrina(db, tenant_id=None) -> dict:
                             conteudo = await baixar_conteudo(creds["access_token"], file_id, mime_type)
                             if conteudo is None:
                                 raise RuntimeError("download do arquivo falhou")
-                            texto = await extrair_texto(mime_type, conteudo)
+                            # Fase pós-265 — `extrair_texto` agora levanta com a
+                            # causa real (OCR indisponível, DOCX corrompido, OCR
+                            # falhou em tudo), capturada pelo `except` abaixo. O
+                            # `texto=None` que sobra aqui é só o caso honesto de
+                            # "documento sem texto nenhum" — a mensagem antiga
+                            # ("tipo de arquivo não suportado ou sem texto
+                            # extraível") mentia em 100% dos casos, porque
+                            # `tipo_suportado()` já barrou tipo não suportado
+                            # acima, com mensagem própria.
+                            texto, aviso = await extrair_texto(mime_type, conteudo)
                             if not texto:
                                 entrada.status = "FALHOU"
-                                entrada.erro = "tipo de arquivo não suportado ou sem texto extraível"
+                                entrada.erro = (
+                                    "arquivo sem texto extraível — documento vazio, ou "
+                                    "só imagens sem texto reconhecível."
+                                )
                                 falhas += 1
                             else:
                                 # Fase 188.1 — achado da Fase 186: reprocessar um
@@ -217,6 +229,12 @@ async def executar_sync_drive_doutrina(db, tenant_id=None) -> dict:
                                     metadata={"tenant_id": str(integ.tenant_id), **metadata}, document_id=file_id,
                                 )
                                 entrada.status = "EMBEDDED"
+                                # Sucesso parcial (ex.: OCR que falhou em
+                                # algumas páginas de um PDF grande): o arquivo
+                                # conta como indexado, mas o que se perdeu fica
+                                # visível — o painel pinta o aviso de âmbar, não
+                                # de vermelho, já que o status não é FALHOU.
+                                entrada.erro = aviso
                                 processados += 1
                         except Exception as exc:
                             entrada.status = "FALHOU"

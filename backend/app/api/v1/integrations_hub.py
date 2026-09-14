@@ -345,7 +345,13 @@ async def hub_drive_doutrina_last_sync_arquivos(
     real de CADA arquivo já era gravado em `JurisprudenciaIngerida.erro`,
     mas nenhum endpoint o expunha, tornando "1 falhas" uma caixa-preta sem
     acesso direto ao banco. Devolve os até 50 arquivos mais recentes deste
-    tenant, com o motivo real de cada falha."""
+    tenant, com o motivo real de cada falha.
+
+    Fase pós-265: `erro` cru continua no payload (auditoria/suporte) e ganha
+    ao lado `erro_amigavel` — a mesma tradução curada que o card de status já
+    usa (`integration_hub.friendly_detail`), aditiva, nunca substituindo o
+    dado técnico. Sem isso o corpo de erro 429 do provedor de embeddings
+    chegava verbatim à tela pra um usuário não-técnico."""
     from app.models.jurisprudencia_ingerida import JurisprudenciaIngerida
 
     fonte = f"google_drive:{current_user.tenant_id}"
@@ -367,6 +373,14 @@ async def hub_drive_doutrina_last_sync_arquivos(
                 "caminho_pasta": (linha.metadata_extraida or {}).get("caminho_pasta") or "",
                 "status": linha.status,
                 "erro": linha.erro,
+                # `fallback=False` de propósito: aqui a mensagem crua pode
+                # já ter sido escrita pelo próprio sistema, em português
+                # claro (o aviso de OCR parcial de um arquivo EMBEDDED, ou
+                # "OCR indisponível no servidor (...)" de um FALHOU). A frase
+                # genérica do fallback embrulharia uma mensagem já acionável
+                # e a pioraria — traduzir só quando um padrão de fato casa
+                # (429 de cota, 401/403 de credencial, timeout...).
+                "erro_amigavel": integration_hub.friendly_detail(linha.erro, fallback=False),
                 "processed_at": linha.processed_at.isoformat() if linha.processed_at else None,
             }
             for linha in linhas

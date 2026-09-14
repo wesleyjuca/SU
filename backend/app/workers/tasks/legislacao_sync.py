@@ -105,7 +105,9 @@ async def executar_sync_legislacao(db) -> dict:
         raise
 
     stats = {"processados": processados, "pulados": pulados, "falhas": falhas}
-    await finalizar_sync(db, run, "OK", stats)
+    # Fase pós-265 — antes era "OK" incondicional; ver o mesmo comentário em
+    # `jurisprudencia_sync.py`. Uma pipeline que falhou em tudo não é "OK".
+    await finalizar_sync(db, run, "OK" if falhas == 0 else "ERRO", stats)
     await db.commit()
     log.info("legislacao_sync_complete", **stats)
     return stats

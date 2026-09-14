@@ -211,7 +211,12 @@ async def executar_sync_stj(db) -> dict:
         "nao_classificados": nao_classificados,
         "custo_classificacao_usd": round(custo_total, 4),
     }
-    await finalizar_sync(db, run, "OK", stats)
+    # Fase pós-265 — antes era "OK" incondicional: uma execução com
+    # `processados: 0, falhas: 200` (o que acontece quando o provedor de
+    # embeddings das collections PÚBLICAS está indisponível) era gravada como
+    # sucesso, e ninguém no sistema tinha como perceber. Mesma convenção
+    # binária já usada em `agents/process/process_agent.py`.
+    await finalizar_sync(db, run, "OK" if falhas == 0 else "ERRO", stats)
     await db.commit()
     log.info("stj_sync_complete", **stats)
     return stats

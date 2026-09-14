@@ -100,6 +100,56 @@ async def test_jobs_expoe_detalhe_do_erro_de_sync_run(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_jobs_expoe_processados_e_falhas_do_sync_run(monkeypatch):
+    """Fase pós-265 — `processados`/`falhas` já estavam no `stats` e eram
+    descartados aqui: uma pipeline de base pública que falhou em TODOS os
+    itens ficava invisível até pro SUPERADMIN."""
+    import datetime as dt_mod
+
+    class _Row:
+        def __init__(self, stats):
+            self.fonte = "lexml_legislacao"
+            self.tipo = "INGESTAO"
+            self.status = "ERRO"
+            self.started_at = dt_mod.datetime(2026, 9, 14, 6, 0, tzinfo=dt_mod.timezone.utc)
+            self.stats = stats
+
+    class _AgentRunResult:
+        def all(self_inner):
+            return []
+
+    class _SyncRunResult:
+        def all(self_inner):
+            return [
+                _Row({"processados": 0, "falhas": 200}),
+                _Row({}),  # stats vazio não pode quebrar
+            ]
+
+    class _FakeSession:
+        def __init__(self):
+            self._calls = 0
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def execute(self, stmt):
+            self._calls += 1
+            return _AgentRunResult() if self._calls == 1 else _SyncRunResult()
+
+    import app.db.base as dbbase
+    monkeypatch.setattr(dbbase, "AsyncSessionLocal", lambda: _FakeSession())
+
+    runs = (await bi._jobs())["sync_runs_recentes"]
+
+    assert runs[0]["processados"] == 0
+    assert runs[0]["falhas"] == 200
+    assert runs[1]["processados"] is None and runs[1]["falhas"] is None
+
+
+@pytest.mark.asyncio
 async def test_coletar_infra_agrega_sem_lancar():
     snap = await bi.coletar_infra()
     assert {"celery", "redis", "qdrant", "postgres_pool", "jobs", "coleta_ms"} <= set(snap)

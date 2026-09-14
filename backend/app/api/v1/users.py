@@ -127,8 +127,22 @@ def _config_to_dict(c: AIProviderConfig) -> dict:
 @router.get("/me/ai-providers")
 async def list_ai_providers():
     """Registro estático dos provedores suportados (Fase 137.1) — o frontend
-    monta o formulário de "Adicionar IA" a partir disto."""
-    return {"providers": AI_PROVIDERS}
+    monta o formulário de "Adicionar IA" a partir disto.
+
+    Fase pós-265: junto vai um booleano (nunca a chave) dizendo se a
+    plataforma tem o provedor padrão de embeddings configurado. Sem ele, as
+    bases compartilhadas (jurisprudência/legislação/doutrina pública) só
+    funcionam se o próprio usuário cadastrar uma chave DESSE provedor — e o
+    frontend não tinha como saber disso, então nunca avisava quem mais
+    precisava do aviso (um tenant configurado só com Gemini)."""
+    from app.config import settings
+    from app.rag.embeddings import SYSTEM_DEFAULT_PROVIDER
+
+    return {
+        "providers": AI_PROVIDERS,
+        "sistema_tem_embedding_padrao": bool(settings.OPENAI_API_KEY),
+        "embedding_provider_padrao": SYSTEM_DEFAULT_PROVIDER,
+    }
 
 
 @router.get("/me/ai-configs")

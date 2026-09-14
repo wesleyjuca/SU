@@ -163,6 +163,24 @@ def get_embeddings_client(*, force_system_default: bool = False) -> tuple[AsyncO
                     settings.DEFAULT_EMBEDDING_MODEL,
                     settings.EMBEDDING_DIMENSIONS,
                 )
+            # Fase pós-265 — a mensagem listava TODOS os provedores
+            # embedding-capable ("gemini, openai") mesmo neste ramo, onde só
+            # uma chave `openai` serve (as linhas acima são explícitas: outro
+            # provedor geraria vetor incompatível com o conteúdo público já
+            # indexado). Um tenant só-Gemini era mandado cadastrar Gemini pra
+            # resolver algo que Gemini não resolve. Agora a mensagem depende
+            # do caminho: base pública exige o provedor padrão do sistema.
+            if force_system_default:
+                raise EmbeddingProviderUnavailable(
+                    "Busca vetorial indisponível: OPENAI_API_KEY não configurada. "
+                    "As bases compartilhadas (jurisprudência, legislação e doutrina "
+                    f"pública) são indexadas com o provedor padrão do sistema "
+                    f"({SYSTEM_DEFAULT_PROVIDER}) e só funcionam com uma chave desse "
+                    "provedor — uma chave de outro provedor geraria vetores "
+                    "incompatíveis com o conteúdo já indexado. Configure a chave do "
+                    f"sistema, ou cadastre uma chave {SYSTEM_DEFAULT_PROVIDER} em "
+                    "\"Minha IA\"."
+                )
             provedores = ", ".join(sorted(embedding_capable_providers()))
             raise EmbeddingProviderUnavailable(
                 "Busca vetorial indisponível: OPENAI_API_KEY não configurada. "

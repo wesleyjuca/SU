@@ -110,7 +110,7 @@ async def test_falha_no_meio_dos_arquivos_de_um_tenant_nao_aborta_os_demais(monk
         return b"bytes"
 
     async def _fake_extrair_texto(mimetype, conteudo):
-        return "texto extraido"
+        return "texto extraido", None
 
     monkeypatch.setattr("app.integrations.google_drive.client.listar_arquivos", _fake_listar_arquivos)
     monkeypatch.setattr("app.integrations.google_drive.client.baixar_conteudo", _fake_baixar_conteudo)
@@ -199,7 +199,7 @@ async def test_arquivo_falhou_e_reprocessado_na_proxima_sincronizacao(monkeypatc
         return "agora funciona".encode("utf-8")
 
     async def _fake_extrair_texto(mimetype, conteudo):
-        return "agora funciona"
+        return "agora funciona", None
 
     monkeypatch.setattr("app.integrations.google_drive.client.listar_arquivos", _fake_listar_arquivos)
     monkeypatch.setattr("app.integrations.google_drive.client.baixar_conteudo", _fake_baixar_conteudo)
@@ -397,7 +397,7 @@ async def test_falha_seguida_de_rollback_tambem_falhando_nao_escapa_e_segue_pro_
         return b"bytes"
 
     async def _fake_extrair_texto(mimetype, conteudo):
-        return "texto extraido"
+        return "texto extraido", None
 
     monkeypatch.setattr("app.integrations.google_drive.client.listar_arquivos", _fake_listar_arquivos)
     monkeypatch.setattr("app.integrations.google_drive.client.baixar_conteudo", _fake_baixar_conteudo)
@@ -474,7 +474,7 @@ async def test_sync_ativa_byok_do_admin_que_conectou_a_integracao(monkeypatch):
         return b"bytes"
 
     async def _fake_extrair_texto(mimetype, conteudo):
-        return "texto extraido"
+        return "texto extraido", None
 
     monkeypatch.setattr("app.integrations.google_drive.client.listar_arquivos", _fake_listar_arquivos)
     monkeypatch.setattr("app.integrations.google_drive.client.baixar_conteudo", _fake_baixar_conteudo)
@@ -551,7 +551,7 @@ async def test_sync_percorre_multiplas_pastas_configuradas(monkeypatch):
         return b"bytes"
 
     async def _fake_extrair_texto(mimetype, conteudo):
-        return "texto extraido"
+        return "texto extraido", None
 
     monkeypatch.setattr("app.integrations.google_drive.client.listar_arquivos", _fake_listar_arquivos)
     monkeypatch.setattr("app.integrations.google_drive.client.baixar_conteudo", _fake_baixar_conteudo)
@@ -618,7 +618,7 @@ async def test_sync_uma_pasta_falha_outra_funciona_nao_aborta(monkeypatch):
         return b"bytes"
 
     async def _fake_extrair_texto(mimetype, conteudo):
-        return "texto extraido"
+        return "texto extraido", None
 
     monkeypatch.setattr("app.integrations.google_drive.client.listar_arquivos", _fake_listar_arquivos)
     monkeypatch.setattr("app.integrations.google_drive.client.baixar_conteudo", _fake_baixar_conteudo)
@@ -684,3 +684,108 @@ async def test_sync_todas_as_pastas_falham_termina_erro(monkeypatch):
 
     assert resultado["tenants_sincronizados"] == 0
     assert chamadas_finalizar[0][0] == "ERRO"
+
+
+# ─── Fase pós-265 — a mensagem que mentia e o sucesso parcial do OCR ──────────
+# `extrair_texto` colapsava 4 causas distintas num `None`, e o worker escrevia
+# "tipo de arquivo não suportado ou sem texto extraível" — cuja primeira metade
+# é impossível naquele ponto, porque `tipo_suportado()` já barrou tipo não
+# suportado acima, com mensagem própria.
+
+
+def _monta_fakes_basicos(monkeypatch, tenant):
+    """Plumbing comum dos 2 testes abaixo (mesmo padrão dos testes acima)."""
+    async def _fake_iniciar_sync(db, tenant_id, fonte, tipo):
+        return type("Run", (), {"tenant_id": tenant_id})()
+
+    async def _fake_finalizar_sync(db, run, status, stats):
+        pass
+
+    async def _fake_get_credentials(db, tenant_id, provider):
+        return {"access_token": "tok"}
+
+    async def _fake_listar_arquivos(access_token, folder_id):
+        return [{"id": "f1", "name": "vade-mecum.pdf", "mimeType": "application/pdf"}]
+
+    async def _fake_baixar_conteudo(access_token, file_id, mime_type):
+        return b"%PDF-fake"
+
+    async def _fake_ingest(**kwargs):
+        return None
+
+    async def _fake_delete_chunks(**kwargs):
+        return None
+
+    monkeypatch.setattr("app.services.movements_import.iniciar_sync", _fake_iniciar_sync)
+    monkeypatch.setattr("app.services.movements_import.finalizar_sync", _fake_finalizar_sync)
+    monkeypatch.setattr("app.services.integration_hub.get_credentials", _fake_get_credentials)
+    monkeypatch.setattr("app.integrations.google_drive.client.listar_arquivos", _fake_listar_arquivos)
+    monkeypatch.setattr("app.integrations.google_drive.client.baixar_conteudo", _fake_baixar_conteudo)
+    monkeypatch.setattr("app.rag.ingestion.ingest_document", _fake_ingest)
+    monkeypatch.setattr("app.rag.ingestion.delete_document_chunks", _fake_delete_chunks)
+
+
+@pytest.mark.asyncio
+async def test_causa_real_da_falha_chega_ao_erro_do_arquivo(monkeypatch):
+    """Antes: qualquer falha de extração virava a mesma frase genérica (e
+    factualmente errada). Agora a causa real levantada por `extrair_texto`
+    chega ao campo que a tela exibe."""
+    import app.workers.tasks.google_drive_sync as mod
+
+    tenant = uuid.uuid4()
+    integ = _FakeInteg(tenant, "folder_x")
+    _monta_fakes_basicos(monkeypatch, tenant)
+
+    async def _fake_extrair_texto(mimetype, conteudo):
+        raise RuntimeError(
+            "OCR indisponível no servidor (pdfplumber/pytesseract ou o binário "
+            "do tesseract não estão instalados) — PDFs escaneados não podem ser lidos."
+        )
+
+    monkeypatch.setattr("app.integrations.google_drive.client.extrair_texto", _fake_extrair_texto)
+
+    entrada = _FakeEntradaFalhou()
+    db = _FakeDB([
+        _FakeScalarsResult([integ]),
+        _FakeScalarResult(_FakeCfg()),
+        _FakeScalarResult(entrada),
+    ])
+
+    resultado = await mod.executar_sync_drive_doutrina(db)
+
+    assert resultado["falhas"] == 1
+    assert entrada.status == "FALHOU"
+    assert "OCR indisponível no servidor" in entrada.erro
+
+
+@pytest.mark.asyncio
+async def test_ocr_parcial_indexa_o_arquivo_e_guarda_o_aviso(monkeypatch):
+    """Decisão do usuário (fase pós-265): um PDF grande com algumas páginas
+    ruins é indexado com o que deu, e o que se perdeu fica visível — antes,
+    1 página ruim derrubava o arquivo inteiro."""
+    import app.workers.tasks.google_drive_sync as mod
+
+    tenant = uuid.uuid4()
+    integ = _FakeInteg(tenant, "folder_x")
+    _monta_fakes_basicos(monkeypatch, tenant)
+
+    async def _fake_extrair_texto(mimetype, conteudo):
+        return "texto das páginas boas", "3 de 267 página(s) falharam no OCR — o arquivo foi indexado com o texto das demais."
+
+    monkeypatch.setattr("app.integrations.google_drive.client.extrair_texto", _fake_extrair_texto)
+
+    entrada = _FakeEntradaFalhou()
+    db = _FakeDB([
+        _FakeScalarsResult([integ]),
+        _FakeScalarResult(_FakeCfg()),
+        _FakeScalarResult(entrada),
+    ])
+
+    resultado = await mod.executar_sync_drive_doutrina(db)
+
+    assert resultado["processados"] == 1
+    assert resultado["falhas"] == 0
+    assert entrada.status == "EMBEDDED"
+    # O aviso sobrevive no mesmo campo que a tela já exibe — mas com status
+    # EMBEDDED, então o frontend o pinta de âmbar (aviso), não de vermelho.
+    assert entrada.erro is not None and "3 de 267" in entrada.erro
