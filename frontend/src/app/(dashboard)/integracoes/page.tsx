@@ -146,7 +146,8 @@ function HubCards() {
   const [arquivosDriveAbertos, setArquivosDriveAbertos] = useState(false);
   const [arquivosDrive, setArquivosDrive] = useState<Array<{
     google_file_id: string; nome_arquivo: string | null; caminho_pasta: string;
-    status: string; erro: string | null; processed_at: string | null;
+    status: string; erro: string | null; erro_amigavel: string | null;
+    processed_at: string | null;
   }> | null>(null);
   const [carregandoArquivosDrive, setCarregandoArquivosDrive] = useState(false);
 
@@ -562,7 +563,20 @@ function HubCards() {
                                     <p className="font-medium text-afj-black/80 truncate max-w-[180px]" title={arq.nome_arquivo || arq.google_file_id}>
                                       {arq.caminho_pasta ? `${arq.caminho_pasta}/` : ""}{arq.nome_arquivo || arq.google_file_id}
                                     </p>
-                                    {arq.erro && <p className="text-red-600 mt-0.5">{arq.erro}</p>}
+                                    {/* Fase pós-265 — mostra a tradução curada
+                                        (`erro_amigavel`) e guarda o texto técnico
+                                        no tooltip, pro suporte. Vermelho só quando
+                                        o arquivo de fato falhou: um arquivo
+                                        EMBEDDED pode trazer um aviso (ex.: OCR
+                                        parcial), que é âmbar, não erro. */}
+                                    {arq.erro && (
+                                      <p
+                                        className={`mt-0.5 ${arq.status === "FALHOU" ? "text-red-600" : "text-amber-600"}`}
+                                        title={arq.erro}
+                                      >
+                                        {arq.erro_amigavel || arq.erro}
+                                      </p>
+                                    )}
                                   </td>
                                   <td className="px-2.5 py-1.5 align-top text-right whitespace-nowrap">
                                     <span className={`px-1.5 py-0.5 rounded-sm ${

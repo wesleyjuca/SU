@@ -51,6 +51,18 @@ def pastas_drive_doutrina(extra_data: dict | None) -> list[dict]:
 # técnico original. Primeiro padrão que casa vence; fallback nunca
 # inventa uma causa que não foi confirmada.
 _FRIENDLY_ERROR_PATTERNS: list[tuple[re.Pattern, str]] = [
+    # Achado real de produção (fase pós-265): a sincronização da Doutrina
+    # começou a falhar com o corpo de erro 429 do Gemini inteiro gravado em
+    # `JurisprudenciaIngerida.erro` e renderizado verbatim na tela de
+    # Integrações. Nenhum dos padrões abaixo casava com cota esgotada, então
+    # o admin recebia o JSON cru dentro do fallback genérico. O mesmo padrão
+    # já existia escrito em `api/v1/users.py::_friendly_ai_error` (tela
+    # "Minha IA") — mantido lá com texto próprio daquele contexto (fala de
+    # Google AI Studio); aqui o texto é genérico pra qualquer integração.
+    # Primeiro da lista de propósito: precede o padrão de credencial abaixo.
+    (re.compile(r"\b429\b|resource_exhausted|quota|rate.?limit", re.I),
+     "A cota da chave de IA configurada foi esgotada ou não cobre este modelo. "
+     "Verifique o faturamento no provedor, ou troque a chave em \"Minha IA\"."),
     (re.compile(r"credencial inv[aá]lida|revogad|\b401\b|\b403\b", re.I),
      "A credencial não é válida ou foi revogada. Reconecte a integração em Integrações."),
     (re.compile(r"timeout|inalcan[çc][aá]vel|connecterror|connecttimeout", re.I),
@@ -66,15 +78,27 @@ _FRIENDLY_ERROR_PATTERNS: list[tuple[re.Pattern, str]] = [
 ]
 
 
-def friendly_detail(raw: str | None) -> str | None:
+def friendly_detail(raw: str | None, *, fallback: bool = True) -> str | None:
     """Traduz `last_error_detail`/`detail` cru pra uma mensagem em português
     que um administrador não-técnico consegue agir sobre — nunca afirma uma
-    causa que não foi de fato identificada (fallback honesto abaixo)."""
+    causa que não foi de fato identificada (fallback honesto abaixo).
+
+    `fallback=False` devolve `None` quando nenhum padrão casa, em vez da
+    frase genérica. Achado real da verificação da fase pós-265: aplicada a
+    um erro que o PRÓPRIO sistema escreveu em português claro (ex.: "OCR
+    indisponível no servidor (...)"), a frase genérica embrulhava uma
+    mensagem já acionável e a piorava — *"Não foi possível identificar a
+    causa exata do erro (OCR indisponível no servidor ...)"*. O fallback
+    continua sendo o certo pro card de status, onde o texto cru é uma
+    exceção de biblioteca; não é o certo onde a mensagem pode já ser nossa.
+    """
     if not raw:
         return None
     for pattern, friendly in _FRIENDLY_ERROR_PATTERNS:
         if pattern.search(raw):
             return friendly
+    if not fallback:
+        return None
     truncado = raw[:140]
     return f"Não foi possível identificar a causa exata do erro ({truncado}). Se persistir, contate o suporte técnico."
 

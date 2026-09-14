@@ -1111,6 +1111,216 @@ rediscobertas do zero a cada sessão — contexto completo de cada uma em
     (3) confirmar nas variáveis de ambiente do Railway se `OPENAI_API_KEY`
     está setada; (4) reconectar a pasta do Google Drive Doutrina e
     verificar se `eca-2025.pdf` agora ingere sem o erro de batch do Gemini.
+- **Fase pós-264** — usuário testou em produção, pós-deploy da fase
+  anterior, a sincronização da Doutrina no Google Drive. O fix do limite
+  de batch do Gemini funcionou no sentido de que os arquivos passaram a
+  tentar de verdade, mas isso expôs **2 bugs novos**, ambos confirmados
+  por investigação (não hipótese) e corrigidos nesta fase:
+  - **PUBLIC_BASE_URL — achado de configuração, não bug de código.**
+    Usuário testou o OAuth do Google Drive Doutrina direto em produção: o
+    consentimento do Google funcionou e o backend redirecionou com
+    sucesso (`hub_oauth=google_drive_doutrina_ok`), mas para
+    `http://localhost:3000` — o valor padrão de desenvolvimento hardcoded
+    em `backend/app/config.py` (`CORS_ORIGINS`/`PUBLIC_BASE_URL`), porque
+    essa variável não estava configurada no Railway de produção. Não é
+    corrigível por código — é configuração de plataforma. Usuário
+    confirmou o domínio real (`afj-core.vercel.app`) e decidiu não
+    adicionar guarda de boot (fica registrado como opção se o problema
+    voltar num deploy futuro).
+  - **BUG A, real — "Event loop is closed" no `eca-2025.pdf` + sync
+    marcada como travada pelo reaper.**
+    `backend/app/rag/embeddings.py::get_embeddings_client()` criava um
+    `AsyncOpenAI` sem `timeout=` explícito e nunca fechava esses clients
+    — diferente de todo outro cliente HTTP do projeto.
+    `sync_google_drive_doutrina` tem `time_limit=7200`/
+    `soft_time_limit=6900` (2h/115min) compartilhado entre todos os
+    tenants/arquivos de uma execução diária; o fix do batch fez um
+    documento grande como o ECA (chunking por artigo, ~267 artigos →
+    250-350+ chunks ÷ 100 por lote) precisar de ~3-4 chamadas SEQUENCIAIS
+    ao Gemini em vez de 1 falha rápida. Sem timeout próprio, um lote
+    lento/rate-limitado podia consumir bastante tempo, e se o
+    `soft_time_limit` interrompesse a execução no meio de uma chamada de
+    rede assíncrona (`SIGALRM` atingindo a maquinaria interna do
+    asyncio/httpx num ponto não seguro), o processo era kill-ado (o
+    reaper marcava o `SyncRun` como "travado" ~4h depois) — bate
+    exatamente com o sintoma relatado. Corrigido com o fix mínimo e
+    seguro (decisão do usuário, sem mexer no `time_limit` da task nem
+    redesenhar pra subtasks por arquivo): nova constante
+    `_EMBEDDING_TIMEOUT_SECONDS=120.0` passada em toda construção de
+    `AsyncOpenAI`; client BYOK (descartável, criado a cada chamada) agora
+    é fechado explicitamente após uso; `run_worker_coro`
+    (`backend/app/workers/async_utils.py`) passou a também fechar e
+    resetar o singleton `app.rag.embeddings._client` no `finally` de cada
+    task Celery — mesmo padrão já usado ali pro engine asyncpg e pro pool
+    Redis (o singleton é module-level e sobrevive entre execuções de task
+    no mesmo processo worker; se ficar preso a um loop de uma task
+    anterior já fechado, a PRÓXIMA task que o reusar bate no mesmo "Event
+    loop is closed").
+  - **BUG B, real — TypeError `'<' not supported between instances of
+    'int' and 'NoneType'`** em arquivos da pasta "BASE DE CONHECIMENTO
+    IA". `embed_batch_with_meta`, `sorted(response.data, key=lambda x:
+    x.index)` — `sorted()` usa sempre `__lt__` internamente (Timsort),
+    então qualquer item de `response.data` com `x.index is None` explode
+    nessa comparação. O SDK da OpenAI desserializa respostas via
+    `BaseModel.construct()` (sem validação Pydantic) — se a camada de
+    compatibilidade OpenAI do Gemini omitir a chave `"index"` em algum
+    item do lote, o SDK silenciosamente cria o objeto com `index=None`
+    em vez de lançar erro. Bug LATENTE pré-existente (a linha já existia
+    antes da fase pós-263), mas o fatiamento em lotes aumentou a
+    exposição — mais chamadas ao Gemini = mais chance de um lote vir com
+    esse defeito da camada de compatibilidade. Corrigido (decisão do
+    usuário: falhar alto, não tentar preservar ordem e continuar): antes
+    de `sorted()`, checa `any(item.index is None for item in
+    response.data)` e levanta `RuntimeError` explicativo — capturado pelo
+    fail-soft já existente por arquivo em `google_drive_sync.py`,
+    produzindo um `entrada.erro` diagnosticável em vez do TypeError
+    críptico. Evita o risco de casar um chunk de texto com o vetor
+    errado (pior num sistema jurídico do que o arquivo simplesmente
+    falhar com causa clara).
+  - **Verificado**: branch reiniciada a partir do `main` pós-#264. 10
+    testes novos/estendidos com prova nos dois sentidos (timeout passado
+    na construção do client BYOK e singleton; client BYOK fechado após
+    uso, singleton nunca fechado dentro de
+    `embed_text_with_meta`/`embed_batch_with_meta`; `run_worker_coro`
+    fecha e reseta o singleton de embeddings, com fail-soft se o close
+    falhar; o guard de `index=None` levanta `RuntimeError` claro, e o
+    caminho normal — sem índice ausente — continua ordenando
+    corretamente). 2 arquivos de teste pré-existentes com fakes de
+    `AsyncOpenAI` desatualizados (`test_embeddings_byok.py`,
+    `test_rag_search_byok_fase255.py`) quebraram ao rodar a suíte
+    completa (não aceitavam o novo kwarg `timeout=`) — corrigidos junto,
+    exatamente o tipo de teste desatualizado que a suíte pega antes do
+    CI. Suíte completa na configuração exata do runner (banco `afj_core`
+    do zero via boot real da app, `REDIS_URL=` vazio), 2 execuções
+    seguidas contra o mesmo banco: `tests/test_unit/` 987 passed/4
+    skipped (+10 desta fase), `tests/test_api/` 195 passed/4 skipped nas
+    2 rodadas (sem regressão). `ruff check app/` limpo.
+  - **O que este sandbox não pode provar**: se o timeout de 120s é
+    suficiente pra lotes reais de 100 itens contra o Gemini em produção
+    (egress bloqueado neste sandbox); se isso sozinho evita todo cenário
+    de `soft_time_limit` estourando pra documentos MUITO grandes (múltiplos
+    arquivos grandes na mesma pasta poderiam ainda somar mais que 115min).
+    Pedir ao usuário pra configurar `PUBLIC_BASE_URL` no Railway e
+    re-testar a sincronização da Doutrina após o deploy, reportando se
+    `eca-2025.pdf` e os arquivos de "BASE DE CONHECIMENTO IA" completam
+    ou falham agora com uma mensagem clara.
+- **Fase pós-265** — usuário pediu "agora resolva os achados na
+  investigação": os 4 que as investigações da fase anterior identificaram e
+  não corrigiram. Cada um foi reconfirmado por leitura direta de código
+  antes de virar fix — nenhum é hipótese. O fio comum entre eles é o mesmo
+  defeito: **o sistema sabia a causa real da falha e não contava pra
+  ninguém**.
+  - **ACHADO 1, corrigido — erro 429 (cota do Gemini) chegava cru ao
+    admin.** `google_drive_sync.py` grava `entrada.erro = str(exc)[:500]` e
+    o frontend renderizava `{arq.erro}` verbatim — o JSON de quota inteiro,
+    em vermelho, pra um advogado. `friendly_detail()`
+    (`services/integration_hub.py`) existe exatamente pra isso mas (a) não
+    tinha padrão pra 429/cota (os 6 padrões cobriam 401/403, timeout, oauth
+    expirado, escopo, 5xx e "ausente") e (b) nunca era aplicada aos erros
+    por arquivo, só a `TenantIntegration.last_error_detail`. O padrão certo
+    já existia escrito em `api/v1/users.py::_friendly_ai_error` (tela "Minha
+    IA"). Corrigido: padrão novo no topo da lista + `erro_amigavel` aditivo
+    em `GET .../last-sync/arquivos` (o `erro` cru continua no payload, pra
+    suporte) + frontend renderizando o amigável com o técnico no `title=`.
+    **Decisão de escopo**: `_friendly_ai_error` NÃO foi deduplicado contra
+    `friendly_detail` — as mensagens divergem legitimamente (uma fala de
+    "Google AI Studio" na tela de testar chave, a outra é genérica pra
+    qualquer integração); unificar regrediria uma das duas.
+  - **ACHADO 2, corrigido — a mensagem "tipo de arquivo não suportado"
+    era impossível naquele ponto.** `google_drive_sync.py` gravava "tipo de
+    arquivo não suportado ou sem texto extraível" numa linha que só é
+    alcançada DEPOIS de `tipo_suportado()` já ter barrado todo tipo não
+    suportado, com mensagem própria e correta — **a primeira metade da frase
+    mentia em 100% dos casos**. E a segunda era vaga porque
+    `extrair_texto()` (`integrations/google_drive/client.py`) colapsava
+    QUATRO causas distintas num único `None`: OCR falhou, OCR indisponível
+    no servidor, extração de DOCX estourou, documento genuinamente vazio.
+    Corrigido: `extrair_texto` devolve `tuple[texto, aviso]` e **levanta
+    `RuntimeError` com a causa real** nos 3 ramos de falha dura (o único
+    chamador de produção já envolve tudo num `try/except` que grava a
+    mensagem, então a causa chega à tela sem estrutura nova); `None` ficou
+    reservado pro único caso honesto. Os 7 fakes de `extrair_texto` na suíte
+    foram migrados pro novo contrato — exatamente a armadilha "fake com
+    assinatura desatualizada vira erro do serviço externo" já catalogada
+    aqui, por isso faz parte do fix, não é consequência dele.
+  - **ACHADO 3, corrigido — `TesseractNotFoundError` escapava do guard, e o
+    OCR era tudo-ou-nada.** `ocr_agent.py` fazia `except ImportError:
+    return self.UNAVAILABLE`, mas `pytesseract.TesseractNotFoundError`
+    herda de `EnvironmentError` (`OSError`), **não** de `ImportError`: com a
+    lib instalada e o binário ausente no servidor, a exceção subia, o agente
+    devolvia FAILED, e o arquivo virava o mesmo erro genérico do achado 2.
+    E `_ocr_pdf` não tinha `try/except` por página — **uma única página que
+    estourava derrubava o PDF inteiro**, que é o que aconteceu com o Vade
+    Mecum. Corrigido: imports separados num `try/except ImportError` próprio
+    (com `pytesseract` no escopo, a exceção é capturada **pelo nome** — sem
+    `except OSError` genérico, que mascararia erro real de I/O, e sem
+    farejar string de mensagem); `_ocr_pdf` isola cada página, conta
+    `paginas_falhas`/`paginas_total` e expõe os dois no `output` do agente.
+    **Decisão do usuário**: indexar o que deu e reportar o resto — um Vade
+    Mecum fica parcialmente pesquisável em vez de totalmente ausente, e o
+    aviso ("3 de 267 páginas falharam no OCR") aparece em âmbar na tela,
+    com o arquivo contando como EMBEDDED.
+  - **ACHADO 4, corrigido no que era honestidade/visibilidade — bases
+    públicas podiam falhar em 100% e reportar "OK".** As collections
+    compartilhadas (`jurisprudencia`/`legislacao`/`doutrina`) sempre
+    resolvem pro provedor padrão do sistema, por desenho (um vetor Gemini
+    não é comparável a um vetor OpenAI). O problema não era o desenho:
+    `jurisprudencia_sync.py`/`legislacao_sync.py` chamavam
+    `finalizar_sync(..., "OK", ...)` **incondicionalmente** — uma execução
+    com `processados: 0, falhas: 200` era gravada como sucesso;
+    `brain_infra.py` descartava `processados`/`falhas` do `stats`, então nem
+    o SUPERADMIN via; a mensagem de `EmbeddingProviderUnavailable` listava
+    todos os provedores embedding-capable ("gemini, openai") num ramo onde
+    só uma chave `openai` serve, mandando um tenant só-Gemini cadastrar
+    Gemini pra resolver algo que Gemini não resolve; e o banner de
+    `/minha-ia` se escondia justamente de quem precisava dele (a condição
+    era "nenhuma config com `embedding_model`", e Gemini TEM
+    `embedding_model`). Corrigido nos 5 pontos: status derivado de `falhas`
+    (mesma convenção binária de `process_agent.py`; **`"PARCIAL"` foi
+    considerado e descartado** — seria um 3º valor de `SyncRun.status` que
+    nenhum leitor atual conhece), `falhas`/`processados` expostos no painel
+    SUPERADMIN, mensagem específica por caminho, `sistema_tem_embedding_
+    padrao` (booleano, nunca a chave) em `/me/ai-providers` alimentando um
+    **segundo** banner em `/minha-ia`, e o comentário falso de
+    `busca-juridica/page.tsx` ("coleções sem pipeline de ingestão
+    automática" — `jurisprudencia`/`legislacao` têm pipeline diária no
+    Beat) corrigido. **Decisão do usuário: só honestidade + visibilidade**
+    — não mexer em de quem é a chave que paga a ingestão pública (não
+    envolver as pipelines em `user_ai_creds`), nem quebrar o
+    compartilhamento das bases por tenant.
+  - **Achado da própria verificação** (o tipo que só aparece rodando): com o
+    Fix 1 no ar, o HTTP real mostrou que a tradução **piorava** a mensagem
+    de um arquivo cuja causa o próprio sistema tinha acabado de escrever em
+    português claro — *"Não foi possível identificar a causa exata do erro
+    (OCR indisponível no servidor ...)"*. O fallback genérico é o certo pro
+    card de status (onde o texto cru é uma exceção de biblioteca), e errado
+    onde a mensagem pode já ser nossa. `friendly_detail` ganhou
+    `fallback: bool = True` e o endpoint passa `fallback=False` — traduz só
+    quando um padrão de fato casa.
+  - **Verificado**: prova bidirecional em cada fix (com o fix revertido, 3
+    de 4 testes do OCR falham; 3 de 4 dos das bases públicas; 1 dos do 429)
+    — o 4º de cada grupo é o teste de regressão, que passa nos dois sentidos
+    de propósito. Suíte completa na configuração exata do runner (banco
+    `afj_p265` do zero via `create_all`+`aplicar_ddl_idempotente`+seed,
+    `REDIS_URL=` vazio), 2 execuções seguidas contra o mesmo banco:
+    `tests/test_unit/` **1005 passed/4 skipped** nas 2 (+18 desta fase),
+    `tests/test_api/` 190 passed/9 skipped na 1ª e 188/11 na 2ª (mesma
+    classe de skip condicional já documentada; nenhum skip toca os arquivos
+    desta fase). `ruff check app/`/`tsc --noEmit`/`eslint` limpos. HTTP real
+    confirmando `erro_amigavel` preenchido só pro 429 e `null` pras
+    mensagens nossas, e `sistema_tem_embedding_padrao: false` no ambiente
+    sem chave central. Playwright real (Chromium do sandbox, stack completa)
+    em `/integracoes` e `/minha-ia` — **12/12 checks PASS**: cota traduzida,
+    JSON cru ausente da tela, causa do OCR intacta, aviso parcial em âmbar
+    vs. falha em vermelho, técnico preservado no tooltip, mensagem
+    mentirosa ausente, os 2 textos do banner novo, console limpo.
+  - **O que este sandbox não pode provar**: se o OCR parcial de fato salva
+    o Vade Mecum real em produção (depende do PDF e do tesseract do
+    container Railway — aqui o binário está ausente, o que aliás foi o que
+    permitiu provar o achado 3 com a exceção real); e se a cota do Gemini
+    era mesmo a causa dos arquivos de "BASE DE CONHECIMENTO IA". Pedir ao
+    usuário pra re-sincronizar a Doutrina após o deploy e reportar as
+    mensagens novas, que agora nomeiam a causa.
 
 ## Teste geral do sistema (metodologia)
 

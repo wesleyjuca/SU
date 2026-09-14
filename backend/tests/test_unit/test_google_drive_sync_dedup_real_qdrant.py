@@ -143,7 +143,7 @@ async def test_reprocessar_arquivo_falhou_nao_duplica_chunks_no_qdrant(qdrant_me
         return b"bytes"
 
     async def _fake_extrair_texto(mimetype, conteudo):
-        return "Art. 1º Esta é a doutrina sobre o tema X, com texto suficiente para gerar ao menos um chunk."
+        return "Art. 1º Esta é a doutrina sobre o tema X, com texto suficiente para gerar ao menos um chunk.", None
 
     monkeypatch.setattr("app.integrations.google_drive.client.listar_arquivos", _fake_listar_arquivos)
     monkeypatch.setattr("app.integrations.google_drive.client.baixar_conteudo", _fake_baixar_conteudo)

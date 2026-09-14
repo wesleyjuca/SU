@@ -29,7 +29,12 @@ const COLECOES = [
   { value: "documentos_clientes", label: "Docs. Clientes", color: "bg-teal-100 text-teal-700" },
 ];
 
-// Coleções sem pipeline de ingestão automática — só estas podem ser populadas manualmente.
+// Coleções que TAMBÉM aceitam indexação manual pelo painel abaixo.
+// Fase pós-265 — o comentário anterior dizia "coleções sem pipeline de
+// ingestão automática", o que é falso: `jurisprudencia` e `legislacao` têm
+// pipeline diária no Celery Beat (STJ 4h, Legislação 6h), e `doutrina_privada`
+// é populada pela sincronização do Google Drive. O eixo real desta lista é
+// "dá pra colar conteúdo à mão aqui", não "não tem automação".
 const COLECOES_INDEXAVEIS = COLECOES.filter((c) =>
   ["jurisprudencia", "legislacao", "doutrina", "memorias_afj"].includes(c.value)
 );

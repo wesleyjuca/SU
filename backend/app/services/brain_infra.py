@@ -194,9 +194,14 @@ async def _jobs() -> dict:
                 select(SyncRun.fonte, SyncRun.tipo, SyncRun.status, SyncRun.started_at, SyncRun.stats)
                 .order_by(SyncRun.started_at.desc()).limit(10)
             )).all()
+            # Fase pós-265 — `processados`/`falhas` já estavam no `stats` do
+            # SyncRun e eram descartados aqui: nem o SUPERADMIN via que uma
+            # pipeline de base pública tinha falhado em todos os itens.
             sync_list = [
                 {"fonte": s.fonte, "tipo": s.tipo, "status": s.status,
                  "started_at": s.started_at.isoformat() if s.started_at else None,
+                 "processados": (s.stats or {}).get("processados"),
+                 "falhas": (s.stats or {}).get("falhas"),
                  "detalhe": (s.stats or {}).get("fonte_detalhe")}
                 for s in syncs
             ]

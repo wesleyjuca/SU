@@ -61,15 +61,31 @@ async def test_listar_arquivos_rede_indisponivel_retorna_none(monkeypatch):
 async def test_extrair_texto_docx(monkeypatch):
     import app.utils.docx_text as docx_mod
     monkeypatch.setattr(docx_mod, "extract_docx_text", lambda raw: "texto do docx")
-    texto = await extrair_texto(_MIME_DOCX, b"conteudo-fake")
+    texto, aviso = await extrair_texto(_MIME_DOCX, b"conteudo-fake")
     assert texto == "texto do docx"
+    assert aviso is None
 
 
 @pytest.mark.asyncio
 async def test_extrair_texto_docx_vazio_vira_none(monkeypatch):
     import app.utils.docx_text as docx_mod
     monkeypatch.setattr(docx_mod, "extract_docx_text", lambda raw: "")
-    assert await extrair_texto(_MIME_DOCX, b"conteudo-fake") is None
+    assert await extrair_texto(_MIME_DOCX, b"conteudo-fake") == (None, None)
+
+
+@pytest.mark.asyncio
+async def test_extrair_texto_docx_corrompido_levanta_com_causa(monkeypatch):
+    """Fase pós-265 — uma das 4 causas que colapsavam num `None` genérico:
+    DOCX que estoura na extração agora levanta com a causa real, que o
+    chamador grava em `JurisprudenciaIngerida.erro`."""
+    import app.utils.docx_text as docx_mod
+
+    def _explode(raw):
+        raise ValueError("não é um zip válido")
+
+    monkeypatch.setattr(docx_mod, "extract_docx_text", _explode)
+    with pytest.raises(RuntimeError, match="falha ao ler o DOCX.*zip"):
+        await extrair_texto(_MIME_DOCX, b"conteudo-fake")
 
 
 @pytest.mark.asyncio
@@ -81,12 +97,16 @@ async def test_extrair_texto_pdf_via_ocr_agent(monkeypatch):
         return AgentResult(status=AgentStatus.SUCCESS, agent_name="ocr_agent", output={"texto_extraido": "texto do pdf"})
 
     monkeypatch.setattr(ocr_mod.OCRAgent, "execute", _fake_execute)
-    texto = await extrair_texto(_MIME_PDF, b"conteudo-fake")
+    texto, aviso = await extrair_texto(_MIME_PDF, b"conteudo-fake")
     assert texto == "texto do pdf"
+    assert aviso is None
 
 
 @pytest.mark.asyncio
-async def test_extrair_texto_pdf_ocr_indisponivel_vira_none(monkeypatch):
+async def test_extrair_texto_pdf_ocr_indisponivel_levanta_com_causa(monkeypatch):
+    """Fase pós-265 — antes isto virava `None` e a mensagem na tela dizia
+    "tipo de arquivo não suportado ou sem texto extraível", escondendo que
+    o problema é o servidor sem OCR instalado."""
     from app.agents.base.result import AgentResult, AgentStatus
     import app.agents.ocr.ocr_agent as ocr_mod
 
@@ -94,14 +114,81 @@ async def test_extrair_texto_pdf_ocr_indisponivel_vira_none(monkeypatch):
         return AgentResult(status=AgentStatus.SUCCESS, agent_name="ocr_agent", output={"texto_extraido": ocr_mod.OCRAgent.UNAVAILABLE})
 
     monkeypatch.setattr(ocr_mod.OCRAgent, "execute", _fake_execute)
-    assert await extrair_texto(_MIME_PDF, b"conteudo-fake") is None
+    with pytest.raises(RuntimeError, match="OCR indisponível no servidor"):
+        await extrair_texto(_MIME_PDF, b"conteudo-fake")
+
+
+@pytest.mark.asyncio
+async def test_extrair_texto_pdf_agente_falhou_levanta_com_o_erro_do_agente(monkeypatch):
+    from app.agents.base.result import AgentResult, AgentStatus
+    import app.agents.ocr.ocr_agent as ocr_mod
+
+    async def _fake_execute(self, ctx):
+        return AgentResult(status=AgentStatus.FAILED, agent_name="ocr_agent", error="PDF criptografado")
+
+    monkeypatch.setattr(ocr_mod.OCRAgent, "execute", _fake_execute)
+    with pytest.raises(RuntimeError, match="OCR do PDF falhou: PDF criptografado"):
+        await extrair_texto(_MIME_PDF, b"conteudo-fake")
+
+
+@pytest.mark.asyncio
+async def test_extrair_texto_pdf_ocr_parcial_indexa_e_avisa(monkeypatch):
+    """Fase pós-265, decisão do usuário: um PDF grande (ex.: Vade Mecum) com
+    algumas páginas ruins é indexado com o que deu, e o que se perdeu é
+    reportado — antes, 1 página ruim derrubava o arquivo inteiro."""
+    from app.agents.base.result import AgentResult, AgentStatus
+    import app.agents.ocr.ocr_agent as ocr_mod
+
+    async def _fake_execute(self, ctx):
+        return AgentResult(
+            status=AgentStatus.SUCCESS, agent_name="ocr_agent",
+            output={"texto_extraido": "texto das páginas boas", "paginas_falhas": 3, "paginas_total": 267},
+        )
+
+    monkeypatch.setattr(ocr_mod.OCRAgent, "execute", _fake_execute)
+    texto, aviso = await extrair_texto(_MIME_PDF, b"conteudo-fake")
+    assert texto == "texto das páginas boas"
+    assert aviso is not None and "3 de 267" in aviso
+
+
+@pytest.mark.asyncio
+async def test_extrair_texto_pdf_todas_as_paginas_falharam_levanta(monkeypatch):
+    from app.agents.base.result import AgentResult, AgentStatus
+    import app.agents.ocr.ocr_agent as ocr_mod
+
+    async def _fake_execute(self, ctx):
+        return AgentResult(
+            status=AgentStatus.SUCCESS, agent_name="ocr_agent",
+            output={"texto_extraido": "", "paginas_falhas": 4, "paginas_total": 4},
+        )
+
+    monkeypatch.setattr(ocr_mod.OCRAgent, "execute", _fake_execute)
+    with pytest.raises(RuntimeError, match="falhou em todas as 4"):
+        await extrair_texto(_MIME_PDF, b"conteudo-fake")
+
+
+@pytest.mark.asyncio
+async def test_extrair_texto_pdf_sem_texto_e_sem_falha_vira_none(monkeypatch):
+    """O único caso em que `None` é honesto: o OCR rodou em todas as páginas
+    e o documento realmente não tem texto."""
+    from app.agents.base.result import AgentResult, AgentStatus
+    import app.agents.ocr.ocr_agent as ocr_mod
+
+    async def _fake_execute(self, ctx):
+        return AgentResult(
+            status=AgentStatus.SUCCESS, agent_name="ocr_agent",
+            output={"texto_extraido": "   ", "paginas_falhas": 0, "paginas_total": 2},
+        )
+
+    monkeypatch.setattr(ocr_mod.OCRAgent, "execute", _fake_execute)
+    assert await extrair_texto(_MIME_PDF, b"conteudo-fake") == (None, None)
 
 
 @pytest.mark.asyncio
 async def test_extrair_texto_tipo_nao_suportado():
-    assert await extrair_texto("application/vnd.ms-excel", b"x") is None
-    assert await extrair_texto(None, b"x") is None
-    assert await extrair_texto(_MIME_DOCX, b"") is None
+    assert await extrair_texto("application/vnd.ms-excel", b"x") == (None, None)
+    assert await extrair_texto(None, b"x") == (None, None)
+    assert await extrair_texto(_MIME_DOCX, b"") == (None, None)
 
 
 @pytest.mark.asyncio
@@ -110,13 +197,14 @@ async def test_extrair_texto_google_doc_nativo(monkeypatch):
     Docs escritos direto no Drive (não upload de arquivo), e esse tipo
     nunca tinha um case aqui — todo Google Doc virava 'tipo não suportado'
     e o arquivo nunca era lido."""
-    texto = await extrair_texto(_MIME_GDOC, "conteúdo exportado como texto\n".encode("utf-8"))
+    texto, aviso = await extrair_texto(_MIME_GDOC, "conteúdo exportado como texto\n".encode("utf-8"))
     assert texto == "conteúdo exportado como texto"
+    assert aviso is None
 
 
 @pytest.mark.asyncio
 async def test_extrair_texto_google_doc_vazio_vira_none():
-    assert await extrair_texto(_MIME_GDOC, b"   \n  ") is None
+    assert await extrair_texto(_MIME_GDOC, b"   \n  ") == (None, None)
 
 
 class _FakeDownloadClient:
