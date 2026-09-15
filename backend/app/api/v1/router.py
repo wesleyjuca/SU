@@ -6,7 +6,7 @@ from app.api.v1 import (
     financial, ws, audit, rag, notifications, tenant, system, lgpd, push, portal,
     petition_templates, integrity, google_integration, tenants_admin, billing,
     reports_admin, invoices, crm, publications, integrations_hub, ai_oauth,
-    teses, agent_prompts, custom_agents, playbooks,
+    teses, agent_prompts, custom_agents, playbooks, lexml,
 )
 from app.dependencies import require_active_tenant, get_current_staff
 
@@ -39,6 +39,7 @@ api_router.include_router(publications.router, dependencies=_BLOCK_STAFF)
 api_router.include_router(ws.router)
 api_router.include_router(audit.router, dependencies=_STAFF)
 api_router.include_router(rag.router, dependencies=_BLOCK_STAFF)
+api_router.include_router(lexml.router, dependencies=_BLOCK_STAFF)
 # Fase 239 (achado da Fase 237, rodada de teste geral) — mesma classe do
 # achado abaixo (Fase 235): este router era o único de negócio, fora
 # tenant/system já corrigidos ali, ainda montado sem `_STAFF` — CLIENT

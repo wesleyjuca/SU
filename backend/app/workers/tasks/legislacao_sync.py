@@ -24,6 +24,7 @@ async def executar_sync_legislacao(db) -> dict:
     from app.integrations.lexml.client import buscar_lote_legislacao_federal, buscar_norma_completa
     from app.rag.ingestion import ingest_document
     from app.services.movements_import import iniciar_sync, finalizar_sync
+    from app.services.lexml_acervo import upsert_norma
 
     run = await iniciar_sync(db, tenant_id=None, fonte=FONTE, tipo="INGESTAO")
 
@@ -88,6 +89,23 @@ async def executar_sync_legislacao(db) -> dict:
                     metadata=qdrant_metadata, document_id=urn,
                     force_system_default=True,  # collection pública/compartilhada
                 )
+                # Integração LexML — além do Qdrant (texto pesquisável por
+                # semântica), o metadado estruturado vai para o acervo, que é
+                # o que permite filtrar por tipo/ano e vincular a processo.
+                # Falhar aqui NÃO pode invalidar a ingestão que já deu certo:
+                # o texto está no índice, e o acervo se recompõe no próximo
+                # backfill. Por isso o try/except próprio.
+                try:
+                    await upsert_norma(
+                        db,
+                        urn=urn,
+                        titulo=norma.get("titulo"),
+                        url_fonte=registro.get("url"),
+                        metadata_extra={"origem": FONTE},
+                    )
+                except Exception as exc_acervo:
+                    log.warning("lexml_acervo_upsert_falhou", urn=urn, error=str(exc_acervo))
+
                 entrada.status = "EMBEDDED"
                 processados += 1
             except Exception as exc:

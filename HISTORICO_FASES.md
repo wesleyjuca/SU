@@ -7873,3 +7873,218 @@ mensagens novas, que agora nomeiam a causa de cada arquivo.
   (novos), `test_google_drive_client.py`, `test_google_drive_sync.py`,
   `test_hub_drive_last_sync_arquivos.py`, `test_brain_infra.py`
 - `CLAUDE.md`, `HISTORICO_FASES.md`
+
+---
+
+# Fase pós-266 — Integração LexML: correções de segurança, acervo estruturado e pesquisa de legislação
+
+## Context
+
+Usuário entregou um pedido formal de 21 seções para **planejar** a integração
+do LexML Brasil ao AFJ, com restrições explícitas: auditar a arquitetura antes
+de propor qualquer coisa, marcar como **NÃO VERIFICADO** tudo que não fosse
+confirmável, e *"não inventar endpoints, parâmetros, tabelas, APIs ou
+funcionalidades do LexML"*. O plano saiu como `PLANO_INTEGRACAO_LEXML_AFJ.md`
+(26 seções, raiz do repo). Depois o usuário mandou: **"faça a implementação"**.
+
+**Duas premissas do pedido não batiam com o sistema, e é honesto começar por
+elas** (as duas confirmadas por leitura/grep, não por suposição):
+
+1. **O LexML já estava integrado.** `integrations/lexml/client.py` consulta o
+   SRU desde antes desta sessão; `legislacao_sync.py` roda diariamente às 06:00
+   no Celery Beat; `citacao_check.py` já fazia consulta **ao vivo**. Isto nunca
+   foi uma integração nova — é a evolução de uma que já rodava em produção.
+2. **Não há Supabase, Edge Function nem RLS no repositório** (grep completo,
+   incluindo `site-packages`: zero linhas de código; só prosa em `DEPLOY.md`
+   descartando-o como opção). O isolamento multi-tenant são **191 filtros
+   manuais** `Model.tenant_id == current_user.tenant_id` — convenção, não
+   mecanismo.
+
+**O obstáculo central, e como foi contornado sem inventar nada.** A Fase 0 do
+plano pedia uma sonda real ao SRU antes de qualquer código, porque os nomes das
+tags do XML e os índices CQL aceitos são NÃO VERIFICADOS. Este sandbox **não
+alcança `lexml.gov.br`** (egress bloqueado, reconfirmado). A solução não foi
+adiar nem chutar endpoint: **construir só sobre o que já está provado em
+produção**.
+
+| Recurso | Status | Origem da prova |
+|---|---|---|
+| `query=<texto livre>` | **Provado** | `buscar_lei()`, via `citacao_check` |
+| `query=localidade=federal and tipoDocumento=X` | **Provado** | `buscar_lote_legislacao()`, diário |
+| `maximumRecords` | **Provado** | idem |
+| Índices CQL `ano`, `autoridade` | **NÃO VERIFICADO** | — |
+
+Decisão de desenho que fecha o buraco: os filtros não confirmados (`ano`,
+`autoridade`) são aplicados **no acervo local**, como pós-filtro — nunca
+montados em CQL. Funciona independentemente do que a sonda revelaria, e não
+quebra em produção se o índice não existir. Quando a sonda um dia rodar, mover
+o filtro para a CQL é otimização, não correção. Há um teste de guarda
+(`test_cql_nunca_contem_indice_nao_provado`) que reprova se alguém adicionar
+esses índices à CQL sem uma sonda real por trás.
+
+## Bloco 1 — correções no que já existia (independe do LexML novo)
+
+- **Bug latente confirmado, corrigido**: a collection `legislacao` do Qdrant
+  não declarava índice de payload `document_id`, mas `legislacao_sync.py:88`
+  chama `ingest_document(document_id=urn)` e `delete_document_chunks()` filtra
+  por esse campo — as outras 3 collections que usam esse caminho têm o índice,
+  com comentário registrando que sem ele o Qdrant responde HTTP 400.
+  Reingestão de uma norma duplicaria chunks em vez de substituí-los.
+  Self-healed via `ensure_collections()`, já idempotente — sem migração.
+- **Segurança do XML — medido, não suposto.** Rodei os dois ataques clássicos
+  contra o parser em uso: **XXE não se aplica** (`xml.etree.ElementTree`
+  recusa entidade externa — `ParseError: undefined entity`), mas **expansão de
+  entidade interna passa** (billion laughs, DoS de memória). Fechado com
+  `defusedxml==0.7.1` + teto de 8 MB antes do parse.
+- **SSRF real, fechado**: `baixar_texto_norma(url)` fazia GET numa URL vinda da
+  RESPOSTA EXTERNA, sem validação — o portal (ou quem o comprometesse)
+  escolheria o alvo, incluindo `169.254.169.254`. Agora há allowlist de
+  domínio (`.gov.br`/`.leg.br`/`.jus.br`/`.mp.br`/`.def.br`), rejeição de IP
+  literal, `follow_redirects=False` e **revalidação de cada salto** — um
+  `follow_redirects=True` deixaria o portal redirecionar para qualquer lugar,
+  anulando a allowlist.
+- **User-Agent identificando o AFJ** (antes caía no default do `httpx`), com
+  o risco registrado no próprio código: foi um UA autoidentificado que causou
+  o 403 do WAF do Comunica/DJEN — se o LexML um dia responder 403, **este é o
+  primeiro suspeito**.
+- **Breaker `lexml` visível no painel Cérebro**: o estado já ia para o Redis,
+  mas nenhuma tela lia, porque LexML não é uma `FonteProcessual` e não está no
+  `registry.py`. `brain_infra.py` ganhou `fontes_documentais`, lendo os
+  breakers `lexml` e `stj_dados_abertos` por nome.
+
+**Achado de verificação (o tipo que só aparece rodando a suíte inteira)**: a
+revalidação de redirect quebrou um fake pré-existente em
+`test_lexml_client.py` — `_FakeResponse` sem `is_redirect` levantava
+`AttributeError` **dentro** do `CircuitBreaker`, que devolvia o default e fazia
+a função retornar `None`. A falha chegava como *"extração de texto não
+funciona"*, não como *"fake velho"* — exatamente a armadilha já catalogada no
+CLAUDE.md. Corrigido junto.
+
+## Bloco 2 — acervo estruturado de normas
+
+- **`lexml_normas`** (`models/lexml.py`) — **sem `tenant_id`, de propósito**:
+  uma Lei federal é a mesma para todos os escritórios, mesma decisão já
+  aplicada à collection `legislacao` do Qdrant (que é pública). A **URN é a
+  chave natural** (`urn:lex:br:federal:lei:1990-09-11;8078`), UNIQUE; o `id`
+  UUID existe só para servir de FK interna. `texto_integral`/`texto_obtido_em`
+  nulos: o texto é guardado **sob demanda**, não em massa — o LexML é
+  agregador de metadado, o texto vive no órgão de origem, e replicar o acervo
+  inteiro num produto comercial é a mesma classe de questão já registrada em
+  `docs/juridico/DATAJUD_TERMO_DE_USO.md`.
+- **`lexml_norma_tenant`** — favorito, vínculo com processo/documento e
+  anotação, tudo por tenant. É a **10ª tabela** da classe "tem PII do titular
+  e pode ser esquecida pelo erasure"; as 9 anteriores viraram achado de
+  auditoria justamente por terem sido esquecidas.
+- **`services/lexml_urn.py`** — `normalizar_urn`/`validar_urn`/
+  `derivar_campos_da_urn`. Princípio de desenho: uma URN que não casa a forma
+  esperada é **preservada como veio** e apenas não rende campos derivados,
+  nunca é "consertada" por heurística — inventar estrutura num identificador
+  jurídico é pior que admitir que não foi possível interpretá-lo.
+- **`services/lexml_acervo.py`** — `upsert_norma` **conservador** (só
+  sobrescreve campo com valor não-vazio: uma busca que devolveu menos metadado
+  que a ingestão anterior não pode apagar o que já se sabia — há teste para
+  isso), `registrar_texto_integral`, `backfill_de_jurisprudencia_ingerida`
+  (idempotente, contando `criadas`/`ja_existentes`/`urn_invalida` **sem inflar
+  o número de sucesso**, que é a classe de bug que este projeto já corrigiu
+  várias vezes), `vincular`/`desvincular`.
+- **Índices no `DDL_IDEMPOTENTE`** (GIN FTS sobre `titulo||ementa` e
+  `(tipo_norma, ano)`) — **nenhuma migration Alembic**, pela regra "carimbar,
+  nunca migrar" já documentada.
+- `legislacao_sync.py` passou a gravar o metadado estruturado além do Qdrant,
+  **num try/except próprio**: falhar no acervo não pode invalidar uma ingestão
+  que já deu certo — o texto está no índice e o acervo se recompõe no próximo
+  backfill.
+- **LGPD**: `lexml_norma_tenant.anotacao` entrou no `erase_client_data` (via
+  `process_id` → processo do titular) **e** no `export_client_data`
+  (`normas_vinculadas_lexml`). A norma em si fica intacta — é lei pública, não
+  dado do titular.
+
+**Prova bidirecional do fix de LGPD**, que era o ponto que o plano marcava
+como obrigatório: o teste de sentinela (`test_lgpd_sentinela.py`) varre o
+banco inteiro por VALOR, mas só pegaria a falha **se a tabela nova for
+preenchida no cenário** — senão a guarda passa vazia. O teste agora semeia um
+vínculo LexML pela camada de serviço real; com o fix revertido ele falha
+nomeando `lexml_norma_tenant.anotacao (1 linha)`, e passa com o fix.
+Confirmado também que o teste desfaz o que fez (0 linhas nas duas tabelas
+depois de rodar).
+
+## Bloco 3 — pesquisa ao vivo e tela
+
+- **`client.py::buscar_normas(texto, tipo, limite)`** + `montar_query_cql()`,
+  usando só as formas provadas (ver tabela acima). Fail-soft como o resto do
+  módulo: `[]`, nunca exceção — quem chama está num caminho síncrono de
+  usuário.
+- **`lexml_acervo.buscar()`** — cache Redis (10 min) → acervo local → SRU ao
+  vivo, só quando o acervo não preenche o limite. O que vier do portal é
+  persistido (UPSERT por URN), então a mesma busca sai local na próxima vez.
+  A resposta carrega `fonte_consultada`/`fonte_respondeu`: sem isso, *"o LexML
+  está fora do ar"* e *"o acervo local já bastava"* chegariam à tela como a
+  mesma coisa — o mesmo defeito de fail-soft que este projeto já corrigiu no
+  DataJud e no Comunica.
+- **`api/v1/lexml.py`**, montado com `_BLOCK_STAFF` (papel CLIENT nunca
+  alcança): `POST /lexml/buscar`, `GET /lexml/normas/{id}`,
+  `GET /lexml/normas/{id}/texto` (sob demanda, com `origem` =
+  `cache`/`fonte`/`indisponivel`), `GET|POST /lexml/acervo`,
+  `DELETE /lexml/acervo/{id}`.
+- **Aba "Legislação (LexML)"** em `/busca-juridica`, com sub-abas Pesquisar /
+  Meu acervo. Reaproveita `.afj-card`, `.btn-afj-primary`, `useToast`.
+  Separação obrigatória visível na tela: fonte oficial (link + texto integral
+  cru), metadado (tipo/número/ano/autoridade), referência (URN citável, com
+  botão de copiar) e anotação do escritório — em campos distintos.
+  **Nenhum campo desta API ou desta tela carrega interpretação gerada por
+  IA**, e não há resumo automático de propósito; se um dia houver, precisa vir
+  rotulado como sugestão, em bloco próprio.
+
+## Verificação
+
+- **48 testes** de URN/acervo/segurança + **11 novos** de busca/CQL.
+  Prova bidirecional em cada fix que a comportava (LGPD acima; SSRF provado
+  com uma lista de tentativas em vez de `assert` dentro do fake, porque
+  `CircuitBreaker.run()` engole `AssertionError` e o teste passava com a
+  guarda removida — a armadilha "fail-soft engole o sinal", já catalogada).
+- **Suíte completa na configuração exata do runner** (banco `afj_p266` do zero
+  via `create_all` + `aplicar_ddl_idempotente` + seed, `REDIS_URL=` vazio),
+  **2 execuções seguidas contra o mesmo banco**: `tests/test_unit/` **1065
+  passed / 4 skipped** nas duas (baseline 1005/4, +60 desta fase);
+  `tests/test_api/` 190/9 na 1ª e 188/11 na 2ª (mesma classe de skip
+  condicional a rate-limit já documentada, sem regressão de ordem/estado).
+  `ruff check app/` limpo; `tsc --noEmit`/`eslint` limpos no frontend.
+- **HTTP real** contra o servidor de verdade — **16/16 PASS**: busca local
+  achando a norma semeada com metadado derivado da URN, `fonte_consultada`
+  respeitado, busca sem critério rejeitada (não 200 vazio), detalhe com
+  URN + fonte oficial, nenhum campo de IA na resposta, favoritar/listar/
+  remover do acervo, norma inexistente → 404 (não 500), sem token → 401.
+- **Playwright real** (Chromium do sandbox, stack completa) — **19/20 PASS**:
+  a aba nova aparece e alterna sem quebrar a busca semântica, resultado traz
+  a Lei 14.133 com URN citável e badge de origem, link de fonte oficial
+  apontando para o Planalto, "Copiar URN" funcionando, favoritar → aparece em
+  "Meu acervo" → remover → some, filtro por tipo Decreto incluindo o decreto e
+  **excluindo** a lei, e nenhum rótulo de IA/resumo na tela. A única falha é
+  um 503 de `/rag/coverage` — endpoint da aba semântica pré-existente, sem
+  Qdrant populado neste sandbox; nenhuma chamada `/lexml/*` falhou.
+
+## O que este sandbox não pode provar
+
+Nada que dependa de **alcançar o LexML de verdade**: se as tags do XML de
+resposta são as que o parser espera, se a CQL combinada (texto livre `and`
+filtro) é aceita pelo portal, e se os índices `ano`/`autoridade` existem. O
+egress para `lexml.gov.br` está bloqueado aqui, e foi por isso que o desenho
+evitou depender de qualquer um desses pontos. Pedido ao usuário: após o
+deploy, pesquisar uma lei conhecida na aba Legislação e reportar se vieram
+resultados com badge **"LexML (agora)"** — é isso que prova o caminho ao vivo.
+
+### Arquivos principais
+- Novos: `backend/app/models/lexml.py`, `backend/app/services/lexml_urn.py`,
+  `backend/app/services/lexml_acervo.py`, `backend/app/api/v1/lexml.py`,
+  `frontend/src/components/legislacao/PainelLexml.tsx`,
+  `PLANO_INTEGRACAO_LEXML_AFJ.md`
+- Alterados: `backend/app/integrations/lexml/client.py`,
+  `backend/app/rag/collections.py`, `backend/app/core/events.py`,
+  `backend/app/api/v1/router.py`, `backend/app/api/v1/lgpd.py`,
+  `backend/app/models/__init__.py`, `backend/app/services/brain_infra.py`,
+  `backend/app/workers/tasks/legislacao_sync.py`, `backend/requirements.txt`,
+  `frontend/src/app/(dashboard)/busca-juridica/page.tsx`
+- Testes: `test_lexml_urn.py`, `test_lexml_acervo.py`,
+  `test_lexml_seguranca.py`, `test_lexml_busca.py` (novos),
+  `test_lgpd_sentinela.py`, `test_lexml_client.py` (estendidos)
+- `CLAUDE.md`, `HISTORICO_FASES.md`

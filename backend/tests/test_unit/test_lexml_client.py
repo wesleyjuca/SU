@@ -202,6 +202,14 @@ async def test_baixar_texto_norma_extrai_texto_de_html_simples(monkeypatch):
     class _FakeResponse:
         status_code = 200
         text = html
+        # `is_redirect` passou a ser lido quando `baixar_texto_norma` deixou de
+        # usar `follow_redirects=True` e passou a seguir cada salto à mão, para
+        # revalidar o destino contra a allowlist de domínio (SSRF). Sem este
+        # atributo o fake levanta AttributeError DENTRO do circuit breaker, que
+        # devolve o default e faz a função retornar `None` — a falha chegava
+        # aqui como "extração de texto não funciona", não como "fake velho".
+        is_redirect = False
+        next_request = None
 
     class _FakeClient:
         async def __aenter__(self):

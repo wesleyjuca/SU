@@ -12,10 +12,14 @@ best-effort por tag local (ignora namespace), circuit breaker, e `None`
 """
 from __future__ import annotations
 
+import ipaddress
+from urllib.parse import urlparse
 from xml.etree import ElementTree as ET
 
 import httpx
 import structlog
+from defusedxml import DefusedXmlException
+from defusedxml import ElementTree as DefusedET
 
 from app.integrations.fontes.circuit_breaker import CircuitBreaker
 
@@ -25,15 +29,82 @@ LEXML_SRU_URL = "https://www.lexml.gov.br/busca/SRU"
 _TIMEOUT = 15.0
 _breaker = CircuitBreaker(name="lexml")
 
+# Identificação em chamada a API pública de dado aberto — boa prática de
+# cidadania (permite ao operador do portal nos contatar em vez de bloquear no
+# escuro). Antes, o cliente caía no default do httpx ("python-httpx/x.x.x").
+#
+# RISCO CONHECIDO, registrado de propósito: um User-Agent autoidentificado foi
+# a causa-raiz confirmada do HTTP 403 do WAF do Comunica/DJEN (ver
+# `integrations/dje/comunica.py`). O LexML é acervo de dados abertos `.gov.br`,
+# não portal de consulta processual protegido, e nunca apresentou 403 — mas se
+# um dia apresentar, ESTE É O PRIMEIRO SUSPEITO: basta remover o header.
+_USER_AGENT = "AFJ-Core/1.0 (+https://afjadvogados.com.br; sistema juridico)"
+_HEADERS = {"User-Agent": _USER_AGENT}
+
+# Teto de resposta antes do parse. O `defusedxml` já barra expansão de
+# entidade (billion laughs), mas não impede um corpo gigante de consumir
+# memória só para o parser descobrir que é grande demais.
+_MAX_RESPOSTA_BYTES = 8 * 1024 * 1024  # 8 MB
+
+# Allowlist de domínio para `baixar_texto_norma`. Sem isto, a função faz GET
+# numa URL que veio DA RESPOSTA EXTERNA — SSRF clássico: o portal (ou quem o
+# comprometer) escolheria o alvo, incluindo `169.254.169.254` (metadata de
+# nuvem) ou um serviço interno. Sufixos amplos o bastante para o universo real
+# de provedores de dados do LexML (Planalto, Senado, Câmara, tribunais), e
+# estreitos o bastante para excluir qualquer host arbitrário.
+_SUFIXOS_PERMITIDOS = (".gov.br", ".leg.br", ".jus.br", ".mp.br", ".def.br")
+_MAX_REDIRECTS = 5
+
 
 def _local(tag: str) -> str:
     return tag.rsplit("}", 1)[-1]
 
 
-def _parsear_resposta(xml_text: str) -> dict | None:
+def _fromstring_seguro(xml_text: str) -> ET.Element | None:
+    """Parse de XML vindo de fonte externa. `None` (nunca exceção) em qualquer
+    problema — o chamador já trata `None` como "não verificável".
+
+    Medido neste projeto: `xml.etree.ElementTree` **recusa** entidade externa
+    (XXE não se aplica), mas **aceita** expansão de entidade interna, que é o
+    vetor de DoS de memória. `defusedxml` fecha esse.
+    """
+    if len(xml_text.encode("utf-8", errors="ignore")) > _MAX_RESPOSTA_BYTES:
+        log.warning("lexml_xml_grande_demais", tamanho=len(xml_text))
+        return None
     try:
-        root = ET.fromstring(xml_text)
-    except ET.ParseError:
+        return DefusedET.fromstring(xml_text)
+    except (ET.ParseError, DefusedXmlException, ValueError) as exc:
+        log.warning("lexml_xml_invalido", error=str(exc)[:200])
+        return None
+
+
+def url_permitida(url: str) -> bool:
+    """`True` se a URL pode ser buscada por `baixar_texto_norma`.
+
+    Rejeita: esquema fora de http/https, host ausente, IP literal (fecha o
+    acesso a metadata de nuvem e à rede interna) e qualquer host fora dos
+    sufixos oficiais brasileiros.
+    """
+    try:
+        partes = urlparse(url)
+    except ValueError:
+        return False
+    if partes.scheme not in ("http", "https"):
+        return False
+    host = (partes.hostname or "").lower()
+    if not host:
+        return False
+    try:
+        ipaddress.ip_address(host)
+        return False  # IP literal nunca é um portal legislativo legítimo
+    except ValueError:
+        pass
+    return any(host == s.lstrip(".") or host.endswith(s) for s in _SUFIXOS_PERMITIDOS)
+
+
+def _parsear_resposta(xml_text: str) -> dict | None:
+    root = _fromstring_seguro(xml_text)
+    if root is None:
         return None
 
     num_records: str | None = None
@@ -68,7 +139,7 @@ async def buscar_lei(referencia: str) -> dict | None:
             "query": referencia,
             "maximumRecords": "1",
         }
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        async with httpx.AsyncClient(timeout=_TIMEOUT, headers=_HEADERS) as client:
             resp = await client.get(LEXML_SRU_URL, params=params)
             if resp.status_code != 200:
                 log.warning("lexml_http", status=resp.status_code)
@@ -102,9 +173,8 @@ def _parsear_registros(xml_text: str) -> list[dict]:
     contrário de `_parsear_resposta`, que só olha o 1º). Um <record>
     malformado ou sem `urn` é pulado, não derruba os demais. Nunca lança —
     XML não parseável devolve `[]`."""
-    try:
-        root = ET.fromstring(xml_text)
-    except ET.ParseError:
+    root = _fromstring_seguro(xml_text)
+    if root is None:
         return []
 
     registros: list[dict] = []
@@ -140,7 +210,7 @@ async def buscar_lote_legislacao(tipo_norma: str, maximum_records: int = 50) -> 
             "query": f"localidade=federal and tipoDocumento={tipo_norma}",
             "maximumRecords": str(maximum_records),
         }
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        async with httpx.AsyncClient(timeout=_TIMEOUT, headers=_HEADERS) as client:
             resp = await client.get(LEXML_SRU_URL, params=params)
             if resp.status_code != 200:
                 log.warning("lexml_bulk_http", status=resp.status_code, tipo=tipo_norma)
@@ -178,14 +248,35 @@ async def baixar_texto_norma(url: str) -> str | None:
     específico) pra tolerar tanto o portal legado (`ccivil_03`) quanto o mais
     novo (`www4.planalto.gov.br/legislacao`) sem saber qual foi resolvido.
     Fail-soft: qualquer falha de rede, parsing ou texto vazio devolve
-    `None`, nunca lança."""
+    `None`, nunca lança.
+
+    A URL vem da resposta do LexML, não de nós — por isso passa por
+    `url_permitida()` antes, e **cada salto de redirect é revalidado**. Um
+    `follow_redirects=True` simples deixaria o portal redirecionar para
+    qualquer lugar, anulando a allowlist."""
+    if not url_permitida(url):
+        log.warning("lexml_url_bloqueada", url=url[:200])
+        return None
+
     async def _f():
-        async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=True) as client:
-            resp = await client.get(url)
-            if resp.status_code != 200:
-                log.warning("lexml_download_texto_http", status=resp.status_code, url=url)
-                raise RuntimeError(f"download status {resp.status_code}")
-            return resp.text
+        # follow_redirects desligado de propósito: seguimos à mão para poder
+        # validar o destino de cada salto contra a allowlist.
+        async with httpx.AsyncClient(timeout=_TIMEOUT, headers=_HEADERS, follow_redirects=False) as client:
+            alvo = url
+            for _ in range(_MAX_REDIRECTS):
+                resp = await client.get(alvo)
+                if resp.is_redirect:
+                    destino = str(resp.next_request.url) if resp.next_request else ""
+                    if not url_permitida(destino):
+                        log.warning("lexml_redirect_bloqueado", de=alvo[:120], para=destino[:120])
+                        raise RuntimeError("redirect para host fora da allowlist")
+                    alvo = destino
+                    continue
+                if resp.status_code != 200:
+                    log.warning("lexml_download_texto_http", status=resp.status_code, url=alvo[:200])
+                    raise RuntimeError(f"download status {resp.status_code}")
+                return resp.text
+            raise RuntimeError("excesso de redirects")
 
     html = await _breaker.run(_f, default=None)
     if html is None:
@@ -223,3 +314,61 @@ async def buscar_norma_completa(registro: dict) -> dict | None:
         "urn": registro["urn"],
         "texto": texto,
     }
+
+
+# ─── Integração LexML — busca sob demanda (disparada pelo advogado) ───────────
+
+def montar_query_cql(texto: str, tipo_norma: str | None = None) -> str:
+    """Monta a CQL de uma busca sob demanda usando SÓ o que está provado.
+
+    Duas formas são provadas em produção neste projeto, por estarem em uso:
+    texto livre como `query` inteira (`buscar_lei`, via `citacao_check`) e
+    `localidade=federal and tipoDocumento=X` (`buscar_lote_legislacao`, na
+    sincronização diária). O operador `and` entre elas é CQL padrão e cada
+    metade é provada isolada — a COMBINAÇÃO não foi verificada contra o
+    portal real (egress bloqueado no ambiente de desenvolvimento).
+
+    Os índices `ano` e `autoridade` **não** entram aqui: nunca foram vistos
+    respondendo, e um índice inexistente pode derrubar a busca inteira. Esses
+    filtros são aplicados no acervo local, depois (ver
+    `services/lexml_acervo.py`). Se um dia uma sonda real confirmar os
+    índices, movê-los para a CQL é otimização, não correção.
+    """
+    termo = " ".join((texto or "").split()).strip()
+    if tipo_norma:
+        tipo = tipo_norma.strip()
+        filtro = f"localidade=federal and tipoDocumento={tipo}"
+        return f"{termo} and {filtro}" if termo else filtro
+    return termo
+
+
+async def buscar_normas(texto: str, tipo_norma: str | None = None, limite: int = 20) -> list[dict]:
+    """Busca normas no SRU por texto livre (e, opcionalmente, tipo).
+
+    Fail-soft como todo o resto do módulo: `[]` — nunca exceção — se a rede
+    cair, o circuito estiver aberto ou o XML não for parseável. Cada item:
+    `{"urn", "titulo", "url"}`, o mesmo formato de `_parsear_registros`.
+    """
+    query = montar_query_cql(texto, tipo_norma)
+    if not query:
+        return []
+    limite = max(1, min(int(limite or 20), 100))
+
+    async def _f():
+        params = {
+            "operation": "searchRetrieve",
+            "version": "1.1",
+            "query": query,
+            "maximumRecords": str(limite),
+        }
+        async with httpx.AsyncClient(timeout=_TIMEOUT, headers=_HEADERS) as client:
+            resp = await client.get(LEXML_SRU_URL, params=params)
+            if resp.status_code != 200:
+                log.warning("lexml_busca_http", status=resp.status_code)
+                raise RuntimeError(f"lexml status {resp.status_code}")
+            return resp.text
+
+    xml_text = await _breaker.run(_f, default=None)
+    if xml_text is None:
+        return []
+    return _parsear_registros(xml_text)

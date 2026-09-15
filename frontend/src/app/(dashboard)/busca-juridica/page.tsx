@@ -1,10 +1,11 @@
 "use client";
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import { BookOpen, Search, Loader2, Copy, Check, AlertTriangle, Upload, ChevronDown, ChevronUp, BarChart2 } from "lucide-react";
+import { BookOpen, Search, Loader2, Copy, Check, AlertTriangle, Upload, ChevronDown, ChevronUp, BarChart2, Scale } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { useToast } from "@/components/ui/Toast";
 import { useUserStore } from "@/store";
+import { PainelLexml } from "@/components/legislacao/PainelLexml";
 
 interface RagResult {
   id: string;
@@ -343,6 +344,11 @@ export default function BuscaJuridicaPage() {
   const [needsEmbeddingProvider, setNeedsEmbeddingProvider] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
   const [coverage, setCoverage] = useState<Record<string, number>>({});
+  // Duas naturezas de busca que não se misturam: a semântica lê o conteúdo já
+  // indexado no Qdrant; a de legislação consulta o acervo LexML por
+  // identificador/metadado. Juntá-las num campo só faria a tela prometer um
+  // ranqueamento que a segunda não tem.
+  const [modo, setModo] = useState<"semantica" | "legislacao">("semantica");
 
   useEffect(() => {
     const token = localStorage.getItem("afj_access_token");
@@ -434,6 +440,29 @@ export default function BuscaJuridicaPage() {
         </div>
       </div>
 
+      <div className="flex gap-2">
+        {([["semantica", "Busca semântica", Search], ["legislacao", "Legislação (LexML)", Scale]] as const).map(
+          ([valor, rotulo, Icone]) => (
+            <button
+              key={valor}
+              type="button"
+              onClick={() => setModo(valor)}
+              className={`text-sm px-4 py-2 rounded-sm border transition-colors flex items-center gap-2 ${
+                modo === valor
+                  ? "border-afj-gold bg-afj-gold/5 text-afj-gold font-medium"
+                  : "border-afj-cream-dark text-afj-black/50 hover:border-afj-gold/50"
+              }`}
+            >
+              <Icone size={14} /> {rotulo}
+            </button>
+          )
+        )}
+      </div>
+
+      {modo === "legislacao" ? (
+        <PainelLexml />
+      ) : (
+      <>
       {user?.role === "ADMIN" && <PainelIndexacao />}
       <PainelFavorabilidade />
 
@@ -586,6 +615,8 @@ export default function BuscaJuridicaPage() {
             </div>
           )}
         </>
+      )}
+      </>
       )}
     </div>
   );

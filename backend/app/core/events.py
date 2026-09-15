@@ -353,6 +353,14 @@ DDL_IDEMPOTENTE: list[str] = [
         "ALTER TABLE financial_entries ADD COLUMN IF NOT EXISTS parcela_atual INTEGER",
         "ALTER TABLE financial_entries ADD COLUMN IF NOT EXISTS parcela_total INTEGER",
         "CREATE INDEX IF NOT EXISTS ix_financial_entries_grupo_recorrencia ON financial_entries (grupo_recorrencia_id)",
+        # Integração LexML — acervo estruturado de normas. As tabelas nascem
+        # do `create_all` (models em app/models/lexml.py); aqui só o que o
+        # `create_all` NÃO faz: o índice de busca textual. `to_tsvector` é
+        # IMMUTABLE com a configuração fixada ('portuguese'), requisito para
+        # índice de expressão — sem o literal, o Postgres recusa.
+        "CREATE INDEX IF NOT EXISTS ix_lexml_normas_fts ON lexml_normas "
+        "USING GIN (to_tsvector('portuguese', coalesce(titulo,'') || ' ' || coalesce(ementa,'')))",
+        "CREATE INDEX IF NOT EXISTS ix_lexml_normas_tipo_ano ON lexml_normas (tipo_norma, ano)",
 ]
 
 
