@@ -510,6 +510,31 @@ async def erase_client_data(
 
     await db.flush()
 
+    # ─── Acervo LexML: a relação do escritório com a norma ────────────────
+    # A NORMA em si (`lexml_normas`) é dado público e fica intacta — não é
+    # PII do titular, e não há base para apagar uma lei do acervo.
+    # `lexml_norma_tenant` é outra história: `anotacao` é texto livre que o
+    # escritório escreveu sobre um caso, e o vínculo alcança o titular por
+    # `process_id → legal_processes.client_id`. É a 10ª tabela desta classe
+    # no projeto; as 9 anteriores viraram achado de auditoria por terem sido
+    # esquecidas aqui. O vínculo estrutural é preservado (o processo
+    # continua ligado à norma); só o texto livre é removido.
+    from app.models.lexml import LexmlNormaTenant
+
+    vinculos_lexml_result = await db.execute(
+        select(LexmlNormaTenant).where(
+            LexmlNormaTenant.tenant_id == current_user.tenant_id,
+            LexmlNormaTenant.process_id.in_(
+                select(LegalProcess.id).where(client_linked_processes_filter(client_id))
+            ),
+        )
+    )
+    for vinculo in vinculos_lexml_result.scalars().all():
+        if vinculo.anotacao:
+            vinculo.anotacao = "[Conteúdo removido — LGPD art. 18 IV]"
+
+    await db.flush()
+
     # Registra auditoria (tenant-scoped — antes nascia sem tenant_id e sumia do
     # painel de Auditoria, que filtra por tenant; e o except silencioso escondia
     # falhas numa operação sensível de LGPD).
@@ -719,6 +744,22 @@ async def export_client_data(
     )
     memoria_agentes = memory_result.scalars().all()
 
+    # Integração LexML — mesmo alcance de erase_client_data acima
+    # (o vínculo do escritório com a norma, via processo do titular). A
+    # norma em si é pública e não é dado do titular; a `anotacao` é.
+    from app.models.lexml import LexmlNormaTenant, LexmlNorma
+    vinculos_lexml_result = await db.execute(
+        select(LexmlNormaTenant, LexmlNorma)
+        .join(LexmlNorma, LexmlNorma.id == LexmlNormaTenant.norma_id)
+        .where(
+            LexmlNormaTenant.tenant_id == current_user.tenant_id,
+            LexmlNormaTenant.process_id.in_(
+                select(LegalProcess.id).where(client_linked_processes_filter(uuid.UUID(client_id)))
+            ),
+        )
+    )
+    vinculos_lexml = vinculos_lexml_result.all()
+
     # Rodada pós-166a43c — mesmo alcance de erase_client_data acima
     # (LGPDConsentRecord.client_id); export mostra o dado real.
     from app.models.audit_log import LGPDConsentRecord
@@ -920,6 +961,18 @@ async def export_client_data(
                 "created_at": m.created_at.isoformat(),
             }
             for m in memoria_agentes
+        ],
+        "normas_vinculadas_lexml": [
+            {
+                "id": str(v.id),
+                "urn": n.urn,
+                "titulo": n.titulo,
+                "processo_id": str(v.process_id) if v.process_id else None,
+                "favorito": v.favorito,
+                "anotacao": v.anotacao,
+                "created_at": v.created_at.isoformat(),
+            }
+            for v, n in vinculos_lexml
         ],
         "consentimentos_lgpd": [
             {

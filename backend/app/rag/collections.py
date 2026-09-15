@@ -87,6 +87,16 @@ COLLECTIONS: dict[str, dict] = {
             # Fase 138.3 — ingestão automática via LexML/Planalto.
             "tipo_norma": PayloadSchemaType.KEYWORD,  # "Lei" | "Decreto"
             "urn": PayloadSchemaType.KEYWORD,         # URN LexML, chave estável do documento
+            # Achado de auditoria (integração LexML): faltava aqui, apesar de
+            # `legislacao_sync.py` chamar `ingest_document(document_id=urn)` e
+            # `delete_document_chunks()` filtrar por este campo antes de
+            # reingerir. Mesma causa já corrigida em peticoes_afj/
+            # doutrina_privada/documentos_clientes — sem o índice, o Qdrant
+            # real responde 400 "Index required but not found for
+            # document_id" e a reingestão DUPLICA os chunks da norma em vez
+            # de substituí-los. `ensure_collections()` cria o índice sozinho
+            # no próximo boot, sem migração manual.
+            "document_id": PayloadSchemaType.KEYWORD,
             # Fase pós-260 — ver nota em jurisprudencia acima.
             "embedding_provider": PayloadSchemaType.KEYWORD,
         },

@@ -238,6 +238,25 @@ async def _fontes() -> dict:
             resultado["pdpj"] = {"registrado": "pdpj" in PROVIDERS, "credential_gated": True}
         except Exception:
             pass
+        # Fontes DOCUMENTAIS (legislação/jurisprudência) — não são
+        # `FonteProcessual` e por isso nunca estiveram no registry: não têm
+        # descobrir_por_oab/detalhar/movimentos/partes. O resultado prático
+        # era que o breaker delas ficava invisível no painel, mesmo com o
+        # estado sendo persistido no Redis. Lidos aqui pelo nome, direto.
+        resultado["fontes_documentais"] = []
+        try:
+            from app.integrations.fontes.circuit_breaker import CircuitBreaker
+            for nome, descricao in (
+                ("lexml", "LexML — legislação federal (SRU)"),
+                ("stj_dados_abertos", "STJ — jurisprudência (dados abertos)"),
+            ):
+                estado = await CircuitBreaker(name=nome).estado_atual()
+                resultado["fontes_documentais"].append({
+                    "nome": nome, "descricao": descricao, "breaker": estado,
+                })
+        except Exception as exc:
+            log.warning("brain_fontes_documentais_falhou", error=str(exc))
+
         # Tabela de referência de tribunais
         try:
             from sqlalchemy import select, func

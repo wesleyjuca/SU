@@ -92,6 +92,44 @@ async def _limpar(client_id: str) -> None:
             except Exception:
                 await db.rollback()
         await db.execute(text("DELETE FROM clients WHERE id = :cid"), {"cid": client_id})
+        # `lexml_normas` é compartilhada entre escritórios e não tem FK para
+        # `clients` — o loop acima não a alcança. A norma em si não é dado do
+        # titular (é lei pública), mas a linha de teste não pode ficar para trás.
+        await db.execute(text("DELETE FROM lexml_normas WHERE urn LIKE :urn"),
+                         {"urn": "urn:lex:br:federal:lei:2027-01-01;sentinela%"})
+        await db.commit()
+
+
+async def _semear_vinculo_lexml(process_id: str, token: str) -> None:
+    """Cria uma norma LexML e a vincula ao processo do titular, com anotação.
+
+    A NORMA não recebe o token: ela é lei pública, compartilhada entre
+    escritórios, e sobrevive ao esquecimento por desenho. O token vai só na
+    `anotacao`, que é do escritório e fala do caso.
+    """
+    from app.services.lexml_acervo import upsert_norma, vincular
+
+    async with AsyncSessionLocal() as db:
+        processo = (await db.execute(
+            text("SELECT tenant_id FROM legal_processes WHERE id = :pid"),
+            {"pid": process_id},
+        )).first()
+        if not processo:
+            return
+        norma = await upsert_norma(
+            db,
+            urn=f"urn:lex:br:federal:lei:2027-01-01;sentinela{uuid.uuid4().hex[:8]}",
+            titulo="Lei de teste do sentinela LGPD",
+        )
+        if norma is None:
+            return
+        await vincular(
+            db,
+            tenant_id=processo[0],
+            norma_id=norma.id,
+            process_id=uuid.UUID(process_id),
+            anotacao=f"anotacao lexml {token}",
+        )
         await db.commit()
 
 
@@ -146,6 +184,13 @@ async def test_esquecimento_nao_deixa_pii_em_nenhuma_coluna(client, auth_headers
             await client.post(f"/api/v1/processes/{pid}/deadlines", headers=auth_headers, json={
                 "descricao": f"prazo {token}", "data_prazo": "2027-02-01",
                 "tipo": "CONTESTACAO"})
+
+            # Integração LexML — `lexml_norma_tenant.anotacao` é texto livre do
+            # escritório sobre o caso do titular, alcançável a partir do
+            # processo. Semeada pela camada de serviço real (o endpoint de
+            # vínculo ainda não existe): sem preencher a tabela, a varredura
+            # passaria vazia e a guarda não provaria nada sobre ela.
+            await _semear_vinculo_lexml(pid, token)
 
         antes = await _varrer_banco(token)
         assert antes, "o token não foi gravado em lugar nenhum — a guarda não provaria nada"

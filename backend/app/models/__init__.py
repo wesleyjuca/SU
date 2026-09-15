@@ -26,6 +26,7 @@ from app.models.push_subscription import PushSubscription
 from app.models.ai_call_log import AICallLog
 from app.models.ai_config import AIProviderConfig
 from app.models.jurisprudencia_ingerida import JurisprudenciaIngerida
+from app.models.lexml import LexmlNorma, LexmlNormaTenant
 from app.models.tese import Tese
 from app.models.agent_prompt import AgentPromptConfig, AgentPromptVersion, AgentAttachment
 from app.models.custom_agent import CustomAgent, CustomAgentVersion
@@ -55,6 +56,7 @@ __all__ = [
     "Tribunal",
     "AIProviderConfig",
     "JurisprudenciaIngerida",
+    "LexmlNorma", "LexmlNormaTenant",
     "Tese",
     "AgentPromptConfig",
     "AgentPromptVersion",
