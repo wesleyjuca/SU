@@ -316,13 +316,12 @@ async def buscar(
     vistas = {n.urn for n in locais}
 
     fonte_consultada = False
-    fonte_respondeu = False
+    diagnostico: dict = {}
     if consultar_fonte and texto and len(resultados) < limite:
-        from app.integrations.lexml.client import buscar_normas
+        from app.integrations.lexml.client import buscar_normas_com_diagnostico
 
         fonte_consultada = True
-        registros = await buscar_normas(texto, tipo_norma, limite)
-        fonte_respondeu = bool(registros)
+        registros, diagnostico = await buscar_normas_com_diagnostico(texto, tipo_norma, limite)
         for registro in registros:
             urn_normalizada = normalizar_urn(registro.get("urn"))
             if not urn_normalizada or urn_normalizada in vistas:
@@ -349,13 +348,29 @@ async def buscar(
                 break
         await db.commit()
 
+    desfecho = diagnostico.get("desfecho")
     resposta = {
         "total": len(resultados),
         "resultados": resultados[:limite],
         "fonte_consultada": fonte_consultada,
-        "fonte_respondeu": fonte_respondeu,
+        # `fonte_respondeu` era `bool(registros)`, o que chamava de "não
+        # respondeu" tanto o portal fora do ar quanto o portal respondendo
+        # que não achou nada. Agora é o que a palavra diz: houve resposta.
+        "fonte_respondeu": desfecho in ("ok", "vazio"),
+        "fonte_desfecho": desfecho,
+        "fonte_detalhe": {
+            "status_code": diagnostico.get("status_code"),
+            "body_snippet": diagnostico.get("body_snippet"),
+            "number_of_records": diagnostico.get("number_of_records"),
+            "query": diagnostico.get("query"),
+        } if diagnostico else None,
     }
-    if redis:
+
+    # Falha NÃO entra no cache: guardar "o portal está fora" por 10 minutos faz
+    # quem tenta de novo receber a mesma resposta errada sem nenhuma chamada de
+    # rede — a indisponibilidade passa e o sistema continua afirmando que não.
+    cacheavel = (not fonte_consultada) or desfecho in ("ok", "vazio")
+    if redis and cacheavel:
         try:
             await redis.set(chave, json.dumps(resposta), ex=CACHE_TTL_SEGUNDOS)
         except Exception as exc:

@@ -1488,7 +1488,10 @@ nunca repetir o mesmo teste do zero.** Antes de planejar uma nova rodada:
     os índices CQL aceitos pelo SRU são NÃO VERIFICADOS (egress bloqueado pra
     `lexml.gov.br`). A saída não foi chutar endpoint — foi **construir só sobre
     o que já está provado em produção**: `query=<texto livre>` e
-    `query=localidade=federal and tipoDocumento=X` (as duas em uso hoje). Os
+    `query=localidade=federal and tipoDocumento=X` (as duas em uso hoje).
+    **Correção da fase pós-266.2**: o "texto livre" provado é uma REFERÊNCIA
+    NUMÉRICA (`8078/1990`, que `citacao_check` manda), não uma frase em
+    linguagem natural — esta linha superestimava o que estava verificado. Os
     filtros não confirmados (`ano`, `autoridade`) são **pós-filtro no acervo
     local**, nunca montados em CQL — um índice inexistente pode derrubar a
     busca inteira. Há teste de guarda (`test_cql_nunca_contem_indice_nao_provado`)
@@ -1551,6 +1554,57 @@ nunca repetir o mesmo teste do zero.** Antes de planejar uma nova rodada:
     desenho evitou depender desses pontos. Pedir ao usuário: após o deploy,
     pesquisar uma lei conhecida na aba Legislação e reportar se vieram
     resultados com badge **"LexML (agora)"** — é isso que prova o caminho vivo.
+
+- **Fase pós-266.2** — usuário mergeou a #266, testou em produção o que eu pedi
+  ("lei de licitações" na aba Legislação) e mandou o resultado: **0 norma(s)** +
+  *"O portal do LexML não respondeu"*. Isso **não** prova que o portal está fora
+  — expôs **3 defeitos no código que eu tinha acabado de entregar**, e o defeito
+  central é que o sistema não tinha como saber o que aconteceu.
+  - **Defeito 1 — o diagnóstico adivinhava, e em 3 de 5 casos mentia.**
+    `fonte_respondeu = bool(registros)`, mas `buscar_normas()` devolvia `[]`
+    para: HTTP não-200, erro de rede, **circuito aberto (nem tentou)**, XML num
+    schema desconhecido e **200 com zero registros** (resposta legítima). A tela
+    dizia "não respondeu" nos cinco. É a armadilha "fail-soft engole o sinal"
+    catalogada acima, reproduzida por mim — e justamente no ponto que o plano
+    marcava como NÃO VERIFICADO.
+  - **Defeito 2 — o acervo nascia vazio e nada o preenchia.**
+    `backfill_de_jurisprudencia_ingerida()` tinha **zero chamador**, e
+    `legislacao_sync` faz `continue` antes do `upsert_norma` para toda norma já
+    ingerida (praticamente todas). Os "0 norma(s)" seriam 0 **mesmo com o portal
+    respondendo**. Ligado na sincronização diária (decisão do usuário), em
+    try/except próprio.
+  - **Defeito 3 — o cache de 10 min memorizava a falha**: quem tentasse de novo
+    recebia a mesma resposta errada sem chamada de rede. Passou antes porque
+    este sandbox roda sem Redis. Agora só `ok`/`vazio` entram no cache.
+  - **Correção da minha própria afirmação**: o texto livre provado é
+    `8078/1990`, não uma frase (ver acima). `montar_query_cql` passou a reusar
+    `citacao_check.extrair_referencias_lei()` — "Lei 14.133/2021" vira
+    `14133/2021`; frase sem padrão segue como antes, agora instrumentada.
+  - **A peça central**: `buscar_normas_com_diagnostico()` nomeia o desfecho
+    (`ok`/`vazio`/`circuito_aberto`/`http`/`rede`/`xml_ilegivel`/
+    `schema_inesperado`). **`numberOfRecords` é o discriminador** entre
+    "respondeu e não achou" e "respondeu num formato que não sabemos ler" — se
+    o campo aparece, nosso entendimento do envelope SRU está certo; se não,
+    está errado, e é isso que o sistema precisa dizer. Circuito aberto é
+    distinguido por flag de fechamento (o breaker devolve o mesmo `default`
+    para "aberto" e "falhou"); status e corpo são capturados **antes** de
+    levantar, senão sumiriam com a exceção.
+  - **Verificado**: prova nos dois sentidos medida — com os fixes revertidos,
+    **9 testes falham**. Falha do backfill injetada na dependência de DENTRO,
+    não trocando a função. 2 testes pré-existentes + 4 fakes desatualizados
+    quebraram e foram corrigidos junto (a armadilha do fake velho, pega pela
+    suíte antes do CI). Suíte na configuração do runner, 2 execuções contra o
+    mesmo banco: `test_unit` **1082/4** nas duas (+17), `test_api` 188/11 e
+    187/12. `ruff`/`tsc`/`eslint` limpos. **Playwright 11/11** com um **LexML
+    falso local** em vez de stub da função — o cliente real percorre HTTP,
+    parser e disjuntor; `circuito_aberto` obtido do jeito real, 3 recusas
+    seguidas abrindo o disjuntor.
+  - **O que este sandbox não pode provar**: qual desfecho ocorre contra o
+    portal real. **Este trabalho não conserta a busca** — faz o sistema dizer o
+    que está errado, para a próxima fase corrigir com dado em vez de aposta.
+    Impersonação TLS ficou deliberadamente de fora: só faz sentido se o
+    diagnóstico apontar `http`/`rede`, e aplicá-la agora mascararia a causa.
+    Pedir ao usuário: repetir a busca após o deploy e reportar a mensagem nova.
 
 Histórico completo (achados, decisões de escopo, correções, verificações
 empíricas de cada fase) fica em `HISTORICO_FASES.md` — movido pra fora

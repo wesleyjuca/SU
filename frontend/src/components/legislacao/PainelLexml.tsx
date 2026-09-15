@@ -40,7 +40,56 @@ interface RespostaBusca {
   resultados: Norma[];
   fonte_consultada: boolean;
   fonte_respondeu: boolean;
+  fonte_desfecho?: string | null;
+  fonte_detalhe?: {
+    status_code: number | null;
+    body_snippet: string | null;
+    number_of_records: number | null;
+    query: string | null;
+  } | null;
 }
+
+/**
+ * Uma mensagem por desfecho real da consulta ao portal.
+ *
+ * Antes havia uma frase só — "o portal não respondeu" — para cinco situações
+ * diferentes, e ela era falsa em três delas: o portal pode ter respondido que
+ * não achou nada, a consulta pode nem ter saído (disjuntor aberto), ou a
+ * resposta pode ter vindo num formato que o sistema ainda não lê.
+ *
+ * `tom` separa o que é falha do que é resultado legítimo: "não encontrei" não
+ * é erro e não deve aparecer em âmbar ao lado de "o portal recusou".
+ */
+const DESFECHOS: Record<string, { tom: "info" | "aviso"; texto: string }> = {
+  vazio: {
+    tom: "info",
+    texto: "O portal do LexML respondeu, mas não encontrou nenhuma norma para esses termos.",
+  },
+  circuito_aberto: {
+    tom: "aviso",
+    texto:
+      "As consultas ao portal estão suspensas por alguns minutos, após falhas seguidas. " +
+      "O que aparece abaixo vem só do acervo já conhecido.",
+  },
+  http: {
+    tom: "aviso",
+    texto: "O portal do LexML recusou a consulta. O que aparece abaixo vem só do acervo já conhecido.",
+  },
+  rede: {
+    tom: "aviso",
+    texto: "Não foi possível alcançar o portal do LexML. O que aparece abaixo vem só do acervo já conhecido.",
+  },
+  xml_ilegivel: {
+    tom: "aviso",
+    texto: "O portal do LexML devolveu uma resposta ilegível. O que aparece abaixo vem só do acervo já conhecido.",
+  },
+  schema_inesperado: {
+    tom: "aviso",
+    texto:
+      "O portal do LexML respondeu num formato que o sistema ainda não sabe ler — " +
+      "os resultados dele não puderam ser aproveitados nesta consulta.",
+  },
+};
 
 // Só os tipos que a sincronização diária de fato cobre hoje
 // (`TIPOS_NORMA_SUPORTADOS` no cliente SRU). Listar mais sugeriria uma
@@ -398,12 +447,35 @@ export function PainelLexml() {
             <div className="space-y-3">
               <div className="flex items-center justify-between text-xs text-afj-black/50">
                 <span>{resposta.total} norma(s)</span>
-                {resposta.fonte_consultada && !resposta.fonte_respondeu && (
-                  <span className="text-amber-700 flex items-center gap-1">
-                    <AlertTriangle size={12} /> O portal do LexML não respondeu nesta consulta —
-                    o que aparece abaixo vem só do acervo já conhecido.
-                  </span>
-                )}
+                {resposta.fonte_consultada && (() => {
+                  const info = DESFECHOS[resposta.fonte_desfecho ?? ""];
+                  if (!info) return null;
+                  // O técnico (status HTTP / trecho da resposta) fica no
+                  // tooltip: serve ao suporte sem poluir a tela do advogado —
+                  // mesmo princípio de `erro_amigavel` em Integrações.
+                  const tecnico = [
+                    resposta.fonte_detalhe?.status_code
+                      ? `HTTP ${resposta.fonte_detalhe.status_code}`
+                      : null,
+                    resposta.fonte_detalhe?.query
+                      ? `consulta enviada: ${resposta.fonte_detalhe.query}`
+                      : null,
+                    resposta.fonte_detalhe?.body_snippet,
+                  ]
+                    .filter(Boolean)
+                    .join(" — ");
+                  return (
+                    <span
+                      title={tecnico || undefined}
+                      className={`flex items-center gap-1 ${
+                        info.tom === "aviso" ? "text-amber-700" : "text-afj-black/50"
+                      }`}
+                    >
+                      {info.tom === "aviso" && <AlertTriangle size={12} />}
+                      {info.texto}
+                    </span>
+                  );
+                })()}
               </div>
               {resposta.resultados.length === 0 ? (
                 <div className="afj-card p-6 text-center">
