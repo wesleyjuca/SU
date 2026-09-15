@@ -24,9 +24,22 @@ async def executar_sync_legislacao(db) -> dict:
     from app.integrations.lexml.client import buscar_lote_legislacao_federal, buscar_norma_completa
     from app.rag.ingestion import ingest_document
     from app.services.movements_import import iniciar_sync, finalizar_sync
-    from app.services.lexml_acervo import upsert_norma
+    from app.services.lexml_acervo import backfill_de_jurisprudencia_ingerida, upsert_norma
 
     run = await iniciar_sync(db, tenant_id=None, fonte=FONTE, tipo="INGESTAO")
+
+    # Integração LexML — sem isto o acervo estruturado nasce vazio e assim
+    # fica: o `upsert_norma` lá embaixo só é alcançado no ramo de URN NOVA, e
+    # toda norma já ingerida cai no `continue` antes dele. Como a pipeline roda
+    # diariamente há muito tempo, "já ingerida" é praticamente o acervo
+    # inteiro — a busca de legislação devolvia zero mesmo com o portal
+    # funcionando. O backfill é idempotente e reconstrói a partir do que
+    # `JurisprudenciaIngerida` já registrou. Try/except próprio pela mesma
+    # razão do upsert: falhar aqui não pode derrubar a sincronização.
+    try:
+        await backfill_de_jurisprudencia_ingerida(db)
+    except Exception as exc_backfill:
+        log.warning("lexml_backfill_falhou", error=str(exc_backfill))
 
     processados = 0
     pulados = 0

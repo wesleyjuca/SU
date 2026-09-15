@@ -168,15 +168,25 @@ TIPOS_NORMA_SUPORTADOS = ("Lei", "Decreto")
 _URL_TAGS = ("location", "url", "identifier")
 
 
-def _parsear_registros(xml_text: str) -> list[dict]:
-    """Extrai todos os <record> de uma resposta SRU multi-registro (ao
-    contrário de `_parsear_resposta`, que só olha o 1º). Um <record>
-    malformado ou sem `urn` é pulado, não derruba os demais. Nunca lança —
-    XML não parseável devolve `[]`."""
-    root = _fromstring_seguro(xml_text)
-    if root is None:
-        return []
+def _numero_de_registros(root: ET.Element) -> int | None:
+    """`numberOfRecords` do envelope SRU, ou `None` se o campo não existir.
 
+    É o **discriminador** entre "o portal respondeu e não achou nada" e "o
+    portal respondeu num formato que este parser não entende" — dois desfechos
+    que antes viravam a mesma lista vazia. Se este campo aparece, nosso
+    entendimento do envelope SRU está correto; se não aparece, está errado, e
+    é isso que o diagnóstico precisa dizer.
+    """
+    for el in root.iter():
+        if _local(el.tag) == "numberOfRecords" and el.text:
+            bruto = el.text.strip()
+            if bruto.isdigit():
+                return int(bruto)
+    return None
+
+
+def _registros_de(root: ET.Element) -> list[dict]:
+    """Extrai todos os <record> de uma árvore SRU já parseada."""
     registros: list[dict] = []
     for record_el in root.iter():
         if _local(record_el.tag) != "record":
@@ -197,6 +207,17 @@ def _parsear_registros(xml_text: str) -> list[dict]:
         if urn:  # sem URN não dá pra formar uma chave de idempotência estável
             registros.append({"urn": urn, "titulo": titulo, "url": url})
     return registros
+
+
+def _parsear_registros(xml_text: str) -> list[dict]:
+    """Extrai todos os <record> de uma resposta SRU multi-registro (ao
+    contrário de `_parsear_resposta`, que só olha o 1º). Um <record>
+    malformado ou sem `urn` é pulado, não derruba os demais. Nunca lança —
+    XML não parseável devolve `[]`."""
+    root = _fromstring_seguro(xml_text)
+    if root is None:
+        return []
+    return _registros_de(root)
 
 
 async def buscar_lote_legislacao(tipo_norma: str, maximum_records: int = 50) -> list[dict]:
@@ -335,6 +356,20 @@ def montar_query_cql(texto: str, tipo_norma: str | None = None) -> str:
     índices, movê-los para a CQL é otimização, não correção.
     """
     termo = " ".join((texto or "").split()).strip()
+
+    # Fase pós-266.2 — a "forma provada" era mais estreita do que eu registrei.
+    # O que `citacao_check` manda há muito tempo, e que sabidamente responde, é
+    # uma REFERÊNCIA NUMÉRICA normalizada ("8078/1990") — nunca uma frase em
+    # linguagem natural. Quando o texto digitado contém uma referência assim,
+    # é ela que vai; caso contrário segue a frase como antes, e agora o
+    # diagnóstico dirá se o índice padrão do SRU a atende.
+    if termo:
+        from app.services.citacao_check import extrair_referencias_lei
+
+        referencias = extrair_referencias_lei(termo)
+        if referencias:
+            termo = referencias[0]
+
     if tipo_norma:
         tipo = tipo_norma.strip()
         filtro = f"localidade=federal and tipoDocumento={tipo}"
@@ -342,19 +377,39 @@ def montar_query_cql(texto: str, tipo_norma: str | None = None) -> str:
     return termo
 
 
-async def buscar_normas(texto: str, tipo_norma: str | None = None, limite: int = 20) -> list[dict]:
-    """Busca normas no SRU por texto livre (e, opcionalmente, tipo).
+async def buscar_normas_com_diagnostico(
+    texto: str, tipo_norma: str | None = None, limite: int = 20
+) -> tuple[list[dict], dict]:
+    """Busca normas no SRU e devolve `(registros, diagnostico)`.
 
-    Fail-soft como todo o resto do módulo: `[]` — nunca exceção — se a rede
-    cair, o circuito estiver aberto ou o XML não for parseável. Cada item:
-    `{"urn", "titulo", "url"}`, o mesmo formato de `_parsear_registros`.
+    Existe porque a lista vazia sozinha é ambígua: ela era o retorno de CINCO
+    desfechos distintos — circuito aberto (nem tentou), HTTP não-200, erro de
+    rede, XML num schema que este parser não entende, e o portal respondendo
+    200 com zero registros, que é resposta legítima e não falha. A tela
+    afirmava "o portal não respondeu" nos cinco, o que é falso em três deles.
+    É a armadilha "fail-soft engole o sinal" já catalogada no CLAUDE.md.
+
+    `diagnostico["desfecho"]` é um de: `ok`, `vazio`, `circuito_aberto`,
+    `http`, `rede`, `xml_ilegivel`, `schema_inesperado`, `sem_criterio`.
+    Nunca lança — quem chama está num caminho síncrono de usuário.
     """
     query = montar_query_cql(texto, tipo_norma)
+    diagnostico: dict = {
+        "desfecho": "sem_criterio", "query": query,
+        "status_code": None, "body_snippet": None, "number_of_records": None,
+    }
     if not query:
-        return []
+        return [], diagnostico
     limite = max(1, min(int(limite or 20), 100))
 
+    # O breaker devolve o mesmo `default` para "circuito aberto" e para
+    # "a chamada falhou" — esta flag é o que distingue os dois sem uma leitura
+    # extra do Redis e sem corrida entre checar e chamar.
+    tentou = False
+
     async def _f():
+        nonlocal tentou
+        tentou = True
         params = {
             "operation": "searchRetrieve",
             "version": "1.1",
@@ -362,13 +417,56 @@ async def buscar_normas(texto: str, tipo_norma: str | None = None, limite: int =
             "maximumRecords": str(limite),
         }
         async with httpx.AsyncClient(timeout=_TIMEOUT, headers=_HEADERS) as client:
-            resp = await client.get(LEXML_SRU_URL, params=params)
+            try:
+                resp = await client.get(LEXML_SRU_URL, params=params)
+            except Exception as exc:
+                diagnostico["desfecho"] = "rede"
+                diagnostico["body_snippet"] = f"{type(exc).__name__}: {exc}"[:500]
+                raise
             if resp.status_code != 200:
+                # Capturado ANTES de levantar: dentro do breaker o status
+                # sumiria junto com a exceção (mesmo padrão de `dje/comunica.py`).
+                diagnostico["desfecho"] = "http"
+                diagnostico["status_code"] = resp.status_code
+                diagnostico["body_snippet"] = (resp.text or "")[:500]
                 log.warning("lexml_busca_http", status=resp.status_code)
                 raise RuntimeError(f"lexml status {resp.status_code}")
+            diagnostico["status_code"] = 200
             return resp.text
 
     xml_text = await _breaker.run(_f, default=None)
     if xml_text is None:
-        return []
-    return _parsear_registros(xml_text)
+        if not tentou:
+            diagnostico["desfecho"] = "circuito_aberto"
+        elif diagnostico["desfecho"] not in ("http", "rede"):
+            diagnostico["desfecho"] = "rede"  # exceção fora dos ramos instrumentados
+        log.warning("lexml_busca_sem_resposta", desfecho=diagnostico["desfecho"])
+        return [], diagnostico
+
+    root = _fromstring_seguro(xml_text)
+    if root is None:
+        diagnostico["desfecho"] = "xml_ilegivel"
+        diagnostico["body_snippet"] = xml_text[:500]
+        return [], diagnostico
+
+    diagnostico["number_of_records"] = _numero_de_registros(root)
+    registros = _registros_de(root)
+    if registros:
+        diagnostico["desfecho"] = "ok"
+    elif diagnostico["number_of_records"] == 0:
+        diagnostico["desfecho"] = "vazio"  # respondeu e não achou — não é falha
+    else:
+        # 200 com XML válido, mas sem `numberOfRecords` reconhecível ou com
+        # registros que não conseguimos ler: o schema não é o que o parser
+        # assume. É o ponto que o plano marcava como NÃO VERIFICADO — o
+        # snippet é o insumo para corrigir o parser na próxima fase.
+        diagnostico["desfecho"] = "schema_inesperado"
+        diagnostico["body_snippet"] = xml_text[:500]
+    return registros, diagnostico
+
+
+async def buscar_normas(texto: str, tipo_norma: str | None = None, limite: int = 20) -> list[dict]:
+    """Wrapper fino sobre `buscar_normas_com_diagnostico` para quem só quer a
+    lista (mesmo idioma de `embed_text` sobre `embed_text_with_meta`)."""
+    registros, _ = await buscar_normas_com_diagnostico(texto, tipo_norma, limite)
+    return registros

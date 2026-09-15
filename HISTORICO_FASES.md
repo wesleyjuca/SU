@@ -8088,3 +8088,146 @@ resultados com badge **"LexML (agora)"** — é isso que prova o caminho ao vivo
   `test_lexml_seguranca.py`, `test_lexml_busca.py` (novos),
   `test_lgpd_sentinela.py`, `test_lexml_client.py` (estendidos)
 - `CLAUDE.md`, `HISTORICO_FASES.md`
+
+---
+
+# Fase pós-266.2 — a busca de legislação não sabia dizer por que voltava vazia
+
+## Context
+
+O usuário mergeou a PR #266, testou em produção exatamente o que eu havia
+pedido — pesquisou "lei de licitações" na aba Legislação — e mandou o
+resultado: **0 norma(s)** e o banner *"O portal do LexML não respondeu nesta
+consulta"*.
+
+Esse retorno **não** prova que o portal está fora. Ele expôs **três defeitos no
+código que eu tinha acabado de entregar**, mais **uma afirmação minha que era
+imprecisa** — todos confirmados por leitura direta, nenhum hipótese. O defeito
+central é justamente que o sistema não tinha como saber o que aconteceu.
+
+### Defeito 1 — o diagnóstico adivinhava, e em 3 dos 5 casos mentia
+
+`services/lexml_acervo.py::buscar()` fazia `fonte_respondeu = bool(registros)`,
+mas `client.py::buscar_normas()` devolvia `[]` em **cinco** situações:
+
+| Desfecho real | O que a tela dizia |
+|---|---|
+| HTTP não-200 (WAF/5xx) | "não respondeu" — certo por acaso |
+| erro de rede / timeout | "não respondeu" — certo por acaso |
+| **circuito aberto — nem tentou** | "não respondeu" — **falso** |
+| XML num schema que o parser não conhece | "não respondeu" — **falso** |
+| **200 com zero registros** (resposta legítima) | "não respondeu" — **falso** |
+
+É exatamente a armadilha catalogada no CLAUDE.md — *"Fail-soft pode engolir o
+sinal: 'a fonte está fora' e 'não há novidade' viravam o mesmo `[]`"* —
+reproduzida por mim em código novo. Pior: o plano marcava as tags do XML como
+**NÃO VERIFICADO**, e eu não instrumentei justamente o ponto incerto.
+
+### Defeito 2 — o acervo nascia vazio e nada o preenchia
+
+`backfill_de_jurisprudencia_ingerida()` tinha **zero chamador** em produção
+(grep: só o próprio teste). E `legislacao_sync.py` faz `continue` no ramo
+`if existe:` **antes** do `upsert_norma` — para toda norma já ingerida (ou
+seja, praticamente o acervo inteiro, já que a pipeline roda diariamente há
+muito tempo) o acervo nunca era alimentado.
+
+Consequência: os "0 norma(s)" da tela seriam 0 **mesmo com o portal
+respondendo perfeitamente**. Metade da feature estava morta ao nascer.
+
+### Defeito 3 — o cache de 10 minutos memorizava a falha
+
+`buscar()` gravava a resposta no Redis incondicionalmente, inclusive
+`fonte_respondeu: false` com zero resultados. Uma indisponibilidade momentânea
+ficava lembrada por 10 minutos: a indisponibilidade passa e o sistema continua
+afirmando que não. Passou na verificação anterior porque este sandbox roda com
+`REDIS_URL=` vazio; produção tem Redis.
+
+### Correção 4 — minha tabela do "provado" estava imprecisa
+
+Registrei `query=<texto livre>` como **provado** por `citacao_check`. O que de
+fato é provado é uma **referência numérica normalizada**: `citacao_check.py`
+extrai `"Lei nº 8.078/1990"` → `"8078/1990"` e é *isso* que vai como `query`.
+Uma frase em linguagem natural como "lei de licitações" **nunca** foi provada.
+
+## Abordagem
+
+1. **`client.py` devolve a causa.** Nova
+   `buscar_normas_com_diagnostico() -> (registros, diag)`; `buscar_normas()`
+   vira wrapper fino (mesmo idioma de `embed_text` sobre
+   `embed_text_with_meta`). `diag["desfecho"]`: `ok`, `vazio`,
+   `circuito_aberto`, `http`, `rede`, `xml_ilegivel`, `schema_inesperado`,
+   `sem_criterio`.
+   - **circuito aberto** distinguido por uma flag de fechamento (`tentou`), não
+     por leitura extra do Redis: o breaker devolve o mesmo `default` para
+     "aberto" e para "falhou", e sem isso a tela culpa o portal por uma
+     consulta que nunca saiu.
+   - **status + corpo** capturados **antes** de levantar para o breaker (mesmo
+     padrão de `dje/comunica.py`), senão sumiriam junto com a exceção.
+   - **`numberOfRecords` como discriminador**: é ele que separa "respondeu e
+     não achou nada" de "respondeu num formato que não sabemos ler". Se o campo
+     aparece, nosso entendimento do envelope SRU está certo; se não, está
+     errado — e é isso que o diagnóstico precisa dizer. Reusa o que
+     `_parsear_resposta()` já lia, sem parser novo.
+2. **Forma de consulta provada.** `montar_query_cql()` reusa
+   `citacao_check.extrair_referencias_lei()`: "Lei 14.133/2021" vira
+   `14133/2021`. Sem casar o padrão, segue a frase como antes — agora
+   instrumentada. Nada inventado: ou é a forma já provada, ou é o
+   comportamento atual, visível.
+3. **`lexml_acervo.buscar()`** propaga `fonte_desfecho`/`fonte_detalhe`;
+   `fonte_respondeu` passa a significar o que a palavra diz. **Falha não entra
+   no cache.**
+4. **Backfill ligado na sincronização diária** (decisão do usuário), em
+   `try/except` próprio — falhar ali não pode derrubar a sincronização, pela
+   mesma razão já escrita para o `upsert_norma`.
+5. **Uma mensagem por desfecho na tela**, com `tom` separando falha de
+   resultado legítimo: "não encontrei" deixa de aparecer em âmbar ao lado de
+   "o portal recusou". O técnico (HTTP, consulta enviada, trecho do corpo) vai
+   para o tooltip — serve ao suporte sem poluir a tela do advogado, mesmo
+   princípio de `erro_amigavel` da fase pós-265.
+
+## Verificação
+
+- **Prova nos dois sentidos, medida**: com os fixes 3 e 4 revertidos, **9
+  testes falham** (os 6 de cache, os 2 pré-existentes de `SyncRun` e o do
+  backfill); com eles, 30 passam. O caso `vazio` (200 + `numberOfRecords: 0`)
+  é o que hoje passaria como "não respondeu" — é ele que prova o defeito 1
+  fechado.
+- Falha do backfill injetada **na dependência de dentro** (a própria query),
+  não trocando a função por um fake que levanta — senão o teste passaria com a
+  correção revertida, porque o código real nunca rodaria.
+- **2 testes pré-existentes quebraram** ao ligar o backfill (o fake de banco
+  consumia a fila na ordem antiga) e **4 fakes ficaram desatualizados** ao
+  mudar o contrato de busca — exatamente a armadilha "fake com assinatura
+  desatualizada" já catalogada, pega pela suíte antes do CI. Corrigidos junto.
+- Suíte completa na configuração do runner (banco `afj_p266` do zero,
+  `REDIS_URL=` vazio), 2 execuções contra o mesmo banco: `tests/test_unit/`
+  **1082 passed/4 skipped** nas duas (+17); `tests/test_api/` 188/11 e 187/12
+  (mesma classe de skip condicional a rate-limit já documentada). `ruff`/`tsc
+  --noEmit`/`eslint` limpos.
+- **Playwright real — 11/11 PASS**, com um **LexML falso local** em vez de um
+  stub da função: o cliente real percorre HTTP, parser e disjuntor de ponta a
+  ponta. Cobre `ok`, `vazio` (dizendo que o portal **respondeu**),
+  `schema_inesperado` (a mensagem que nunca existiu), `http` (com o HTTP 403 no
+  tooltip e o HTML cru fora da tela) e `circuito_aberto` — este último obtido
+  do jeito real, três recusas seguidas abrindo o disjuntor.
+
+## O que este sandbox não pode provar
+
+Qual desfecho ocorre contra o portal real — egress para `lexml.gov.br` segue
+bloqueado (reconfirmado: `curl` → `000`). **Este trabalho não conserta a
+busca**: ele faz o sistema dizer *o que está errado*, para a próxima fase
+corrigir com dado em vez de aposta. Impersonação TLS (`curl_cffi`) ficou
+deliberadamente de fora — só faz sentido se o diagnóstico apontar `http`/`rede`,
+e aplicá-la agora mascararia a causa real.
+
+Pedido ao usuário: repetir a busca após o deploy e reportar a mensagem nova.
+Ela nomeia a causa, e é ela que decide a fase seguinte.
+
+### Arquivos principais
+- `backend/app/integrations/lexml/client.py`
+- `backend/app/services/lexml_acervo.py`
+- `backend/app/workers/tasks/legislacao_sync.py`
+- `frontend/src/components/legislacao/PainelLexml.tsx`
+- `backend/tests/test_unit/test_lexml_busca.py`,
+  `backend/tests/test_unit/test_legislacao_sync.py`
+- `CLAUDE.md`, `HISTORICO_FASES.md`

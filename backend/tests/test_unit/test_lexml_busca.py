@@ -28,6 +28,23 @@ _XML_UM_REGISTRO = """<?xml version="1.0"?>
 </srw:searchRetrieveResponse>"""
 
 
+# 200 legítimo, sem nenhum registro — é resposta, não falha.
+_XML_ZERO_REGISTROS = """<?xml version="1.0"?>
+<srw:searchRetrieveResponse xmlns:srw="http://www.loc.gov/zing/srw/">
+  <srw:numberOfRecords>0</srw:numberOfRecords>
+  <srw:records/>
+</srw:searchRetrieveResponse>"""
+
+# 200 com XML válido, mas num envelope que este parser não conhece: nem
+# `numberOfRecords`, nem `<record>`. É o desfecho que o plano marcava como
+# NÃO VERIFICADO e que antes era indistinguível de "portal fora do ar".
+_XML_OUTRO_SCHEMA = """<?xml version="1.0"?>
+<resultado>
+  <totalEncontrado>7</totalEncontrado>
+  <documento><identificador>br;federal;lei;2021;14133</identificador></documento>
+</resultado>"""
+
+
 class _RespostaFake:
     def __init__(self, status_code=200, text=""):
         self.status_code = status_code
@@ -66,6 +83,24 @@ def _breaker_limpo():
     lexml_client._breaker.record_success()
     yield
     lexml_client._breaker.record_success()
+
+
+class _ClienteQueExplode:
+    """Falha de transporte (DNS/timeout/conexão recusada), antes de qualquer
+    resposta HTTP."""
+
+    def __init__(self, capturados):
+        self._capturados = capturados
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_):
+        return False
+
+    async def get(self, url, params=None, **_kwargs):
+        self._capturados.append({"url": url, "params": params or {}})
+        raise ConnectionError("conexão recusada")
 
 
 def _fingir_http(monkeypatch, capturados, resposta):
@@ -148,9 +183,11 @@ async def test_busca_persiste_o_que_veio_da_fonte(monkeypatch):
     urn = f"urn:lex:br:federal:lei:2021-04-01;busca{uuid.uuid4().hex[:8]}"
 
     async def _fonte_fake(texto, tipo_norma=None, limite=20):
-        return [{"urn": urn, "titulo": "Lei de teste", "url": "https://www.planalto.gov.br/x.htm"}]
+        registros = [{"urn": urn, "titulo": "Lei de teste", "url": "https://www.planalto.gov.br/x.htm"}]
+        return registros, {"desfecho": "ok", "status_code": 200, "body_snippet": None,
+                           "number_of_records": 1, "query": texto}
 
-    monkeypatch.setattr(lexml_client, "buscar_normas", _fonte_fake)
+    monkeypatch.setattr(lexml_client, "buscar_normas_com_diagnostico", _fonte_fake)
 
     async with sessao_isolada() as db:
         await _limpar(db, [urn])
@@ -179,12 +216,14 @@ async def test_ano_filtra_o_que_veio_da_fonte_tambem(monkeypatch):
     urn_1990 = f"urn:lex:br:federal:lei:1990-09-11;b{uuid.uuid4().hex[:8]}"
 
     async def _fonte_fake(texto, tipo_norma=None, limite=20):
-        return [
+        registros = [
             {"urn": urn_2021, "titulo": "Norma de 2021", "url": None},
             {"urn": urn_1990, "titulo": "Norma de 1990", "url": None},
         ]
+        return registros, {"desfecho": "ok", "status_code": 200, "body_snippet": None,
+                           "number_of_records": 2, "query": texto}
 
-    monkeypatch.setattr(lexml_client, "buscar_normas", _fonte_fake)
+    monkeypatch.setattr(lexml_client, "buscar_normas_com_diagnostico", _fonte_fake)
 
     async with sessao_isolada() as db:
         await _limpar(db, [urn_2021, urn_1990])
@@ -203,9 +242,9 @@ async def test_consultar_fonte_false_nao_toca_a_rede(monkeypatch):
 
     async def _fonte_fake(*_a, **_k):
         chamou.append(True)
-        return []
+        return [], {"desfecho": "vazio"}
 
-    monkeypatch.setattr(lexml_client, "buscar_normas", _fonte_fake)
+    monkeypatch.setattr(lexml_client, "buscar_normas_com_diagnostico", _fonte_fake)
 
     async with sessao_isolada() as db:
         resposta = await lexml_acervo.buscar(db, texto="qualquer", consultar_fonte=False)
@@ -220,9 +259,9 @@ async def test_fonte_muda_nao_apaga_metadado_ja_conhecido(monkeypatch):
     urn = f"urn:lex:br:federal:lei:2021-04-01;c{uuid.uuid4().hex[:8]}"
 
     async def _fonte_pobre(*_a, **_k):
-        return [{"urn": urn, "titulo": None, "url": None}]
+        return [{"urn": urn, "titulo": None, "url": None}], {"desfecho": "ok"}
 
-    monkeypatch.setattr(lexml_client, "buscar_normas", _fonte_pobre)
+    monkeypatch.setattr(lexml_client, "buscar_normas_com_diagnostico", _fonte_pobre)
 
     async with sessao_isolada() as db:
         await _limpar(db, [urn])
@@ -243,3 +282,144 @@ async def test_fonte_muda_nao_apaga_metadado_ja_conhecido(monkeypatch):
             assert norma.url_fonte == "https://www.planalto.gov.br/bom.htm"
         finally:
             await _limpar(db, [urn])
+
+
+# ─── Diagnóstico: um desfecho por causa real ─────────────────────────────────
+#
+# O defeito que estes testes fecham: `[]` era o retorno de CINCO situações
+# distintas, e a tela dizia "o portal não respondeu" em todas — falso em três
+# delas. Cada teste abaixo falha se o rótulo voltar a ser genérico.
+
+@pytest.mark.asyncio
+async def test_desfecho_ok_quando_ha_registros(monkeypatch):
+    _fingir_http(monkeypatch, [], _RespostaFake(200, _XML_UM_REGISTRO))
+    registros, diag = await lexml_client.buscar_normas_com_diagnostico("licitação")
+    assert len(registros) == 1
+    assert diag["desfecho"] == "ok"
+    assert diag["status_code"] == 200
+
+
+@pytest.mark.asyncio
+async def test_portal_respondeu_sem_achar_nada_nao_e_falha(monkeypatch):
+    """O caso que a tela chamava de "o portal não respondeu" — e respondeu."""
+    _fingir_http(monkeypatch, [], _RespostaFake(200, _XML_ZERO_REGISTROS))
+    registros, diag = await lexml_client.buscar_normas_com_diagnostico("assunto inexistente")
+    assert registros == []
+    assert diag["desfecho"] == "vazio"
+    assert diag["number_of_records"] == 0
+
+
+@pytest.mark.asyncio
+async def test_schema_desconhecido_nao_se_disfarca_de_portal_fora(monkeypatch):
+    """200 com XML válido num envelope que o parser não conhece. Antes era
+    indistinguível de indisponibilidade; o snippet é o insumo para corrigir o
+    parser na próxima fase."""
+    _fingir_http(monkeypatch, [], _RespostaFake(200, _XML_OUTRO_SCHEMA))
+    registros, diag = await lexml_client.buscar_normas_com_diagnostico("licitação")
+    assert registros == []
+    assert diag["desfecho"] == "schema_inesperado"
+    assert diag["number_of_records"] is None
+    assert "totalEncontrado" in (diag["body_snippet"] or "")
+
+
+@pytest.mark.asyncio
+async def test_http_nao_200_preserva_status_e_corpo(monkeypatch):
+    _fingir_http(monkeypatch, [], _RespostaFake(403, "<html>bloqueado pelo WAF</html>"))
+    registros, diag = await lexml_client.buscar_normas_com_diagnostico("licitação")
+    assert registros == []
+    assert diag["desfecho"] == "http"
+    assert diag["status_code"] == 403
+    assert "WAF" in (diag["body_snippet"] or "")
+
+
+@pytest.mark.asyncio
+async def test_falha_de_transporte_e_reportada_como_rede(monkeypatch):
+    capturados = []
+    monkeypatch.setattr(
+        lexml_client.httpx, "AsyncClient",
+        lambda **_kwargs: _ClienteQueExplode(capturados),
+    )
+    registros, diag = await lexml_client.buscar_normas_com_diagnostico("licitação")
+    assert registros == []
+    assert diag["desfecho"] == "rede"
+    assert "ConnectionError" in (diag["body_snippet"] or "")
+
+
+@pytest.mark.asyncio
+async def test_circuito_aberto_diz_que_nem_tentou(monkeypatch):
+    """O breaker devolve o mesmo default de uma chamada que falhou — sem
+    distinguir, a tela culpa o portal por uma consulta que nunca saiu."""
+    capturados = []
+    _fingir_http(monkeypatch, capturados, _RespostaFake(200, _XML_UM_REGISTRO))
+    for _ in range(lexml_client._breaker.failure_threshold):
+        lexml_client._breaker.record_failure()
+
+    registros, diag = await lexml_client.buscar_normas_com_diagnostico("licitação")
+
+    assert registros == []
+    assert diag["desfecho"] == "circuito_aberto"
+    assert capturados == [], "circuito aberto não pode gerar chamada de rede"
+
+
+@pytest.mark.asyncio
+async def test_xml_ilegivel_tem_desfecho_proprio(monkeypatch):
+    _fingir_http(monkeypatch, [], _RespostaFake(200, "isto não é XML <<<"))
+    registros, diag = await lexml_client.buscar_normas_com_diagnostico("licitação")
+    assert registros == []
+    assert diag["desfecho"] == "xml_ilegivel"
+
+
+# ─── Forma da consulta ───────────────────────────────────────────────────────
+
+def test_referencia_de_lei_vira_a_forma_provada():
+    """"Lei 14.133/2021" vira "14133/2021": a única forma de texto livre que
+    `citacao_check` manda em produção e que sabidamente responde."""
+    assert montar_query_cql("Lei nº 14.133/2021") == "14133/2021"
+    assert montar_query_cql("aplicação da Lei 8.078/1990 ao caso") == "8078/1990"
+
+
+def test_frase_sem_referencia_segue_como_esta():
+    assert montar_query_cql("lei de licitações") == "lei de licitações"
+
+
+# ─── Cache: falha não pode ser memorizada ────────────────────────────────────
+
+class _RedisFake:
+    def __init__(self):
+        self.dados: dict[str, str] = {}
+
+    async def get(self, chave):
+        return self.dados.get(chave)
+
+    async def set(self, chave, valor, ex=None):
+        self.dados[chave] = valor
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "desfecho,deve_cachear",
+    [("ok", True), ("vazio", True), ("http", False), ("rede", False),
+     ("circuito_aberto", False), ("schema_inesperado", False)],
+)
+async def test_so_resposta_do_portal_entra_no_cache(monkeypatch, desfecho, deve_cachear):
+    """Guardar "o portal está fora" por 10 minutos faz quem tenta de novo
+    receber a mesma resposta errada sem nenhuma chamada de rede: a
+    indisponibilidade passa e o sistema continua afirmando que não."""
+    async def _fonte_fake(*_a, **_k):
+        return [], {"desfecho": desfecho, "status_code": None,
+                    "body_snippet": None, "number_of_records": None, "query": "x"}
+
+    monkeypatch.setattr(lexml_client, "buscar_normas_com_diagnostico", _fonte_fake)
+    redis_fake = _RedisFake()
+
+    async def _get_redis_fake():
+        return redis_fake
+
+    monkeypatch.setattr(lexml_acervo, "get_redis", _get_redis_fake)
+
+    async with sessao_isolada() as db:
+        resposta = await lexml_acervo.buscar(db, texto=f"consulta {desfecho}", limite=10)
+
+    assert resposta["fonte_desfecho"] == desfecho
+    assert resposta["fonte_respondeu"] is (desfecho in ("ok", "vazio"))
+    assert bool(redis_fake.dados) is deve_cachear
